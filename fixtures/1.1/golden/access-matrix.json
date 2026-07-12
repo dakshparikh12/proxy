@@ -1,0 +1,6 @@
+{
+  "_doc": "PA5 — each principal retrieves only what the source permits; revocation propagates.",
+  "principals": {"alice": ["repoA"], "bob": ["repoB"]},
+  "objects": {"repoA/x": ["alice"], "repoB/y": ["bob"]},
+  "revocation_test": {"revoke": ["alice","repoA/x"], "expect_after_sync": "empty for alice"}
+}

@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {"matcher": "*",
+       "hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/harness/guard.py\""}]}
+    ],
+    "PostToolUse": [
+      {"matcher": "Edit|Write|MultiEdit",
+       "hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/harness/post_edit_test.py\""}]}
+    ],
+    "Stop": [
+      {"hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/harness/stop_verify.py\""}]}
+    ]
+  }
+}

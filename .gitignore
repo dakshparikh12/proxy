@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.mutmut-cache
+
+# OS
+.DS_Store
+
+# Secrets / local env (never commit)
+.env
+*.key
+*.pem
+secrets.local.*
+
+# Build loop runtime output
+runner.log
+PROGRESS.md

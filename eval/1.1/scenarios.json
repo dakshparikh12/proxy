@@ -1,0 +1,12 @@
+{
+  "_doc": "Tier-2 [eval] scenarios for 1.1. Each maps to a PA criterion in components/1.1-ingest.md. Author real estates in fixtures/1.1/, then fill golden keys.",
+  "estates": ["estate-code", "estate-docs", "estate-monorepo", "estate-secrets", "estate-hard"],
+  "scenarios": [
+    {"id": "PA1", "criterion": "anything-in", "grader": "deterministic:reconciliation", "threshold": 0.95, "golden": "reconciliation counts"},
+    {"id": "PA2", "criterion": "no-hallucinated-citations", "grader": "deterministic:locator-resolve + llm-judge(20)", "threshold": 0.0, "golden": "golden/citations-sample.json"},
+    {"id": "PA3", "criterion": "hard-inputs", "grader": "deterministic:field-match", "threshold": 0.90, "golden": "golden/hard/*.json"},
+    {"id": "PA4", "criterion": "secrets", "grader": "deterministic:secret-scan", "threshold": 1.0, "golden": "golden/secrets.json"},
+    {"id": "PA5", "criterion": "permissions", "grader": "deterministic:access-matrix", "threshold": 1.0, "golden": "golden/access-matrix.json"},
+    {"id": "PA6", "criterion": "same-door", "grader": "deterministic:code-path-trace", "threshold": 1.0, "golden": "identical path on estate-code vs estate-monorepo"}
+  ]
+}

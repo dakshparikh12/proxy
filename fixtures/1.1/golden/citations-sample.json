@@ -1,0 +1,9 @@
+{
+  "_doc": "PA2 — no hallucinated citations. Human-verified: each Artifact's locator resolves to content that supports it.",
+  "_how_to_author": "After a first ingest of estate-code, sample 20 Artifacts; a human confirms each locator points at supporting content; record pass/fail here.",
+  "cases": [
+    {"artifact_kind": "code", "source_uri": "<repo>/path/file.py", "locator": "file.py:42", "human_verified_supports": true},
+    {"artifact_kind": "doc",  "source_uri": "<repo>/README.md",    "locator": "bbox:...",     "human_verified_supports": true}
+  ],
+  "threshold": {"hallucinated_citation_rate_max": 0.0}
+}
