@@ -17,6 +17,6 @@ def main():
     # TODO(build): for each estate: build the component, run each scenario, score with grader, compare to threshold.
     print(f"[eval_runner] {len(scenarios)} scenarios across estates. Wire the build + grader here.")
     print("Per-criterion table (measured vs threshold) prints here; exit 0 only if ALL clear on ALL estates.")
-    sys.exit(0)
+    print("EVAL NOT WIRED — refusing to pass. Wire graders (RUNBOOK STEP 5)."); sys.exit(2)
 
 if __name__ == "__main__": main()

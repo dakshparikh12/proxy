@@ -3,7 +3,7 @@ Build component <COMPONENT>. Read AGENTS.md, then components/<COMPONENT>.md. Use
 This is ONE pass of the build loop. Do exactly one increment:
 1. Orient: read PROGRESS.md and the failing output of `bash harness/verify.sh`.
 2. Plan the single next increment toward the next unmet [pytest] acceptance criterion.
-3. TDD: write/adjust the milestone test first, then make it pass. Do NOT edit existing tests, fixtures, the spec, or harness files.
+3. Make the next pre-authored failing test pass. Tests are written by the founders BEFORE the loop runs; you never create or modify tests. If no test covers the next spec requirement, record it in PROGRESS.md as a spec/arbiter gap and stop the pass.
 4. Run `bash harness/verify.sh`. If not green, note why in PROGRESS.md.
 5. Commit the increment with a clear message. Then stop (the loop starts a fresh pass).
 

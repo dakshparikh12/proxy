@@ -6,7 +6,7 @@ import argparse, subprocess, time, sys, pathlib, hashlib
 ROOT = pathlib.Path(__file__).parent
 MAX_PASSES = 40
 STALL_LIMIT = 4            # identical failure N times -> stop
-COST_CEIL_USD = 25.0      # stop if spend exceeds
+COST_CEIL_USD = 25.0      # informational only — claude -p reports no cost; real caps are max-turns + wall-clock + max-passes
 
 def verify() -> tuple[int, str]:
     r = subprocess.run(["bash", str(ROOT/"harness"/"verify.sh")], capture_output=True, text=True)
@@ -15,7 +15,7 @@ def verify() -> tuple[int, str]:
 def one_pass(component: str) -> None:
     prompt = (ROOT/"harness"/"prompts"/"pass_prompt.md").read_text().replace("<COMPONENT>", component)
     # fresh headless Claude Code session; --dangerously-skip-permissions is gated by guard.py hook
-    subprocess.run(["claude", "-p", prompt, "--permission-mode", "bypassPermissions"],
+    subprocess.run(["claude", "-p", prompt, "--permission-mode", "bypassPermissions", "--max-turns", "80"],
                    cwd=ROOT, timeout=60*30)
 
 def main():
@@ -24,7 +24,10 @@ def main():
     ap.add_argument("--max-passes", type=int, default=MAX_PASSES)
     args = ap.parse_args()
     last_fail_hash, stall = None, 0
+    start = time.time()
     for i in range(1, args.max_passes+1):
+        if time.time() - start > 9*3600:
+            print("wall clock cap"); return
         print(f"\n===== PASS {i} / {args.component} =====", flush=True)
         one_pass(args.component)
         code, out = verify()

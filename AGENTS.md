@@ -25,4 +25,7 @@ Downstream contract (1.2 serves; 02–06 consume): resolve_entity · relate · e
 All [pytest] pass · all [eval] clear threshold on every real estate · adversarial clean · ruff/mypy/bandit clean · no invariant-violating path (test-proven) · Store adapter is the only DB access · evidence folder committed · both founders signed off. Done means the product is proven on real data — not that the code compiles.
 
 ## Component map & order
-1.1 (—) → 1.2 (1.1) → 1.3 (1.2) → 1.4 (1.2,1.3) → 1.5 (1.1–1.4) → 02–06 (1.x). Build in dependency order.
+Canonical specs: /specs/DD00-contracts.md (contracts + amendments, overrides all)
+then DD01 estate → DD02 meeting → DD03 reactive → DD04 proactive → DD05 workroom
+→ DD06 experience. Build order: DD00 ratified → DD01 → DD02 (+ latency spike) →
+DD03/DD05 (parallel worktrees) → DD04 → DD06. components/*.md are SUPERSEDED.

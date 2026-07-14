@@ -22,4 +22,3 @@ secrets.local.*
 
 # Build loop runtime output
 runner.log
-PROGRESS.md
