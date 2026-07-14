@@ -22,3 +22,9 @@ secrets.local.*
 
 # Build loop runtime output
 runner.log
+
+# Pre-existing artifacts (not part of build)
+proxy-overnight-loop.zip
+proxy/
+fixtures/estate/
+state/
