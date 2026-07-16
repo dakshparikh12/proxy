@@ -256,14 +256,78 @@
 - Grader: Langfuse · Threshold: the criterion's pXX · Validity mutant: measure cold / N=1 → unstable/flapping → protocol rejects it.
 
 ## N · Security posture (standing, cross-cutting §4)
-### N1 · No token in any log, ever
-- Traces: §4-security · Arbiter: [adversarial] · Estate: fixture
-- GIVEN all operations run WHEN logs are scanned THEN 0 tokens/secrets appear.
-- Grader: deterministic (log scan) · Threshold: 0 · Validity mutant: log a token → red.
+### N1 · (merged into A5)
+- The standing log-scan for tokens/secrets lives in A5 (disk + index + logs). Do not duplicate; keep one scan.
 ### N2 · Encrypted at rest, per-tenant
 - Traces: §4-security · Arbiter: [unit-fixture] · Estate: fixture
 - GIVEN a tenant volume THEN it is encrypted at rest and not shared across tenants.
 - Grader: deterministic (volume assert) · Threshold: encrypted + isolated · Validity mutant: plaintext/shared volume → red.
+
+---
+
+## Round-2 additions (fresh-context audit — matched to the NEW Code-Intelligence Doc 01)
+*These close real behavioral gaps and depth holes the audit found. The audit's "Estate Graph / Carve / Experts" gaps were REJECTED — they target a superseded spec the new Doc 01 explicitly rejects.*
+
+### G7 · call_hierarchy correctness
+- Traces: §3.7/§3.8 · Arbiter: [eval-realrepo] · Estate: single
+- GIVEN a golden symbol WHEN `call_hierarchy` runs THEN it returns the true caller set, tagged `resolved`.
+- Grader: deterministic (vs golden caller set) · Threshold: recall ≥ `[floor]`, pass^k · Validity mutant: drop a caller → red.
+### G8 · Multi-language-server independence
+- Traces: §3.7 · Arbiter: [adversarial] · Estate: polyglot
+- GIVEN a polyglot repo WHEN one language server crashes THEN the others keep answering and each restarts on its own lifecycle.
+- Grader: deterministic (kill one LS) · Threshold: 0 cross-server cascade · Validity mutant: single shared LS process → cascade → red.
+### B6 · Git LFS content resolves
+- Traces: §3.2 · Arbiter: [eval-realrepo] · Estate: single (LFS-tracked file)
+- GIVEN a blobless clone with an LFS-tracked, indexed file WHEN it is read/blamed THEN the real content resolves, not the LFS pointer.
+- Grader: deterministic · Threshold: real content · Validity mutant: return the pointer text → red.
+### H6 · not-found-by is an OBSERVED result, not just an enum
+- Traces: §2.4/§3.8 · Arbiter: [eval-realrepo] · Estate: single
+- GIVEN a symbol that genuinely does not exist WHEN queried THEN the result's `resolution` == `not-found-by-<method>` — never an empty list, never an exception, never "doesn't exist."
+- Grader: deterministic · Threshold: correct tag · Validity mutant: return empty/throw → red.
+### H1+ · Envelope holds on REAL-repo outputs
+- Traces: §3.8 · Arbiter: [contract] · Estate: single + monorepo
+- GIVEN any result from any `[eval-realrepo]` run (not just the fixture) THEN it validates the envelope schema — the honesty contract holds on real data.
+- Grader: schema over real-repo outputs · Threshold: 100% · Validity mutant: an unlabeled real-repo result → red.
+### H5b · Blame honors `.git-blame-ignore-revs`
+- Traces: §2.3/§3.? ownership · Arbiter: [eval-realrepo] · Estate: deep-history (has an ignore-revs file)
+- GIVEN a file touched by a bulk-reformat rev listed in `.git-blame-ignore-revs` WHEN `owner_of` uses blame THEN that rev is skipped and ownership is not misattributed to the reformatter.
+- Grader: deterministic (vs true author) · Threshold: correct owner · Validity mutant: ignore the ignore-revs file → misattribution → red.
+### E4 · Overview regenerates on the affected slice only
+- Traces: §3.5 · Arbiter: [eval-realrepo] · Estate: live
+- GIVEN a one-file edit WHEN the overview regenerates THEN only the affected unit's slice re-renders; the rest is byte-unchanged.
+- Grader: deterministic (byte-diff of unaffected slices) · Threshold: 0 unaffected changes · Validity mutant: full overview re-render → red.
+### I9 · Reconcile-then-pin ordering
+- Traces: §3.9 · Arbiter: [eval-realrepo] · Estate: live (with simulated drift)
+- GIVEN drift at meeting start WHEN the session initializes THEN reconcile runs FIRST, the pin is taken on the post-reconcile tip, and readiness flips only after — the meeting never pins a stale tip.
+- Grader: deterministic (pinned SHA == post-reconcile tip; ordering trace) · Threshold: exact · Validity mutant: pin before reconcile → stale pin → red.
+### I10 · Prep is off the critical path
+- Traces: §3.9 · Arbiter: [eval-realrepo] · Estate: monorepo
+- GIVEN a large repo WHEN readiness is evaluated THEN join/readiness never blocks on the Zoekt/SCIP build; prep runs async and the fast path flips ready independently.
+- Grader: deterministic (readiness-time vs prep-completion-time) · Threshold: ready ≪ prep-done · Validity mutant: gate readiness on Zoekt build → red.
+### J4 · Clone failure → honest not-ready
+- Traces: §4-failure · Arbiter: [adversarial] · Estate: fixture (auth-loss / OOM / network mid-clone)
+- GIVEN a repo that fails to clone WHEN processed THEN it shows `not-ready` with the specific reason, Proxy never joins, and no partial ghost copy remains.
+- Grader: deterministic (fault injection) · Threshold: not-ready + reason, 0 residue · Validity mutant: flip ready on partial clone → red.
+### K3 · Deep-history probe (dedicated)
+- Traces: §4-scale · Arbiter: [eval-realrepo]+[latency] · Estate: deep-history
+- GIVEN a 10+-year-history repo WHEN blame/ownership runs THEN it resolves within the latency budget AND honors `.git-blame-ignore-revs` (H5b).
+- Grader: Langfuse pXX + deterministic · Threshold: within budget · Validity mutant: naive blame ignoring history depth → timeout → red.
+### K4 · Many-tiny-files probe (dedicated)
+- Traces: §4-scale · Arbiter: [eval-realrepo] · Estate: many-tiny-files (100k+ small files)
+- GIVEN a repo whose scale is file-COUNT not LOC WHEN indexed THEN coverage(D1) is exact and search/index latency holds — proving scale is handled by file count, not just LOC (D5 pins LOC only).
+- Grader: deterministic + Langfuse · Threshold: D1 exact + latency budget · Validity mutant: assume scale∝LOC → miss the count blowup → red.
+### Z1 · Composed end-to-end real-repo Q&A (THE product-level test)
+- Traces: §1/§2 (meeting-speed · honest · fresh · any-scale) · Arbiter: [eval-realrepo] · Estate: single + monorepo
+- GIVEN a real meeting-style question ("who calls X and who owns it?") WHEN the agent composes search→nav→ownership THEN it returns a correct, `file:line`-cited answer with correct envelope tags, within the freshness+latency budget, on the pinned SHA — one flow, not per-layer.
+- Grader: deterministic (vs golden) + Langfuse (latency) + envelope schema · Threshold: correct+cited+tagged, ≤budget, pass^k · Validity mutant: stale/uncited/untagged answer → red.
+### D8+ · Messy files on a REAL dirty repo
+- Traces: §3.4/§4-failure · Arbiter: [eval-realrepo] · Estate: messy (real repo with genuinely unparseable/partial files)
+- GIVEN a real repo containing broken/partial files WHEN indexed THEN valid spans index, broken spans flag, search covers the gap, coverage stays exact — verified on real data, not just an injected fixture (D8).
+- Grader: deterministic · Threshold: D1 exact + no crash · Validity mutant: crash on the real broken file → red.
+
+## Reclassified (grading gates, not standalone criteria)
+- **M1** is a *grading protocol* that governs every `[latency]` criterion (F2, I8, K3, Z1), not a GIVEN/WHEN/THEN criterion — removed from the criterion count, kept as the latency gate.
+- **K1** is an *estate-binding gate* ("run the suite on small AND ≥1M"), not a new behavior — kept as a gate, not double-counted.
 
 ---
 
@@ -274,4 +338,5 @@
 - **Coverage:** every §2 promise and every §3 clause maps to ≥1 criterion above; a clause with no criterion is a gap to fill.
 
 ## Coverage ledger (spec clause → criteria)
-§3.1→A1–A6 · §3.2→B1–B5 · §3.3→C1–C4 · §3.4→D1–D8 · §3.5→E1–E3 · §3.6→F1–F3 · §3.7→G1–G6 · §3.8→H1–H5 · §3.9→I1–I8 · §3.10→J1–J3 · §4-scale→K1–K2 · §4-lang→L1 · §4-latency→M1 · §4-security→N1–N2. **~55 criteria across unit / property / contract / real-repo / adversarial / latency.**
+§3.1→A1–A6 · §3.2→B1–B6 · §3.3→C1–C4 · §3.4→D1–D8,D8+ · §3.5→E1–E4 · §3.6→F1–F3 · §3.7→G1–G8 · §3.8→H1,H1+,H2–H6 · §3.9→I1–I10 · §3.10→J1–J4 · §4-scale→K1–K4 · §4-lang→L1 · §4-latency→M1(gate) · §4-security→N2 (N1 merged into A5). **~65 criteria across unit / property / contract / real-repo / adversarial / latency; ~34 are [eval-realrepo]/[latency] real-repo tests.**
+*Round-2 audit closed: call_hierarchy (G7), multi-LS independence (G8), LFS (B6), not-found-by result (H6), envelope-on-real-repo (H1+), blame-ignore-revs (H5b), overview slice-regen (E4), reconcile-then-pin (I9), prep-off-critical-path (I10), clone-failure (J4), deep-history (K3), many-tiny-files (K4), composed E2E Q&A (Z1), messy-real-repo (D8+). Rejected: Estate-Graph/Carve/Experts gaps (superseded architecture).*
