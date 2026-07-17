@@ -10,7 +10,7 @@ bundle; the template carries the exact fields the RTM gate + seal require).
 **PATCH MODE (fast) — if staging/<DOC>/review-gaps.md OR evidence/<DOC>-sweep.md exists:** a prior
 bundle is already staged and a reviewer/sweep listed specific gaps. **Do NOT regenerate the bundle.**
 Read the existing staging/<DOC>/acceptance/<DOC>/ and ADD only the missing requirements + criteria
-(and ambiguities) that close each listed gap, appending to the existing YAML files. Leave every
+that close each listed gap, appending to the existing YAML files. Leave every
 already-valid requirement/criterion untouched. Renumber ids to stay unique. This is a small, surgical
 edit — not a rewrite. Then jump to "FINISH".
 
@@ -24,16 +24,25 @@ edit — not a rewrite. Then jump to "FINISH".
    dimension set (capability, negative/off-state, exclusivity, source-honesty, degradation, boundary
    values, error shapes, ordering/atomicity, per-branch, negative frontier — per EXHAUSTIVE-COVERAGE).
    Give each sub-agent a UNIQUE id prefix (R-<DOC>-<section>-NN / AC-<SECTION>-NN) so ids never collide.
-3. MERGE: concatenate the parts into staging/<DOC>/acceptance/<DOC>/requirements/requirements.yaml +
-   criteria/criteria.yaml. Then YOU (lead) do the CROSS-CUTTING pass the sections can't: the doc's
-   invariants/laws (AGENTS.md), canonical-contract criteria, and the whole fault-model — plus a dedupe.
+3. MERGE (cheap — plain concat, no LLM ceremony): join the parts into
+   staging/<DOC>/acceptance/<DOC>/requirements/requirements.yaml + criteria/criteria.yaml. Then YOU
+   (lead) do only the CROSS-CUTTING pass the sections can't: the doc's invariants/laws (AGENTS.md) as
+   criteria, canonical-contract criteria, and fault/negative behaviors captured AS criteria (error
+   shapes, off-state, negative frontier) — plus a dedupe. Do NOT author a separate fault-model
+   document; fault coverage lives inside criteria.yaml.
 
 ## Both modes then FINISH
-Ensure the bundle also has: requirements/{ambiguities,dispositions}.yaml · faults/fault-model.yaml ·
-protocols/ · estates/ · models/system-model.yaml · assurance-limits.yaml · authorities/authority-index.yaml
-· manifest.yaml (counts + hashes where computable). Every criterion must have deterministic-preferred
-oracles + numeric thresholds (zeros explicit); a calibrated judge ONLY where no deterministic oracle
-exists. Every criterion traces to a real requirement (the RTM gate verifies bidirectionally and refuses
-the seal otherwise). Serious behaviors get their exact accept/reject boundary decomposed; nothing loose;
-spec ambiguities go in ambiguities.yaml, never guessed. Write ONLY under staging/<DOC>/ (a conductor
-promotes after the gate). Commit "<DOC>: staged criteria bundle". Final message: one line — the counts.
+The bundle is ONLY requirements/requirements.yaml + criteria/criteria.yaml — nothing else. The coverage
+gate + seal read only these two, and NOTHING downstream reads the old formal-assurance artifacts
+(fault-model, dispositions, ambiguities, protocols, estates, system-model, assurance-limits,
+authority-index). They never touched the code and cost ~⅓ of gen time, so they are DROPPED. Every
+criterion has deterministic-preferred oracles + numeric thresholds (zeros explicit); a calibrated judge
+ONLY where no deterministic oracle exists. Every criterion traces to a real requirement (the RTM gate
+verifies bidirectionally and refuses the seal otherwise). Serious behaviors get their exact accept/reject
+boundary decomposed; nothing loose. A spec ambiguity is resolved by CANONICAL-DECISIONS.md or, if truly
+unresolved, noted inline on the criterion — never guessed, never a separate file. Write ONLY under
+staging/<DOC>/ (a conductor promotes after the gate). Commit "<DOC>: staged criteria bundle".
+
+SPEED — this is MINUTES of work, not hours. Keep the criteria EXPANSIVE and accurate (they are the
+oracle the build is graded against), but skip every artifact that never becomes a test. Final message:
+one line — the counts.
