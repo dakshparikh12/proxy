@@ -45,7 +45,9 @@ PROTECTED = ("tests/", "harness/", "fixtures/", "criteria/", "acceptance/", "pro
 MAX_PASSES, STALL_LIMIT, PASS_TIMEOUT = 120, 4, 60 * 30   # wall-clock (9h/doc) binds before passes
 MAX_BUILD_SESSIONS = 24            # each is a LONG persistent builder doing many milestones
 BUILD_TIMEOUT, BUILD_TURNS = 60 * 90, 600   # a builder session iterates internally build->test->fix
-REVIEW_CYCLES, SWEEP_CYCLES = 2, 1   # 1 gen + up to 1 patch cycle; sweep is a single backstop
+REVIEW_CYCLES, SWEEP_CYCLES = 3, 2   # each pass is cheap now (formal artifacts dropped) so keep the
+#                                      coverage loop generous; both break EARLY once the reviewer
+#                                      approves + the RTM gate passes, so a clean doc costs 1 cycle.
 
 
 def log(msg: str) -> None:
