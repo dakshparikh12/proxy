@@ -31,7 +31,6 @@ echo "--- Preflight checks ---"
 
 # Tests collected via venv python — derive expected count from sealed bundle
 PY="${PROXY_PY:-.venv/bin/python}"
-BUNDLE="acceptance/doc01/criteria/criteria.yaml"
 
 # 1a. Collect tests — FAIL on any collection error
 COLLECT_OUTPUT=$("$PY" -m pytest --collect-only -q 2>&1)
@@ -49,38 +48,43 @@ else
   echo "PASS  $COLLECTED_NUM tests collected, 0 collection errors"
 fi
 
-# 1b. Bundle coverage — every rung-1 criterion must map to ≥1 test function
-if [ -f "$BUNDLE" ]; then
-  COVERAGE_RESULT=$("$PY" -c "
+# 1b. Bundle coverage — every rung-1 criterion in EVERY acceptance/<doc> bundle present must
+#     map to >=1 test function. tests/ is searched RECURSIVELY (doc00 lives in tests/doc00/),
+#     and the match strips the AC- prefix so both naming schemes work
+#     (doc01 `test_ac_m6_001`, doc00 `test_ten_004`).
+COVERAGE_RESULT=$("$PY" -c "
 import re, pathlib, sys
 RUNG1 = {'[unit-example]','[unit-property]','[contract]','[unit-fixture]','[security-adversarial]','[adversarial]'}
-text = pathlib.Path('$BUNDLE').read_text()
-ids = re.findall(r'criterion_id:\s+(AC-\S+)', text)
-classes = re.findall(r'evidence_class:\s+\"(\[[^\]]+\])\"', text)
-rung1 = [(i, c) for i, c in zip(ids, classes) if c in RUNG1]
+bundles = sorted(pathlib.Path('acceptance').glob('*/**/criteria/criteria.yaml'))
+if not bundles:
+    print('WARN no acceptance/<doc> criteria bundles found — skipping coverage check')
+    sys.exit(2)
 test_funcs = set()
-for tf in pathlib.Path('tests').glob('test_*.py'):
+for tf in pathlib.Path('tests').rglob('test_*.py'):
     for m in re.finditer(r'^def (test_\w+)', tf.read_text(), re.MULTILINE):
         test_funcs.add(m.group(1))
-uncovered = []
-for cid, ec in rung1:
-    pat = cid.lower().replace('-', '_')
-    if not any(pat in f for f in test_funcs):
-        uncovered.append(cid)
-if uncovered:
-    print(f'FAIL {len(uncovered)} rung-1 criteria uncovered: {\" \".join(uncovered)}')
-    sys.exit(1)
-else:
-    print(f'PASS {len(rung1)} rung-1 criteria, all covered')
-    sys.exit(0)
+def key(cid):  # strip AC- so both test_ac_m6_001 and test_ten_004 conventions match
+    return cid.lower().replace('-', '_').removeprefix('ac_')
+fail = False
+for b in bundles:
+    text = b.read_text()
+    ids = re.findall(r'criterion_id:\s+(AC-\S+)', text)
+    classes = re.findall(r'evidence_class:\s+\"(\[[^\]]+\])\"', text)
+    rung1 = [(i, c) for i, c in zip(ids, classes) if c in RUNG1]
+    uncovered = [cid for cid, ec in rung1 if not any(key(cid) in f for f in test_funcs)]
+    doc = b.parts[1]
+    if uncovered:
+        print(f'FAIL {doc}: {len(uncovered)} rung-1 criteria uncovered: {\" \".join(uncovered)}')
+        fail = True
+    else:
+        print(f'PASS {doc}: {len(rung1)} rung-1 criteria, all covered')
+sys.exit(1 if fail else 0)
 " 2>&1)
-  COVERAGE_EXIT=$?
-  echo "$COVERAGE_RESULT"
-  if [ "$COVERAGE_EXIT" -ne 0 ]; then
-    FAILS=$((FAILS + 1))
-  fi
-else
-  echo "WARN  bundle not found at $BUNDLE — skipping coverage check"
+COVERAGE_EXIT=$?
+echo "$COVERAGE_RESULT"
+if [ "$COVERAGE_EXIT" -eq 1 ]; then
+  FAILS=$((FAILS + 1))
+elif [ "$COVERAGE_EXIT" -eq 2 ]; then
   WARNS=$((WARNS + 1))
 fi
 
