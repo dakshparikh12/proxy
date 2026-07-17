@@ -41,7 +41,9 @@ DOCS = {
     "doc09": {"spec": "09-VERIFICATION.md", "deps": []},
 }
 ORDER = list(DOCS)
-PROTECTED = ("tests/", "harness/", "fixtures/", "criteria/", "acceptance/", "product/", ".claude/")
+PROTECTED = ("tests/", "harness/", "fixtures/", "criteria/", "acceptance/", "product/", ".claude/",
+             "orchestrator/prompts/", "orchestrator/orchestrate.py", "orchestrator/supervise.sh",
+             "orchestrator/skills/", "orchestrator/verify_doc.md")
 MAX_PASSES, STALL_LIMIT, PASS_TIMEOUT = 120, 4, 60 * 30   # wall-clock (9h/doc) binds before passes
 MAX_BUILD_SESSIONS = 24            # each is a LONG persistent builder doing many milestones
 BUILD_TIMEOUT, BUILD_TURNS = 60 * 90, 600   # a builder session iterates internally build->test->fix
@@ -78,6 +80,9 @@ def tree_hash(trees=PROTECTED) -> str:
     for t in trees:
         p = ROOT / t
         if not p.exists():
+            continue
+        if p.is_file():   # single-file protected entry (e.g. orchestrate.py): hash it directly
+            h.update(str(p.relative_to(ROOT)).encode()); h.update(p.read_bytes())
             continue
         for f in sorted(p.rglob("*")):
             if f.is_file() and "__pycache__" not in str(f):

@@ -17,6 +17,9 @@ PROTECTED = (
     "eval/", "sources/",
     # TASK 2 additions:
     "product/", "criteria/", "acceptance/", ".env", "requirements",
+    # TASK 1: protect the orchestrator (conductor writes only state/ and *.log)
+    "orchestrator/prompts/", "orchestrator/orchestrate.py",
+    "orchestrator/supervise.sh", "orchestrator/skills/", "orchestrator/verify_doc.md",
 )
 
 # Build a regex fragment matching any protected dir for shell-write patterns
