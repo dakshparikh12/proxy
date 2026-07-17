@@ -29,8 +29,10 @@ warn_check() {
 # 1. >0 tests collected AND verify.sh exits nonzero (red = arbiter alive)
 echo "--- Preflight checks ---"
 
-# Tests collected
-COLLECTED=$(pytest --collect-only -q 2>/dev/null | tail -1)
+# Tests collected (try venv pytest first, then system)
+PYTEST="${VIRTUAL_ENV:-$PWD/.venv}/bin/pytest"
+[ -x "$PYTEST" ] || PYTEST="pytest"
+COLLECTED=$($PYTEST --collect-only -q 2>/dev/null | tail -1)
 if echo "$COLLECTED" | grep -qE "^[1-9][0-9]* test"; then
   echo "PASS  >0 tests collected ($COLLECTED)"
 else
@@ -102,9 +104,10 @@ else
 fi
 
 # 6. acceptance-bundle check (WARN not FAIL while acceptance/ is empty)
-if [ -d acceptance/doc01 ] && [ -f acceptance/doc01/manifest ]; then
+if [ -d acceptance/doc01 ] && { [ -f acceptance/doc01/manifest ] || [ -f acceptance/doc01/manifest.yaml ]; }; then
+  MANIFEST_FILE=$([ -f acceptance/doc01/manifest.yaml ] && echo "acceptance/doc01/manifest.yaml" || echo "acceptance/doc01/manifest")
   # Check that manifest contains hashes (basic sanity)
-  if grep -qE '[a-f0-9]{32,}' acceptance/doc01/manifest 2>/dev/null; then
+  if grep -qE '[a-f0-9]{32,}' "$MANIFEST_FILE" 2>/dev/null; then
     echo "PASS  acceptance bundle manifest with hashes"
   else
     echo "WARN  acceptance/doc01/manifest present but no hashes found"
