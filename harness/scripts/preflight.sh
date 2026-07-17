@@ -29,10 +29,9 @@ warn_check() {
 # 1. >0 tests collected AND verify.sh exits nonzero (red = arbiter alive)
 echo "--- Preflight checks ---"
 
-# Tests collected (try venv pytest first, then system)
-PYTEST="${VIRTUAL_ENV:-$PWD/.venv}/bin/pytest"
-[ -x "$PYTEST" ] || PYTEST="pytest"
-COLLECTED=$($PYTEST --collect-only -q 2>/dev/null | tail -1)
+# Tests collected via venv python
+PY="${PROXY_PY:-.venv/bin/python}"
+COLLECTED=$("$PY" -m pytest --collect-only -q 2>/dev/null | tail -1)
 if echo "$COLLECTED" | grep -qE "^[1-9][0-9]* test"; then
   echo "PASS  >0 tests collected ($COLLECTED)"
 else
@@ -49,7 +48,7 @@ else
 fi
 
 # 2. eval_runner.py exits 2
-python3 eval_runner.py --component dummy 2>/dev/null; EVAL_EXIT=$?
+"$PY" eval_runner.py --component dummy 2>/dev/null; EVAL_EXIT=$?
 if [ "$EVAL_EXIT" -eq 2 ]; then
   echo "PASS  eval_runner.py exits 2"
 else
@@ -60,7 +59,7 @@ fi
 # 3. guard.py present and probe-passing
 if [ -f harness/guard.py ]; then
   PROBE='{"tool_name":"Read","tool_input":{"file_path":"/dev/null"}}'
-  if echo "$PROBE" | python3 harness/guard.py >/dev/null 2>&1; then
+  if echo "$PROBE" | "$PY" harness/guard.py >/dev/null 2>&1; then
     echo "PASS  guard.py present and probe-passing"
   else
     echo "FAIL  guard.py probe failed"
@@ -80,7 +79,7 @@ else
 fi
 
 # 5. integrity hash recorded (just verify protected trees exist)
-HASH=$(python3 -c "
+HASH=$("$PY" -c "
 import pathlib, hashlib
 ROOT = pathlib.Path('.')
 trees = ('tests/', 'harness/', 'fixtures/', 'criteria/', 'acceptance/', 'product/', '.claude/')

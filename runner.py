@@ -4,6 +4,10 @@ loops until green / stop / stall / cost-ceiling."""
 import argparse, subprocess, time, sys, pathlib, hashlib, json, os
 
 ROOT = pathlib.Path(__file__).parent
+# Ensure the venv python is used for all subprocess calls
+_VENV_PY = str(ROOT / ".venv" / "bin" / "python")
+PY = _VENV_PY if pathlib.Path(_VENV_PY).exists() else sys.executable
+os.environ.setdefault("PROXY_PY", PY)
 MAX_PASSES = 40
 STALL_LIMIT = 4            # identical failure N times -> stop
 COST_CEIL_USD = 25.0      # informational only
@@ -62,7 +66,7 @@ def _preflight() -> None:
     # Probe guard.py with a benign event
     probe = json.dumps({"tool_name": "Read", "tool_input": {"file_path": "/dev/null"}})
     r = subprocess.run(
-        [sys.executable, str(guard)],
+        [PY, str(guard)],
         input=probe, capture_output=True, text=True, timeout=10,
     )
     if r.returncode != 0:
@@ -144,7 +148,7 @@ def main():
         (ROOT/"runner.log").open("a").write(f"pass {i} exit {code}\n{out[-2000:]}\n")
         if code == 0:
             print(f"[rung 1] code check GREEN after {i} passes. Running [rung 2] real-data eval...")
-            ev = subprocess.run([sys.executable, str(ROOT/"eval_runner.py"), "--component", args.component],
+            ev = subprocess.run([PY, str(ROOT/"eval_runner.py"), "--component", args.component],
                                 capture_output=True, text=True)
             print(ev.stdout[-3000:]); (ROOT/"runner.log").open("a").write(f"[eval pass {i}] exit {ev.returncode}\n{ev.stdout[-2000:]}\n")
             if ev.returncode == 0:
