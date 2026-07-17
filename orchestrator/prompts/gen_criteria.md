@@ -3,7 +3,8 @@ code). Doc: <DOC>. Spec: product/v0-spec/<SPEC> (CANONICAL-DECISIONS.md override
 
 Read, in order: criteria/GENERATOR.md (the method, Phases A–E) · orchestrator/EXHAUSTIVE-COVERAGE.md
 (total breadth, density tiers, cost-free oracles) · the full spec · AGENTS.md (laws/invariants) ·
-acceptance/doc01/ (the reference bundle format — match it EXACTLY).
+orchestrator/prompts/FORMAT-TEMPLATE.yaml (the slim format to match — do NOT read the full doc01
+bundle; the template carries the exact fields the RTM gate + seal require).
 
 ## TWO MODES — check first which applies
 **PATCH MODE (fast) — if staging/<DOC>/review-gaps.md OR evidence/<DOC>-sweep.md exists:** a prior
