@@ -29,3 +29,4 @@ proxy/
 fixtures/estate/
 state/
 fixtures/estates/**/clone/
+proxy.bundle
