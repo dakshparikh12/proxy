@@ -251,5 +251,14 @@ gcloud sql instances patch "$SQL_INSTANCE" --activation-policy=NEVER   # resume:
 ## What's still deferred (do NOT set up now)
 Prod GCP env (REGIONAL Cloud SQL + PITR) · self-hosted transport (Recall/STT/TTS OSS path) · the per-customer-GCP-project onboarding · Langfuse self-host (scaffold stays inert). And, separate from provisioning: the **build machinery** (`AGENTS.md`, `.claude/` skills, `harness/prompts/pass_prompt.md`) still references the retired estate-graph architecture and must be rewired to `product/v0-spec/` + the Doc 00 §16 build order before a build run.
 
+---
+
+# ✅ AS-BUILT STATE (provisioned 2026-07-16 — this section reflects reality)
+**Everything below exists and every `.env` key is filled. Local `.env` is the source; secrets never committed.**
+- **GCP:** project `proxy-meeting-dev` (account `proxy.meeting@gmail.com`, $300 trial credit) · region `us-central1` · 13 APIs enabled · SA `terraform-deployer@` (impersonation by the user, no key file) · SA `proxy-run@` (runtime) · tfstate bucket `proxy-meeting-dev-tfstate` (versioned) · Cloud SQL `proxy-dev-pg` (Postgres 15, db-f1-micro, zonal; db `proxy`, user `proxy_app`; **STOPPED — wake with** `gcloud sql instances patch proxy-dev-pg --activation-policy=ALWAYS`) · bucket `proxy-dev-notes-proxy-meeting-dev` (versioned) · Secret Manager `DATABASE_URL` (bound to proxy-run) · Artifact Registry `proxy-images` · KMS `proxy-keyring/code-intel-disk`.
+- **SaaS keys live:** Anthropic (personal-account key for spike/runtime; **build loop runs on the Max subscription**) · Recall (+ workspace secret; AssemblyAI key pasted in the region's Transcription dashboard, default US endpoints) · AssemblyAI · Cartesia · E2B.
+- **Auth chain:** GitHub App `proxy-meeting-agent` under `dakshparikh12` (contents:read + metadata:read, Push events; **webhook = smee.io channel, dev-only**; private key at `~/secrets/proxy-meeting-agent.2026-07-16.private-key.pem`) · Google OAuth client `Proxy Web Client` in `proxy-meeting-dev` (consent screen Testing/External; **redirect = localhost:8080 only**) · Nango Cloud dev env, integration `github-app` (App ID + public link + private key; the github-app provider takes no client id/secret — kept in `.env` regardless).
+- **Deferred (swap when the domain exists):** GitHub App webhook URL smee→`https://<domain>/webhooks/github` · add `https://<domain>/auth/callback` to the OAuth client · Recall webhook endpoints · prod GCP env. Anthropic usage: build = subscription, product = API key.
+
 ## Confirm-at-build (the loop must fetch live docs — CANONICAL §11.10)
 Recall, E2B, Nango, AssemblyAI, Cartesia, and the `claude_agent_sdk` message shape can't be pinned from a design doc; the loop verifies each vendor's live wire shape when it builds Docs 02/04/05. Keep those dashboards reachable then.
