@@ -45,7 +45,7 @@ PROTECTED = ("tests/", "harness/", "fixtures/", "criteria/", "acceptance/", "pro
 MAX_PASSES, STALL_LIMIT, PASS_TIMEOUT = 120, 4, 60 * 30   # wall-clock (9h/doc) binds before passes
 MAX_BUILD_SESSIONS = 24            # each is a LONG persistent builder doing many milestones
 BUILD_TIMEOUT, BUILD_TURNS = 60 * 90, 600   # a builder session iterates internally build->test->fix
-REVIEW_CYCLES, SWEEP_CYCLES = 3, 3
+REVIEW_CYCLES, SWEEP_CYCLES = 2, 1   # 1 gen + up to 1 patch cycle; sweep is a single backstop
 
 
 def log(msg: str) -> None:
@@ -178,16 +178,28 @@ def verify(doc: str, blocking_types: bool = False) -> tuple[int, str]:
     return 0, "\n".join(out)
 
 
+def bundle_dir(doc: str) -> pathlib.Path:
+    """Dir that actually holds the sealed criteria. Tolerates the legacy double-nested
+    acceptance/<doc>/<doc>/ layout left by the old promote bug so already-sealed docs are
+    recognized (and skipped) instead of regenerated."""
+    d = ROOT / "acceptance" / doc
+    return (d / doc) if (d / doc / "criteria").exists() else d
+
+
 def promote(doc: str) -> None:
     """Deterministic promotion of staged arbiter artifacts into protected trees (this
     process only — agents cannot). staging/<doc>/acceptance -> acceptance/<doc>;
     staging/<doc>/tests -> tests/ (doc-scoped subdir or fixtures)."""
     s = STAGING / doc
     if (s / "acceptance").exists():
+        # The staged bundle lives at staging/<doc>/acceptance/<doc>/. Copy THAT dir, not its
+        # parent — copying the parent double-nests to acceptance/<doc>/<doc>/, which the
+        # "already sealed?" skip-check never finds, so it regenerates from scratch every run.
+        src = (s / "acceptance" / doc) if (s / "acceptance" / doc).exists() else (s / "acceptance")
         dst = ROOT / "acceptance" / doc
         if dst.exists():
             shutil.rmtree(dst)
-        shutil.copytree(s / "acceptance", dst)
+        shutil.copytree(src, dst)
     if (s / "tests").exists():
         for item in (s / "tests").rglob("*"):
             if item.is_file():
@@ -348,7 +360,7 @@ def run_doc(doc: str) -> str:
     sdir.mkdir(parents=True, exist_ok=True)
 
     # P1+P2: criteria (skip generation if a sealed bundle already exists — doc01 has Pranav's)
-    if not (ROOT / "acceptance" / doc / "criteria").exists():
+    if not (bundle_dir(doc) / "criteria").exists():
         for cycle in range(1, REVIEW_CYCLES + 1):
             log(f"[{doc}] P1 generate criteria (cycle {cycle})")
             agent("gen_criteria.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]})
@@ -379,7 +391,7 @@ def run_doc(doc: str) -> str:
         log(f"[{doc}] P3 generate evidence layer (tests/fixtures/sims/goldens -> staging)")
         agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]})
     # P4: gate + promote + seal (THIS process, deterministic)
-    base = (sdir / "acceptance" / doc) if (sdir / "acceptance" / doc).exists() else (ROOT / "acceptance" / doc)
+    base = (sdir / "acceptance" / doc) if (sdir / "acceptance" / doc).exists() else bundle_dir(doc)
     if not coverage_gate(doc, base):
         return "COVERAGE_GATE_FAILED"
     promote(doc)
