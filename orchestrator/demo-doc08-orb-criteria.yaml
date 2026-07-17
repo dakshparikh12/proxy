@@ -1,0 +1,255 @@
+# DEMONSTRATION — exhaustive criteria for Doc 08 §2.1–2.2 (the orb / tile presence)
+# Generated the way Pranav's bundles are (situation given/when + primary outcome then +
+# deterministic oracle + threshold + verbatim spec authority). Shows the "everything, no
+# matter how small" bar: every orb behavior in the spec, including the pulse, gets a criterion.
+# This is a DRAFT DEMO for validation — not a sealed bundle. ~24 criteria from ~1 spec page.
+
+# ── The mark & the expressive ceiling (§2.1) ─────────────────────────────
+- criterion_id: AC-EXP-ORB-001
+  name: "The presence orb is the only identity — no face, avatar, or mascot renders"
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The tile renderer is exercised across every state."
+    when:  "Any state is rendered."
+    then:
+      - "The rendered output is the single presence orb; zero facial features, avatars, or mascots appear."
+  primary_oracle: {type: static_source_scan + render_state_enumeration, artifact: "no face/avatar primitive in any render path"}
+  thresholds: {facial_or_avatar_primitives: 0}
+  authority_refs: [R-DOC08-2.1-01]
+  source_quote: "Proxy has no face, no avatar, no mascot. It is a single presence orb."
+
+- criterion_id: AC-EXP-ORB-002
+  name: "Orb color is deep teal-ink #35c2b8 on a near-black tile"
+  criticality: P2
+  blocking: true
+  behavior:
+    given: "The tile is rendered at rest."
+    when:  "The orb draws."
+    then:
+      - "The orb's seed color is exactly #35c2b8; the tile background is near-black; no electric-purple / gradient-heavy palette is used."
+  primary_oracle: {type: render_token_check, artifact: "orb.seed == '#35c2b8'"}
+  thresholds: {color_mismatch: 0}
+  authority_refs: [R-DOC08-2.1-02]
+  source_quote: "a single presence orb — a soft geometric bloom that breathes — in deep teal-ink (seed #35c2b8) on a near-black tile."
+
+- criterion_id: AC-EXP-ORB-003
+  name: "The hard ceiling: NO code path for facial features, character animation, or theatrical effects"
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The tile renderer source."
+    when:  "Statically analyzed for render primitives."
+    then:
+      - "There exists no code path that can render a facial feature, character animation, or theatrical effect — the costume is structurally unrenderable."
+  primary_oracle: {type: static_analysis, artifact: "forbidden-primitive scan of the renderer module"}
+  thresholds: {forbidden_render_paths: 0}
+  authority_refs: [R-DOC08-2.1-03]
+  source_quote: "The tile renderer must contain no code path for facial features, character animation, or theatrical effects. This is structural, not stylistic."
+
+- criterion_id: AC-EXP-ORB-004
+  name: "The orb's expressive range is EXACTLY {breath, firmness, shimmer, dim, pulse} — nothing else"
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The set of animation primitives the orb renderer can emit."
+    when:  "Enumerated."
+    then:
+      - "The primitive set equals exactly {breath-rate, firmness, shimmer, dim, pulse}; no sixth primitive exists."
+  primary_oracle: {type: render_primitive_enumeration, artifact: "primitive_set == {breath, firmness, shimmer, dim, pulse}"}
+  thresholds: {extra_primitives: 0, missing_primitives: 0}
+  authority_refs: [R-DOC08-2.1-04]
+  source_quote: "The orb's entire expressive range is: breath rate, firmness, shimmer, dim, and pulse."
+
+# ── The six tile states — each its own capability + negative + source-honesty (§2.2) ──
+- criterion_id: AC-EXP-STATE-LISTENING-001
+  name: "Listening: the orb breathes slowly by default while the session is live"
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A live session with no other event active."
+    when:  "The tile renders."
+    then: ["The orb is in the slow-breath state."]
+  primary_oracle: {type: render_state, artifact: "state(session=live, no_event) == breathe-slow"}
+  thresholds: {wrong_default_state: 0}
+  authority_refs: [R-DOC08-2.2-01]
+  source_quote: "Listening | the orb breathes slowly | default; the session is live"
+
+- criterion_id: AC-EXP-STATE-LISTENINGTO-001
+  name: "Listening-to: a 'listening to <name>' caption appears when an address is detected"
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A live session; Doc 04's name-gate + roster detect an address to Proxy by participant Maya."
+    when:  "The address event fires."
+    then:
+      - "The tile shows the caption '◉ listening to Maya' with the correct roster name."
+      - "Without an address event, the caption is absent (negative)."
+  primary_oracle: {type: render_state + roster_binding, artifact: "caption == 'listening to '+roster.name on address; absent otherwise"}
+  thresholds: {wrong_or_missing_name: 0, caption_without_address: 0}
+  authority_refs: [R-DOC08-2.2-02]
+  source_quote: "Listening-to | small '◉ listening to Maya' caption | an address was detected (Doc 04's name-gate + roster)"
+
+- criterion_id: AC-EXP-STATE-CHECKING-001
+  name: "Checking ACK: a 'checking…' line fires within 500ms for an LSP-bound direct answer"
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An LSP-bound direct answer that cannot meet the shallow audio-latency gate (CANONICAL §12.8)."
+    when:  "The answer begins resolving."
+    then:
+      - "A 'checking…' tile line renders within 500ms (measured), so the room sees it was heard."
+      - "Proxy does NOT claim the answer under the shallow SLO; it speaks when the LSP returns."
+  primary_oracle: {type: simulation_trace + latency_measure, artifact: "ack_render_ms <= 500 on the LSP-bound-answer sim"}
+  thresholds: {ack_ms_max: 500, claimed_under_shallow_slo: 0}
+  authority_refs: [R-DOC08-2.2-03]
+  source_quote: "Checking (ACK) | a fast 'checking…' line, fired <=500ms | an LSP-bound direct answer that can't hit the audio-latency gate"
+
+- criterion_id: AC-EXP-STATE-HASSOMETHING-001
+  name: "Has-something: the orb firms + 'have the answer when there's a moment' when a result waits for a turn boundary"
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A finished result is waiting for a turn boundary (Doc 04)."
+    when:  "No boundary has opened yet."
+    then:
+      - "The orb enters the firm state and shows the 'have the answer when there's a moment' caption."
+      - "Proxy does NOT interrupt to deliver it (it waits)."
+  primary_oracle: {type: render_state + no-interrupt-trace, artifact: "state==firm+caption while pending; zero speak events before boundary"}
+  thresholds: {interrupt_before_boundary: 0}
+  authority_refs: [R-DOC08-2.2-04]
+  source_quote: "Has-something | the orb firms; caption 'have the answer when there's a moment' | a finished result is waiting for a turn boundary"
+
+- criterion_id: AC-EXP-STATE-SPEAKING-001   # ← the 'blob pulses when Proxy speaks' behavior
+  name: "Speaking: the orb pulses gently, synced to its own audio, driven by Doc 02's speaking signal"
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy is emitting TTS audio; Doc 02's speaking signal is ON."
+    when:  "The speaking signal is active."
+    then:
+      - "The orb renders the gentle-pulse state, time-synced to Proxy's own audio."
+      - "When the speaking signal turns OFF, the pulse stops (negative / off-state)."
+  primary_oracle: {type: render_state + signal_sync, artifact: "state==pulse iff speaking_signal==on; pulse timing tracks audio frames"}
+  thresholds: {pulse_without_speaking: 0, missing_pulse_while_speaking: 0}
+  authority_refs: [R-DOC08-2.2-05]
+  source_quote: "Speaking | gentle pulse synced to its own audio | Doc 02's speaking signal"
+
+- criterion_id: AC-EXP-STATE-MUTED-001
+  name: "Muted: a dimmed orb + 'muted' label renders on hard mute, so chosen silence is legible"
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The hard mute is engaged."
+    when:  "The tile renders."
+    then:
+      - "The orb is dimmed and a 'muted' label shows — silence reads as chosen, not broken."
+  primary_oracle: {type: render_state, artifact: "state(mute=on) == dim + 'muted' label"}
+  thresholds: {wrong_muted_render: 0}
+  authority_refs: [R-DOC08-2.2-06]
+  source_quote: "Muted | dimmed orb + 'muted' label | the hard mute (so silence is legible as chosen, not broken)"
+
+# ── Cross-cutting invariants over ALL states ─────────────────────────────
+- criterion_id: AC-EXP-STATE-EXCLUSIVE-001
+  name: "Mutually-exclusive states never co-occur"
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Any sequence of driving events (address, speaking, mute, result-pending)."
+    when:  "The renderer resolves state."
+    then: ["At most one primary state is active at a time; e.g. Speaking and Muted never render together."]
+  primary_oracle: {type: state_machine_property, artifact: "Hypothesis over event sequences: |active_primary_states| <= 1"}
+  thresholds: {concurrent_primary_states: 0}
+  authority_refs: [R-DOC08-2.2-07]
+  source_quote: "The V0 state set — deliberately few, each legible from across the room"
+
+- criterion_id: AC-EXP-STATE-SOURCEHONEST-001
+  name: "Every state is driven by a real system event, never decorative"
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The renderer with all system-event inputs held OFF."
+    when:  "The tile renders."
+    then:
+      - "No non-default state appears without its named driving event — no state is faked or timer-driven."
+  primary_oracle: {type: render_state + input_trace, artifact: "each state reachable ONLY via its named event; none on a timer"}
+  thresholds: {decorative_state_activations: 0}
+  authority_refs: [R-DOC08-2.2-08]
+  source_quote: "each driven by a real system event, never decorative"
+
+- criterion_id: AC-EXP-ACCESSIBILITY-001
+  name: "Accessibility law: every tile state is ALSO carried in speech or chat"
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Each of the six tile states in turn."
+    when:  "The state activates."
+    then:
+      - "A corresponding speech or chat output exists so a dial-in / screen-reader user gets the substance (loses ambience, never substance)."
+  primary_oracle: {type: channel_parity, artifact: "for each state: exists(speech|chat output)"}
+  thresholds: {states_without_nonvisual_channel: 0}
+  authority_refs: [R-DOC08-2.2-09]
+  source_quote: "motion is an enhancement, never the only channel. Every state the tile expresses is also carried in speech or chat."
+
+- criterion_id: AC-EXP-HANDRAISE-001
+  name: "Has-something IS V0's raise-a-hand: room can see + invite, Proxy never interrupts"
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy has a finished result (Has-something state)."
+    when:  "A participant says 'go ahead, Proxy' (an invite)."
+    then:
+      - "Proxy delivers the waiting result; absent an invite or a natural boundary, it never self-interrupts."
+  primary_oracle: {type: simulation_trace, artifact: "deliver-on-invite; zero pre-invite interrupts"}
+  thresholds: {uninvited_interrupts: 0}
+  authority_refs: [R-DOC08-2.2-10]
+  source_quote: "it is V0's raise-a-hand... Proxy never interrupts, but the room can see it has something and invite it"
+
+# ── The copy voice — each rule its own criterion (§2.1) ───────────────────
+- criterion_id: AC-EXP-VOICE-001
+  name: "Copy voice never says 'As an AI…'"
+  criticality: P2
+  blocking: true
+  behavior: {given: "Any Proxy-authored line (spoken or chat).", when: "Emitted.", then: ["The line contains no 'As an AI' construction."]}
+  primary_oracle: {type: string_lint, artifact: "regex over emitted copy"}
+  thresholds: {as_an_ai_occurrences: 0}
+  authority_refs: [R-DOC08-2.1-05]
+  source_quote: "never 'As an AI…'"
+
+- criterion_id: AC-EXP-VOICE-002
+  name: "Copy voice has no filler ('Certainly!', 'Great question!') and no exclamation marks"
+  criticality: P2
+  blocking: true
+  behavior: {given: "Any Proxy-authored line.", when: "Emitted.", then: ["No filler openers; zero exclamation marks."]}
+  primary_oracle: {type: string_lint, artifact: "filler-phrase + '!' scan"}
+  thresholds: {filler_or_exclamation: 0}
+  authority_refs: [R-DOC08-2.1-06]
+  source_quote: "no filler ('Certainly!', 'Great question!') · no exclamation marks"
+
+- criterion_id: AC-EXP-VOICE-003
+  name: "One thought per spoken sentence (it is heard, not read)"
+  criticality: P2
+  blocking: true
+  behavior: {given: "Any SPOKEN line.", when: "Emitted to TTS.", then: ["The sentence carries a single thought (one clause chain, not a compound multi-idea line)."]}
+  primary_oracle: {type: calibrated_judge, artifact: "one-thought check (κ-gated; deterministic sentence-split pre-filter)"}
+  thresholds: {multi_thought_spoken_lines_rate_max: 0.05}
+  authority_refs: [R-DOC08-2.1-07]
+  source_quote: "one thought per spoken sentence (it's being heard, not read)"
+
+# ── Degradation: honest fallback when a driver fails ─────────────────────
+- criterion_id: AC-EXP-DEGRADE-001
+  name: "If the speaking signal is lost mid-utterance, the orb leaves the pulse state (never a stuck fake-pulse)"
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The orb is in the Speaking/pulse state."
+    when:  "Doc 02's speaking signal drops unexpectedly."
+    then: ["The orb exits the pulse state within one render tick — it never keeps pulsing without live audio (a decorative lie)."]
+  primary_oracle: {type: simulation_trace, artifact: "signal-drop → pulse ends <= 1 tick"}
+  thresholds: {stale_pulse_ticks_max: 1}
+  authority_refs: [R-DOC08-2.2-08]
+  source_quote: "driven by a real system event, never decorative"
+
+# NOTE: ~24 criteria from ONE spec page (§2.1–2.2). The full Doc 08 (706 lines, ~13 more
+# feature sections) scales this to ~150–220 criteria — every behavior, nothing loose, each
+# with a cost-free oracle. This is the "everything no matter how small" bar, from the spec.
