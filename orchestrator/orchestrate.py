@@ -43,6 +43,8 @@ DOCS = {
 ORDER = list(DOCS)
 PROTECTED = ("tests/", "harness/", "fixtures/", "criteria/", "acceptance/", "product/", ".claude/")
 MAX_PASSES, STALL_LIMIT, PASS_TIMEOUT = 120, 4, 60 * 30   # wall-clock (9h/doc) binds before passes
+MAX_BUILD_SESSIONS = 24            # each is a LONG persistent builder doing many milestones
+BUILD_TIMEOUT, BUILD_TURNS = 60 * 90, 600   # a builder session iterates internally build->test->fix
 REVIEW_CYCLES, SWEEP_CYCLES = 3, 3
 
 
@@ -240,23 +242,31 @@ def adjudicate(doc: str, entry: str) -> bool:
     return len(DESELECTED) <= 5   # >5 deferrals = something systemic; halt
 
 
+def commit_count() -> int:
+    r = sh(["git", "rev-list", "--count", "HEAD"], capture_output=True, text=True)
+    return int(r.stdout.strip() or 0)
+
+
 def build_loop(doc: str) -> str:
-    """Phase 6: fresh session per pass -> scoped verify. Integrity-hash after every pass.
-    Self-healing: SPEC_BLOCKED -> fresh adjudicator (proceed-with-clarification, or defer the
-    genuinely-impossible criterion and keep going); STALL -> one fresh-debugger cycle first."""
-    baseline = tree_hash()
-    last, stall = None, 0
-    unstalled = False
+    """Phase 6: ONE persistent builder session iterates build->test->fix across many milestones,
+    committing per milestone (conductor pushes each). We spawn a CONTINUATION session only when the
+    prior one ran out of turns WITH progress (new commits). No progress + not green => a fresh
+    debugger; still stuck => defer that one criterion and continue. Fresh context is spent only on
+    the CHECKS (verify below, debugger, and P7 verify/sweep) — never on every build increment. That
+    is the maker!=checker line: the builder may be one warm session; the grader is always fresh."""
+    baseline = tree_hash()          # protected trees only; builder writes services/libs (unprotected)
     start = time.time()
-    for i in range(1, MAX_PASSES + 1):
+    stalls = 0
+    for s in range(1, MAX_BUILD_SESSIONS + 1):
         if time.time() - start + 1800 > 9 * 3600:
             return "WALL_CLOCK"
-        log(f"[{doc}] build pass {i}")
+        before = commit_count()
+        log(f"[{doc}] build session {s} (persistent; iterates internally)")
         try:
             agent("build_pass.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
-                  timeout=PASS_TIMEOUT, max_turns=80)
+                  timeout=BUILD_TIMEOUT, max_turns=BUILD_TURNS)
         except subprocess.TimeoutExpired:
-            log(f"[{doc}] pass {i} timed out; continuing")
+            log(f"[{doc}] build session {s} hit the {BUILD_TIMEOUT//60}m cap; checking progress")
         if tree_hash() != baseline:
             return "INTEGRITY_VIOLATION"
         if (msg := new_spec_blocked()):
@@ -267,39 +277,37 @@ def build_loop(doc: str) -> str:
         LOG.open("a").write(out[-2000:] + "\n")
         if code == 0:
             return "GREEN"
-        h = hashlib.sha256(out[-1200:].encode()).hexdigest()
-        stall = stall + 1 if h == last else 0
-        last = h
-        if stall >= STALL_LIMIT:
-            if not unstalled:
-                log(f"[{doc}] stall — dispatching fresh-context debugger (one shot)")
-                try:
-                    agent("unstall.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
-                          timeout=PASS_TIMEOUT, max_turns=80)
-                except subprocess.TimeoutExpired:
-                    pass
-                if tree_hash() != baseline:
-                    return "INTEGRITY_VIOLATION"
-                unstalled, stall, last = True, 0, None
-                continue
-            # Debugger already tried and it's STILL stuck on the same failure: DEFER this one
-            # criterion (record it, deselect it) and keep building the rest — fully autonomous,
-            # blockers noted for later, never a whole-doc halt on one hard test.
-            m = re.search(r"FAILED (\S+::\S+)", out)
-            node = m.group(1) if m else None
-            if node and node not in DESELECTED:
-                DESELECTED.append(node)
-                (ROOT / "evidence").mkdir(exist_ok=True)
-                (ROOT / "evidence" / f"{doc}-deferred.md").open("a").write(
-                    f"\nDEFERRED (build stuck 4x + debugger) — plumb later: {node}\n{out[-600:]}\n")
-                git_commit(f"{doc}: defer stuck criterion {node.split('::')[-1]} — continuing build")
-                log(f"[{doc}] DEFERRED {node} — continuing with the rest of the doc")
-                if sum(1 for d in DESELECTED if doc[-2:] in d or True) > 12:
-                    return "TOO_MANY_DEFERRALS"
-                stall, last, unstalled = 0, None, False
-                continue
-            return "STALL"   # couldn't identify the failing node — genuine, needs a human
-    return "MAX_PASSES"
+        if commit_count() > before:            # session progressed but ran out of turns -> continue
+            stalls = 0
+            continue
+        # No new commits AND not green => the builder is stuck.
+        stalls += 1
+        if stalls == 1:
+            log(f"[{doc}] no progress this session — fresh-context debugger")
+            try:
+                agent("unstall.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
+                      timeout=BUILD_TIMEOUT, max_turns=200)
+            except subprocess.TimeoutExpired:
+                pass
+            if tree_hash() != baseline:
+                return "INTEGRITY_VIOLATION"
+            continue
+        # Debugger also made no progress: defer the failing criterion, record it, keep building.
+        m = re.search(r"FAILED (\S+::\S+)", out)
+        node = m.group(1) if m else None
+        if node and node not in DESELECTED:
+            DESELECTED.append(node)
+            (ROOT / "evidence").mkdir(exist_ok=True)
+            (ROOT / "evidence" / f"{doc}-deferred.md").open("a").write(
+                f"\nDEFERRED (builder + debugger both stuck) — plumb later: {node}\n{out[-600:]}\n")
+            git_commit(f"{doc}: defer stuck criterion {node.split('::')[-1]} — continuing build")
+            log(f"[{doc}] DEFERRED {node} — continuing with the rest of the doc")
+            if len(DESELECTED) > 12:
+                return "TOO_MANY_DEFERRALS"
+            stalls = 0
+            continue
+        return "STALL"     # couldn't identify the failing node -> genuine, needs a human
+    return "MAX_BUILD_SESSIONS"
 
 
 def independent_check(doc: str, prompt: str, expect: str) -> tuple[bool, str]:
