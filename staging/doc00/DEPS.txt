@@ -1,7 +1,0 @@
-# pip-installable packages the Doc 00 evidence layer imports (beyond the stdlib + pytest).
-# All are also product runtime deps; listed here so the test layer can run standalone.
-psycopg[binary]        # psycopg3 — schema/model-stateful oracles (S.pg_conn, information_schema introspection)
-alembic                # S.apply_migrations runs `python -m alembic upgrade head` against the ephemeral test DB
-structlog              # observability/credential-log-absence oracles capture structlog output
-starlette              # boot/health/auth-route oracles drive the ASGI app via a test client
-testing.postgresql     # optional: ephemeral local Postgres when TEST_DATABASE_URL is unset (S.pg_conn fallback)
