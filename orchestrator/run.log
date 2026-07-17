@@ -1,0 +1,11 @@
+[03:01:59] ########## doc00 (00-FOUNDATION.md) ##########
+[03:01:59] [doc00] P1 generate criteria (cycle 1)
+[03:02:00] [doc00] P2 adversarial criteria review
+[03:02:02] [doc00] P1 generate criteria (cycle 2)
+[03:02:03] [doc00] P2 adversarial criteria review
+[03:02:04] [doc00] P1 generate criteria (cycle 3)
+[03:02:05] [doc00] P2 adversarial criteria review
+[03:02:07] GATE FAIL: no requirements at /Users/daksh/Downloads/proxy-build/staging/doc00/acceptance/doc00
+
+[03:02:07] ==> doc00: COVERAGE_GATE_FAILED_AFTER_REVIEW_CYCLES
+[03:02:07] HALT: sequential dependency — resolve, then rerun with --from doc00

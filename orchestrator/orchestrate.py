@@ -377,11 +377,29 @@ def run_doc(doc: str) -> str:
     return "DONE"
 
 
+def cli_preflight() -> None:
+    """Fail fast BEFORE the night starts: claude CLI present + authenticated, venv, git identity."""
+    if shutil.which("claude") is None:
+        sys.exit("PRELAUNCH FAIL: `claude` CLI not on PATH.")
+    r = subprocess.run(["claude", "-p", "Reply with exactly: AUTH_OK", "--max-turns", "1"],
+                       cwd=ROOT, capture_output=True, text=True, timeout=120)
+    combined = (r.stdout or "") + (r.stderr or "")
+    if "AUTH_OK" not in combined:
+        sys.exit("PRELAUNCH FAIL: claude CLI is not authenticated in THIS terminal.\n"
+                 "  Fix: run `claude` interactively here, then `/login` (use the Max subscription\n"
+                 "  account), exit, and relaunch the orchestrator.\n"
+                 f"  CLI said: {combined.strip()[:200]}")
+    if not pathlib.Path(PY).exists():
+        sys.exit("PRELAUNCH FAIL: .venv missing — run `uv venv --python 3.12` + install test deps.")
+    print("PRELAUNCH OK: claude authenticated, venv present.")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--from", dest="start", default="doc00")
     ap.add_argument("--only", default=None)
     args = ap.parse_args()
+    cli_preflight()
     docs = [args.only] if args.only else ORDER[ORDER.index(args.start):]
     LOG.write_text("")
     for doc in docs:
