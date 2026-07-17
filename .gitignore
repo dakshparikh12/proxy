@@ -47,3 +47,8 @@ proxy.bundle
 # Orchestrator runtime logs (grow continuously; never commit)
 orchestrator/run.log
 orchestrator/console.log
+
+# Orchestrator run-pinning markers (purely local; must never be committed/pushed,
+# or a pull would carry another run's pin/permission state)
+orchestrator/state/run.sha
+orchestrator/state/ALLOW_PULL

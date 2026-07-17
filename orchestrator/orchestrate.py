@@ -26,6 +26,9 @@ ORCH = ROOT / "orchestrator"
 STAGING = ROOT / "staging"
 PY = str(ROOT / ".venv" / "bin" / "python")
 LOG = ORCH / "run.log"
+ALLOW_PULL = ORCH / "state" / "ALLOW_PULL"   # present ONLY between docs: the supervisor may
+#   fast-forward monitoring-side fixes then. Absent while a doc builds => the run is pinned to
+#   its launch SHA and no founder push can mutate it mid-doc.
 
 DOCS = {
     "doc00": {"spec": "00-FOUNDATION.md",
@@ -95,12 +98,29 @@ def git_commit(msg: str) -> None:
     push_backup()
 
 
+def lock_pull_during_doc() -> None:
+    """A doc is now building: pin the run to its launch SHA (remove the between-docs marker)."""
+    ALLOW_PULL.unlink(missing_ok=True)
+
+
+def allow_pull_between_docs() -> None:
+    """At a doc boundary (or on halt): a fast-forward of monitoring-side fixes is safe again."""
+    ALLOW_PULL.parent.mkdir(exist_ok=True)
+    ALLOW_PULL.touch()
+
+
 def push_backup() -> None:
     """Best-effort remote backup after every commit — all progress saved off-machine, never
-    halts the run if the network/auth hiccups."""
+    halts the run if the network/auth hiccups. DURING a doc (ALLOW_PULL absent) a push conflict
+    means a founder pushed into a live run: we do NOT rebase the live tree onto it (that would
+    mutate the run), just WARN and leave the work committed locally to push at the next boundary."""
     try:
         r = sh(["git", "push", "-q", "origin", "main"], capture_output=True, text=True, timeout=90)
         if r.returncode != 0:
+            if not ALLOW_PULL.exists():
+                log("WARN push conflict DURING a doc — run pinned to launch SHA; skipping rebase, "
+                    "work is committed locally and will push at the next doc boundary.")
+                return
             sh(["git", "pull", "--rebase", "-q", "origin", "main"], capture_output=True, text=True, timeout=90)
             sh(["git", "push", "-q", "origin", "main"], capture_output=True, text=True, timeout=90)
     except Exception as e:
@@ -503,8 +523,10 @@ def main():
     docs = [args.only] if args.only else ORDER[ORDER.index(args.start):]
     LOG.write_text("")
     for doc in docs:
+        lock_pull_during_doc()      # doc in flight — pin the run to its launch SHA
         result = run_doc(doc)
         log(f"==> {doc}: {result}")
+        allow_pull_between_docs()    # doc no longer building (boundary or halt) — ff pull safe again
         if result != "DONE":
             log("HALT: sequential dependency — resolve, then rerun with --from " + doc)
             sys.exit(1)

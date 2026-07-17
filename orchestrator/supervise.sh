@@ -15,6 +15,12 @@ MAX_RESTARTS="${MAX_RESTARTS:-60}"
 STUCK_LIMIT="${STUCK_LIMIT:-4}"     # same doc, no progress, N times in a row => human needed
 i=0; last=""; stuck=0
 
+# Pin this run to the SHA we launched at: a founder push can't silently mutate a live run.
+# The supervisor only fast-forwards new work at a doc boundary (ALLOW_PULL present), never mid-doc.
+mkdir -p orchestrator/state
+git rev-parse HEAD > orchestrator/state/run.sha 2>/dev/null || true
+echo "[supervisor] launch SHA $(cut -c1-12 orchestrator/state/run.sha 2>/dev/null) pinned -> orchestrator/state/run.sha"
+
 done_tag() { git rev-parse -q --verify "refs/tags/$1-done" >/dev/null 2>&1; }
 
 while : ; do
@@ -46,9 +52,15 @@ while : ; do
   echo "=================================================================="
   echo "[supervisor] launch #$i — building from $start — $(date '+%F %T')"
   echo "=================================================================="
-  # Pull any monitoring-side fixes pushed while it ran, so they auto-apply on this restart
-  # (tree is clean between conductor runs — the conductor commits everything). Never fatal.
-  git pull --rebase -q origin main 2>/dev/null || git rebase --abort 2>/dev/null || true
+  # Auto-apply monitoring-side fixes ONLY at a doc boundary: the conductor touches
+  # orchestrator/state/ALLOW_PULL between docs and removes it while a doc builds. Fast-forward
+  # ONLY, so a founder push can never rebase-mutate a live run pinned to its launch SHA.
+  if [ -f orchestrator/state/ALLOW_PULL ]; then
+    git pull --ff-only -q origin main 2>/dev/null \
+      || echo "[supervisor] ff-only pull declined (diverged from remote) — staying on local HEAD"
+  else
+    echo "[supervisor] ALLOW_PULL absent — run pinned to launch SHA $(cut -c1-12 orchestrator/state/run.sha 2>/dev/null); skipping pull"
+  fi
   python3 orchestrator/orchestrate.py --from "$start"   # inherits its own logging
   rc=$?
   echo "[supervisor] conductor exited rc=$rc from $start at $(date '+%F %T')"
