@@ -46,6 +46,9 @@ while : ; do
   echo "=================================================================="
   echo "[supervisor] launch #$i — building from $start — $(date '+%F %T')"
   echo "=================================================================="
+  # Pull any monitoring-side fixes pushed while it ran, so they auto-apply on this restart
+  # (tree is clean between conductor runs — the conductor commits everything). Never fatal.
+  git pull --rebase -q origin main 2>/dev/null || git rebase --abort 2>/dev/null || true
   python3 orchestrator/orchestrate.py --from "$start"   # inherits its own logging
   rc=$?
   echo "[supervisor] conductor exited rc=$rc from $start at $(date '+%F %T')"
