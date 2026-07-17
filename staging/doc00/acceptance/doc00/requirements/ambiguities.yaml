@@ -168,3 +168,58 @@
 # obligation requiring the meeting_cost/staged_drafts -> meetings FK). A-001..A-005, A-008, A-010, A-011 are
 # accepted minor assumptions (A-010 resume_with_fallback arity -> Doc 04/05; A-011 progress-event finality
 # encoding -> Doc 05). 0 UNRESOLVED material ambiguities; 0 unresolved contradictions. Qualification: SPEC_QUALIFIED.
+
+# ── A-012 / A-013: third-review (review-gaps.md GAP-1 / GAP-3) material contradictions, RESOLVED ──
+
+- ambiguity_id: A-012
+  authority_refs: [R-DOC00-15-02, R-DOC00-15-03, R-DOC00-5-17]
+  severity: material
+  problem: >
+    Cost-breaker basis uncomputable on the pinned meeting_cost schema — a re-run of the A-009 defect CLASS in a new
+    place (review-gaps GAP-1). A-006 resolved the breaker's cap BASIS to be "fractions of the listening baseline applied
+    to the LISTENING subset (transport + Scribe + orch-idle)", with task/e2b spend excluded (AC-INV-002/003). But the
+    canonical meeting_cost DDL (CANONICAL §3) carries a SINGLE lumped model_usd whose own comment is "Scribe (direct) +
+    seam meter (wakes/Workroom)" — listening model spend (Scribe + orch-idle wakes) AND task model spend (Workroom/Opus)
+    are summed into one column. On that schema you cannot subtract the task portion, so the listening-subset basis and the
+    "task/e2b never trips the listening breaker" guarantee are UNCOMPUTABLE; A-006 silently assumed a decomposition the
+    pinned schema does not provide. A memory-only task accumulator does not fix it — AC-SUB-026 requires the meter to
+    reload from meeting_cost after recycle, so the task portion MUST be persisted.
+  required_resolution: >
+    Resolved by a DERIVED OBLIGATION of the two-meter invariant (R-DOC00-15-02) + the A-006 breaker basis (a P1 authority),
+    exactly as A-009 required the FK edge the bare DDL omitted: meeting_cost SHALL carry a persisted task_model_usd column
+    — the substantive-work (Workroom/Opus) model-spend SUBSET of model_usd (not an added summand; check_meeting_budget()'s
+    total model_usd+transport_usd+e2b_usd per AC-INV-003 is unchanged). Then listening model spend = model_usd -
+    task_model_usd is computable, the listening-subset breaker basis = transport_usd + (model_usd - task_model_usd), and the
+    task budget = task_model_usd + e2b_usd. AC-SUB-025 is amended to include task_model_usd in the canonical column set;
+    new AC-SUB-038 pins the split + the computable-listening-basis obligation (thresholds listening_basis_uncomputable /
+    task_model_folded_into_listening_basis = 0). This is the real resolution (persist the decomposition the breaker
+    requires), not a wording patch.
+  disposition: resolved_by_derived_obligation
+
+- ambiguity_id: A-013
+  authority_refs: [R-DOC00-5-27, R-DOC00-5-19, R-DOC00-5-26]
+  severity: material
+  problem: >
+    Live contradiction the "0 unresolved contradictions" claim missed (review-gaps GAP-3): abort-is-final vs
+    restart/resume/drain. §5.5 says "restart the coarse unit ... a workroom task = restart unless its deliverable already
+    exists," and CANONICAL §12.10 drains workroom tasks on boot with "WHERE operation_type LIKE 'workroom:%' AND
+    status='interrupted'". But the abort rule (CANONICAL §11.9 / Doc 04 §3.11 / Doc 05 §3.11) is "Abort is FINAL, never
+    retried — session-resume / JSON-retry can never resurrect a build the user killed." operation_runs.status is pinned to
+    exactly {running, completed, failed, interrupted} (AC-SUB-037), with NO distinct 'aborted' value. A crash leaves a row
+    status='running' -> boot reaper marks it 'interrupted' -> the drain reclaims/restarts it. If a USER-ABORTED build also
+    lands in status='interrupted', the identical drain predicate RESURRECTS it — a direct violation of abort-is-final and of
+    §1 "human control is absolute (a running build can be aborted)". The three clauses were authored in isolation, so the
+    collision was never routed.
+  required_resolution: >
+    Never-retry carve-out (consistent with the pinned status enum, so AC-SUB-037 is not weakened): a user-initiated abort
+    SHALL finalize the operation_runs row to a TERMINAL status the reaper and drain never reclaim — status='failed' (the
+    reaper only sweeps 'running'->'interrupted'; the drain only reclaims status='interrupted'), distinct from a crash (left
+    'running' for the reaper). The abort transition is durable (survives recycle), so a replacement instance also never
+    resurrects it. New AC-SUB-039 pins this: an aborted build's row is terminal-failed and provably matched by neither the
+    boot reaper nor the workroom drain predicate (thresholds aborted_build_drained / aborted_build_resurfaced_running = 0).
+    AC-SUB-037's status domain is unchanged (abort reuses the existing terminal 'failed'; no new status value introduced).
+  disposition: resolved_by_derived_obligation
+
+# Third-review update: A-006/A-007/A-009/A-012/A-013 are material CONTRADICTIONS, all RESOLVED (A-012 by the two-meter
+# derived obligation requiring the meeting_cost task_model_usd split; A-013 by the abort-is-final terminal-'failed'
+# carve-out). Still 0 UNRESOLVED material ambiguities; 0 unresolved contradictions. Qualification: SPEC_QUALIFIED.

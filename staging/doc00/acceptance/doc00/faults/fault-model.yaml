@@ -1243,3 +1243,89 @@
   description: "The build hard-wires a single Claude SDK auth mode (API-key only), dropping the OAuth-token and Vertex paths the spec requires kept."
   must_be_detected_by: [AC-BOOT-007]
   detection_requirement: 1.0
+
+# ── Third-review (review-gaps.md GAP-1/2/3/7/8/9) fault additions ──
+- fault_id: F-COST-BASIS-UNCOMPUTABLE
+  category: cost
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "meeting_cost keeps only the lumped model_usd (no task_model_usd), so the listening-subset breaker basis cannot exclude task model spend — the A-006 resolution is uncomputable (A-012)."
+  must_be_detected_by: [AC-SUB-038]
+  detection_requirement: 1.0
+- fault_id: F-TASK-MODEL-IN-LISTENING-BASIS
+  category: cost
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "The breaker computes its listening basis from raw model_usd (including Workroom/Opus task spend), so task work trips the listening notes-only breaker — the exact §12.7 'kill the real work' failure."
+  must_be_detected_by: [AC-SUB-038, AC-INV-003]
+  detection_requirement: 1.0
+- fault_id: F-ABORTED-BUILD-RESURRECTED
+  category: resilience
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A user-aborted workroom task is left status='interrupted', so the boot/periodic drain (WHERE status='interrupted') restarts it — resurrecting a build the user killed (violates abort-is-final)."
+  must_be_detected_by: [AC-SUB-039]
+  detection_requirement: 1.0
+- fault_id: F-ABORT-MARKED-INTERRUPTED
+  category: resilience
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "The abort path marks the row 'interrupted' (the crash bucket) instead of a terminal non-drained status, making abort indistinguishable from a crash and thus drain-eligible."
+  must_be_detected_by: [AC-SUB-039]
+  detection_requirement: 1.0
+- fault_id: F-WEBHOOK-SCHEMA-DRIFT
+  category: data_integrity
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "webhook_events is created with a column set differing from the canonical {id,provider,delivery_guid UNIQUE,sha,payload,status,received_at} or drops the delivery_guid UNIQUE constraint."
+  must_be_detected_by: [AC-SUB-040]
+  detection_requirement: 1.0
+- fault_id: F-WEBHOOK-STATUS-OUT-OF-DOMAIN
+  category: data_integrity
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A webhook_events.status value outside {pending,processed,failed} is written/accepted, so the drain's WHERE status='pending' can silently skip a mis-statused row (webhook never processed)."
+  must_be_detected_by: [AC-SUB-040]
+  detection_requirement: 1.0
+- fault_id: F-PROD-KEY-UNCONDITIONAL
+  category: deployment
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "SESSION_SECRET/GCP-project are required unconditionally, so a dev boot crashes on a prod-only key (dev breakage)."
+  must_be_detected_by: [AC-BOOT-008]
+  detection_requirement: 1.0
+- fault_id: F-PROD-KEY-NEVER-REQUIRED
+  category: security
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "SESSION_SECRET is never required, so prod boots without a session secret — a session-forgery security hole."
+  must_be_detected_by: [AC-BOOT-008]
+  detection_requirement: 1.0
+- fault_id: F-NO-TURN-CAP-CONFIG
+  category: operability
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "The per-role turn caps (wake_max_turns / task_wall_clock_budget_min / MAX_TURNS_*) are absent from config/defaults.toml + .env.example, leaving the SDK default max_turns=1000 as the only floor."
+  must_be_detected_by: [AC-CFG-012]
+  detection_requirement: 1.0
+- fault_id: F-INTERNAL-NOTES-UNTOKENED
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "/internal/notes serves notes without requiring the internal bearer token, so any caller reaching the route reads any meeting's notes."
+  must_be_detected_by: [AC-TEN-004]
+  detection_requirement: 1.0
+- fault_id: F-INTERNAL-NOTES-ON-AUTHWALL
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "/internal/notes is mounted on the public/auth-wall surface (reachable via a user session or the dispatch funnel), exposing a token-only reader to end users."
+  must_be_detected_by: [AC-TEN-004]
+  detection_requirement: 1.0
+- fault_id: F-INTERNAL-NOTES-SANDBOX-REACHABLE
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "Tenant sandbox code can reach /internal/notes (holds the token or egress is not denied), turning it into a cross-tenant notes-exfiltration primitive."
+  must_be_detected_by: [AC-TEN-004]
+  detection_requirement: 1.0

@@ -1909,3 +1909,79 @@
   criticality: P1
   testability: executable
   status: qualified
+
+# ══════════════════════════════════════════════════════════════════
+# Third-review (review-gaps.md GAP-1/2/3/7/8) requirement additions
+# ══════════════════════════════════════════════════════════════════
+
+- requirement_id: R-DOC00-15-15
+  authority_type: architecture_invariant
+  authority_document: DOC-00
+  source_location: "§12.7 two-meter split / §3 meeting_cost (derived obligation of R-DOC00-15-02 + A-006/A-012)"
+  source_quote: "the listening baseline (transport + Scribe + orch idle) is the SLA ceiling; substantive work draws a separate, disclosed task budget. ... check_meeting_budget() reads model_usd + transport_usd + e2b_usd"
+  normalized_statement: >
+    THE SYSTEM SHALL persist the substantive-work (Workroom/Opus) model spend as a task_model_usd column in meeting_cost
+    (a SUBSET of model_usd, not an added summand), so the listening-subset breaker basis transport_usd + (model_usd - task_model_usd)
+    is computable and task/e2b spend is structurally excluded from the listening (notes-only) breaker (A-012, resolved).
+  requirement_type: cost
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-27
+  authority_type: architecture_invariant
+  authority_document: DOC-00
+  source_location: "§1 (human control absolute — abort) + §5.5 restart-not-resume + CANONICAL §11.9 abort-is-final"
+  source_quote: "a running build can be paused or aborted mid-flight ... Abort is FINAL, never retried — session-resume / JSON-retry can never resurrect a build the user killed mid-meeting."
+  normalized_statement: >
+    WHEN a running workroom-task operation_runs row is aborted by the user
+    THE SYSTEM SHALL finalize it to a terminal status the boot reaper and the periodic workroom drain never reclaim
+    (never resurrected by restart/resume/JSON-retry), distinct from a crash-interrupted row (A-013, resolved).
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-28
+  authority_type: threat_model
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§11.4 /internal/notes + §12.9 sandbox egress + §5.1 auth wall"
+  source_quote: "reads the live notes via GET /internal/notes/{meeting_id} (token-gated, mounted outside the auth wall like /internal/reconcile) which folds note_deltas -> the notes object server-side."
+  normalized_statement: >
+    WHILE GET /internal/notes/{meeting_id} is mounted outside the user auth wall
+    THE SYSTEM SHALL gate it on the internal service bearer token (reject un-tokened / user-session-only requests), keep it off the public
+    connect-page/dispatch-funnel surface, and ensure untrusted tenant sandbox code (no token + egress default-deny) cannot reach it —
+    so it is not a cross-tenant notes-exfiltration surface; the only tenant-user notes surface is the auth-walled /m/{meeting_id} with its
+    server-side meeting->tenant check.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-6-08
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§6 boot required-key set — the (prod) qualifier"
+  source_quote: "DATABASE_URL, GCS_BUCKET, SESSION_SECRET (prod), GCP project (prod), each AES credential key, RECALL_API_KEY, ANTHROPIC_*."
+  normalized_statement: >
+    WHEN the process boots THE SYSTEM SHALL enforce the (prod)-qualified keys (SESSION_SECRET, GCP project) as required-in-prod and
+    optional-in-dev: a missing SESSION_SECRET/GCP-project SHALL crash boot in prod but SHALL NOT crash boot in dev; the unconditional keys
+    (DATABASE_URL, GCS_BUCKET, each AES key, RECALL_API_KEY, ANTHROPIC_*) remain required in every environment.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-7-11
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§7 config contract — per-role MAX_TURNS_* + config/defaults.toml turn caps"
+  source_quote: "per-role MAX_TURNS_* ... Numeric/threshold tunables live in config/defaults.toml (one value + unit + range per bracketed constant ...)"
+  normalized_statement: >
+    THE SYSTEM SHALL define the per-role turn-cap surface as config/defaults.toml tunables ([orchestrator] wake_max_turns,
+    [workroom] task_wall_clock_budget_min) each carrying a value + unit + range, overridable by the per-role MAX_TURNS_* env family
+    documented in .env.example.
+  requirement_type: operability
+  criticality: P2
+  testability: executable
+  status: qualified
