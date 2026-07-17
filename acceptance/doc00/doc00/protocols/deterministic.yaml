@@ -1,0 +1,72 @@
+# Deterministic Protocol — Doc 00 Foundation
+# Per GENERATOR.md §11.1
+---
+
+protocol_id: PROTO-DETERMINISTIC-01
+name: "Deterministic exact-oracle protocol"
+version: "1.0"
+
+description: >
+  Used for every Doc 00 criterion whose oracle is a static scan, schema/config inspection,
+  Pydantic/Literal introspection, state-machine assertion, concurrency schedule, or simulation
+  trace. Covers contract shapes, schema conformance, substrate mechanisms (heartbeat/fencing/
+  atomic-claim/reconcile), boot ordering, CI guards, IaC config, Docker config, registry closure,
+  and the structural security invariants (tenant isolation, lethal-trifecta reachability,
+  secret-in-log absence, per-sandbox secrets, accept-route authz).
+
+requirements:
+  - Inputs and environment fully specified and pinned before execution (fixture hashes, container digest).
+  - Any randomness (e.g. concurrency interleavings) explored with a pinned schedule/seed, not left to luck.
+  - Exact or invariant-based oracle; no learned evaluator as the primary decision.
+  - Isolated setup (fresh DB, fresh repo skeleton, fresh plan JSON) and verified cleanup after each test.
+  - Repeat only to detect environmental flakiness (default 1 run; flakiness budget 3 retries).
+  - Any divergent result on a repeat is NONDETERMINISTIC_FAILURE unless the criterion allows it.
+  - No-op / constant-success baselines SHALL be rejected by the oracle before the test passes.
+
+execution:
+  setup:
+    - Apply the fixture pinned state (migrated DB at head, repo skeleton, terraform-plan JSON, dockerfiles).
+    - Assert setup integrity (table count, schema hash, or file inventory).
+  run:
+    - Execute the exact operation under test (schema introspection, static scan, webhook/claim/heartbeat op, boot trace).
+    - Capture full output including schema, field values, labels, ordering, counts, exit codes.
+  oracle:
+    - Schema: exact column-set / type / index-predicate comparison.
+    - Contract: exact Literal member-set / Pydantic field-set comparison.
+    - Static: forbidden-pattern absence + required-pattern presence + call/definition counts + reachability.
+    - State-machine: assert transition legality (running->interrupted, fencing rowcount 0 -> is_owner False).
+    - Concurrency: run the pinned interleaving; assert exactly-one-owner / single-running-row / serialized section.
+    - Ordering: assert the exact sequence (lifespan steps; land->200->drain; DROP-before-INSERT analogues).
+    - Security: assert absence of prohibited data (secret in log, cross-tenant row, ungated outward path).
+  cleanup:
+    - Restore fixture state / dispose ephemeral DB + sandboxes; assert no state leaks to the next test.
+
+flakiness_policy:
+  max_retries: 3
+  retry_classification: "NONDETERMINISTIC_FAILURE after budget exhausted"
+  retry_permitted_only_for: "INFRASTRUCTURE_FAILURE (confirmed external cause)"
+
+pre_build_negative_validation:
+  requirement: >
+    Every P0 and P1 criterion using this protocol SHALL demonstrate its oracle rejects the
+    applicable canonical bad behavior (the paired fault in fault-model.yaml) before build.
+  canonical_bad_behaviors:
+    - no-op / constant-success implementation
+    - schema/column/index drift (missing partial unique index, wrong column type)
+    - concurrency violation (two owners, second running row, unlocked critical section)
+    - fencing bypass (zombie emits after rowcount 0)
+    - ordering violation (process before 200; routers before reaper)
+    - secret written to logs / cross-tenant read / ungated outward side-effect
+    - contract drift (extra/missing Literal member, unbounded free-text, non-UUID id)
+    - guard removed / made skippable (multi-head accepted, dead token accepted)
+
+evidence_format:
+  - junit XML with explicit criterion_id + test_id in <properties>
+  - executed assertion count per test
+  - output artifact hash for schema/config/golden checks
+  - no-op baseline rejection recorded as a separate evidence line
+  - fault detection result recorded per mandatory fault
+
+applies_to_criteria:
+  tags: [static, contract, unit-example, unit-property, model-stateful, integration, security-adversarial, deployment, fault-injection]
+  note: "All Doc 00 criteria EXCEPT the two performance-gated ones (AC-INV-001, AC-BLD-001) which use PROTO-PERFORMANCE-01."

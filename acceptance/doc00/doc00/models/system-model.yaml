@@ -1,0 +1,200 @@
+# System Model — Doc 00 Constitution, Architecture & Foundation
+# Per GENERATOR.md §5.1. The model exists to identify which verification dimensions apply.
+
+---
+
+public_inputs:
+  - id: IN-WEBHOOK
+    description: "External webhooks (GitHub push/install/uninstall + Recall bot events), HMAC-signed"
+    trust_level: untrusted
+    validation: HMAC signature + delivery_guid dedupe (webhook_events)
+  - id: IN-CLIENT-MSG
+    description: "tile/connect -> backend client messages through the dispatch funnel"
+    trust_level: untrusted
+    validation: Pydantic validation in dispatch; tile->backend not trusted (public connect URL)
+  - id: IN-AUTH
+    description: "Google OAuth sign-in on the connect page"
+    trust_level: untrusted-until-verified
+    validation: Authlib + Google OIDC; signed session cookie backed by sessions
+  - id: IN-ACCEPT
+    description: "POST /m/{meeting_id}/drafts/{draft_id}/accept|reject"
+    trust_level: tenant-authenticated
+    validation: protected() + server-side meeting/draft->tenant check + CSRF
+  - id: IN-CAP-TOKEN
+    description: "Signed capability token in a chat link (read-only notes)"
+    trust_level: scoped-capability
+    validation: signature + TTL + meeting-scope + revocation check
+  - id: IN-INTERNAL
+    description: "POST /internal/{reconcile,notes} (outside the auth wall)"
+    trust_level: internal-token
+    validation: internal bearer token
+
+public_outputs:
+  - id: OUT-HEALTH
+    description: "GET /health (UptimeRobot) + Healthchecks.io heartbeats"
+  - id: OUT-READINESS
+    description: "Readiness enum connecting|cloning|indexing|ready|not_ready + coverage_pct + gaps"
+  - id: OUT-NOTES-VIEW
+    description: "GET /m/{meeting_id} folded notes + staged_drafts cards"
+  - id: OUT-AGENT-CHUNK
+    description: "AgentChunk stream (INIT|TEXT|TOOL_USE|TOOL_RESULT|RESULT|ERROR), consumed via stream_deltas"
+
+persistent_stores:
+  - id: STORE-POSTGRES
+    description: "ONE Cloud SQL Postgres 15 — all durable state (operation_runs, webhook_events, meeting_cost, staged_drafts, tenants/users/repos/meetings/sessions, transcript_segments, note_deltas)"
+    scope: tenant-scoped (tenant_id in every app table; scope_id text on operation_runs)
+    mutable: true
+    irreversible_actions: [migration, tenant-offboard-delete]
+  - id: STORE-GCS
+    description: "GCS Object-Versioned buckets — notes files, artifacts, sandbox-seed, Terraform state; drafts full content"
+    scope: tenant-prefixed
+    mutable: true
+    irreversible_actions: [tenant-offboard-prefix-delete]
+  - id: STORE-TENANT-VOLUME
+    description: "code_intel per-tenant encrypted volume (KMS PD + per-tenant envelope key)"
+    scope: tenant-isolated
+    mutable: true
+    irreversible_actions: [envelope-key-destroy = crypto-shred]
+
+mutable_state:
+  - id: STATE-OPRUN
+    description: "operation_runs rows: running -> completed|failed|interrupted; heartbeat/fencing"
+    transitions:
+      - insert(running) via with_operation_run / atomic claim
+      - running -> completed (normal exit)
+      - running -> failed (exception)
+      - running -> interrupted (stale sweep on read + boot bulk sweep)
+      - fencing UPDATE rowcount 0 -> is_owner=False -> self-terminate
+  - id: STATE-COST-METER
+    description: "meeting_cost persisted meter (model+transport+e2b); reloaded on recycle; two-meter split"
+  - id: STATE-SANDBOX
+    description: "E2B sandbox: provision -> destroy; bounded by native timeout + explicit destroy + TTL reconcile"
+  - id: STATE-SESSION
+    description: "server-side sessions (signed cookie) -> {user_id, tenant_id}"
+
+asynchronous_jobs:
+  - id: JOB-RECONCILE
+    description: "run_reconcile_sweep(): reap stale operation_runs, destroy ended-meeting sandboxes, notes-retention, tenant-offboard"
+    triggered_by: [Cloud Scheduler (prod, 5min), in-process interval (dev)]
+    idempotent: true
+  - id: JOB-WEBHOOK-DRAIN
+    description: "Drain webhook_events status='pending' on boot + periodically (idempotent)"
+    triggered_by: [boot, periodic]
+  - id: JOB-BOOT-REAPER
+    description: "Boot-time bulk sweep marking orphaned running rows interrupted before router mount"
+    triggered_by: [server boot lifespan]
+  - id: JOB-MIGRATE
+    description: "Alembic upgrade under pg_advisory_lock, 30x5s retry-until-success (parallel-boot safe)"
+    triggered_by: [container start CMD]
+
+queues_and_event_streams:
+  - id: QUEUE-WEBHOOK-EVENTS
+    description: "webhook_events durable landing (delivery_guid unique) — the ONLY external-callback durability; NO general meeting_events bus"
+    deduplication_key: delivery_guid
+
+caches:
+  - id: CACHE-PROMPT
+    description: "1-hr-TTL prompt cache on stable agent prefixes (policy noted §13; enforced Doc 04/05)"
+  - id: CACHE-MEETING-COST-INPROC
+    description: "In-process cost accrual is write-through to persisted meeting_cost (never authoritative alone)"
+
+external_dependencies:
+  - id: EXT-E2B
+    description: "E2B sandboxes — Workroom mutable work ONLY (never the direct-answer path)"
+    failure_modes: [timeout, crash, leak-past-TTL]
+  - id: EXT-RECALL
+    description: "Recall.ai bots — at-least-once join webhooks (atomic-claim dedupe)"
+    failure_modes: [duplicate-delivery, retry]
+  - id: EXT-ANTHROPIC
+    description: "Anthropic/AssemblyAI/Cartesia model APIs — every model is an API (no GPU)"
+    failure_modes: [timeout, rate-limit, EPIPE from SDK subprocess]
+  - id: EXT-NANGO
+    description: "Nango — end-user GitHub OAuth; tokens minted per-operation, never cached/logged"
+    failure_modes: [timeout, unavailable]
+  - id: EXT-SECRET-MANAGER
+    description: "GCP Secret Manager — platform credentials + GitHub-App private key"
+    failure_modes: [binding-drift (check-secret-bindings gate)]
+
+trust_boundaries:
+  - id: TB-TENANT
+    description: "Per-tenant isolation: distinct envelope key per tenant; tenant_id in every schema; cross-tenant read = P0 breach"
+  - id: TB-AUTH-WALL
+    description: "control_plane is the auth wall; /internal/* mounted outside it, token-gated"
+  - id: TB-LETHAL-TRIFECTA
+    description: "No transcript-triggered path reaches an outward side-effect without a human click (staged-drafts-only)"
+  - id: TB-SANDBOX
+    description: "Arbitrary code exec only inside E2B, never on the host; per-sandbox random JWT secret"
+  - id: TB-FENCING
+    description: "A reclaimed process (is_owner=False) emits nothing (speak/send_chat/apply/dispatch gated)"
+
+authentication_authorization_boundaries:
+  - id: AUTH-SESSION
+    description: "resolve_session(cookie) -> {user_id, tenant_id}; signed cookie backed by sessions"
+  - id: AUTH-ACCEPT
+    description: "Only accept-draft is hard-enforced: authenticated tenant member via /m/ + server-side draft->tenant check"
+  - id: AUTH-CAP-TOKEN
+    description: "Read-only capability token: scoped + short-TTL + revocable; never grants accept"
+  - id: AUTH-INTERNAL
+    description: "Internal token on /internal/{reconcile,notes}"
+
+tenant_boundaries:
+  - id: TENANT-VOLUME-KEY
+    description: "Per-tenant envelope key; destroying it crypto-shreds only that tenant"
+  - id: TENANT-SCHEMA
+    description: "tenant_id (or FK chain) in every durable app table"
+
+secret_bearing_paths:
+  - id: SBP-GITHUB-TOKEN
+    description: "Per-operation GitHub token via Nango — never cached, never logged"
+  - id: SBP-DETECTED-SECRET
+    description: "Detected secrets — redacted at read path; excluded from index/context/sandbox/logs"
+  - id: SBP-SANDBOX-JWT
+    description: "Per-sandbox random JWT secret (host keeps the map); never fleet-shared"
+  - id: SBP-PLATFORM-CREDS
+    description: "Secret Manager platform creds + GitHub-App private key; random_id + ignore_changes=[secret_data]"
+
+irreversible_or_consequential_actions:
+  - id: ICA-KEY-DESTROY
+    description: "Envelope-key destroy = crypto-shred (offboarding) — unrecoverable, tenant-scoped"
+  - id: ICA-OFFBOARD-DELETE
+    description: "run_reconcile_sweep tenant delete: Postgres rows + GCS prefixes"
+  - id: ICA-DRAFT-APPLY
+    description: "Accept-handler apply of a staged draft (only after a human click)"
+  - id: ICA-MIGRATION
+    description: "Alembic schema migration (advisory-locked, single writer)"
+
+cancellation_points:
+  - id: CP-PAUSE
+    description: "check_pause() on operation_runs.pause_requested -> pause/abort a running build"
+  - id: CP-FENCE
+    description: "Fencing rowcount 0 -> is_owner=False -> self-terminate (stop emitting)"
+
+recovery_and_retry:
+  - id: RR-RESTART-NOT-RESUME
+    description: "Meeting harness crash = restart (re-join Recall + replay from progress); no checkpoint-resume"
+  - id: RR-WORKROOM-COMPLETION
+    description: "Workroom task = restart unless SQL completion check shows deliverable exists"
+  - id: RR-WEBHOOK-DEDUPE
+    description: "Duplicate delivery_guid -> ON CONFLICT DO NOTHING (idempotent)"
+  - id: RR-MIGRATE-RETRY
+    description: "30x5s retry under advisory lock until the winning migrator releases"
+  - id: RR-EPIPE
+    description: "BrokenPipeError swallowed + retry recovers; unknown exception crashes after flush"
+
+deployment_environments:
+  - id: ENV-PROD
+    description: "control_plane (Cloud Run) + meeting_runtime (GCE MIG) + code_intel (stateful GCE) + Cloud SQL REGIONAL + PITR"
+  - id: ENV-DEV
+    description: "Same shape; Cloud SQL ZONAL db-f1-micro; dev auto-deploys on trigger; in-process reconcile interval"
+  - id: ENV-TEST-FIXTURE
+    description: "Fixtures: migrated ephemeral Postgres, terraform-plan JSON, dockerfile-lint, static-analysis, injected faults"
+
+resource_and_scale_dimensions:
+  - id: SCALE-INFLIGHT-LLM
+    description: "PROXY_MAX_INFLIGHT_LLM=16 global libs/llm semaphore (distinct from per-meeting 3-5)"
+  - id: SCALE-POOL
+    description: "asyncpg pool min 2 / max 20 (~2 instances x 20 ~= 40 conns under Cloud SQL limits)"
+  - id: SCALE-HEARTBEAT
+    description: "HEARTBEAT_S=10 / STALE_AFTER_S=40 (config)"
+  - id: SCALE-COST
+    description: "Listening baseline ~$0.95-1.25/hr SLA ceiling; separate disclosed task budget"

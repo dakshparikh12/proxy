@@ -1,0 +1,170 @@
+# Ambiguities — Doc 00 Foundation
+# Extracted per GENERATOR.md §4.4. Material ambiguities block the seal; minor ones are
+# accepted as explicitly-recorded assumptions with their own criterion (§4.5).
+
+- ambiguity_id: A-001
+  authority_refs: [R-DOC00-4-13]
+  severity: minor
+  problem: >
+    "per-tenant envelope key over each tenant's subdirectory" does not pin the KMS key
+    hierarchy (one KEK per tenant vs one KEK + per-tenant DEK). Both satisfy the
+    distinct-key-per-tenant + crypto-shred properties.
+  required_resolution: >
+    Accepted as minor: the criterion asserts the observable properties (distinct key per
+    tenant; destroying one shreds only that tenant) and is agnostic to the KEK/DEK layering.
+  disposition: accepted_minor_assumption
+
+- ambiguity_id: A-002
+  authority_refs: [R-DOC00-5-04, R-DOC00-5-05]
+  severity: minor
+  problem: >
+    HEARTBEAT_S and STALE_AFTER_S are given as "≈10" and "≈40" (approximate). The exact
+    values are not pinned in Doc 00 prose.
+  required_resolution: >
+    Accepted as minor: config/defaults.toml pins heartbeat_s=10 and stale_after_s=40
+    ([orchestrator]); criteria reference the config values, not the prose tildes.
+  disposition: accepted_minor_assumption
+
+- ambiguity_id: A-003
+  authority_refs: [R-DOC00-15-01]
+  severity: minor
+  problem: >
+    The listening baseline is stated as both "~$0.95–1.25/hr" (§15/§12.7) and
+    "~$0.95–1.15/hr" (§8 small-resolutions). The upper bound differs by $0.10.
+  required_resolution: >
+    Accepted as minor: use the CANONICAL §12.7 / config-defaults [cost] range as authoritative
+    (listening_baseline_high_usd_per_h = 1.25); the §8 "1.15" is an editorial rounding.
+    The cost-ceiling criterion (AC-INV-001) uses the config values.
+  disposition: accepted_minor_assumption
+
+- ambiguity_id: A-004
+  authority_refs: [R-DOC00-6-02, R-DOC00-6-04]
+  severity: minor
+  problem: >
+    §6 lists the boot-time reaper as marking "in_meeting/running" rows interrupted, but the
+    canonical operation_runs status enum (CANONICAL §2) is {running, completed, failed,
+    interrupted} — there is no 'in_meeting' status.
+  required_resolution: >
+    Accepted as minor: 'in_meeting' in the prose refers to the meetings.status='live' /
+    operation_runs status='running' pairing; the criterion targets orphaned status='running'
+    operation_runs rows, which is the canonical shape.
+  disposition: accepted_minor_assumption
+
+- ambiguity_id: A-005
+  authority_refs: [R-DOC00-16-01]
+  severity: minor
+  problem: >
+    The spike latency gate is "p50 ≤ ~2.5s" (§11.12) while the pinned direct-answer SLO
+    (config [latency_slo]) is first_audio_p50_s = 2.5 and first_text_p50_s = 2.0. It is not
+    stated which clock the spike gate measures.
+  required_resolution: >
+    Accepted as minor: the spike gate (AC-BLD-001) measures the shallow first-grounded-audio
+    p50 (config first_audio_p50_s = 2.5), consistent with CANONICAL §12.8 "step-0.5 measures
+    the shallow path".
+  disposition: accepted_minor_assumption
+
+- ambiguity_id: A-006
+  authority_refs: [R-DOC00-15-02, R-DOC00-15-03]
+  severity: material
+  problem: >
+    The cost breaker's cap BASIS is contradictory across two P1 criteria. §12.7 (AC-INV-002) says task
+    spend is "never folded into the baseline"; §15's lean meter (AC-INV-003) says check_meeting_budget()
+    "reads the sum [model+transport+e2b], gated by the breaker (soft cap -> degrade; hard cap -> notes-only)."
+    If the listening-baseline caps (hard_cap_frac=1.0 of the listening baseline) are applied to a sum that
+    INCLUDES e2b_usd/Workroom/Opus, task work trips the listening breaker and forces notes-only — the exact
+    outcome §12.7 calls "arithmetically false [that] would force the breaker to kill the product's real work."
+  required_resolution: >
+    Resolved from §12.7's explicit intent (task spend never folded; do not kill real work) and the fact that
+    every breaker ACTION (degrade to Haiku, widen Scribe interval, notes-only) is a LISTENING-tier degradation:
+    check_meeting_budget() RETURNS the full sum (the total-meeting figure), but the soft/hard caps that drive
+    degrade/notes-only are fractions of the listening baseline applied to the LISTENING subset (transport +
+    Scribe + orch-idle); substantive-work spend is governed SOLELY by the separate pre-dispatch estimate gate
+    on dispatch_workroom, never by the listening breaker. AC-INV-002/AC-INV-003 are reconciled to encode this
+    single behavior (thresholds task_spend_trips_listening_breaker=0 / task_spend_forces_notes_only=0), so it
+    is no longer silently split across two conflicting P1 criteria.
+  disposition: resolved_by_canonical_intent
+
+- ambiguity_id: A-007
+  authority_refs: [R-DOC00-10-07, R-DOC00-4-05]
+  severity: material
+  problem: >
+    Self-contradicting banned string. §12.12's authoritative banned-token list includes "GCE-per-meeting"
+    as a dead token the CI banned-strings test must fail on, but AMENDMENT A1 (2026-07-17, same doc) REVIVED
+    exactly that topology — meeting_runtime is now GCE MIG, one asyncio process per meeting (R-DOC00-4-05 /
+    AC-HOST-005). A banned-strings guard tripping on "GCE per meeting" collides head-on with the A1 deploy
+    definition. AC-CI-007's example tokens sidestep it, but the requirement's own source authority bans it.
+  required_resolution: >
+    A1 (the later-dated 2026-07-17 amendment) supersedes the §12.12 dead-token entry; per CANONICAL's own
+    "the later canonical decision wins" rule, "GCE-per-meeting"/"GCE per meeting" is REMOVED from the
+    banned-strings set. AC-CI-007 asserts the banned set does NOT contain it (threshold
+    gce_per_meeting_in_banned_set=0); the remaining genuinely-dead tokens (session_transcripts, ManagedResource,
+    warm pool, map_* pipeline, TILE_ADDRESS, "every ask->workroom", "bundles the notes object") still fail.
+  disposition: resolved_by_amendment_precedence
+
+- ambiguity_id: A-008
+  authority_refs: [R-DOC00-4-05]
+  severity: minor
+  problem: >
+    Intra-Doc-00 stale-prose contradiction. §5.3 (line 164) still reads "the meeting_runtime harness itself
+    is a Cloud Run process, not a provisioned resource," which directly contradicts A1 / §12.1 / AC-HOST-005
+    ({meeting_runtime_on_cloudrun: 0}). The bundle routed the analogous stale-prose issue (A-004 handles the
+    stale in_meeting wording) but left this one unrouted.
+  required_resolution: >
+    Accepted as minor (stale pre-A1 prose): A1 / CANONICAL §12.1 wins — meeting_runtime is GCE MIG, not Cloud
+    Run. AC-HOST-005 targets the canonical GCE-MIG topology and asserts meeting_runtime_on_cloudrun=0; the
+    §5.3 "Cloud Run process" clause is superseded editorial residue, exactly as A-004 treats the stale
+    in_meeting status wording.
+  disposition: accepted_minor_assumption
+
+- ambiguity_id: A-009
+  authority_refs: [R-INV-09, R-DOC00-5-17, R-DOC00-5-18]
+  severity: material
+  problem: >
+    Jointly-unimplementable schema pair. AC-TEN-001 (R-INV-09, tenant isolation) requires every tenant-scoped table
+    to reach tenant_id "directly or via an FK chain to tenants" (tenant_unscoped_tables: 0), but the canonical DDL for
+    meeting_cost (CANONICAL §3) and staged_drafts (§4) declares a BARE meeting_id (uuid PK / uuid NOT NULL) with NO
+    `REFERENCES meetings` and no tenant_id column. As written, AC-TEN-001 and the exact-column-set schema criteria
+    (AC-SUB-025/027) cannot both hold: with no declared FK edge, the "FK chain to tenants" is not structurally present
+    for those two tables.
+  required_resolution: >
+    Resolved by the tenant-isolation invariant's precedence (a P0 authority): the FK edge the bare DDL omits is a
+    DERIVED OBLIGATION of R-INV-09, so meeting_cost.meeting_id and staged_drafts.meeting_id SHALL be declared
+    `REFERENCES meetings(id)` in the migration. AC-SUB-025/027 are amended to require that FK (thresholds
+    meeting_cost_missing_meetings_fk / staged_drafts_missing_meetings_fk = 0), which makes AC-TEN-001's FK chain
+    (meeting_cost/staged_drafts -> meetings -> tenant_id) structurally hold. This is the real resolution (require the
+    edge), not a wording patch that hand-waves an undeclared linkage as "reachable".
+  disposition: resolved_by_derived_obligation
+
+- ambiguity_id: A-010
+  authority_refs: [R-DOC00-2-10]
+  severity: minor
+  problem: >
+    Intra-CANONICAL signature contradiction. §11.9 shows resume_with_fallback(session_id, history_fn) — a 2-arg form —
+    while §12.12 orders "Pin resume_with_fallback full 6-arg signature in §11.9"; the four extra args are never
+    enumerated in the spec. AC-CMP-010 pins single-definition/location but not arity, so no Doc 00 criterion catches
+    either shape.
+  required_resolution: >
+    Accepted minor + covered_downstream: per CANONICAL's "later canonical decision wins", §12.12's 6-arg mandate
+    supersedes §11.9's stale 2-arg shorthand, but the exact 6-arg parameter list is NOT specified at Doc 00's surface —
+    resume_with_fallback lives in libs/agentkit and is parameterized by its Doc 04 §3.5 / Doc 05 §3.1 callers, so the
+    concrete signature/arity is pinned and acceptance-tested in the Doc 04/05 bundles. Doc 00 asserts only the
+    single-definition/DRY property (AC-CMP-010); it cannot (absent the arg names) author an arity criterion.
+  disposition: resolved_by_amendment_precedence
+
+- ambiguity_id: A-011
+  authority_refs: [R-DOC00-2-16]
+  severity: minor
+  problem: >
+    "progress events same shape minus finality" (§2) does not pin HOW finality is removed — a separate ProgressEvent
+    model, an Envelope with status=None, or a non-terminal 'progress' marker all satisfy "same shape minus finality".
+  required_resolution: >
+    Accepted as minor: AC-CMP-016 asserts the OBSERVABLE property (same structural fields as the Envelope; no finalized
+    terminal EnvelopeStatus carried, so a progress event is never mistaken for a finalized one) and is agnostic to the
+    concrete encoding; the Workroom producer's exact representation is a Doc 05 detail.
+  disposition: accepted_minor_assumption
+
+# A-006/A-007/A-009 are material CONTRADICTIONS surfaced by adversarial review; all RESOLVED here
+# (A-006 by §12.7 intent; A-007 by A1 amendment precedence; A-009 by the R-INV-09 tenant-isolation derived
+# obligation requiring the meeting_cost/staged_drafts -> meetings FK). A-001..A-005, A-008, A-010, A-011 are
+# accepted minor assumptions (A-010 resume_with_fallback arity -> Doc 04/05; A-011 progress-event finality
+# encoding -> Doc 05). 0 UNRESOLVED material ambiguities; 0 unresolved contradictions. Qualification: SPEC_QUALIFIED.
