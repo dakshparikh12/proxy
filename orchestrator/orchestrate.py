@@ -86,13 +86,19 @@ def git_commit(msg: str) -> None:
 
 
 def ensure_deps(doc: str) -> None:
-    deps = DOCS[doc]["deps"]
+    deps = list(DOCS[doc]["deps"])          # copy — never mutate the module table
     hints = STAGING / doc / "DEPS.txt"
     if hints.exists():
-        deps = deps + [d.strip() for d in hints.read_text().splitlines() if d.strip()]
+        for line in hints.read_text().splitlines():
+            line = line.split("#", 1)[0].strip()          # drop inline + comment-only lines
+            if line:
+                deps.append(line)
+    deps = [d for d in dict.fromkeys(deps) if re.match(r"^[A-Za-z0-9]", d)]   # dedupe + sane spec only
     if deps:
         log(f"[{doc}] installing test/build deps: {deps}")
-        sh(["uv", "pip", "install", "-q", *deps])
+        r = sh(["uv", "pip", "install", "-q", *deps], capture_output=True, text=True)
+        if r.returncode != 0:
+            log(f"[{doc}] WARN dep install non-zero (continuing): {r.stderr[-300:]}")
 
 
 def test_dirs_upto(doc: str) -> list[str]:
@@ -302,9 +308,16 @@ def run_doc(doc: str) -> str:
             shutil.copy2(sdir / "review-gaps.md", ROOT / "evidence" / f"{doc}-review-gaps-outstanding.md")
             log(f"[{doc}] WARN review gaps outstanding after {REVIEW_CYCLES} cycles — gate passed, "
                 f"proceeding; sweep is the backstop; morning item saved to evidence/")
-    # P3: evidence (tests+fixtures+sims+goldens) — always ensure it exists
-    log(f"[{doc}] P3 generate evidence layer (tests/fixtures/sims/goldens -> staging)")
-    agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]})
+    # P3: evidence (tests+fixtures+sims+goldens). Skip on resume if already promoted + collecting
+    # clean (a re-run after a conductor-side halt must not waste ~30min regenerating a sealed doc).
+    promoted_ok = bool(test_dirs_upto(doc)) and sh(
+        [PY, "-m", "pytest", "--collect-only", "-q", *test_dirs_upto(doc)],
+        capture_output=True, text=True).returncode == 0
+    if promoted_ok and (ORCH / "state" / f"{doc}.seal.json").exists():
+        log(f"[{doc}] P3 skipped — evidence already promoted + collecting clean (resume)")
+    else:
+        log(f"[{doc}] P3 generate evidence layer (tests/fixtures/sims/goldens -> staging)")
+        agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]})
     # P4: gate + promote + seal (THIS process, deterministic)
     base = (sdir / "acceptance" / doc) if (sdir / "acceptance" / doc).exists() else (ROOT / "acceptance" / doc)
     if not coverage_gate(doc, base):
@@ -314,10 +327,11 @@ def run_doc(doc: str) -> str:
     git_commit(f"{doc}: promote + seal arbiter (bundle+evidence) [{digest[:12]}]")
     log(f"[{doc}] P4 sealed {digest[:12]}")
     ensure_deps(doc)
-    # sanity: evidence must collect
+    # sanity: evidence must collect. Use pytest's EXIT CODE (0 = collected ok), never a substring
+    # match — test names legitimately contain 'error' (e.g. ..._returns_errors_never_throws).
     col = sh([PY, "-m", "pytest", "--collect-only", "-q", *test_dirs_upto(doc)],
              capture_output=True, text=True)
-    if "error" in (col.stdout + col.stderr).lower():
+    if col.returncode != 0:
         return "EVIDENCE_COLLECTION_ERROR:\n" + (col.stdout + col.stderr)[-800:]
     # P5: plan
     log(f"[{doc}] P5 plan + planner-review")
