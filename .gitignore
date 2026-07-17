@@ -16,9 +16,22 @@ venv/
 
 # Secrets / local env (never commit)
 .env
+.env.local
 *.key
 *.pem
 secrets.local.*
+
+# Cloud / IaC credentials & state (never commit)
+*-sa.json
+gcp-*.json
+service-account*.json
+application_default_credentials.json
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!example.tfvars
+crash.log
 
 # Build loop runtime output
 runner.log
