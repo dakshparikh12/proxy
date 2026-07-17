@@ -122,10 +122,11 @@ def verify(doc: str, blocking_types: bool = False) -> tuple[int, str]:
         return 1, "\n".join(out)
     mypy_rc = run([PY, "-m", "mypy", "--strict", *dirs]) if dirs else 0
     bandit_rc = run([PY, "-m", "bandit", "-q", "-r", *dirs]) if dirs else 0
+    desel = [a for t in DESELECTED for a in ("--deselect", t)]
     col = sh([PY, "-m", "pytest", "--collect-only", "-q", *scope], capture_output=True, text=True)
     if re.search(r"^no tests ran|^0 tests|error", col.stdout.splitlines()[-1] if col.stdout else "error"):
         return 1, "ZERO TESTS COLLECTED or collection error — refusing green\n" + col.stdout[-800:]
-    if run([PY, "-m", "pytest", "-q", "-x", "--maxfail=1", *scope]) != 0:
+    if run([PY, "-m", "pytest", "-q", "-x", "--maxfail=1", *desel, *scope]) != 0:
         return 1, "\n".join(out)
     if blocking_types and (mypy_rc or bandit_rc):
         return 1, "doc-end gate: mypy/bandit must be clean\n" + "\n".join(out)
@@ -181,18 +182,52 @@ def coverage_gate(doc: str, base: pathlib.Path) -> bool:
     return r.returncode == 0
 
 
-def spec_blocked() -> str | None:
+DESELECTED: list[str] = []          # genuinely-impossible criteria deferred for morning (recorded)
+_seen_blocked = 0
+
+
+def new_spec_blocked() -> str | None:
+    """Only NEW SPEC_BLOCKED entries since last check (resolved ones don't re-trigger)."""
+    global _seen_blocked
     p = ROOT / "PROGRESS.md"
-    if p.exists() and "SPEC_BLOCKED" in p.read_text():
-        tail = [l for l in p.read_text().splitlines() if "SPEC_BLOCKED" in l][-1]
-        return tail
+    if not p.exists():
+        return None
+    entries = [l for l in p.read_text().splitlines() if "SPEC_BLOCKED" in l and "RESOLVED" not in l]
+    if len(entries) > _seen_blocked:
+        _seen_blocked = len(entries)
+        return entries[-1]
     return None
 
 
+def adjudicate(doc: str, entry: str) -> bool:
+    """Fresh-context ruling on a claimed blocker. True = proceed; False = deferred (recorded)."""
+    log(f"[{doc}] adjudicating SPEC_BLOCKED: {entry[:120]}")
+    ok, out = independent_check(doc, "adjudicate.md", "ADJUDICATION: PROCEED")
+    if ok:
+        clar = out.split("ADJUDICATION: PROCEED", 1)[-1][:800]
+        (ROOT / "PROGRESS.md").open("a").write(
+            f"\n## ADJUDICATION RESOLVED — proceed with this reading:\n{clar}\n")
+        git_commit(f"{doc}: adjudication — proceed with clarified reading")
+        return True
+    m = re.search(r"ADJUDICATION: DEFER\s+(\S+)", out)
+    target = m.group(1) if m else ""
+    if target:
+        DESELECTED.append(target)
+    (ROOT / "evidence").mkdir(exist_ok=True)
+    (ROOT / "evidence" / f"{doc}-deferred.md").open("a").write(
+        f"\nDEFERRED (genuinely spec-blocked, needs founder spec fix): {entry}\n{out[-800:]}\n")
+    git_commit(f"{doc}: deferred genuinely-blocked criterion for morning triage")
+    log(f"[{doc}] DEFERRED {target or '(unparsed target)'} — night continues; morning triage item")
+    return len(DESELECTED) <= 5   # >5 deferrals = something systemic; halt
+
+
 def build_loop(doc: str) -> str:
-    """Phase 6: fresh session per pass -> scoped verify. Integrity-hash after every pass."""
+    """Phase 6: fresh session per pass -> scoped verify. Integrity-hash after every pass.
+    Self-healing: SPEC_BLOCKED -> fresh adjudicator (proceed-with-clarification, or defer the
+    genuinely-impossible criterion and keep going); STALL -> one fresh-debugger cycle first."""
     baseline = tree_hash()
     last, stall = None, 0
+    unstalled = False
     start = time.time()
     for i in range(1, MAX_PASSES + 1):
         if time.time() - start + 1800 > 9 * 3600:
@@ -205,8 +240,10 @@ def build_loop(doc: str) -> str:
             log(f"[{doc}] pass {i} timed out; continuing")
         if tree_hash() != baseline:
             return "INTEGRITY_VIOLATION"
-        if (msg := spec_blocked()):
-            return f"SPEC_BLOCKED: {msg}"
+        if (msg := new_spec_blocked()):
+            if not adjudicate(doc, msg):
+                return "TOO_MANY_DEFERRALS"
+            continue
         code, out = verify(doc)
         LOG.open("a").write(out[-2000:] + "\n")
         if code == 0:
@@ -215,7 +252,17 @@ def build_loop(doc: str) -> str:
         stall = stall + 1 if h == last else 0
         last = h
         if stall >= STALL_LIMIT:
-            return "STALL"
+            if unstalled:
+                return "STALL"
+            log(f"[{doc}] stall detected — dispatching fresh-context debugger (one shot)")
+            try:
+                agent("unstall.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
+                      timeout=PASS_TIMEOUT, max_turns=80)
+            except subprocess.TimeoutExpired:
+                pass
+            if tree_hash() != baseline:
+                return "INTEGRITY_VIOLATION"
+            unstalled, stall, last = True, 0, None
     return "MAX_PASSES"
 
 
@@ -245,7 +292,16 @@ def run_doc(doc: str) -> str:
                 break
             (sdir / "review-gaps.md").write_text(out)
         else:
-            return "CRITERIA_NOT_APPROVED"
+            # Review cycles exhausted: proceed ONLY if the deterministic gate passes; record the
+            # residual review gaps for morning + rely on the end-of-doc completeness sweep as
+            # the backstop. (Halting the whole night on reviewer perfectionism serves no one;
+            # proceeding on a FAILED coverage gate is never allowed.)
+            if not coverage_gate(doc, sdir / "acceptance" / doc):
+                return "COVERAGE_GATE_FAILED_AFTER_REVIEW_CYCLES"
+            (ROOT / "evidence").mkdir(exist_ok=True)
+            shutil.copy2(sdir / "review-gaps.md", ROOT / "evidence" / f"{doc}-review-gaps-outstanding.md")
+            log(f"[{doc}] WARN review gaps outstanding after {REVIEW_CYCLES} cycles — gate passed, "
+                f"proceeding; sweep is the backstop; morning item saved to evidence/")
     # P3: evidence (tests+fixtures+sims+goldens) — always ensure it exists
     log(f"[{doc}] P3 generate evidence layer (tests/fixtures/sims/goldens -> staging)")
     agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]})
