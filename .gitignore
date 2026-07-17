@@ -28,3 +28,4 @@ proxy-overnight-loop.zip
 proxy/
 fixtures/estate/
 state/
+fixtures/estates/**/clone/

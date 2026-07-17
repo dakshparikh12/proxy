@@ -1,0 +1,110 @@
+{
+  "_doc": "Mechanical blast-radius golden: reverse importers of flask.blueprints.",
+  "_derivation": "stdlib-ast reverse-import graph (derive_goldens.py) \u2014 independent of Proxy's tree-sitter/LSP pipeline",
+  "estate": "flask",
+  "pinned_sha": "36e4a824f340fdee7ed50937ba8e7f6bc7d17f81",
+  "target_module": "flask.blueprints",
+  "question": "What in this repo directly imports flask.blueprints and would need review if its interface changed?",
+  "direct_importers": [
+    {
+      "module": "flask",
+      "file": "src/flask/__init__.py"
+    },
+    {
+      "module": "flask.debughelpers",
+      "file": "src/flask/debughelpers.py"
+    }
+  ],
+  "transitive_importers": [
+    {
+      "module": "flask",
+      "file": "src/flask/__init__.py"
+    },
+    {
+      "module": "flask.__main__",
+      "file": "src/flask/__main__.py"
+    },
+    {
+      "module": "flask.app",
+      "file": "src/flask/app.py"
+    },
+    {
+      "module": "flask.blueprints",
+      "file": "src/flask/blueprints.py"
+    },
+    {
+      "module": "flask.cli",
+      "file": "src/flask/cli.py"
+    },
+    {
+      "module": "flask.config",
+      "file": "src/flask/config.py"
+    },
+    {
+      "module": "flask.ctx",
+      "file": "src/flask/ctx.py"
+    },
+    {
+      "module": "flask.debughelpers",
+      "file": "src/flask/debughelpers.py"
+    },
+    {
+      "module": "flask.globals",
+      "file": "src/flask/globals.py"
+    },
+    {
+      "module": "flask.helpers",
+      "file": "src/flask/helpers.py"
+    },
+    {
+      "module": "flask.json",
+      "file": "src/flask/json/__init__.py"
+    },
+    {
+      "module": "flask.json.provider",
+      "file": "src/flask/json/provider.py"
+    },
+    {
+      "module": "flask.json.tag",
+      "file": "src/flask/json/tag.py"
+    },
+    {
+      "module": "flask.logging",
+      "file": "src/flask/logging.py"
+    },
+    {
+      "module": "flask.sansio.app",
+      "file": "src/flask/sansio/app.py"
+    },
+    {
+      "module": "flask.sansio.blueprints",
+      "file": "src/flask/sansio/blueprints.py"
+    },
+    {
+      "module": "flask.sansio.scaffold",
+      "file": "src/flask/sansio/scaffold.py"
+    },
+    {
+      "module": "flask.sessions",
+      "file": "src/flask/sessions.py"
+    },
+    {
+      "module": "flask.templating",
+      "file": "src/flask/templating.py"
+    },
+    {
+      "module": "flask.testing",
+      "file": "src/flask/testing.py"
+    },
+    {
+      "module": "flask.views",
+      "file": "src/flask/views.py"
+    },
+    {
+      "module": "flask.wrappers",
+      "file": "src/flask/wrappers.py"
+    }
+  ],
+  "grader": "deterministic:set-recall on direct_importers (threshold in scenarios.json); transitive graded leniently (superset allowed)",
+  "known_limits": "static imports only \u2014 no dynamic __import__/importlib, no string-routed loading; those gaps are the messy-estate's job, not this golden's"
+}
