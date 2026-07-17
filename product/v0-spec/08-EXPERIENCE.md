@@ -416,11 +416,11 @@ An answer is produced **once**, as a single normalized chunk stream (Doc 04's `A
 
 **The projector consumes the delta stream, not raw `AgentChunk` (CANONICAL §1.1 / §11.3).** `stream_deltas` is applied **exactly once**, inside `BehaviorRunner.run()` (Doc 04); every downstream consumer — the projector, the cost meter, the transcript logger — receives **deltas** and **MUST NOT re-wrap** (the old Doc 08 re-wrap is deleted). On that delta stream `chunk.text` is already a true delta, forwarded as-is and **never re-accumulated**. Field access is `chunk.type` (the discriminator — never `.kind`), `chunk.metadata["name"]` for a TOOL_USE, and `chunk.metadata["structured"]` for a TOOL_RESULT (never `.tool` / `.structured` as top-level attrs).
 
-What the projector renders, and nothing else:
-- **A delivery-tool `TOOL_USE`** (`speak` / `send_chat` / `show_screen`) → the frame for the channel the model chose. `speak` → a TTS-streamed voice frame of the tool's *own* text deltas; `send_chat` → a chat frame (the permanent record + receipts + honesty tags); `show_screen` → a screen/canvas frame.
-- **A work-tool `TOOL_USE`** (`grep` / `read` / `get_dependents` / …) → the tile "working…" line (§2.2) — its **own** frame, never interleaved into chat prose.
-- **A structured `TOOL_RESULT`** → a canvas render (pin-to-source highlights, the final-artifact preview — §2.5).
-- **Raw `TEXT`** (the model's own reasoning) is **not projected to any surface** — only an explicit delivery tool reaches a human.
+**The projector is NARROWED to two event types only (AMENDMENT C2, 2026-07-17):**
+- **A `TOOL_USE`** → tile "working…" lines (the tool name, humanized).
+- **A structured `TOOL_RESULT`** → screen canvas render (pin-to-source highlights, the final-artifact preview — §2.5).
+
+**Everything else is handled by the delivery tools themselves.** `speak(text)` / `send_chat(text, dm?)` / `show_screen(artifact)` are the **sole delivery authority** (wake-turn tools — CANONICAL §12.3); the projector **never** auto-extracts a headline from raw text, never renders `TEXT` chunks, and never decides which channel to use. Raw `TEXT` (the model's own reasoning) is **not projected to any surface** — only an explicit delivery tool reaches a human.
 
 Every projected frame is a **registered `ProxyMessage` instance** (never a hand-built dict, never an unregistered `"speak"` type); `send()` serializes it via `model_dump()`.
 

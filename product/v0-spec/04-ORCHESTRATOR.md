@@ -2,7 +2,7 @@
 
 *Build order: 5th. Wires together Docs 01 (index), 02 (voice/transport), 03 (notes) and dispatches to Doc 05 (workroom). The proactive door is V1-dormant (cut from V0); the ordered close lives in §3.16 (over Doc 03's close pass). This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately.*
 
-*Enhancement note (this revision): the CORE is unchanged — Proxy is the agent on the call; standing pipes vs. judgment wakes; reflexes-in-code only for physics; zero situation-conditional branching. What this revision adds is the **durable engineering substrate** underneath that core, adopted line-for-line from our funded sibling repo `~/platform` (same Claude Agent SDK, same GCP/Cloud-Run/Postgres stack, same hard problems). See `PLATFORM-ADOPTION.md` Parts II, III, V, XIII. Two truths their production comments repeat — and that our design must be built around rather than rediscover in production — govern everything below: **(1) SDK tool calls execute where `query()` is invoked unless you force them remote; (2) SDK sessions live on one instance's local disk and die on autoscale.** A multi-hour meeting on Cloud Run *will* meet an instance recycle, so the "one thin asyncio session" survives — and gets durable — without adding a broker.*
+*Enhancement note (this revision): the CORE is unchanged — Proxy is the agent on the call; standing pipes vs. judgment wakes; reflexes-in-code only for physics; zero situation-conditional branching. What this revision adds is the **durable engineering substrate** underneath that core, adopted line-for-line from our funded sibling repo `~/platform` (same Claude Agent SDK, same GCP/Cloud-Run/Postgres stack, same hard problems). See `PLATFORM-ADOPTION.md` Parts II, III, V, XIII. Two truths their production comments repeat — and that our design must be built around rather than rediscover in production — govern everything below: **(1) SDK tool calls execute where `query()` is invoked unless you force them remote; (2) SDK sessions live on one instance's local disk and die on autoscale.** The `meeting_runtime` runs on a **GCE MIG** (or small GKE pool — **AMENDMENT A1, 2026-07-17**) with real grace periods, so drain events are rare, not routine; the durability substrate below is **defense-in-depth**, not a crutch against 10s SIGTERMs — and it adds no broker.*
 
 ---
 
@@ -211,6 +211,7 @@ A sample wake-behavior, as a typed module constant:
 
 ```python
 # behaviors/answer_question.py — a typed BehaviorConfig constant (no YAML loader; CANONICAL §12.5)
+# AMENDMENT C3, 2026-07-17: normative sample regenerated with code_intel MCP tools + mcp_servers mount.
 ANSWER_QUESTION = Behavior(
     name="answer-question",
     role=(
@@ -218,7 +219,8 @@ ANSWER_QUESTION = Behavior(
         "Decide the path (CANONICAL §11.6): a simple grounded code lookup you ANSWER "
         "DIRECTLY in this turn using the mounted code_intel tools (cited file:line); "
         "real work you dispatch to the workroom and present when it returns — using "
-        "the delivery rules already in your session prefix."
+        "the delivery rules already in your session prefix. "
+        "Speak short sentences, use contractions, no enumeration, two sentences max."
     ),
     rules=[
         # Examples of judgment (NOT a decision table):
@@ -242,6 +244,10 @@ ANSWER_QUESTION = Behavior(
             "get_dependents", "who_writes", "list_entry_points", "grep", "read", "batch_read",
             "dispatch_workroom", "speak", "send_chat", "show_screen", "ack", "cancel_task",
         ],
+        # The code_intel MCP server is mounted on this behavior (CANONICAL §7 / §12.5).
+        mcp_servers=[{"name": "code_intel", "tools": [
+            "get_dependents", "who_writes", "list_entry_points", "grep", "read", "batch_read",
+        ]}],
     ),
 )
 register(ANSWER_QUESTION)
@@ -303,12 +309,14 @@ Model selection is exactly the three-tier config from §3.12 (`per-behavior conf
 
 **Prompt discipline in the wake-turn system prompt (CANONICAL §10.9).** `with_proxy_guardrails(...)` appends one standing line to every grounded wake turn: *"prefer the compact artifact, cheapest tool first, one gather pass — pull the map/notes summaries once, prefer them over re-exploring raw code, don't re-fetch."* This biases the model toward the compact digest + the map/notes summaries + the reused tool cache (above) over re-exploring raw code, holding the ~1–2s grounded-answer target instead of fanning out redundant reads.
 
+**Spoken register (AMENDMENT C2, 2026-07-17).** Every `speak()` utterance is composed as speech — short sentences, contractions, no enumeration, two sentences maximum. This constraint appears in **at least two prompt locations**: (1) the wake-behavior `role` string and (2) the `with_proxy_guardrails(...)` system suffix. The spoken register ensures voice output sounds like a colleague talking, not a document being read aloud.
+
 ## 3.5 · Two-tier session durability (the multi-hour meeting *will* meet a recycle)
 *(`PLATFORM-ADOPTION.md` III.6. Their `AgentService` stale-session recovery @462-495. **The Tier-2 Postgres session-mirror is cut** per CANONICAL-DECISIONS §6 — the stale-session replay below rebuilds from Doc 03's transcript plane, so a second mirror was redundant.)*
 
 **DRY (CANONICAL §11.9 / §12.12):** the stale-session replay mechanism is the pinned full **6-arg** `resume_with_fallback(runner, behavior, inputs, resume_id, abort, history_fn)`, **imported from `libs/agentkit/resume.py` — not redefined here.** It is parameterized by the history *source* (`history_fn`); Doc 04 passes Doc 03's transcript-plane reader, Doc 05 passes its own. The code below is shown for reading convenience only.
 
-A Claude Agent SDK session lives on the **local disk of whichever Cloud Run instance created it.** A 90-minute meeting will, with near-certainty, span an instance recycle, a redeploy, or a scale event — and the next wake can land on a *different* instance that has never heard of that session. Without durability, Proxy silently forgets the whole meeting mid-call. Two tiers defend against this. **Single-writer-per-meeting is an explicit invariant** (§3.6 guarantees exactly one harness owns a meeting).
+A Claude Agent SDK session lives on the **local disk of whichever instance created it.** With the `meeting_runtime` on a GCE MIG (**AMENDMENT A1, 2026-07-17**), drain events are rare (real grace periods, not 10s SIGTERMs), but a multi-hour meeting *can* still span a redeploy or a rare drain — and the next wake can land on a *different* instance. Without durability, Proxy silently forgets the whole meeting mid-call. Two tiers defend against this as **defense-in-depth**. **Single-writer-per-meeting is an explicit invariant** (§3.6 guarantees exactly one harness owns a meeting).
 
 **Tier 1 — persist the SDK `session_id`, resume each wake.** On the `INIT` chunk of the first turn, capture `metadata.session_id` and write it to the meeting's Postgres row. Every subsequent wake passes `resume=<session_id>` into the provider query. Cheap, and covers the common case (same instance still alive).
 
@@ -667,7 +675,7 @@ The model replies with tool calls — `speak("Renaming chargeCard touches 14 cal
 
 **Pinned SLO block (CANONICAL §12.8 — the DIRECT-ANSWER path only):** ack-audible p95 ≤ 500ms · first-grounded-text p50 ≤ 2s / p95 ≤ 4s · first-grounded-audio p50 ≤ 2.5s / p95 ≤ 5s. Targets apply to **SHALLOW** answers only (index/graph/grep, one gather pass via the host-side `code_intel` API, no live-LSP, no Workroom). **LSP-bound direct answers are exempt from the audio gate** — they fire the "checking…" **tile ACK** (still ≤500ms) and speak when the LSP returns. A "direct" answer needing >1 pass or an LSP call is reclassified and excluded from the shallow SLO; §11.12 step-0.5 measures the shallow path.
 
-**Parallelism & durability:** asyncio session, **no bus, no broker** — every dispatched task is a parallel `asyncio.create_task` whose completion notifies Proxy (no polling). The durability is the *Postgres row + wall-clock*: the heartbeated `operation_runs` row (§3.7) detects a dead instance, the atomic claim (§3.6) — the same `operation_runs` row — guarantees one harness per meeting, two-tier session durability (§3.5) survives a recycle, the simplified sandbox lifecycle (§3.9: E2B-native timeout + destroy-on-close + TTL cron) scales sandboxes to zero between meetings. Proxy is the only serializer, and only at the mouth.
+**Parallelism & durability:** asyncio session, **no bus, no broker** — every dispatched task is a parallel `asyncio.create_task` whose completion notifies Proxy (no polling). The durability is the *Postgres row + wall-clock* as **defense-in-depth against rare drain events** (the `meeting_runtime` runs on GCE MIG with real grace periods — AMENDMENT A1, 2026-07-17): the heartbeated `operation_runs` row (§3.7) detects a dead instance, the atomic claim (§3.6) — the same `operation_runs` row — guarantees one harness per meeting, two-tier session durability (§3.5) survives a recycle, the simplified sandbox lifecycle (§3.9: E2B-native timeout + destroy-on-close + TTL cron) scales sandboxes to zero between meetings. Proxy is the only serializer, and only at the mouth.
 
 **Dynamism (the principle, restated as a build constraint):** there is **no situation-conditional branching** anywhere in this layer's code, and **no rules-table of "if X do Y"** anywhere in the typed `BehaviorConfig`. Code = pipes (constant connections) + reflexes (physics) + bookkeeping (state) + the durable substrate (rows, claims, lifecycle). Config = the capability envelope (which tools/context/model a behavior may use). Every "what should happen here?" — routine or novel — is answered by the same agent turn with the same tools. New capability = a new tool in the manifest + a new `BehaviorConfig` constant, never new wiring.
 

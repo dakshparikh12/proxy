@@ -233,6 +233,8 @@ async def stream_deltas(chunks: AsyncIterator[AgentChunk]) -> AsyncIterator[Agen
 ```
 Doc 04 §3.3's `stream_deltas` (which yielded bare `str` and dropped tool events, taking 4 args) is **replaced** by this — one arg, yields `AgentChunk`. The cost meter reads `RESULT.metadata["total_cost_usd"]` off this same stream.
 
+**AMENDMENT C2, 2026-07-17:** `stream_deltas` is applied exactly once inside `BehaviorRunner.run()`; downstream consumers MUST NOT re-wrap.
+
 ### 11.4 · Cross-service notes read path (`notes_ref`)
 `notes_ref = meeting_id`. The **durable source of the notes object is the `note_deltas` Postgres table**, not the Scribe's in-process `NOTES_CACHE` (which is a scribe-hot-path optimization only). A foreign consumer (the Workroom on another host) reads the live notes via **`GET /internal/notes/{meeting_id}`** (token-gated, mounted outside the auth wall like `/internal/reconcile`) which **folds `note_deltas` → the notes object** server-side. Doc 03 exposes this reader; Doc 05's bundle handling calls it.
 
@@ -293,10 +295,10 @@ If either gate fails, resolve it before committing the substrate — this is our
 
 *Three frontier cross-family audits (Gemini + 2× GPT) were triaged by 7 theme agents against the actual spec. Consensus: the architecture + end goal are RIGHT and must NOT shrink; the mechanism should CONVERGE and SIMPLIFY. Governing rule this pass: **simpler usually solves it; revert to the simpler design; never reduce the end goal** (grounded ~1–2s answers, real *verified* work, honest notes, any-repo, ~$1/hr honest). Full findings: `EXTERNAL-AUDIT-FINDINGS.md`. Notably, triage **rejected several auditor over-builds** (see §12.11) — simplicity won even against the frontier models.*
 
-### §12.1 · THE ONE TOPOLOGY (resolves the GCE-vs-Cloud-Run contradiction; **revert to Cloud Run**)
-Three deployables, three external superpowers, two durable stores. Doc 00 §4's "GCE per-meeting compute" + "not serverless-for-meetings" are **deleted** (the entire Doc 04 durability substrate is already built *for* Cloud Run recycle; the harness holds no volume, so the "multi-hour VM" premise is stale).
+### §12.1 · THE ONE TOPOLOGY (**AMENDMENT A1, 2026-07-17**: meeting_runtime moves to GCE MIG; control_plane stays Cloud Run)
+Three deployables, three external superpowers, two durable stores.
 1. **`control_plane`** — Cloud Run, autoscaling: webhook receiver, connect page + API + the authenticated `/m/{meeting_id}` surface, WS gateway, `/internal/{reconcile,notes}`. The auth wall.
-2. **`meeting_runtime`** — Cloud Run, `min_instances≥1`, `--no-cpu-throttling`, 3600s: **one asyncio harness process per meeting** hosting Proxy's orchestrator session + **transport, Scribe, and the Workroom host-shell as in-process PACKAGES** (asyncio pipes, no bus, no broker). Holds **no volume**; durability = the Postgres substrate (survive-recycle, not prevent). `services/*` remain code packages, not network services.
+2. **`meeting_runtime`** — **GCE MIG** (or small GKE pool; **not** Cloud Run): **one asyncio harness process per meeting** hosting Proxy's orchestrator session + **transport, Scribe, and the Workroom host-shell as in-process PACKAGES** (asyncio pipes, no bus, no broker). Holds **no volume**; durability = the Postgres substrate. Real grace periods on drain events (minutes, not 10s SIGTERMs); the Doc 04 heartbeat/reclaim/reconcile substrate remains as **defense-in-depth against rare drain events**, not as routine crash recovery. `services/*` remain code packages, not network services.
 3. **`code_intel`** — one stateful host (GCE/MIG) with the per-tenant **encrypted volume**: clones + tree-sitter/PageRank + on-demand LSP + the per-repo **SQLite** dependency graph. Exposes a tenant+SHA-scoped internal API.
 - **External:** E2B (per-meeting sandbox — **Workroom mutable work only**), Recall, Anthropic/AssemblyAI/Cartesia. **Durable state:** ONE Cloud SQL Postgres + GCS (Object-Versioned).
 - **The 5→3 collapse only *names* the asyncio reality Doc 04 already relies on — it reinforces no-bus, it doesn't add anything.**
@@ -315,7 +317,7 @@ Core V0 = **one lead SDK session → persisted multi-file plan → SEQUENTIAL su
 
 ### §12.5 · Behaviors — typed Python config (**revert YAML→typed**)
 Replace the YAML behavior registry + loader/schema with typed Python `BehaviorConfig` module constants (the `BehaviorRunner`/`REGISTRY`/`register()` are unchanged). This does **not** touch the "config configures the surface; judgment makes the choice" principle — a typed `BehaviorConfig(tools=[...], model=..., role="...")` declares the identical envelope; it removes a loader for ~9 behaviors (inherited from a 90-task-type repo) and kills the class of bug where the sample YAML silently diverged from prose. Generate a small JSON/TS capability manifest at build for UI labels (fixes the `CAPABILITIES` service-string-in-TS problem). YAML pattern kept as the documented Expansion path.
-- **The `answer-question` behavior MUST mount the `code_intel` tools** (`get_dependents/who_writes/list_entry_points/grep/read/batch_read`) + `dispatch_workroom/speak/send_chat` — so it can direct-answer, not only dispatch. Fix every "every ask → workroom" narrative.
+- **The `answer-question` behavior MUST mount the `code_intel` tools** (`get_dependents/who_writes/list_entry_points/grep/read/batch_read`) + `dispatch_workroom/speak/send_chat` — so it can direct-answer, not only dispatch. Fix every "every ask → workroom" narrative. **AMENDMENT C3, 2026-07-17:** the normative sample in Doc 04 §3.4 is regenerated with the `code_intel` MCP tools in `config.tools` plus the `code_intel` `mcp_servers` mount.
 
 ### §12.6 · Code intelligence — honest & simple
 - **ONE canonical tool matrix** (host-side `code_intel` MCP factory-per-query: `get_dependents/who_writes/list_entry_points/batch_read/find_references/lookup_referent`; native `grep/read/glob` where the agent runs; `bash/git` sandbox-only-mutable; `propose_change` host-side per §11.7). Delete every duplicate name + implicit routing + in-sandbox-LSP mention.
