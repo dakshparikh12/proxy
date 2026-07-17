@@ -61,7 +61,7 @@ while : ; do
   else
     echo "[supervisor] ALLOW_PULL absent — run pinned to launch SHA $(cut -c1-12 orchestrator/state/run.sha 2>/dev/null); skipping pull"
   fi
-  python3 orchestrator/orchestrate.py --from "$start"   # inherits its own logging
+  .venv/bin/python orchestrator/orchestrate.py --from "$start"   # inherits its own logging
   rc=$?
   echo "[supervisor] conductor exited rc=$rc from $start at $(date '+%F %T')"
   sleep 5
