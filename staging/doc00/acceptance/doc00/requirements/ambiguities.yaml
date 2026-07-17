@@ -63,5 +63,60 @@
     the shallow path".
   disposition: accepted_minor_assumption
 
-# No material ambiguities or unresolved contradictions found in Doc 00 against CANONICAL-DECISIONS
-# (which is authored specifically to remove the cross-doc drift). Qualification: SPEC_QUALIFIED.
+- ambiguity_id: A-006
+  authority_refs: [R-DOC00-15-02, R-DOC00-15-03]
+  severity: material
+  problem: >
+    The cost breaker's cap BASIS is contradictory across two P1 criteria. §12.7 (AC-INV-002) says task
+    spend is "never folded into the baseline"; §15's lean meter (AC-INV-003) says check_meeting_budget()
+    "reads the sum [model+transport+e2b], gated by the breaker (soft cap -> degrade; hard cap -> notes-only)."
+    If the listening-baseline caps (hard_cap_frac=1.0 of the listening baseline) are applied to a sum that
+    INCLUDES e2b_usd/Workroom/Opus, task work trips the listening breaker and forces notes-only — the exact
+    outcome §12.7 calls "arithmetically false [that] would force the breaker to kill the product's real work."
+  required_resolution: >
+    Resolved from §12.7's explicit intent (task spend never folded; do not kill real work) and the fact that
+    every breaker ACTION (degrade to Haiku, widen Scribe interval, notes-only) is a LISTENING-tier degradation:
+    check_meeting_budget() RETURNS the full sum (the total-meeting figure), but the soft/hard caps that drive
+    degrade/notes-only are fractions of the listening baseline applied to the LISTENING subset (transport +
+    Scribe + orch-idle); substantive-work spend is governed SOLELY by the separate pre-dispatch estimate gate
+    on dispatch_workroom, never by the listening breaker. AC-INV-002/AC-INV-003 are reconciled to encode this
+    single behavior (thresholds task_spend_trips_listening_breaker=0 / task_spend_forces_notes_only=0), so it
+    is no longer silently split across two conflicting P1 criteria.
+  disposition: resolved_by_canonical_intent
+
+- ambiguity_id: A-007
+  authority_refs: [R-DOC00-10-07, R-DOC00-4-05]
+  severity: material
+  problem: >
+    Self-contradicting banned string. §12.12's authoritative banned-token list includes "GCE-per-meeting"
+    as a dead token the CI banned-strings test must fail on, but AMENDMENT A1 (2026-07-17, same doc) REVIVED
+    exactly that topology — meeting_runtime is now GCE MIG, one asyncio process per meeting (R-DOC00-4-05 /
+    AC-HOST-005). A banned-strings guard tripping on "GCE per meeting" collides head-on with the A1 deploy
+    definition. AC-CI-007's example tokens sidestep it, but the requirement's own source authority bans it.
+  required_resolution: >
+    A1 (the later-dated 2026-07-17 amendment) supersedes the §12.12 dead-token entry; per CANONICAL's own
+    "the later canonical decision wins" rule, "GCE-per-meeting"/"GCE per meeting" is REMOVED from the
+    banned-strings set. AC-CI-007 asserts the banned set does NOT contain it (threshold
+    gce_per_meeting_in_banned_set=0); the remaining genuinely-dead tokens (session_transcripts, ManagedResource,
+    warm pool, map_* pipeline, TILE_ADDRESS, "every ask->workroom", "bundles the notes object") still fail.
+  disposition: resolved_by_amendment_precedence
+
+- ambiguity_id: A-008
+  authority_refs: [R-DOC00-4-05]
+  severity: minor
+  problem: >
+    Intra-Doc-00 stale-prose contradiction. §5.3 (line 164) still reads "the meeting_runtime harness itself
+    is a Cloud Run process, not a provisioned resource," which directly contradicts A1 / §12.1 / AC-HOST-005
+    ({meeting_runtime_on_cloudrun: 0}). The bundle routed the analogous stale-prose issue (A-004 handles the
+    stale in_meeting wording) but left this one unrouted.
+  required_resolution: >
+    Accepted as minor (stale pre-A1 prose): A1 / CANONICAL §12.1 wins — meeting_runtime is GCE MIG, not Cloud
+    Run. AC-HOST-005 targets the canonical GCE-MIG topology and asserts meeting_runtime_on_cloudrun=0; the
+    §5.3 "Cloud Run process" clause is superseded editorial residue, exactly as A-004 treats the stale
+    in_meeting status wording.
+  disposition: accepted_minor_assumption
+
+# A-006/A-007 are material CONTRADICTIONS surfaced by the adversarial review; both are RESOLVED here
+# (A-006 by §12.7's explicit intent; A-007 by A1 amendment precedence) with the resolution encoded into the
+# reconciled criteria — so 0 UNRESOLVED material ambiguities and 0 unresolved contradictions remain.
+# A-001..A-005 + A-008 are accepted minor assumptions. Qualification: SPEC_QUALIFIED.

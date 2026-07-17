@@ -48,10 +48,12 @@
   source_quote: "situation→action mappings live in model judgment ... never in code branches. Config configures the capability surface"
   disposition: covered_downstream
   rationale: >
-    The no-hardcoded-disposition-tables property is a Doc 04 (wake behaviors) + Doc 05
-    (dispositions) behavior. Doc 00 establishes the typed-config surface (BehaviorConfig,
-    config/defaults.toml = AC-CFG-005); the judgment-vs-code-branch discipline is tested in
-    the Doc 04/05 bundles.
+    Split: the FOUNDATION-structural half — behaviors are typed Python BehaviorConfig constants,
+    not YAML, plus config/defaults.toml holding the tunables — is tested HERE (AC-CMP-014 typed-not-YAML;
+    AC-CFG-005 tunable home). The RUNTIME half — situation->action mappings live in model judgment,
+    never in code branches — is a Doc 04 (wake behaviors) + Doc 05 (dispositions) behavior tested in
+    those bundles. (Corrects the earlier claim that AC-CFG-005 alone covered the typed-not-YAML property;
+    AC-CFG-005 tests only the config/defaults.toml tunables, not that behaviors are typed Python.)
 
 - disposition_id: D-LAW-05
   authority_type: architecture_invariant
@@ -269,3 +271,16 @@
     Doc 00 asserts the DRY home + single definition (AC-CMP-010) and the untrusted-input
     validation (AC-REG-006). The full dispatch behavior (rate-limit -> validate -> isolation ->
     resolution -> handler) is authored/tested in the Doc 08 bundle.
+
+- disposition_id: D-BIND-MULTIREPO
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§11.1 binding flow / §5.7"
+  source_quote: "V0: if a tenant has one repo, it binds automatically; multi-repo tenants pick at invite time."
+  disposition: covered_downstream
+  rationale: >
+    Doc 00 owns the meetings schema (AC-SUB-030) and the binding-flow requirement (R-DOC00-5-22 =
+    meeting bound to (tenant_id, repo_id, pinned_sha=HEAD)). The one-repo-auto-bind vs
+    multi-repo-pick-at-invite BRANCH is a connect-page invite-flow (Doc 08) + harness binding (Doc 04)
+    behavior: the repo-selection UI and the "which repo?" prompt at invite live there. No distinct
+    foundation footprint beyond the meetings.repo_id binding already asserted by AC-SUB-032.

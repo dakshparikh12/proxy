@@ -165,6 +165,48 @@
   testability: executable
   status: qualified
 
+- requirement_id: R-DOC00-2-12
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§11.5 Envelope Pydantic model + §1.2"
+  source_quote: "class Envelope(BaseModel): headline: str; detail: str | None = None; artifact: dict | None = None; receipts: list[str] = []; status: EnvelopeStatus; verification: Literal[\"verified\",\"unverified\"] | None = None; draft_id: UUID | None = None; task_id: UUID"
+  normalized_statement: >
+    WHEN the 05->04 Envelope model is defined in libs/contracts
+    THE SYSTEM SHALL declare exactly the fields {headline, detail, artifact, receipts, status, verification, draft_id, task_id}
+    with verification a separate optional Literal["verified","unverified"]|None (NOT a status value), draft_id an optional UUID, and task_id a UUID.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-2-13
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§1.1 AgentChunk metadata keys + §11.3 cost-meter read"
+  source_quote: "RESULT -> {\"session_id\", \"num_turns\", \"total_cost_usd\", \"structured_output\"} ... The cost meter reads RESULT.metadata[\"total_cost_usd\"] off this same stream."
+  normalized_statement: >
+    WHEN an AgentChunk is emitted
+    THE SYSTEM SHALL carry the canonical per-variant metadata keys (INIT->{session_id,tools,mcp_servers}; TEXT->{msg_id};
+    TOOL_USE->{id,name,input}; TOOL_RESULT->{tool_use_id,is_error,structured}; RESULT->{session_id,num_turns,total_cost_usd,structured_output}; ERROR->{message}),
+    so the cost meter can read RESULT.metadata["total_cost_usd"] off the stream_deltas output.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-2-14
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.5 typed BehaviorConfig + DOC-00 §3 libs/agentkit"
+  source_quote: "Replace the YAML behavior registry + loader/schema with typed Python BehaviorConfig module constants (the BehaviorRunner/REGISTRY/register() are unchanged)."
+  normalized_statement: >
+    THE SYSTEM SHALL express the behavior/disposition registry as typed Python BehaviorConfig module constants driven by BehaviorRunner/REGISTRY/register(),
+    and SHALL NOT ship a YAML behavior registry, loader, or schema (the YAML pattern is the documented Expansion path only).
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
 # ══════════════════════════════════════════════════════════════════
 # M2 — Repository structure (§3, CANONICAL §9)
 # ══════════════════════════════════════════════════════════════════
@@ -514,11 +556,13 @@
 - requirement_id: R-DOC00-5-05
   authority_type: canonical_decision
   authority_document: CANONICAL-DECISIONS
-  source_location: "§12.10 Fencing + §5.1"
+  source_location: "§12.10 Fencing + §5.1 + §12.3 delivery authority"
   source_quote: "heartbeat becomes UPDATE operation_runs SET last_heartbeat_at=now() WHERE id=$1 AND status='running'; rowcount 0 ⇒ reclaimed ⇒ set in-process is_owner=False, self-terminate, gate every speak/send_chat/apply/dispatch on is_owner."
   normalized_statement: >
     WHEN the fencing heartbeat UPDATE (WHERE id=$1 AND status='running') returns rowcount 0
-    THE SYSTEM SHALL set is_owner=False, self-terminate, and gate every speak/send_chat/apply/dispatch on is_owner so a reclaimed zombie cannot emit.
+    THE SYSTEM SHALL set is_owner=False, self-terminate, and gate every outward emit/delivery/side-effect operation on is_owner —
+    the complete frontier being {speak, send_chat, show_screen (the §12.3/AGENTS.md delivery-authority tools), apply, dispatch} —
+    so a reclaimed zombie cannot emit into a meeting a replacement instance now owns.
   requirement_type: security
   criticality: P0
   testability: executable
@@ -1448,6 +1492,19 @@
   testability: executable
   status: qualified
 
+- requirement_id: R-DOC00-13-09
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§13 Operational floor"
+  source_quote: "managed-Postgres automated backups + daily volume snapshots (clones/indexes/map are rebuildable derived state — treat as cache)"
+  normalized_statement: >
+    THE SYSTEM SHALL take daily snapshots of the code_intel per-tenant volume alongside managed-Postgres automated backups,
+    and SHALL treat the clones/indexes/dependency-graph on that volume as rebuildable derived cache (not the durable source of truth).
+  requirement_type: data_integrity
+  criticality: P2
+  testability: executable
+  status: qualified
+
 # ══════════════════════════════════════════════════════════════════
 # M13 — The project CLAUDE.md constitution (§14)
 # ══════════════════════════════════════════════════════════════════
@@ -1672,6 +1729,20 @@
   testability: executable
   status: qualified
 
+- requirement_id: R-DOC00-15-14
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.8 pinned SLOs + DOC-00 §1 headline + config [latency_slo]"
+  source_quote: "Three instrumented clocks on the DIRECT-ANSWER path only: ack-audible p95<=500ms · first-grounded-text p50<=2s/p95<=4s · first-grounded-audio p50<=2.5s/p95<=5s."
+  normalized_statement: >
+    THE SYSTEM SHALL pin the direct-answer latency SLOs in config/defaults.toml [latency_slo] to the canonical values
+    (first_text_p50_s=2.0, first_text_p95_s=4.0, first_audio_p50_s=2.5, first_audio_p95_s=5.0, ack_audible_p95_ms=500),
+    encoding the §1 "about a second or two" headline promise as the foundation's pinned SLO contract on the shallow direct-answer path.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
 # ══════════════════════════════════════════════════════════════════
 # M15 — Build order & the pre-build validation spike (§16, CANONICAL §11.12)
 # ══════════════════════════════════════════════════════════════════
@@ -1753,5 +1824,18 @@
     THE SYSTEM SHALL require a named human's approval via a staged draft before any apply.
   requirement_type: security
   criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-INV-03-SRC
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "Product invariant 3 (AMENDED 2026-07-17)"
+  source_quote: "no raw source in logs or artifacts"
+  normalized_statement: >
+    THE SYSTEM SHALL never emit raw customer source (clone file contents) into logs or artifacts;
+    the structlog processor chain and the Sentry before_send scrubber SHALL strip customer source before it reaches any log line, error report, or artifact.
+  requirement_type: privacy
+  criticality: P1
   testability: executable
   status: qualified

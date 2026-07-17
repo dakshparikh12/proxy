@@ -144,8 +144,22 @@
   category: security
   criticality: P0
   mechanism: hand_authored_negative_build
-  description: "One of speak/send_chat/apply/dispatch is not gated on is_owner (a leak in the fencing net)."
-  must_be_detected_by: [AC-SUB-009]
+  description: "One of speak/send_chat/show_screen/apply/dispatch is not gated on is_owner (a leak in the fencing net)."
+  must_be_detected_by: [AC-SUB-009, AC-SUB-035]
+  detection_requirement: 1.0
+- fault_id: F-SHOW-SCREEN-UNGATED
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "show_screen (a §12.3 delivery-authority verb) is not gated on is_owner, so a reclaimed zombie can project to the canvas of a meeting a replacement now owns."
+  must_be_detected_by: [AC-SUB-009, AC-SUB-035]
+  detection_requirement: 1.0
+- fault_id: F-EMIT-FRONTIER-INCOMPLETE
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "A new outward emit/delivery/side-effect verb is added outside the is_owner-gated frontier {speak,send_chat,show_screen,apply,dispatch} (the negative frontier is not enumerated as explicitly as it is gated)."
+  must_be_detected_by: [AC-SUB-035]
   detection_requirement: 1.0
 - fault_id: F-CLAIM-WRONG-OWNER
   category: state_consistency
@@ -459,6 +473,27 @@
   description: "A Doc 02 signal-surface event is placed in the client ProxyMessage registry (assert_registry_closed would over-demand a consumer)."
   must_be_detected_by: [AC-CMP-011]
   detection_requirement: 1.0
+- fault_id: F-ENVELOPE-SHAPE-DRIFT
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "The Envelope model drifts from {headline,detail,artifact,receipts,status,verification,draft_id,task_id} (e.g. verification collapsed into status, task_id not UUID, or a field missing/added)."
+  must_be_detected_by: [AC-CMP-012]
+  detection_requirement: 1.0
+- fault_id: F-RESULT-METADATA-MISSING-COST
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "The AgentChunk RESULT variant omits total_cost_usd from metadata (or a variant's metadata keys drift), so the cost meter cannot read spend off the stream."
+  must_be_detected_by: [AC-CMP-013]
+  detection_requirement: 1.0
+- fault_id: F-YAML-BEHAVIOR-REGISTRY
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A YAML behavior registry / loader / schema is (re)introduced instead of typed Python BehaviorConfig constants."
+  must_be_detected_by: [AC-CMP-014]
+  detection_requirement: 1.0
 
 # ── Repository structure ─────────────────────────────────────────────────
 - fault_id: F-MULTIPLE-LOCKFILES
@@ -761,6 +796,13 @@
   description: "An /auth/{login,callback,logout} route is missing, or auth is not Authlib+Google OIDC."
   must_be_detected_by: [AC-CFG-010]
   detection_requirement: 1.0
+- fault_id: F-LATENCY-SLO-DRIFT
+  category: performance
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "config [latency_slo] drifts from the canonical §12.8 values (first_text 2.0/4.0, first_audio 2.5/5.0, ack 500ms) — the pinned headline-latency contract is wrong."
+  must_be_detected_by: [AC-CFG-011]
+  detection_requirement: 1.0
 
 # ── IaC / Docker ─────────────────────────────────────────────────────────
 - fault_id: F-IAC-LAYOUT-DRIFT
@@ -1032,6 +1074,20 @@
   mechanism: hand_authored_negative_build
   description: "A skip-list technology is built at V0 (k8s, mesh, OTel/Prometheus, PagerDuty, etc.)."
   must_be_detected_by: [AC-OBS-008]
+  detection_requirement: 1.0
+- fault_id: F-RAW-SOURCE-IN-LOG
+  category: privacy
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "Raw customer source (clone file contents) is written to a log line, the Sentry payload, or an artifact (no source scrubbing) — broader than secret leakage."
+  must_be_detected_by: [AC-OBS-009]
+  detection_requirement: 1.0
+- fault_id: F-NO-VOLUME-SNAPSHOT
+  category: data_integrity
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "The code_intel per-tenant volume has no daily snapshot schedule, or clones/indexes are treated as durable source-of-truth instead of rebuildable cache."
+  must_be_detected_by: [AC-OBS-010]
   detection_requirement: 1.0
 - fault_id: F-RULE-NO-ENFORCEMENT
   category: documentation

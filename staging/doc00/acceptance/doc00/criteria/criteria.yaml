@@ -248,6 +248,70 @@
   source_quote: "The Doc 02 signal surface ... are out of assert_registry_closed()'s scope"
   required_evidence: [static:T-CMP-011]
 
+- criterion_id: AC-CMP-012
+  name: "Envelope (05->04) model declares exactly {headline,detail,artifact,receipts,status,verification,draft_id,task_id}"
+  evidence_class: "[contract]"
+  authority_refs: [R-DOC00-2-12]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The Envelope Pydantic model in libs/contracts."
+    when: "Its field set and field types are introspected."
+    then:
+      - "The field set equals exactly {headline, detail, artifact, receipts, status, verification, draft_id, task_id}."
+      - "verification is a separate optional Literal['verified','unverified']|None (never a status member); draft_id is Optional[UUID]; task_id is UUID."
+      - "status is typed EnvelopeStatus (the checked enum), not an open str."
+  applicability: {fixtures: [fixture-contracts-import], estates: [], excluded_estates: [], rationale: "Full model introspection — the whole P1 contract type, not only its status enum (AC-CMP-003)."}
+  primary_oracle: {type: pydantic_field_set_and_type_comparison, artifact: "set(Envelope.model_fields)==expected; verification Optional Literal; draft_id Optional[UUID]; task_id UUID"}
+  thresholds: {extra_fields: 0, missing_fields: 0, verification_in_status: 0, task_id_not_uuid: 0}
+  test_ids: [T-CMP-012]
+  fault_model_refs: [F-ENVELOPE-SHAPE-DRIFT]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  source_quote: "class Envelope(BaseModel): headline: str; detail: str | None = None; artifact: dict | None = None; receipts: list[str] = []; status: EnvelopeStatus; verification: Literal[\"verified\",\"unverified\"] | None = None; draft_id: UUID | None = None; task_id: UUID"
+  required_evidence: [contract:T-CMP-012]
+
+- criterion_id: AC-CMP-013
+  name: "AgentChunk per-variant metadata keys; RESULT carries total_cost_usd (the cost-meter contract)"
+  evidence_class: "[contract]"
+  authority_refs: [R-DOC00-2-13]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Each AgentChunk variant emitted through stream_deltas."
+    when: "The metadata dict for each variant is introspected."
+    then:
+      - "RESULT.metadata carries exactly {session_id, num_turns, total_cost_usd, structured_output}; INIT->{session_id,tools,mcp_servers}; TEXT->{msg_id}; TOOL_USE->{id,name,input}; TOOL_RESULT->{tool_use_id,is_error,structured}; ERROR->{message}."
+      - "The cost meter reads RESULT.metadata['total_cost_usd'] off the stream_deltas output (the key is present and numeric)."
+  applicability: {fixtures: [fixture-contracts-import, fixture-agentchunk-samples], estates: [], excluded_estates: [], rationale: "Per-variant metadata-key contract — the cost meter's source contract, distinct from the discriminator check (AC-CMP-004)."}
+  primary_oracle: {type: metadata_key_set_per_variant_check, artifact: "each variant's metadata keys == canonical; RESULT has total_cost_usd"}
+  thresholds: {missing_metadata_key: 0, result_missing_total_cost_usd: 0}
+  test_ids: [T-CMP-013]
+  fault_model_refs: [F-RESULT-METADATA-MISSING-COST]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  source_quote: "RESULT -> {\"session_id\", \"num_turns\", \"total_cost_usd\", \"structured_output\"} ... The cost meter reads RESULT.metadata[\"total_cost_usd\"] off this same stream."
+  required_evidence: [contract:T-CMP-013]
+
+- criterion_id: AC-CMP-014
+  name: "Behavior registry is typed Python BehaviorConfig constants; no YAML behavior registry/loader/schema"
+  evidence_class: "[static]"
+  authority_refs: [R-DOC00-2-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "libs/agentkit (BehaviorRunner/REGISTRY/register) and the behavior/disposition definitions."
+    when: "Statically analyzed."
+    then:
+      - "Behaviors are typed Python BehaviorConfig module constants (a dataclass/typed config declaring tools/model/role), registered via register()."
+      - "No YAML behavior registry file, YAML loader, or YAML behavior schema exists in the core (the YAML pattern is documented Expansion only)."
+  applicability: {fixtures: [fixture-static-analysis], estates: [], excluded_estates: [], rationale: "CANONICAL §12.5 revert YAML->typed; DOC-00 §3 places BehaviorConfig in libs/agentkit (foundation-owned)."}
+  primary_oracle: {type: static_typed_config_and_yaml_absence, artifact: "BehaviorConfig is typed Python; zero YAML behavior-registry/loader/schema files"}
+  thresholds: {yaml_behavior_registry_files: 0, yaml_behavior_loader_sites: 0}
+  test_ids: [T-CMP-014]
+  fault_model_refs: [F-YAML-BEHAVIOR-REGISTRY]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  source_quote: "Replace the YAML behavior registry + loader/schema with typed Python BehaviorConfig module constants"
+  required_evidence: [static:T-CMP-014]
+
 # ══════════════════════════════════════════════════════════════════
 # REPO — Repository structure (§3)
 # ══════════════════════════════════════════════════════════════════
@@ -896,19 +960,19 @@
   required_evidence: [model-stateful:T-SUB-008]
 
 - criterion_id: AC-SUB-009
-  name: "A reclaimed zombie emits nothing: speak/send_chat/apply/dispatch all gate on is_owner"
+  name: "A reclaimed zombie emits nothing: speak/send_chat/show_screen/apply/dispatch all gate on is_owner"
   evidence_class: "[security-adversarial]"
   authority_refs: [R-DOC00-5-05]
   criticality: P0
   blocking: true
   behavior:
     given: "A process with is_owner=False (reclaimed) that attempts to emit."
-    when: "It calls speak, send_chat, apply, and dispatch in turn."
+    when: "It calls speak, send_chat, show_screen, apply, and dispatch in turn."
     then:
-      - "Each of speak/send_chat/apply/dispatch is refused because is_owner is False."
-      - "Zero output reaches the meeting a replacement instance now owns (no double-speak)."
-  applicability: {fixtures: [fixture-zombie-emit], estates: [], excluded_estates: [], rationale: "P0 — enumerate every gated verb (negative frontier)."}
-  primary_oracle: {type: emit_gate_enumeration, artifact: "each of the 4 verbs refused when is_owner False; 0 emissions"}
+      - "Each of speak/send_chat/show_screen/apply/dispatch is refused because is_owner is False."
+      - "Zero output reaches the meeting a replacement instance now owns (no double-speak, no zombie screen)."
+  applicability: {fixtures: [fixture-zombie-emit], estates: [], excluded_estates: [], rationale: "P0 — enumerate every gated verb (negative frontier), incl. show_screen (§12.3 delivery authority)."}
+  primary_oracle: {type: emit_gate_enumeration, artifact: "each of the 5 verbs refused when is_owner False; 0 emissions"}
   thresholds: {emissions_by_zombie: 0, ungated_emit_verbs: 0}
   test_ids: [T-SUB-009]
   fault_model_refs: [F-ZOMBIE-DOUBLE-SPEAK, F-UNGATED-EMIT-VERB]
@@ -1438,6 +1502,28 @@
   source_quote: "transcript_segments.status DEFAULT 'pending' ... applier flips to comprehended transactionally with the delta append"
   required_evidence: [model-stateful:T-SUB-034]
 
+- criterion_id: AC-SUB-035
+  name: "Emit-frontier is complete: no delivery/side-effect call site bypasses the is_owner gate (incl. show_screen)"
+  evidence_class: "[static]"
+  authority_refs: [R-DOC00-5-05]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Every outward emit/delivery/side-effect call site in the harness (the delivery-authority tools speak/send_chat/show_screen per §12.3 plus apply/dispatch)."
+    when: "Statically enumerated and checked for the is_owner guard."
+    then:
+      - "The complete frontier {speak, send_chat, show_screen, apply, dispatch} is enumerated; every member gates on is_owner."
+      - "No delivery/side-effect call site — in particular show_screen, which AC-SUB-009's original four-verb list omitted — reaches the wire without the is_owner check."
+      - "A new outward verb added outside the gated set fails this static completeness check (the frontier is enumerated as explicitly as it is gated)."
+  applicability: {fixtures: [fixture-static-analysis, fixture-zombie-emit], estates: [], excluded_estates: [], rationale: "P0 negative-frontier completeness — §12.3 names show_screen a sole delivery-authority tool alongside speak/send_chat."}
+  primary_oracle: {type: static_emit_frontier_completeness, artifact: "every delivery/side-effect site is in the is_owner-gated set; zero ungated outward verbs; show_screen present"}
+  thresholds: {ungated_delivery_sites: 0, show_screen_ungated: 0, emit_verbs_outside_frontier: 0}
+  test_ids: [T-SUB-035]
+  fault_model_refs: [F-SHOW-SCREEN-UNGATED, F-EMIT-FRONTIER-INCOMPLETE]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  source_quote: "wake-turn tools speak/send_chat/show_screen are the SOLE delivery authority ... gate every speak/send_chat/apply/dispatch on is_owner"
+  required_evidence: [static:T-SUB-035]
+
 # ══════════════════════════════════════════════════════════════════
 # BOOT — Server boot & lifecycle (§6)
 # ══════════════════════════════════════════════════════════════════
@@ -1778,6 +1864,28 @@
   protocol_ref: PROTO-DETERMINISTIC-01
   source_quote: "Auth: Authlib + Google OIDC + /auth/{login,callback,logout} + GOOGLE_CLIENT_ID/SECRET"
   required_evidence: [integration:T-CFG-010]
+
+- criterion_id: AC-CFG-011
+  name: "config [latency_slo] pins the canonical direct-answer SLOs (the ~1-2s headline as a config contract)"
+  evidence_class: "[static]"
+  authority_refs: [R-DOC00-15-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "config/defaults.toml [latency_slo] and the [orchestrator] ack SLO."
+    when: "Its values are read."
+    then:
+      - "first_text_p50_s==2.0, first_text_p95_s==4.0, first_audio_p50_s==2.5, first_audio_p95_s==5.0 (CANONICAL §12.8, DIRECT-ANSWER shallow path)."
+      - "ack_audible_p95_ms==500 (the 'on it' reflex SLO)."
+      - "These are the pinned foundation SLO contract; the RUNTIME latency behavior is exercised by the pre-build spike (AC-BLD-001) and downstream in Doc 04/09 under PROTO-PERFORMANCE-01."
+  applicability: {fixtures: [fixture-defaults-toml], estates: [], excluded_estates: [], rationale: "Config-value pin — Doc 00 owns config/defaults.toml; the headline latency vision gets a concrete foundation contract."}
+  primary_oracle: {type: config_value_check, artifact: "[latency_slo] and ack_audible_p95_ms match the canonical §12.8 values"}
+  thresholds: {latency_slo_value_mismatch: 0}
+  test_ids: [T-CFG-011]
+  fault_model_refs: [F-LATENCY-SLO-DRIFT]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  source_quote: "ack-audible p95<=500ms · first-grounded-text p50<=2s/p95<=4s · first-grounded-audio p50<=2.5s/p95<=5s"
+  required_evidence: [static:T-CFG-011]
 
 # ══════════════════════════════════════════════════════════════════
 # IAC — Infrastructure as Code (§8)
@@ -2128,10 +2236,12 @@
   behavior:
     given: "A negative build reintroducing a superseded token (e.g. session_transcripts, ManagedResource, warm pool, TILE_ADDRESS)."
     when: "The banned-strings CI test runs."
-    then: ["The test exits non-zero naming the dead token."]
-  applicability: {fixtures: [fixture-banned-string], estates: [], excluded_estates: [], rationale: "Conformance drift prevention."}
-  primary_oracle: {type: banned_string_exit_code, artifact: "dead token present -> nonzero"}
-  thresholds: {dead_token_accepted: 0}
+    then:
+      - "The test exits non-zero naming the dead token."
+      - "The banned-token set does NOT include 'GCE-per-meeting'/'GCE per meeting': A1 (2026-07-17) revived GCE-MIG-one-process-per-meeting for meeting_runtime, so that §12.12 dead-token entry is superseded (ambiguity A-007, resolved) — banning it would collide with the A1 deploy definition (AC-HOST-005)."
+  applicability: {fixtures: [fixture-banned-string], estates: [], excluded_estates: [], rationale: "Conformance drift prevention; banned set reconciled with A1 per A-007."}
+  primary_oracle: {type: banned_string_exit_code, artifact: "dead token present -> nonzero; 'GCE-per-meeting' absent from the banned set"}
+  thresholds: {dead_token_accepted: 0, gce_per_meeting_in_banned_set: 0}
   test_ids: [T-CI-007]
   fault_model_refs: [F-DEAD-TOKEN-ACCEPTED]
   protocol_ref: PROTO-DETERMINISTIC-01
@@ -2523,6 +2633,48 @@
   source_quote: "The skip-list (building any of these at V0 is a defect): Kubernetes/any orchestrator · service mesh ..."
   required_evidence: [static:T-OBS-008]
 
+- criterion_id: AC-OBS-009
+  name: "No raw customer source appears in logs, Sentry, or artifacts (source scrubbing)"
+  evidence_class: "[security-adversarial]"
+  authority_refs: [R-INV-03-SRC]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A read/log/error path over clone content carrying a unique source-sentinel line, with log + Sentry capture."
+    when: "The content is processed, logged, and an error is reported."
+    then:
+      - "The source-sentinel line appears nowhere in structlog output, the Sentry before_send payload, or any emitted artifact."
+      - "The structlog processor chain and the Sentry before_send scrubber strip customer source (broader than the secret-sentinel redaction of AC-INV-008)."
+  applicability: {fixtures: [fixture-log-capture, fixture-source-sentinel, fixture-sentry-before-send], estates: [], excluded_estates: [], rationale: "AGENTS.md invariant 3 (amended) — no raw source in logs/artifacts; broader than secret redaction."}
+  primary_oracle: {type: source_absence_in_logs_and_sentry, artifact: "source-sentinel absent from logs, Sentry payload, and artifacts"}
+  thresholds: {source_occurrences_in_logs: 0, source_occurrences_in_sentry: 0, source_in_artifact: 0}
+  test_ids: [T-OBS-009]
+  fault_model_refs: [F-RAW-SOURCE-IN-LOG]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  source_quote: "no raw source in logs or artifacts"
+  required_evidence: [security-adversarial:T-OBS-009]
+
+- criterion_id: AC-OBS-010
+  name: "code_intel per-tenant volume has daily snapshots; clones/indexes are rebuildable cache"
+  evidence_class: "[deployment]"
+  authority_refs: [R-DOC00-13-09]
+  criticality: P2
+  blocking: true
+  behavior:
+    given: "The code_intel volume backup config and the durability model."
+    when: "Inspected."
+    then:
+      - "A daily snapshot schedule is configured on the code_intel per-tenant volume."
+      - "Clones/indexes/dependency-graph are documented + treated as rebuildable derived cache, not the durable source of truth (Postgres + GCS are)."
+  applicability: {fixtures: [fixture-terraform-plan], estates: [], excluded_estates: [], rationale: "Operational-floor backup config — §13."}
+  primary_oracle: {type: terraform_snapshot_schedule_check, artifact: "daily snapshot schedule on the code_intel volume; cache-not-source-of-truth documented"}
+  thresholds: {missing_daily_volume_snapshot: 0}
+  test_ids: [T-OBS-010]
+  fault_model_refs: [F-NO-VOLUME-SNAPSHOT]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  source_quote: "managed-Postgres automated backups + daily volume snapshots (clones/indexes/map are rebuildable derived state — treat as cache)"
+  required_evidence: [deployment:T-OBS-010]
+
 # ══════════════════════════════════════════════════════════════════
 # CON — The project CLAUDE.md constitution (§14)
 # ══════════════════════════════════════════════════════════════════
@@ -2642,9 +2794,10 @@
     then:
       - "Workroom/E2B/Opus spend accrues to a separate task budget."
       - "It is never folded into the listening baseline; no single all-in $1 claim covers both."
-  applicability: {fixtures: [fixture-cost-sim], estates: [], excluded_estates: [], rationale: "Two-meter honesty."}
-  primary_oracle: {type: meter_separation_check, artifact: "task spend not counted in baseline"}
-  thresholds: {task_spend_folded_into_baseline: 0}
+      - "The listening breaker's cap basis is the listening subset only; task/e2b spend never trips the listening (notes-only) breaker (ambiguity A-006, resolved)."
+  applicability: {fixtures: [fixture-cost-sim], estates: [], excluded_estates: [], rationale: "Two-meter honesty; cap-basis reconciled with AC-INV-003 per A-006."}
+  primary_oracle: {type: meter_separation_check, artifact: "task spend not counted in baseline; task spend does not trip the listening breaker"}
+  thresholds: {task_spend_folded_into_baseline: 0, task_spend_trips_listening_breaker: 0}
   test_ids: [T-INV-002]
   fault_model_refs: [F-TASK-FOLDED-INTO-BASELINE]
   protocol_ref: PROTO-DETERMINISTIC-01
@@ -2661,13 +2814,13 @@
     given: "A meeting whose accrued cost crosses the soft cap then the hard cap; and a dispatch_workroom whose estimate exceeds remaining task budget."
     when: "check_meeting_budget() and the pre-dispatch gate run."
     then:
-      - "check_meeting_budget() returns model_usd + transport_usd + e2b_usd."
-      - "At the soft cap the system degrades (Haiku / widen Scribe interval); at the hard cap it goes notes-only."
-      - "dispatch_workroom with estimate > remaining task budget asks-approval or declines."
+      - "check_meeting_budget() returns the sum model_usd + transport_usd + e2b_usd (the total-meeting figure it exposes)."
+      - "The soft/hard caps that drive degrade-to-Haiku/widen-Scribe and notes-only are fractions of the listening baseline applied to the LISTENING subset (transport + Scribe + orch-idle); task/e2b spend does not by itself force notes-only (ambiguity A-006, resolved per §12.7 intent)."
+      - "Substantive-work spend is governed by the separate pre-dispatch estimate gate: dispatch_workroom with estimate > remaining task budget asks-approval or declines."
       - "No meeting_cost_entries ledger and no reserve/settle protocol exist."
-  applicability: {fixtures: [fixture-cost-breaker, fixture-migrated-db], estates: [], excluded_estates: [], rationale: "Circuit-breaker + estimate gate, lean meter."}
-  primary_oracle: {type: breaker_and_gate_trace, artifact: "sum correct; soft->degrade; hard->notes-only; dispatch gated; no ledger table"}
-  thresholds: {breaker_not_triggered: 0, ledger_table_present: 0, dispatch_ungated: 0}
+  applicability: {fixtures: [fixture-cost-breaker, fixture-migrated-db], estates: [], excluded_estates: [], rationale: "Circuit-breaker + estimate gate, lean meter; cap-basis pinned per A-006 so it does not conflict with AC-INV-002."}
+  primary_oracle: {type: breaker_and_gate_trace, artifact: "sum correct; listening-subset soft->degrade / hard->notes-only; task spend gated by pre-dispatch gate not the listening breaker; no ledger table"}
+  thresholds: {breaker_not_triggered: 0, ledger_table_present: 0, dispatch_ungated: 0, task_spend_forces_notes_only: 0}
   test_ids: [T-INV-003]
   fault_model_refs: [F-BREAKER-MISSING, F-COST-LEDGER-PRESENT, F-DISPATCH-UNGATED]
   protocol_ref: PROTO-DETERMINISTIC-01
