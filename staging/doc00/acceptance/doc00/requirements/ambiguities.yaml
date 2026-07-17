@@ -223,3 +223,45 @@
 # Third-review update: A-006/A-007/A-009/A-012/A-013 are material CONTRADICTIONS, all RESOLVED (A-012 by the two-meter
 # derived obligation requiring the meeting_cost task_model_usd split; A-013 by the abort-is-final terminal-'failed'
 # carve-out). Still 0 UNRESOLVED material ambiguities; 0 unresolved contradictions. Qualification: SPEC_QUALIFIED.
+
+# == A-014 / A-015: fourth-review (review-gaps.md GAP-3 / GAP-7) spec inconsistencies, ROUTED ==
+
+- ambiguity_id: A-014
+  authority_refs: [R-DOC00-14-05]
+  severity: material
+  problem: >
+    The §14 hard rule "secrets only from Secret Manager, never literals" NAMES check-secret-bindings as its enforcement mechanism,
+    but check-secret-bindings as specified (§7/§10) only "parses the Terraform secret map vs the deploy config and fails on drift" -
+    a TF-map-vs-deploy consistency gate (AC-CFG-007). It does NOT scan application code for a hardcoded secret literal. So a build
+    that embeds e.g. ANTHROPIC_API_KEY="sk-ant-..." in a .py file passes check-secret-bindings (no drift), banned-strings (not a dead
+    token), and every other gate - the "never literals" rule has no gate that actually enforces it. The rule and its named guard are
+    mutually inconsistent (review-gaps GAP-3).
+  required_resolution: >
+    Resolved by a DERIVED OBLIGATION of the stated §14 hard rule (an architecture invariant) + the §15 safety-floor "secrets excluded
+    from index/map/context/sandbox/logs": the never-literals rule SHALL be enforced by a secret-literal scan gate wired into BOTH
+    pre-commit AND CI (the §10 every-guard-in-both discipline) that fails on a committed hardcoded secret literal - either as an added
+    responsibility of check-secret-bindings or a sibling guard in the fast security/contract suite. check-secret-bindings' EXISTING
+    TF-map-vs-deploy drift responsibility (AC-CFG-007) is unchanged and NOT weakened; new AC-CI-008 pins the in-code-literal frontier
+    the CLAUDE.md rule claims but the drift gate never covered (threshold committed_secret_literal_undetected=0). This is the real
+    resolution (enforce the stated rule), not a wording patch that hand-waves the drift gate as if it scanned code.
+  disposition: resolved_by_derived_obligation
+
+- ambiguity_id: A-015
+  authority_refs: [R-DOC00-5-04, R-DOC00-5-05]
+  severity: minor
+  problem: >
+    A THIRD, contradictory heartbeat number the same §5.1 code block carries that A-002 never addressed: the canonical function
+    signature literal `async def with_operation_run(db, scope_id, op_type, *, heartbeat_s=30)` defaults to 30, while the fencing
+    paragraph pins the cadence to HEARTBEAT_S=~10 / STALE_AFTER_S=~40 (config/defaults.toml). A-002 resolved only the "~10"/"~40"
+    prose TILDES; it never routed the concrete `=30` default, so a build could faithfully copy the =30 signature default and beat ~3x
+    too slowly relative to STALE_AFTER_S=40 (review-gaps GAP-7).
+  required_resolution: >
+    Accepted as minor, config wins (same basis as A-002): config/defaults.toml [orchestrator] heartbeat_s=10 is the operative cadence;
+    the `heartbeat_s=30` in the §5.1 signature is an illustrative default the code SHALL override from config (NOT the operative value).
+    AC-SUB-043 pins the effective cadence == config HEARTBEAT_S (10) and that the 30 literal is not operative (threshold
+    heartbeat_s_literal_30_operative=0); AC-SUB-005 already pins the STALE_AFTER_S=40 side from config.
+  disposition: accepted_minor_assumption
+
+# Fourth-review update: A-014 is a material inconsistency RESOLVED by the never-literals derived obligation (secret-literal scan gate
+# AC-CI-008); A-015 is an accepted minor assumption (config heartbeat_s=10 wins over the =30 signature literal). Still 0 UNRESOLVED
+# material ambiguities; 0 unresolved contradictions. Qualification: SPEC_QUALIFIED.

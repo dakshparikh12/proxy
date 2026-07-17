@@ -1329,3 +1329,47 @@
   description: "Tenant sandbox code can reach /internal/notes (holds the token or egress is not denied), turning it into a cross-tenant notes-exfiltration primitive."
   must_be_detected_by: [AC-TEN-004]
   detection_requirement: 1.0
+
+# == Fourth-review faults (review-gaps.md GAP-1/2/3/6/7) ==
+- fault_id: F-SILENT-BUILD-SANDBOX-REAPED
+  category: durability
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "The heartbeat loop omits db.bump_activity(scope_id), so a long silent build's sandbox is reaped by the reconcile-cron mid-work (the build loses its sandbox despite an active owner)."
+  must_be_detected_by: [AC-SUB-041]
+  detection_requirement: 1.0
+- fault_id: F-ACTIVE-SANDBOX-REAPED-RACE
+  category: durability
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "The reconcile-cron kills a sandbox off a stale list snapshot even though it was bumped since (within-TTL at kill time), reaping a live silent build out from under its owner."
+  must_be_detected_by: [AC-SUB-042]
+  detection_requirement: 1.0
+- fault_id: F-ABANDONED-SANDBOX-NOT-REAPED
+  category: durability
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "An abandoned sandbox (owner dead, no further bumps, past TTL) is never reaped - and no E2B-native timeout backstop exists - so a dropped reconcile tick leaks the sandbox forever."
+  must_be_detected_by: [AC-SUB-042]
+  detection_requirement: 1.0
+- fault_id: F-HARDCODED-SECRET-LITERAL
+  category: security
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A secret embedded as an in-code literal (API key / OAuth token / PEM / inline-password DSN) is committed and no pre-commit+CI gate fails on it - the §14 'never literals' rule has no enforcing scan (check-secret-bindings only checks TF-map drift)."
+  must_be_detected_by: [AC-CI-008]
+  detection_requirement: 1.0
+- fault_id: F-ADD-SECRET-UNGUARDED
+  category: security
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "add-secret.sh takes the value on argv (leaks via ps/history) or with echo on, accepts a non-allowlisted kind, or writes with no fingerprint-confirm - dropping one of the three named guards."
+  must_be_detected_by: [AC-CFG-013]
+  detection_requirement: 1.0
+- fault_id: F-HEARTBEAT-CADENCE-30-LITERAL
+  category: durability
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "The heartbeat loop uses the §5.1 signature default heartbeat_s=30 instead of config HEARTBEAT_S=10, beating ~3x too slowly and leaving barely one beat of margin before STALE_AFTER_S=40."
+  must_be_detected_by: [AC-SUB-043]
+  detection_requirement: 1.0

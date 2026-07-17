@@ -284,3 +284,17 @@
     multi-repo-pick-at-invite BRANCH is a connect-page invite-flow (Doc 08) + harness binding (Doc 04)
     behavior: the repo-selection UI and the "which repo?" prompt at invite live there. No distinct
     foundation footprint beyond the meetings.repo_id binding already asserted by AC-SUB-032.
+
+# == Fourth-review (review-gaps.md GAP-5): the §1 consent line - considered, deferred to Doc 02/04 ==
+
+- disposition_id: D-CONSENT-LINE
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§1 the product narrative - meet: consent line"
+  source_quote: "meet (invited by link; consent line; the always-on comprehension; ...)"
+  disposition: covered_downstream
+  rationale: >
+    The "consent line" (Proxy announcing itself / the join-time consent utterance) is a Doc 02 (transport join/announce) + Doc 04
+    (orchestrator join behavior) runtime behavior, not a foundation-structural one - Doc 00 owns no join/announce surface. Recorded here
+    explicitly (rather than left silent) per this ledger's "atomize into a requirement OR carry a disposition" rule, so a reader can tell
+    the consent behavior was considered-and-deferred to Doc 02/04, not simply missed (review-gaps GAP-5). No Doc 00 criterion.

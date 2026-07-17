@@ -3416,3 +3416,121 @@
   protocol_ref: PROTO-DETERMINISTIC-01
   source_quote: "GET /internal/notes/{meeting_id} (token-gated, mounted outside the auth wall like /internal/reconcile)"
   required_evidence: [security-adversarial:T-TEN-004]
+
+# ══════════════════════════════════════════════════════════════════
+# Fourth adversarial review (review-gaps.md): GAP-1/2 (silent-build sandbox
+# reap + the reap-vs-keepalive race), GAP-3 (hardcoded-secret-literal gate),
+# GAP-6 (guarded add-secret.sh), GAP-7 (heartbeat_s=30 literal). GAP-4 already
+# closed by AC-SUB-040; GAP-5 carried in dispositions (D-CONSENT-LINE).
+# ══════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-SUB-041
+  name: "A silent build's sandbox is kept alive by the heartbeat's bump_activity; it is not reaped mid-work"
+  evidence_class: "[integration]"
+  authority_refs: [R-DOC00-5-29]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A Workroom build running past the sandbox TTL doing silent agent work (no speak/send_chat emissions), wrapped in with_operation_run."
+    when: "Each heartbeat fires while the reconcile-cron runs concurrently."
+    then:
+      - "Every heartbeat calls db.bump_activity(scope_id), extending the sandbox's activity/TTL window (the beat is not fencing-only)."
+      - "The reconcile-cron does NOT kill the sandbox while it is being actively bumped: the still-working silent build survives past the nominal TTL."
+      - "Negative/off-state: a heartbeat loop that omits bump_activity leaves the same long silent build reapable past-TTL - the bump is the load-bearing difference (threshold heartbeat_missing_bump_activity=0)."
+  applicability: {fixtures: [fixture-sandbox-lifecycle, fixture-operation-run, fixture-clock], estates: [], excluded_estates: [], rationale: "Silent-work keep-alive - AC-SUB-016 covers the three no-leak guards (timeout/destroy/reconcile) but NOT the bump_activity keep-alive that stops an actively-working silent build from being reaped (review-gaps GAP-1)."}
+  primary_oracle: {type: sandbox_keepalive_trace, artifact: "each beat bumps activity; actively-bumped sandbox survives reconcile past TTL; unbumped long build reaped"}
+  thresholds: {active_silent_build_reaped: 0, heartbeat_missing_bump_activity: 0}
+  test_ids: [T-SUB-041]
+  fault_model_refs: [F-SILENT-BUILD-SANDBOX-REAPED]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  source_quote: "await db.bump_activity(scope_id)    # keeps the sandbox alive during silent agent work"
+  required_evidence: [integration:T-SUB-041]
+
+- criterion_id: AC-SUB-042
+  name: "Reap-vs-keep-alive ordering: an actively-bumped sandbox is never reaped; an abandoned one always becomes reapable"
+  evidence_class: "[model-stateful]"
+  authority_refs: [R-DOC00-5-29, R-DOC00-5-11]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A sandbox whose owning build interleaves bump_activity beats with concurrent reconcile-cron ticks that list-then-kill past-TTL sandboxes."
+    when: "The interleaving is exercised: (a) a beat lands between the cron's list and its kill decision; (b) the owner dies so no further beats land."
+    then:
+      - "Ordering (a): a sandbox observed as within-TTL at kill-decision time (bumped since the list) is NOT killed - the reconcile keys the kill on current activity/TTL, not a stale list snapshot, so a live silent build is never reaped out from under itself."
+      - "Ordering (b): once the owner stops beating and the TTL elapses, the next reconcile tick reaps it; and independently the E2B-native timeout backstop kills it even if a reconcile tick is dropped (a dropped tick can never leak the sandbox forever)."
+      - "Exclusivity: on one sandbox at one instant, reap and keep-alive are mutually exclusive - no state reaps a still-bumped sandbox and none leaks an abandoned one."
+  applicability: {fixtures: [fixture-sandbox-lifecycle, fixture-clock], estates: [], excluded_estates: [], rationale: "The ordering/race companion to GAP-1: AC-SUB-016 asserts the cron kills past-TTL and AC-SUB-041 asserts keep-alive, but nothing pinned the RACE tying them (review-gaps GAP-2). NOTE: GAP-2's exact head was truncated on disk; this closes the spec-grounded ordering/race in the sandbox-reap lifecycle GAP-1 concerns - if a different race was meant, the conductor's adversarial pass will surface it."}
+  primary_oracle: {type: reap_keepalive_race_model, artifact: "beat-between-list-and-kill -> not killed; owner-dead+TTL -> reaped next tick; dropped-tick -> E2B timeout still kills; no simultaneous reap-of-bumped / leak-of-abandoned"}
+  thresholds: {bumped_sandbox_reaped: 0, abandoned_sandbox_never_reaped: 0, dropped_tick_leaks_sandbox: 0}
+  test_ids: [T-SUB-042]
+  fault_model_refs: [F-ACTIVE-SANDBOX-REAPED-RACE, F-ABANDONED-SANDBOX-NOT-REAPED]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  source_quote: "E2B-native sandbox timeout as the crash backstop (a dropped reconcile tick can't leak a sandbox forever) ... A simple reconcile-cron (§5.4) that lists sandboxes and kills any past TTL."
+  required_evidence: [model-stateful:T-SUB-042]
+
+- criterion_id: AC-SUB-043
+  name: "The operative heartbeat cadence is config HEARTBEAT_S (10), not the §5.1 signature default heartbeat_s=30"
+  evidence_class: "[static]"
+  authority_refs: [R-DOC00-5-05]
+  criticality: P2
+  blocking: true
+  behavior:
+    given: "with_operation_run's heartbeat loop and config/defaults.toml [orchestrator]."
+    when: "The effective heartbeat interval is resolved."
+    then:
+      - "The loop reads HEARTBEAT_S from config/defaults.toml (=10); the sleep between beats == config, NOT the 30 in the signature default `heartbeat_s=30`."
+      - "The cadence satisfies HEARTBEAT_S < STALE_AFTER_S with margin (10 vs 40 => ~4 beats before a fresh row could be swept), so a live owner is never spuriously reaped between beats."
+      - "Negative/off-state: a build whose beat interval is the literal 30 (config not consulted) is a defect - 30 leaves barely one beat of margin before STALE_AFTER_S=40 (threshold heartbeat_s_literal_30_operative=0)."
+  applicability: {fixtures: [fixture-static-analysis, fixture-clock], estates: [], excluded_estates: [], rationale: "Closes review-gaps GAP-7: A-002 routed the approximate ~10/~40 prose tildes but not the third contradictory number - the =30 signature literal in the same code block. Routed via A-015."}
+  primary_oracle: {type: config_cadence_check, artifact: "beat interval == config HEARTBEAT_S(10); 30 literal not operative; HEARTBEAT_S < STALE_AFTER_S margin holds"}
+  thresholds: {heartbeat_s_literal_30_operative: 0, heartbeat_ge_stale_after: 0}
+  test_ids: [T-SUB-043]
+  fault_model_refs: [F-HEARTBEAT-CADENCE-30-LITERAL]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  source_quote: "Tightened cadence: HEARTBEAT_S=~10 / STALE_AFTER_S=~40 (config/defaults.toml)."
+  required_evidence: [static:T-SUB-043]
+
+- criterion_id: AC-CI-008
+  name: "A hardcoded secret literal in committed code fails a pre-commit + CI secret-literal gate (the 'never literals' rule is actually enforced)"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-DOC00-14-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A source file that embeds a secret as a literal (e.g. ANTHROPIC_API_KEY = \"sk-ant-...\", a DATABASE_URL with an inline password, a PEM private-key block, an OAuth token)."
+    when: "The pre-commit hooks and the CI fast security/contract suite run."
+    then:
+      - "The secret-literal gate fails (nonzero exit) on the committed literal, in BOTH pre-commit and CI (per the §10 every-guard-in-both discipline)."
+      - "The same gate does NOT fire on a legitimate os.environ[...] / Secret Manager read (no false-positive on the compliant path)."
+      - "Negative/off-state: check-secret-bindings' TF-map-vs-deploy drift check (AC-CFG-007) alone does NOT catch this in-code literal - the inconsistency A-014 routes - so coverage comes from this dedicated literal scan, not the drift gate."
+  applicability: {fixtures: [fixture-precommit, fixture-ci-secret-scan], estates: [], excluded_estates: [], rationale: "Closes review-gaps GAP-3: the §14 'never literals' rule NAMED check-secret-bindings, which only checks TF-map-vs-deploy drift and cannot see an in-code literal - so no gate actually enforced never-literals. Routed via A-014."}
+  primary_oracle: {type: secret_literal_scan_exit_code, artifact: "planted secret literal -> gate nonzero in pre-commit AND CI; env / Secret-Manager read -> pass"}
+  thresholds: {committed_secret_literal_undetected: 0, secret_gate_missing_from_precommit: 0, secret_gate_missing_from_ci: 0, false_positive_on_env_read: 0}
+  test_ids: [T-CI-008]
+  fault_model_refs: [F-HARDCODED-SECRET-LITERAL]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  source_quote: "secrets only from Secret Manager, never literals - check-secret-bindings"
+  required_evidence: [adversarial:T-CI-008]
+
+- criterion_id: AC-CFG-013
+  name: "The guarded add-secret.sh takes silent input, allowlists secret kinds, and requires a fingerprint confirm"
+  evidence_class: "[static]"
+  authority_refs: [R-DOC00-7-12]
+  criticality: P2
+  blocking: true
+  behavior:
+    given: "The add-secret.sh operator entry-point for out-of-band OAuth/Claude secrets."
+    when: "Its implementation and the three code paths are inspected/exercised."
+    then:
+      - "Secret input is silent - read without terminal echo and not passed via argv or persisted to shell history (e.g. read -s / stdin, never $1)."
+      - "Only an allowlisted set of secret kinds is accepted; a non-allowlisted kind is rejected without writing."
+      - "A fingerprint (hash/prefix) of the value is shown and an explicit operator confirmation is required before the secret version is written."
+      - "Negative/off-state: a value on argv (leaks via ps/history), a non-allowlisted kind, or a write with no fingerprint-confirm are each refused."
+  applicability: {fixtures: [fixture-static-analysis], estates: [], excluded_estates: [], rationale: "Closes review-gaps GAP-6: a named §7 foundation artifact with three security-relevant guarantees left uncovered (AC-CFG-006/007/008 covered Secret Manager wiring/drift, not this operator entry-point)."}
+  primary_oracle: {type: static_script_property_scan, artifact: "silent read (no echo/argv/history); kind allowlist enforced; fingerprint-confirm gate before write"}
+  thresholds: {secret_value_echoed_or_in_history: 0, non_allowlisted_kind_accepted: 0, write_without_fingerprint_confirm: 0}
+  test_ids: [T-CFG-013]
+  fault_model_refs: [F-ADD-SECRET-UNGUARDED]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  source_quote: "a guarded add-secret.sh (silent input, allowlisted kinds, fingerprint confirm - copied from ~/platform)."
+  required_evidence: [static:T-CFG-013]

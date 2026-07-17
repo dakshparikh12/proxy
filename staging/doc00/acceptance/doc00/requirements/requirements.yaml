@@ -1985,3 +1985,50 @@
   criticality: P2
   testability: executable
   status: qualified
+
+# ── Fourth adversarial review (review-gaps.md GAP-1/2/3/6): +3 requirements ──
+
+- requirement_id: R-DOC00-5-29
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§5.1 heartbeat loop (bump_activity) + §5.3/§5.4 sandbox reconcile"
+  source_quote: "await db.bump_activity(scope_id)    # keeps the sandbox alive during silent agent work"
+  normalized_statement: >
+    WHILE a durable operation (a Workroom build) is heartbeating while doing silent agent work (no speech/emissions)
+    THE SYSTEM SHALL, on each heartbeat, bump the owning sandbox's activity/TTL (db.bump_activity(scope_id)) so the §5.4
+    reconcile-cron does NOT reap an actively-working sandbox as past-TTL; and WHEN the owner stops heartbeating (crash/end -
+    no further bumps past the TTL) the sandbox SHALL become reapable (killed by the reconcile-cron and, as backstop, the
+    E2B-native timeout so a dropped reconcile tick can never leak it forever).
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-7-12
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§7 Secrets - add-secret.sh"
+  source_quote: "OAuth/Claude values set out-of-band via a guarded add-secret.sh (silent input, allowlisted kinds, fingerprint confirm - copied from ~/platform)."
+  normalized_statement: >
+    WHEN an operator sets an out-of-band secret (OAuth/Claude values) via add-secret.sh
+    THE SYSTEM SHALL take the value via silent input (no terminal echo / not passed on argv / not persisted to shell history),
+    accept only an allowlisted set of secret kinds (reject any non-allowlisted kind without writing), and require a fingerprint
+    confirmation of the value before writing the secret version.
+  requirement_type: security
+  criticality: P2
+  testability: reviewable
+  status: qualified
+
+- requirement_id: R-DOC00-14-05
+  authority_type: architecture_invariant
+  authority_document: DOC-00
+  source_location: "§14 hard rules + §7 Secrets + §15 Safety floor"
+  source_quote: "secrets only from Secret Manager, never literals - check-secret-bindings"
+  normalized_statement: >
+    WHEN application code is committed THE SYSTEM SHALL enforce that secrets are read only from Secret Manager / the environment and
+    NEVER appear as hardcoded literals in source (an API key / OAuth token / private-key PEM / connection string with an inline
+    password embedded in a file), via a gate that runs in BOTH pre-commit AND CI and fails (nonzero) on a committed secret literal.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
