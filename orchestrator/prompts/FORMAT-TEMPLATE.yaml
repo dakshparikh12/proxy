@@ -1,0 +1,33 @@
+# SLIM format reference for criteria authors — match THIS shape (do not read the full doc01 bundle,
+# which is ~98k tokens; this template carries the exact field structure the RTM gate + seal require).
+
+# --- requirements/requirements.yaml : one block per atomic behavior ---
+- requirement_id: R-DOC0X-3.1-01          # unique: R-<DOC>-<section>-NN
+  authority_type: specification            # specification|canonical_decision|architecture_invariant|threat_model|operational_slo|...
+  authority_document: DOC-0X
+  source_location: "§3.1 paragraph 2"
+  source_quote: "<verbatim sentence from the spec>"
+  normalized_statement: >
+    WHEN <trigger> THE SYSTEM SHALL <response>.   # EARS: ubiquitous|event|state|unwanted|optional
+  requirement_type: security               # security|correctness|durability|performance|ux|...
+  criticality: P0                          # P0|P1|P2
+  testability: executable                  # executable|analyzable|reviewable
+  status: qualified
+
+# --- criteria/criteria.yaml : one or more per requirement (density scales with criticality) ---
+- criterion_id: AC-M1-001                  # unique per doc
+  name: "<one-line observable property>"
+  evidence_class: "[unit-property]"        # [contract]|[unit-*]|[eval-realrepo]|[adversarial]|[latency]|[simulation]
+  authority_refs: [R-DOC0X-3.1-01]         # MUST reference real requirement id(s) — RTM gate checks this
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "<situation / preconditions>"
+    when:  "<trigger>"
+    then:
+      - "<the primary observable outcome>"
+      - "<negative / off-state where applicable>"
+  primary_oracle: {type: deterministic_or_state-machine_or_static_or_simulation, artifact: "<how it's checked>"}
+  thresholds: {some_violation_allowed: 0}  # numbers; zeros explicit
+  fault_model_refs: [F-SOME-FAULT]
+  test_ids: [T-M1-001]
