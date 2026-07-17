@@ -23,15 +23,22 @@ for doc in [00, 01, 02, 03, 04, 05, 08, 09]:            # SPINE-REGISTER order; 
   PHASE 3  EVIDENCE      author the tests + fixtures + simulation workflows that make each criterion
                          checkable; DERIVE goldens mechanically (derive_goldens.py — independent
                          toolchain, no shared-bug blindness). Simulations replace real-data cost.
-  PHASE 4  SEAL          hash the bundle + evidence (manifest.yaml). From here the builder is read-only
-                         against all of it. Changing any of it = new version, prior evidence void.
-                         [The one checkpoint that stays human-or-independent-agent — see "The seal".]
+  PHASE 4  SEAL          RTM COVERAGE GATE (criteria_coverage_gate.py) must exit 0 — every requirement
+                         covered by >=1 criterion, every criterion traces to a real requirement, no
+                         authorityless criteria — else the bundle CANNOT seal. Then hash bundle + evidence
+                         (manifest.yaml). From here the builder is read-only; changing any of it = new
+                         version, prior evidence void. [The one checkpoint that stays human-or-independent
+                         -agent — see "The seal".]
   PHASE 5  PLAN          fresh session drafts the implementation plan from spec+criteria; planner-reviewer
                          (separate authority) critiques it as a skeptical staff engineer; lock the plan.
-  PHASE 6  BUILD LOOP    runner.py <doc>: fresh session per pass, subagent-driven execution, TDD toward
-                         the next sealed criterion; verify.sh (ruff/mypy/bandit + pytest) is the ONLY
-                         green signal per pass; integrity hash re-checked after every pass (protected-
-                         tree change → hard exit); commit per increment. Loops until rung-1 green.
+  PHASE 6  BUILD LOOP    runner.py <doc>: fresh session per pass, subagent-driven execution
+                         (skills/subagent-driven-build.md), TDD toward the next sealed criterion;
+                         verify.sh (ruff/mypy/bandit + pytest) is the ONLY green signal per pass;
+                         integrity hash re-checked after every pass (protected-tree change → hard exit);
+                         commit per increment. Loops until rung-1 green.
+  PHASE 6.5 MUTATION     mutmut on the changed services/*+libs/* modules: NO surviving mutants on code
+           GATE          backing any blocking criterion (deterministic "do the tests have teeth?").
+                         A survivor → REFUTED → back to Phase 6. Automates half of Phase 7's teeth-check.
   PHASE 7  INDEPENDENT   ⭐ fresh session that has NOT seen the build. Reads the sealed criteria + the
            VERIFICATION  full diff + git log + the test suite, RE-RUNS the tests itself, and for EVERY
            GATE          blocking criterion tries to REFUTE it (see below). Any refutation → back to
