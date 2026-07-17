@@ -1,0 +1,12 @@
+{
+  "_doc": "Mechanical blast-radius golden: reverse importers of proxy.carve.",
+  "_derivation": "stdlib-ast reverse-import graph (derive_goldens.py) \u2014 independent of Proxy's tree-sitter/LSP pipeline",
+  "estate": "proxy",
+  "pinned_sha": "c4ba9ac5e6fdff89afb9eb10a2db0fdfa6a015f1",
+  "target_module": "proxy.carve",
+  "question": "What in this repo directly imports proxy.carve and would need review if its interface changed?",
+  "direct_importers": [],
+  "transitive_importers": [],
+  "grader": "deterministic:set-recall on direct_importers (threshold in scenarios.json); transitive graded leniently (superset allowed)",
+  "known_limits": "static imports only \u2014 no dynamic __import__/importlib, no string-routed loading; those gaps are the messy-estate's job, not this golden's"
+}
