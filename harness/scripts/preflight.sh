@@ -29,14 +29,51 @@ warn_check() {
 # 1. >0 tests collected AND verify.sh exits nonzero (red = arbiter alive)
 echo "--- Preflight checks ---"
 
-# Tests collected via venv python
+# Tests collected via venv python — derive expected count from sealed bundle
 PY="${PROXY_PY:-.venv/bin/python}"
-COLLECTED=$("$PY" -m pytest --collect-only -q 2>/dev/null | tail -1)
-if echo "$COLLECTED" | grep -qE "^[1-9][0-9]* test"; then
-  echo "PASS  >0 tests collected ($COLLECTED)"
+
+# Derive expected test count: number of rung-1 criteria with a matching test function
+BUNDLE="acceptance/doc01/criteria/criteria.yaml"
+if [ -f "$BUNDLE" ]; then
+  EXPECTED=$("$PY" -c "
+import re, pathlib
+# Count rung-1 criteria from sealed bundle
+rung1_classes = {'[unit-example]','[unit-property]','[contract]','[unit-fixture]','[security-adversarial]','[adversarial]'}
+ids = re.findall(r'criterion_id:\s+(AC-\S+)', pathlib.Path('$BUNDLE').read_text())
+classes = re.findall(r'evidence_class:\s+\"(\[[^\]]+\])\"', pathlib.Path('$BUNDLE').read_text())
+rung1_ids = [i for i, c in zip(ids, classes) if c in rung1_classes]
+# Count tests that exist for these criteria (plus any extra tests)
+test_dir = pathlib.Path('tests')
+test_funcs = set()
+for tf in test_dir.glob('test_*.py'):
+    for m in re.finditer(r'^def (test_\w+)', tf.read_text(), re.MULTILINE):
+        test_funcs.add(m.group(1))
+print(len(test_funcs))
+" 2>/dev/null)
 else
-  echo "FAIL  >0 tests collected (got: $COLLECTED)"
+  EXPECTED=""
+fi
+
+COLLECT_OUTPUT=$("$PY" -m pytest --collect-only -q 2>&1)
+COLLECT_EXIT=$?
+COLLECTED_LINE=$(echo "$COLLECT_OUTPUT" | grep -E "^\d+ tests? collected|^no tests ran" | tail -1)
+COLLECTED_NUM=$(echo "$COLLECTED_LINE" | grep -oE "^[0-9]+")
+COLLECT_ERRORS=$(echo "$COLLECT_OUTPUT" | grep -cE "^ERROR collecting" || true)
+
+# FAIL on any collection error
+if [ "$COLLECT_ERRORS" -gt 0 ]; then
+  echo "FAIL  pytest collection errors ($COLLECT_ERRORS errors)"
+  echo "$COLLECT_OUTPUT" | grep "^ERROR collecting"
   FAILS=$((FAILS + 1))
+# FAIL unless collected count matches expected
+elif [ -n "$EXPECTED" ] && [ "$COLLECTED_NUM" != "$EXPECTED" ]; then
+  echo "FAIL  expected $EXPECTED tests collected, got $COLLECTED_NUM"
+  FAILS=$((FAILS + 1))
+elif [ -z "$COLLECTED_NUM" ] || [ "$COLLECTED_NUM" -eq 0 ]; then
+  echo "FAIL  0 tests collected"
+  FAILS=$((FAILS + 1))
+else
+  echo "PASS  $COLLECTED_NUM tests collected, 0 errors (expected $EXPECTED)"
 fi
 
 # verify.sh exits nonzero (red = arbiter alive)
