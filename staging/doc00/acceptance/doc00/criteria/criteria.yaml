@@ -312,6 +312,50 @@
   source_quote: "Replace the YAML behavior registry + loader/schema with typed Python BehaviorConfig module constants"
   required_evidence: [static:T-CMP-014]
 
+- criterion_id: AC-CMP-015
+  name: "stream_deltas emits per-msg_id suffix deltas and passes non-TEXT chunks through unchanged"
+  evidence_class: "[model-stateful]"
+  authority_refs: [R-DOC00-2-15]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A scripted upstream AgentChunk stream: TEXT chunks whose .text is the ACCUMULATED text for a msg_id (e.g. 'He','Hello'), a second run under a new msg_id, and interleaved INIT/TOOL_USE/TOOL_RESULT/RESULT/ERROR chunks."
+    when: "The stream is passed once through stream_deltas."
+    then:
+      - "Each TEXT output is only the NEW suffix since the last TEXT of that msg_id ('He' then 'llo'), not the re-accumulated text."
+      - "A new msg_id resets the accumulator (its first delta is its full first text)."
+      - "INIT/TOOL_USE/TOOL_RESULT/RESULT/ERROR chunks are emitted unchanged, in order."
+      - "Applying stream_deltas a SECOND time over its own output corrupts the deltas (exactly-once is semantic, not just structural)."
+  applicability: {fixtures: [fixture-agentchunk-stream], estates: [], excluded_estates: [], rationale: "Deterministic simulation of the delta-izer — the behavioral half AC-CMP-005 (static one-call-site) never exercises."}
+  primary_oracle: {type: stream_delta_simulation, artifact: "stream_deltas(scripted)==expected deltas; passthrough chunks identical; double-application != single"}
+  thresholds: {wrong_text_delta: 0, missing_passthrough_chunk: 0, msgid_reset_missed: 0}
+  test_ids: [T-CMP-015]
+  fault_model_refs: [F-STREAM-DELTAS-NO-DELTA-IZE]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  source_quote: "Delta-izes TEXT (yields only the new suffix per msg_id, resets on a new msg_id); passes INIT/TOOL_USE/TOOL_RESULT/RESULT/ERROR through UNCHANGED."
+  required_evidence: [model-stateful:T-CMP-015]
+
+- criterion_id: AC-CMP-016
+  name: "A Workroom progress event carries the Envelope shape minus finality (no finalized EnvelopeStatus)"
+  evidence_class: "[contract]"
+  authority_refs: [R-DOC00-2-16]
+  criticality: P2
+  blocking: true
+  behavior:
+    given: "The progress-event type emitted by the Workroom alongside the terminal Envelope (libs/contracts)."
+    when: "Its shape is introspected against the Envelope model."
+    then:
+      - "It carries the Envelope's structural fields (headline/detail/artifact/receipts/task_id) — same shape."
+      - "It does NOT carry a finalized terminal EnvelopeStatus value (finality is absent / non-terminal marker), so it is not mistakable for a finalized Envelope."
+  applicability: {fixtures: [fixture-contracts-import], estates: [], excluded_estates: [], rationale: "Progress-event contract variant — distinct from the terminal Envelope (AC-CMP-012). Exact finality-encoding is ambiguity A-011."}
+  primary_oracle: {type: progress_event_shape_check, artifact: "field set == Envelope structural fields; no finalized EnvelopeStatus carried"}
+  thresholds: {progress_event_carries_finalized_status: 0, progress_event_shape_diverges_from_envelope: 0}
+  test_ids: [T-CMP-016]
+  fault_model_refs: [F-PROGRESS-EVENT-CARRIES-FINALITY]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  source_quote: "progress events same shape minus finality."
+  required_evidence: [contract:T-CMP-016]
+
 # ══════════════════════════════════════════════════════════════════
 # REPO — Repository structure (§3)
 # ══════════════════════════════════════════════════════════════════
@@ -1302,11 +1346,12 @@
     then:
       - "meeting_cost has columns {meeting_id uuid PK, model_usd, cache_read_usd, cache_creation_usd, transport_usd, e2b_usd, started_at, updated_at}."
       - "meeting_id is typed uuid."
-  applicability: {fixtures: [fixture-migrated-db], estates: [], excluded_estates: [], rationale: "Cost-SLA schema — CANONICAL §3."}
-  primary_oracle: {type: schema_column_set_comparison, artifact: "meeting_cost columns==canonical; meeting_id uuid"}
-  thresholds: {missing_cost_columns: 0, meeting_id_not_uuid: 0}
+      - "meeting_id is a FOREIGN KEY REFERENCES meetings(id) — the FK edge giving meeting_cost tenant reachability (via meetings.tenant_id), so AC-TEN-001's FK chain holds (ambiguity A-009, resolved: the tenant-isolation invariant requires the edge the bare canonical DDL omits)."
+  applicability: {fixtures: [fixture-migrated-db], estates: [], excluded_estates: [], rationale: "Cost-SLA schema — CANONICAL §3; FK-to-meetings per A-009 so tenant scoping (AC-TEN-001) is structurally satisfiable."}
+  primary_oracle: {type: schema_column_set_comparison, artifact: "meeting_cost columns==canonical; meeting_id uuid REFERENCES meetings(id)"}
+  thresholds: {missing_cost_columns: 0, meeting_id_not_uuid: 0, meeting_cost_missing_meetings_fk: 0}
   test_ids: [T-SUB-025]
-  fault_model_refs: [F-MEETING-COST-SCHEMA-DRIFT]
+  fault_model_refs: [F-MEETING-COST-SCHEMA-DRIFT, F-MEETING-COST-NO-MEETINGS-FK]
   protocol_ref: PROTO-DETERMINISTIC-01
   source_quote: "CREATE TABLE meeting_cost ( meeting_id uuid PRIMARY KEY, model_usd ..., cache_read_usd ..., cache_creation_usd ..., transport_usd ..., e2b_usd ..., started_at ..., updated_at ... )"
   required_evidence: [contract:T-SUB-025]
@@ -1344,11 +1389,12 @@
     then:
       - "A staged_drafts row (status='proposed') exists with the canonical columns {draft_id,meeting_id uuid,kind,summary,artifact_ref,status,created_at}."
       - "The full content is written to GCS Object-Versioned, referenced by artifact_ref, at creation time."
-  applicability: {fixtures: [fixture-staged-draft], estates: [], excluded_estates: [], rationale: "P0 durability — CANONICAL §4."}
-  primary_oracle: {type: draft_persist_check, artifact: "row proposed + GCS artifact present at creation"}
-  thresholds: {draft_not_persisted_at_creation: 0}
+      - "meeting_id is a FOREIGN KEY REFERENCES meetings(id) — the FK edge giving staged_drafts tenant reachability (via meetings.tenant_id), so AC-TEN-001's FK chain holds (ambiguity A-009, resolved)."
+  applicability: {fixtures: [fixture-staged-draft], estates: [], excluded_estates: [], rationale: "P0 durability — CANONICAL §4; FK-to-meetings per A-009 so tenant scoping (AC-TEN-001) is structurally satisfiable."}
+  primary_oracle: {type: draft_persist_check, artifact: "row proposed + GCS artifact present at creation; meeting_id REFERENCES meetings(id)"}
+  thresholds: {draft_not_persisted_at_creation: 0, staged_drafts_missing_meetings_fk: 0}
   test_ids: [T-SUB-027]
-  fault_model_refs: [F-DRAFT-IN-MEMORY-ONLY]
+  fault_model_refs: [F-DRAFT-IN-MEMORY-ONLY, F-STAGED-DRAFT-NO-MEETINGS-FK]
   protocol_ref: PROTO-DETERMINISTIC-01
   source_quote: "propose_change persists the draft (full content to GCS Object-Versioned + a staged_drafts row) at creation"
   required_evidence: [integration:T-SUB-027]
@@ -1524,6 +1570,50 @@
   source_quote: "wake-turn tools speak/send_chat/show_screen are the SOLE delivery authority ... gate every speak/send_chat/apply/dispatch on is_owner"
   required_evidence: [static:T-SUB-035]
 
+- criterion_id: AC-SUB-036
+  name: "The claim/with_operation_run path populates operation_runs.created_by with the owner instance-id"
+  evidence_class: "[integration]"
+  authority_refs: [R-DOC00-5-25]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting_runtime instance with a known instance-id claiming a meeting via the atomic-claim INSERT / with_operation_run."
+    when: "The claim succeeds and the operation_runs row is created."
+    then:
+      - "The row's created_by equals the claiming instance's id (non-null)."
+      - "created_by is the value live-WS affinity (AC-OBS-007) later reads to route reconnects to the owner."
+      - "created_by is never left NULL on a successfully-claimed running row."
+  applicability: {fixtures: [fixture-operation-run, fixture-ws-affinity], estates: [], excluded_estates: [], rationale: "Populating path for the affinity/fencing seam — AC-OBS-007 reads created_by but no criterion asserted it is written."}
+  primary_oracle: {type: created_by_population_check, artifact: "claimed row.created_by == claiming instance-id; not null"}
+  thresholds: {created_by_null_after_claim: 0, created_by_mismatches_instance: 0}
+  test_ids: [T-SUB-036]
+  fault_model_refs: [F-CREATED-BY-UNPOPULATED]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  source_quote: "store the owner instance-id on the row; a non-owner instance proxies or hands off"
+  required_evidence: [integration:T-SUB-036]
+
+- criterion_id: AC-SUB-037
+  name: "operation_runs.status is constrained to exactly {running, completed, failed, interrupted}; out-of-domain values rejected"
+  evidence_class: "[contract]"
+  authority_refs: [R-DOC00-5-26]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The operation_runs write path (create/complete/fail/mark-interrupted repo functions) and, if declared, the status domain constraint."
+    when: "Every status value the code can write to operation_runs is enumerated, and an out-of-domain value (e.g. 'in_meeting', 'paused') is attempted."
+    then:
+      - "The set of status values the code writes equals exactly {running, completed, failed, interrupted}."
+      - "No write path emits an out-of-domain status literal (the partial-unique index, fencing, sweep and reaper all key on 'running')."
+      - "An attempt to persist an out-of-domain status value is rejected (constraint) or provably unreachable (no such write path exists)."
+  applicability: {fixtures: [fixture-migrated-db], estates: [], excluded_estates: [], rationale: "Value-domain pinning for the linchpin status column — mirrors the meetings.status pinning (AC-SUB-030); AC-SUB-001 pins only the column type, not the value set."}
+  primary_oracle: {type: status_value_domain_check, artifact: "written status literals == {running,completed,failed,interrupted}; out-of-domain persist rejected/unreachable"}
+  thresholds: {out_of_domain_status_written: 0, out_of_domain_status_accepted: 0}
+  test_ids: [T-SUB-037]
+  fault_model_refs: [F-OPRUN-STATUS-OUT-OF-DOMAIN]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  source_quote: "status            text NOT NULL,          -- running|completed|failed|interrupted"
+  required_evidence: [contract:T-SUB-037]
+
 # ══════════════════════════════════════════════════════════════════
 # BOOT — Server boot & lifecycle (§6)
 # ══════════════════════════════════════════════════════════════════
@@ -1650,6 +1740,28 @@
   protocol_ref: PROTO-DETERMINISTIC-01
   source_quote: "asyncio.gather(flush_tracing(), db.close(), bot.leave_all(), server.shutdown()) in parallel ... + a hard-exit backstop timer"
   required_evidence: [integration:T-BOOT-006]
+
+- criterion_id: AC-BOOT-007
+  name: "All three Claude SDK auth modes (ANTHROPIC_API_KEY / OAuth token / Vertex) are supported, not hard-wired to one"
+  evidence_class: "[deployment]"
+  authority_refs: [R-DOC00-6-07]
+  criticality: P2
+  blocking: true
+  behavior:
+    given: "The .env.example config contract and the Claude SDK client construction."
+    when: "The three auth configurations are exercised (API-key set; OAuth token set; Vertex set)."
+    then:
+      - ".env.example documents all three auth mechanisms (ANTHROPIC_API_KEY, OAuth token, Vertex), each commented with what-it's-for."
+      - "The SDK client resolves auth from whichever of the three modes is configured — no single mode is hard-wired as the only path."
+      - "A build supporting API-key alone (no OAuth-token or Vertex path) fails this criterion."
+  applicability: {fixtures: [fixture-boot-env], estates: [], excluded_estates: [], rationale: "Three-mode auth surface — AC-BOOT-001 lists ANTHROPIC_* as a key but does not assert the OAuth-token and Vertex paths exist."}
+  primary_oracle: {type: sdk_auth_mode_support_check, artifact: "three modes documented + resolvable; none hard-wired as sole path"}
+  thresholds: {auth_modes_supported_below_three: 0}
+  test_ids: [T-BOOT-007]
+  fault_model_refs: [F-SDK-AUTH-SINGLE-MODE]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  source_quote: "Claude SDK auth (ANTHROPIC_API_KEY / OAuth token / Vertex — keep all three modes)"
+  required_evidence: [deployment:T-BOOT-007]
 
 # ══════════════════════════════════════════════════════════════════
 # CFG — Config, secrets & credentials (§7)
@@ -3117,8 +3229,8 @@
   behavior:
     given: "The migrated schema."
     when: "Every durable app table is inspected for tenant scoping."
-    then: ["Each tenant-scoped table carries tenant_id directly or via an FK chain to tenants; no tenant-scoped table lacks a tenant boundary."]
-  applicability: {fixtures: [fixture-migrated-db], estates: [], excluded_estates: [], rationale: "Tenant-isolation schema floor."}
+    then: ["Each tenant-scoped table carries tenant_id directly or via an FK chain to tenants; no tenant-scoped table lacks a tenant boundary.", "The meeting-keyed tables meeting_cost and staged_drafts reach tenant_id via a DECLARED meeting_id REFERENCES meetings(id) FK (per ambiguity A-009, resolved), not a bare undeclared linkage."]
+  applicability: {fixtures: [fixture-migrated-db], estates: [], excluded_estates: [], rationale: "Tenant-isolation schema floor; the FK edges meeting_cost/staged_drafts -> meetings are pinned by AC-SUB-025/027 per A-009 so this check is satisfiable on the canonical DDL."}
   primary_oracle: {type: schema_tenant_scoping_check, artifact: "every tenant-scoped table reaches tenant_id"}
   thresholds: {tenant_unscoped_tables: 0}
   test_ids: [T-TEN-001]

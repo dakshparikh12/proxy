@@ -116,7 +116,55 @@
     in_meeting status wording.
   disposition: accepted_minor_assumption
 
-# A-006/A-007 are material CONTRADICTIONS surfaced by the adversarial review; both are RESOLVED here
-# (A-006 by §12.7's explicit intent; A-007 by A1 amendment precedence) with the resolution encoded into the
-# reconciled criteria — so 0 UNRESOLVED material ambiguities and 0 unresolved contradictions remain.
-# A-001..A-005 + A-008 are accepted minor assumptions. Qualification: SPEC_QUALIFIED.
+- ambiguity_id: A-009
+  authority_refs: [R-INV-09, R-DOC00-5-17, R-DOC00-5-18]
+  severity: material
+  problem: >
+    Jointly-unimplementable schema pair. AC-TEN-001 (R-INV-09, tenant isolation) requires every tenant-scoped table
+    to reach tenant_id "directly or via an FK chain to tenants" (tenant_unscoped_tables: 0), but the canonical DDL for
+    meeting_cost (CANONICAL §3) and staged_drafts (§4) declares a BARE meeting_id (uuid PK / uuid NOT NULL) with NO
+    `REFERENCES meetings` and no tenant_id column. As written, AC-TEN-001 and the exact-column-set schema criteria
+    (AC-SUB-025/027) cannot both hold: with no declared FK edge, the "FK chain to tenants" is not structurally present
+    for those two tables.
+  required_resolution: >
+    Resolved by the tenant-isolation invariant's precedence (a P0 authority): the FK edge the bare DDL omits is a
+    DERIVED OBLIGATION of R-INV-09, so meeting_cost.meeting_id and staged_drafts.meeting_id SHALL be declared
+    `REFERENCES meetings(id)` in the migration. AC-SUB-025/027 are amended to require that FK (thresholds
+    meeting_cost_missing_meetings_fk / staged_drafts_missing_meetings_fk = 0), which makes AC-TEN-001's FK chain
+    (meeting_cost/staged_drafts -> meetings -> tenant_id) structurally hold. This is the real resolution (require the
+    edge), not a wording patch that hand-waves an undeclared linkage as "reachable".
+  disposition: resolved_by_derived_obligation
+
+- ambiguity_id: A-010
+  authority_refs: [R-DOC00-2-10]
+  severity: minor
+  problem: >
+    Intra-CANONICAL signature contradiction. §11.9 shows resume_with_fallback(session_id, history_fn) — a 2-arg form —
+    while §12.12 orders "Pin resume_with_fallback full 6-arg signature in §11.9"; the four extra args are never
+    enumerated in the spec. AC-CMP-010 pins single-definition/location but not arity, so no Doc 00 criterion catches
+    either shape.
+  required_resolution: >
+    Accepted minor + covered_downstream: per CANONICAL's "later canonical decision wins", §12.12's 6-arg mandate
+    supersedes §11.9's stale 2-arg shorthand, but the exact 6-arg parameter list is NOT specified at Doc 00's surface —
+    resume_with_fallback lives in libs/agentkit and is parameterized by its Doc 04 §3.5 / Doc 05 §3.1 callers, so the
+    concrete signature/arity is pinned and acceptance-tested in the Doc 04/05 bundles. Doc 00 asserts only the
+    single-definition/DRY property (AC-CMP-010); it cannot (absent the arg names) author an arity criterion.
+  disposition: resolved_by_amendment_precedence
+
+- ambiguity_id: A-011
+  authority_refs: [R-DOC00-2-16]
+  severity: minor
+  problem: >
+    "progress events same shape minus finality" (§2) does not pin HOW finality is removed — a separate ProgressEvent
+    model, an Envelope with status=None, or a non-terminal 'progress' marker all satisfy "same shape minus finality".
+  required_resolution: >
+    Accepted as minor: AC-CMP-016 asserts the OBSERVABLE property (same structural fields as the Envelope; no finalized
+    terminal EnvelopeStatus carried, so a progress event is never mistaken for a finalized one) and is agnostic to the
+    concrete encoding; the Workroom producer's exact representation is a Doc 05 detail.
+  disposition: accepted_minor_assumption
+
+# A-006/A-007/A-009 are material CONTRADICTIONS surfaced by adversarial review; all RESOLVED here
+# (A-006 by §12.7 intent; A-007 by A1 amendment precedence; A-009 by the R-INV-09 tenant-isolation derived
+# obligation requiring the meeting_cost/staged_drafts -> meetings FK). A-001..A-005, A-008, A-010, A-011 are
+# accepted minor assumptions (A-010 resume_with_fallback arity -> Doc 04/05; A-011 progress-event finality
+# encoding -> Doc 05). 0 UNRESOLVED material ambiguities; 0 unresolved contradictions. Qualification: SPEC_QUALIFIED.

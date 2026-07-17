@@ -207,6 +207,35 @@
   testability: executable
   status: qualified
 
+- requirement_id: R-DOC00-2-15
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§11.3 stream_deltas delta-izing behavior"
+  source_quote: "Delta-izes TEXT (yields only the new suffix per msg_id, resets on a new msg_id); passes INIT/TOOL_USE/TOOL_RESULT/RESULT/ERROR through UNCHANGED."
+  normalized_statement: >
+    WHEN stream_deltas processes an upstream AgentChunk iterable
+    THE SYSTEM SHALL yield for each TEXT chunk ONLY the new suffix appended since the last TEXT chunk of the same msg_id
+    (resetting the per-msg_id accumulator when a new msg_id starts) and SHALL pass
+    INIT/TOOL_USE/TOOL_RESULT/RESULT/ERROR chunks through unchanged.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-2-16
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§2 the envelope — progress events"
+  source_quote: "progress events same shape minus finality."
+  normalized_statement: >
+    WHEN the Workroom emits a progress event (an in-flight update rather than a terminal Envelope)
+    THE SYSTEM SHALL give it the same field shape as the Envelope minus finality — it does NOT carry a finalized
+    terminal EnvelopeStatus — so a consumer distinguishes an in-flight progress event from a finalized envelope.
+  requirement_type: contract
+  criticality: P2
+  testability: executable
+  status: qualified
+
 # ══════════════════════════════════════════════════════════════════
 # M2 — Repository structure (§3, CANONICAL §9)
 # ══════════════════════════════════════════════════════════════════
@@ -819,6 +848,34 @@
   testability: executable
   status: qualified
 
+- requirement_id: R-DOC00-5-25
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§11.11 live-WS instance affinity + §5.1 operation_runs.created_by + §5.2 atomic claim"
+  source_quote: "route via the operation_runs claim owner (store the owner instance-id on the row; a non-owner instance proxies or hands off)"
+  normalized_statement: >
+    WHEN a meeting_runtime process claims a meeting (the atomic-claim INSERT / with_operation_run creates the operation_runs row)
+    THE SYSTEM SHALL write the owning instance's id into operation_runs.created_by,
+    so live-WS instance affinity has a populated owner-instance source to route reconnects/retries on.
+  requirement_type: state_consistency
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-26
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§2 operation_runs DDL status column (mirrored DOC-00 §5.1)"
+  source_quote: "status            text NOT NULL,          -- running|completed|failed|interrupted"
+  normalized_statement: >
+    WHILE operation_runs rows are written THE SYSTEM SHALL constrain status to exactly
+    {running, completed, failed, interrupted} and SHALL NOT write or accept any out-of-domain status value —
+    the value set the partial-unique index, fencing heartbeat, stale sweep, and boot reaper all key on ('running').
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
 # ══════════════════════════════════════════════════════════════════
 # M5 — Server boot & lifecycle (§6)
 # ══════════════════════════════════════════════════════════════════
@@ -898,6 +955,19 @@
     WHEN SIGINT or SIGTERM is received
     THE SYSTEM SHALL run flush_tracing/db.close/bot.leave_all/server.shutdown concurrently via asyncio.gather with a hard-exit backstop timer.
   requirement_type: resilience
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-6-07
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§7 Claude SDK auth"
+  source_quote: "Claude SDK auth (ANTHROPIC_API_KEY / OAuth token / Vertex — keep all three modes)"
+  normalized_statement: >
+    THE SYSTEM SHALL keep all three Claude SDK auth modes available — ANTHROPIC_API_KEY, OAuth token, and Vertex —
+    documenting each in the .env.example config contract, and SHALL NOT hard-wire a single auth mode.
+  requirement_type: deployment
   criticality: P2
   testability: executable
   status: qualified

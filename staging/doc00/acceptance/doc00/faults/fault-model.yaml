@@ -1194,3 +1194,52 @@
   description: "A step-1 provable is unmet (CI red, no self-migrate, /health down, registry not closed, or harness never self-reaps)."
   must_be_detected_by: [AC-BLD-003]
   detection_requirement: 1.0
+- fault_id: F-STREAM-DELTAS-NO-DELTA-IZE
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "stream_deltas re-emits the accumulated TEXT (or drops passthrough chunks) instead of yielding per-msg_id suffix deltas."
+  must_be_detected_by: [AC-CMP-015]
+  detection_requirement: 1.0
+- fault_id: F-PROGRESS-EVENT-CARRIES-FINALITY
+  category: contract
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A progress event carries a finalized terminal EnvelopeStatus, making it indistinguishable from a completed Envelope."
+  must_be_detected_by: [AC-CMP-016]
+  detection_requirement: 1.0
+- fault_id: F-CREATED-BY-UNPOPULATED
+  category: state_consistency
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "The atomic-claim / with_operation_run path leaves operation_runs.created_by NULL, so live-WS affinity has no owner-instance to route on."
+  must_be_detected_by: [AC-SUB-036]
+  detection_requirement: 1.0
+- fault_id: F-OPRUN-STATUS-OUT-OF-DOMAIN
+  category: data_integrity
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A write path persists an operation_runs.status value outside {running,completed,failed,interrupted} (e.g. 'in_meeting'), corrupting the running-keyed index/fencing/sweep."
+  must_be_detected_by: [AC-SUB-037]
+  detection_requirement: 1.0
+- fault_id: F-MEETING-COST-NO-MEETINGS-FK
+  category: data_integrity
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "meeting_cost.meeting_id is declared without REFERENCES meetings(id), breaking AC-TEN-001's tenant FK chain for the cost table."
+  must_be_detected_by: [AC-SUB-025, AC-TEN-001]
+  detection_requirement: 1.0
+- fault_id: F-STAGED-DRAFT-NO-MEETINGS-FK
+  category: data_integrity
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "staged_drafts.meeting_id is declared without REFERENCES meetings(id), breaking AC-TEN-001's tenant FK chain for the drafts table."
+  must_be_detected_by: [AC-SUB-027, AC-TEN-001]
+  detection_requirement: 1.0
+- fault_id: F-SDK-AUTH-SINGLE-MODE
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "The build hard-wires a single Claude SDK auth mode (API-key only), dropping the OAuth-token and Vertex paths the spec requires kept."
+  must_be_detected_by: [AC-BOOT-007]
+  detection_requirement: 1.0
