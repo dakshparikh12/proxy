@@ -3280,3 +3280,24 @@
   protocol_ref: PROTO-DETERMINISTIC-01
   source_quote: "tokens minted per-operation, never cached or logged"
   required_evidence: [security-adversarial:T-TEN-003]
+
+- criterion_id: AC-TEN-004
+  name: "/internal/notes is token-gated outside the auth wall and scoped meeting->tenant (no cross-tenant notes)"
+  evidence_class: "[security-adversarial]"
+  authority_refs: [R-DOC00-4-01, R-INV-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "GET /internal/notes/{meeting_id} — mounted OUTSIDE the auth wall, token-gated, folding a meeting's note_deltas for cross-host Workroom reads (CANONICAL §11.5 / §12.1)."
+    when: "It is invoked (a) without a valid internal token and (b) with a valid internal token for a given meeting_id."
+    then:
+      - "A request with a missing/invalid internal token is refused; no notes are returned (internal_notes_untokened_accept == 0)."
+      - "With a valid token the handler resolves meeting_id -> its owning tenant server-side and returns ONLY that meeting's folded note_deltas; there is no path by which a meeting_id resolves into another tenant's notes (cross_tenant_notes_returned == 0)."
+  applicability: {fixtures: [fixture-internal-notes], estates: [], excluded_estates: [], rationale: "Auth-wall-external, token-gated tenant-notes surface (CANONICAL §11.5); AC-TEN-002's authenticated /m/ oracle is session-based and structurally cannot exercise this session-less internal path, so the /internal/notes cross-tenant exposure frontier (invariant 9, P0) is otherwise uncovered."}
+  primary_oracle: {type: internal_notes_token_and_scope_check, artifact: "untokened -> refused with no notes; tokened -> only the meeting's own-tenant notes; zero cross-tenant notes"}
+  thresholds: {internal_notes_untokened_accept: 0, cross_tenant_notes_returned: 0}
+  test_ids: [T-TEN-004]
+  fault_model_refs: [F-INTERNAL-NOTES-NO-TOKEN, F-INTERNAL-NOTES-CROSS-TENANT]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  source_quote: "control_plane ... /internal/{reconcile,notes}. The auth wall."
+  required_evidence: [security-adversarial:T-TEN-004]

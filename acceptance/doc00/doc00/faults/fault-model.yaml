@@ -33,6 +33,20 @@
   description: "A tenant-B request reads a tenant-A meeting/draft/notes (server-side tenant check missing/bypassed)."
   must_be_detected_by: [AC-TEN-002]
   detection_requirement: 1.0
+- fault_id: F-INTERNAL-NOTES-NO-TOKEN
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "GET /internal/notes/{meeting_id} is mounted outside the auth wall without the internal-token gate, so an untokened caller reads a meeting's notes."
+  must_be_detected_by: [AC-TEN-004]
+  detection_requirement: 1.0
+- fault_id: F-INTERNAL-NOTES-CROSS-TENANT
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "The /internal/notes handler does not resolve meeting_id -> owning tenant server-side, so a meeting_id can fold in / return another tenant's notes."
+  must_be_detected_by: [AC-TEN-004]
+  detection_requirement: 1.0
 - fault_id: F-CROSS-TENANT-ACCEPT
   category: security
   criticality: P0

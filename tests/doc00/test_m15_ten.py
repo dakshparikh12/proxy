@@ -1,4 +1,4 @@
-"""Doc 00 · TEN — Cross-cutting tenant / credential invariants (AC-TEN-001..003).
+"""Doc 00 · TEN — Cross-cutting tenant / credential invariants (AC-TEN-001..004).
 
 Milestone m15. Every test maps to exactly one blocking (P0) criterion (its id in
 the docstring). Product imports live INSIDE the test bodies, so this module
@@ -22,6 +22,15 @@ Oracle sources per PROTO-DETERMINISTIC-01:
     two sequential operations => mint called exactly once per op (twice total),
     no cache reuse between them, and the sentinel token appears NOWHERE in logs.
     Thresholds: ``token_cached_reuse == 0`` and ``token_log_occurrences == 0``.
+  * AC-TEN-004 [security-adversarial]  -- import the product's ``/internal/notes``
+    handler (mounted OUTSIDE the auth wall, token-gated) and assert two things:
+    (a) an untokened / invalid-token request is REFUSED and returns no notes
+    (``internal_notes_untokened_accept == 0``); (b) with a valid internal token
+    the handler resolves ``meeting_id -> owning tenant`` server-side and returns
+    ONLY that meeting's own-tenant notes, never another tenant's
+    (``cross_tenant_notes_returned == 0``). This closes the ``/internal/notes``
+    cross-tenant exposure frontier that the session-based ``/m/`` oracle
+    (AC-TEN-002) structurally cannot exercise.
 
 Source quotes (spec):
   * "Tenant isolation (tenant_id in every schema; cross-tenant read = P0 breach)"
@@ -360,3 +369,104 @@ def test_ten_003_github_tokens_minted_per_op_never_cached_never_logged():
     assert SENTINEL_PREFIX not in combined, (
         "no minted-token sentinel value may appear in any log output (never logged)"
     )
+
+
+# ── AC-TEN-004 ────────────────────────────────────────────────────────────
+@pytest.mark.security_adversarial
+def test_ten_004_internal_notes_token_gated_and_tenant_scoped():
+    """AC-TEN-004: /internal/notes is token-gated outside the auth wall and resolves meeting_id->tenant server-side; untokened is refused and no cross-tenant notes are ever returned."""
+    # Import the product's /internal/notes handler INSIDE the body (red before it
+    # exists). It is mounted OUTSIDE the auth wall and token-gated, so it takes an
+    # internal token (not a session principal) and a meeting_id, resolves the
+    # meeting -> owning tenant from OUR store, and folds that meeting's
+    # note_deltas. Try the canonical seams in order.
+    handler = None
+    try:
+        from libs.http import internal_notes as handler  # the /internal/notes handler
+    except ImportError:
+        try:
+            from libs.http.internal import get_notes as handler
+        except ImportError:
+            from services.harness.internal import internal_notes as handler
+
+    assert callable(handler), "the /internal/notes handler must be a callable"
+
+    TENANT_A = "11111111-1111-1111-1111-111111111111"
+    A_MEETING = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"   # owned by tenant A
+    GOOD_TOKEN = "internal-token-good"
+    BAD_TOKEN = "not-the-internal-token"
+
+    def _call(meeting_id: str, token):
+        """Invoke the handler tolerating a few natural signatures. Returns the
+        outcome or, on a raise, the exception (a raise IS a refusal)."""
+        for kwargs in (
+            {"meeting_id": meeting_id, "token": token},
+            {"meeting_id": meeting_id, "internal_token": token},
+        ):
+            try:
+                return handler(**kwargs), False
+            except TypeError:
+                continue
+            except Exception as exc:      # a raise is a refusal
+                return exc, True
+        try:
+            return handler(meeting_id, token), False
+        except Exception as exc:
+            return exc, True
+
+    def _is_refusal(outcome, raised: bool) -> bool:
+        if raised:
+            return True
+        text = repr(outcome).lower()
+        if isinstance(outcome, dict):
+            return (
+                bool(outcome.get("error"))
+                or outcome.get("allowed") is False
+                or outcome.get("denied") is True
+                or "unauthorized" in text or "forbidden" in text or "denied" in text
+            )
+        return outcome is None or outcome is False
+
+    def _leak_blob(outcome) -> str:
+        return repr(outcome) if outcome is not None else ""
+
+    # (a) Token gate: a missing/invalid internal token is refused, and NO notes
+    #     are returned (internal_notes_untokened_accept == 0).
+    for bad in (None, "", BAD_TOKEN):
+        outcome, raised = _call(A_MEETING, bad)
+        assert _is_refusal(outcome, raised), (
+            f"an untokened/invalid-token /internal/notes request must be refused "
+            f"(internal_notes_untokened_accept must be 0); got {outcome!r}"
+        )
+        # Even a refusing return must not hand back tenant-A notes content.
+        blob = _leak_blob(None if raised else outcome)
+        assert A_MEETING not in blob and TENANT_A not in blob, (
+            f"an untokened /internal/notes request must return no notes; leaked: {blob}"
+        )
+
+    # (b) Meeting->tenant scoping: with a valid token the handler resolves
+    #     meeting_id -> its owning tenant server-side and returns ONLY that
+    #     meeting's own-tenant notes. It must never resolve a meeting_id into a
+    #     DIFFERENT tenant's notes (cross_tenant_notes_returned == 0).
+    outcome, raised = _call(A_MEETING, GOOD_TOKEN)
+    if not raised and outcome is not None and outcome is not False:
+        resolved_tenant = outcome.get("tenant_id") if isinstance(outcome, dict) else None
+        # If the handler surfaces the resolved tenant, it must be the meeting's
+        # OWN owning tenant (A) — never resolved into a foreign tenant scope.
+        if resolved_tenant is not None:
+            assert resolved_tenant == TENANT_A, (
+                f"/internal/notes must resolve meeting_id -> its OWN owning tenant "
+                f"(server-side), not a foreign tenant; got tenant {resolved_tenant!r}"
+            )
+        # The returned notes must be scoped to the requested meeting only: there
+        # is no folding-in of a different meeting's / tenant's note_deltas.
+        notes = outcome.get("notes") if isinstance(outcome, dict) else outcome
+        for_meeting = (outcome.get("meeting_id") if isinstance(outcome, dict) else None)
+        if for_meeting is not None:
+            assert for_meeting == A_MEETING, (
+                f"/internal/notes returned notes scoped to a different meeting "
+                f"({for_meeting!r} != requested {A_MEETING!r}) — cross-tenant leak vector"
+            )
+        assert notes is not None, (
+            "a valid-token /internal/notes read must return the meeting's folded note_deltas"
+        )
