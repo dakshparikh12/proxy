@@ -31,49 +31,57 @@ echo "--- Preflight checks ---"
 
 # Tests collected via venv python — derive expected count from sealed bundle
 PY="${PROXY_PY:-.venv/bin/python}"
-
-# Derive expected test count: number of rung-1 criteria with a matching test function
 BUNDLE="acceptance/doc01/criteria/criteria.yaml"
-if [ -f "$BUNDLE" ]; then
-  EXPECTED=$("$PY" -c "
-import re, pathlib
-# Count rung-1 criteria from sealed bundle
-rung1_classes = {'[unit-example]','[unit-property]','[contract]','[unit-fixture]','[security-adversarial]','[adversarial]'}
-ids = re.findall(r'criterion_id:\s+(AC-\S+)', pathlib.Path('$BUNDLE').read_text())
-classes = re.findall(r'evidence_class:\s+\"(\[[^\]]+\])\"', pathlib.Path('$BUNDLE').read_text())
-rung1_ids = [i for i, c in zip(ids, classes) if c in rung1_classes]
-# Count tests that exist for these criteria (plus any extra tests)
-test_dir = pathlib.Path('tests')
-test_funcs = set()
-for tf in test_dir.glob('test_*.py'):
-    for m in re.finditer(r'^def (test_\w+)', tf.read_text(), re.MULTILINE):
-        test_funcs.add(m.group(1))
-print(len(test_funcs))
-" 2>/dev/null)
-else
-  EXPECTED=""
-fi
 
+# 1a. Collect tests — FAIL on any collection error
 COLLECT_OUTPUT=$("$PY" -m pytest --collect-only -q 2>&1)
-COLLECT_EXIT=$?
-COLLECTED_LINE=$(echo "$COLLECT_OUTPUT" | grep -E "^\d+ tests? collected|^no tests ran" | tail -1)
-COLLECTED_NUM=$(echo "$COLLECTED_LINE" | grep -oE "^[0-9]+")
 COLLECT_ERRORS=$(echo "$COLLECT_OUTPUT" | grep -cE "^ERROR collecting" || true)
+COLLECTED_NUM=$(echo "$COLLECT_OUTPUT" | grep -oE "^[0-9]+ tests? collected" | grep -oE "^[0-9]+")
 
-# FAIL on any collection error
 if [ "$COLLECT_ERRORS" -gt 0 ]; then
   echo "FAIL  pytest collection errors ($COLLECT_ERRORS errors)"
   echo "$COLLECT_OUTPUT" | grep "^ERROR collecting"
-  FAILS=$((FAILS + 1))
-# FAIL unless collected count matches expected
-elif [ -n "$EXPECTED" ] && [ "$COLLECTED_NUM" != "$EXPECTED" ]; then
-  echo "FAIL  expected $EXPECTED tests collected, got $COLLECTED_NUM"
   FAILS=$((FAILS + 1))
 elif [ -z "$COLLECTED_NUM" ] || [ "$COLLECTED_NUM" -eq 0 ]; then
   echo "FAIL  0 tests collected"
   FAILS=$((FAILS + 1))
 else
-  echo "PASS  $COLLECTED_NUM tests collected, 0 errors (expected $EXPECTED)"
+  echo "PASS  $COLLECTED_NUM tests collected, 0 collection errors"
+fi
+
+# 1b. Bundle coverage — every rung-1 criterion must map to ≥1 test function
+if [ -f "$BUNDLE" ]; then
+  COVERAGE_RESULT=$("$PY" -c "
+import re, pathlib, sys
+RUNG1 = {'[unit-example]','[unit-property]','[contract]','[unit-fixture]','[security-adversarial]','[adversarial]'}
+text = pathlib.Path('$BUNDLE').read_text()
+ids = re.findall(r'criterion_id:\s+(AC-\S+)', text)
+classes = re.findall(r'evidence_class:\s+\"(\[[^\]]+\])\"', text)
+rung1 = [(i, c) for i, c in zip(ids, classes) if c in RUNG1]
+test_funcs = set()
+for tf in pathlib.Path('tests').glob('test_*.py'):
+    for m in re.finditer(r'^def (test_\w+)', tf.read_text(), re.MULTILINE):
+        test_funcs.add(m.group(1))
+uncovered = []
+for cid, ec in rung1:
+    pat = cid.lower().replace('-', '_')
+    if not any(pat in f for f in test_funcs):
+        uncovered.append(cid)
+if uncovered:
+    print(f'FAIL {len(uncovered)} rung-1 criteria uncovered: {\" \".join(uncovered)}')
+    sys.exit(1)
+else:
+    print(f'PASS {len(rung1)} rung-1 criteria, all covered')
+    sys.exit(0)
+" 2>&1)
+  COVERAGE_EXIT=$?
+  echo "$COVERAGE_RESULT"
+  if [ "$COVERAGE_EXIT" -ne 0 ]; then
+    FAILS=$((FAILS + 1))
+  fi
+else
+  echo "WARN  bundle not found at $BUNDLE — skipping coverage check"
+  WARNS=$((WARNS + 1))
 fi
 
 # verify.sh exits nonzero (red = arbiter alive)
