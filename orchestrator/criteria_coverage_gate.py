@@ -57,8 +57,14 @@ def parse_criteria(path: pathlib.Path) -> list[dict]:
 
 
 def main():
-    doc = sys.argv[1] if len(sys.argv) > 1 else "doc01"
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    doc = args[0] if args else "doc01"
     base = ROOT / "acceptance" / doc
+    if "--base" in sys.argv:
+        base = pathlib.Path(sys.argv[sys.argv.index("--base") + 1])
+    if not (base / "requirements" / "requirements.yaml").exists():
+        print(f"GATE FAIL: no requirements at {base}")
+        sys.exit(1)
     reqs = parse_requirements(base / "requirements" / "requirements.yaml")
     crits = parse_criteria(base / "criteria" / "criteria.yaml")
 
