@@ -43,3 +43,7 @@ fixtures/estate/
 state/
 fixtures/estates/**/clone/
 proxy.bundle
+
+# Orchestrator runtime logs (grow continuously; never commit)
+orchestrator/run.log
+orchestrator/console.log
