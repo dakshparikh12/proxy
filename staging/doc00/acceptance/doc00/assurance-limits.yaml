@@ -1,0 +1,57 @@
+# Assurance Limits — Doc 00 Constitution, Architecture & Foundation
+# Per GENERATOR.md §2.2. Emitted in every bundle: what a green Doc 00 bundle DOES and does NOT mean.
+---
+
+what_a_green_bundle_means:
+  - Every authoritative Doc 00 clause has been atomized into a requirement or carried with an explicit disposition.
+  - Every mandatory requirement (P0/P1) has at least one linked blocking acceptance criterion.
+  - All P0 and P1 blocking criteria passed under every applicable environment (fixture + the two performance/cost gates).
+  - The mandatory fault model was detected by the verifier (every P0/P1 canonical fault injected and caught).
+  - The two performance/cost claims (listening-baseline ceiling; spike direct-answer p50) met their pinned protocol.
+  - Structural and mutation signals contain no unexplained critical gaps on changed/high-risk code.
+  - The evidence exactly matches the sealed acceptance-bundle and implementation hashes.
+
+what_it_does_not_mean:
+  - Does not prove the source specification contains every real-world foundation requirement.
+    Doc 00 is the substrate; the product laws' RUNTIME behavior is verified in the Doc 01-05/08 bundles (see dispositions.yaml).
+  - Does not prove tenant isolation holds against OS-level container escape or hypervisor vulnerabilities.
+    Isolation is verified via distinct-envelope-key checks, cross-tenant substitution on fixtures, and schema tenant-scoping —
+    not via a kernel/hypervisor escape simulation.
+  - Does not prove the lethal-trifecta invariant holds under a model jailbreak that produces a NEW outward tool.
+    The invariant is verified as static reachability + disallowed_tools + the human-click gate; a novel outward capability
+    added outside disallowed_tools in a downstream doc is that doc's obligation to re-verify.
+  - Does not prove the cost ceiling holds under all workloads.
+    The listening-baseline ceiling is measured on a scripted listening-only hour; substantive-work meters are separate by design.
+  - Does not prove the spike results generalize to every repository.
+    The pre-build spike measures latency + who_writes accuracy on 2 pinned repos (flask, netbox); ORM stacks beyond the tier-1
+    matrix (Django/SQLAlchemy/Rails) are labeled lower-bound downstream, not certified here.
+  - Does not prove the IaC will apply cleanly against a live GCP project.
+    IaC criteria inspect the plan/config (terraform plan JSON, Cloud Run annotations); a live apply is a deployment-time concern.
+  - Does not prove mutation operators represent every possible implementation defect, nor that the software contains no defects.
+
+known_limits_of_the_estate_portfolio:
+  - estate_gap: real-repo coverage
+    status: by-design-narrow
+    rationale: >
+      Doc 00 acceptance is dominated by cost-free structural oracles over committed fixtures. Only the pre-build spike
+      (AC-BLD-001) touches real repos (flask, netbox). Large-monorepo / polyglot / deep-history repos are out of Doc 00 scope.
+  - estate_gap: live-cloud environment
+    status: deferred
+    rationale: >
+      Cloud Run/GCE/Cloud SQL config is verified against terraform plan + annotations, not a live GCP apply. A live smoke test
+      is a deployment-stage gate (Doc 09 integration), not this bundle.
+
+known_limits_of_security_verification:
+  - Fencing, atomic-claim, and per-partial-index concurrency are verified via pinned interleavings on an ephemeral Postgres,
+    not via a chaos/fuzz schedule across a real multi-instance fleet.
+  - Secret redaction is verified on a sentinel-value fixture; novel secret patterns a downstream gitleaks version misses are not caught here.
+  - The accept-route authz matrix is verified with unauth / cross-tenant / owner-twice fixtures; it does not exercise every
+    CSRF token-forgery variant.
+
+known_limits_of_performance_verification:
+  - The spike latency gate (p50 <= ~2.5s) is founder-present, pre-loop, on 2 pinned repos; production fleet variance is not certified.
+  - The listening-baseline cost ceiling is a deterministic replay of a scripted meeting; live provider price drift is not modeled.
+
+dev_holdout_gap_requirement:
+  - The pre-build spike (AC-BLD-001) uses estate-django-app as a HOLDOUT; its goldens are sealed before the first gate run.
+  - A who_writes/get_dependents accuracy fail on the holdout is a challenge-core escalation to the user, never a silent patch (AC-BLD-002).

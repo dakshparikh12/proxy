@@ -1,0 +1,51 @@
+# Performance / Cost Protocol — Doc 00 Foundation
+# Per GENERATOR.md §11.5. Governs the two Doc 00 claims with a numeric-workload gate:
+#   AC-INV-001 (listening-baseline cost ceiling) and AC-BLD-001 (pre-build spike direct-answer p50).
+---
+
+protocol_id: PROTO-PERFORMANCE-01
+name: "Pinned-workload percentile/cost protocol"
+version: "1.0"
+
+description: >
+  Used where a numeric ceiling (cost/hr) or latency percentile gates the claim. The protocol —
+  not any dashboard — defines pass/fail.
+
+pinned_environment:
+  - hardware/resource_class: recorded per run (Cloud Run instance class for the spike; fixed for cost sim)
+  - deployment: real Cloud Run + real E2B + real STT/TTS for the spike (CANONICAL §11.12); simulated meter for the cost sim
+  - dependency locks + container digest recorded
+  - clock discipline: wall-clock; no Date.now() nondeterminism baked into goldens
+
+latency_protocol:  # AC-BLD-001
+  clock: first-grounded-audio (shallow direct-answer path), CANONICAL §12.8
+  workload: "~10 real questions against a real mid-size repo (estate-django-app / estate-flask), DIRECT-ANSWER path only"
+  warm_vs_cold: report separately; the gate is measured on the warm path
+  samples: ">=10 questions x >=3 repeats; record tool+turn count per sample"
+  reclassification: "a 'direct' answer needing >1 gather pass or an LSP call is reclassified and excluded from the shallow SLO"
+  percentile_and_gate: "p50 <= 2.5s (config first_audio_p50_s). A miss is a challenge-core escalation (branch b) or the latency fallback (branch a), never a silent pass."
+  timeout_treatment: a sample that times out counts as a miss
+
+cost_protocol:  # AC-INV-001
+  workload: "one simulated hour of listening + notes + quick grounded answers (no substantive/Workroom work)"
+  meter: "listening baseline = transport_usd + Scribe model_usd + orchestrator idle"
+  ceiling: "within [0.95, 1.25] USD/hr (config [cost] listening_baseline_low/high_usd_per_h)"
+  separation_invariant: "task-budget spend (Workroom/E2B/Opus) MUST NOT appear in the baseline meter"
+  sample: deterministic replay of a scripted meeting trace; no live spend required
+
+failure_classification:
+  - PRODUCT_FAILURE (gate missed by the implementation)
+  - INFRASTRUCTURE_FAILURE (confirmed external cause — retryable within budget)
+  - NONDETERMINISTIC_FAILURE (variance beyond the recorded band)
+
+retry_budget:
+  latency: "up to 2 re-runs for confirmed INFRASTRUCTURE_FAILURE only; exhausting it blocks acceptance"
+  cost: "deterministic replay — no retry; divergence is a NONDETERMINISTIC_FAILURE"
+
+evidence_format:
+  - per-sample latency/cost records with tool+turn counts
+  - percentile computation + the pinned environment manifest
+  - the reclassification log (which samples were excluded and why)
+
+applies_to_criteria:
+  example_criterion_ids: [AC-INV-001, AC-BLD-001]

@@ -1,0 +1,21 @@
+# Authority Index — Doc 00 Constitution, Architecture & Foundation
+authorities:
+  - id: DOC-00
+    type: specification
+    path: product/v0-spec/00-FOUNDATION.md
+    description: "Constitution, Architecture & Foundation build spec (the fixed core)"
+
+  - id: CANONICAL-DECISIONS
+    type: canonical_decision
+    path: product/v0-spec/CANONICAL-DECISIONS.md
+    description: "Frozen cross-doc decisions — overrides any doc it conflicts with (§0-§12)"
+
+  - id: AGENTS.md
+    type: architecture_invariant
+    path: AGENTS.md
+    description: "Proxy constitution — five laws + 11 product invariants"
+
+  - id: config-defaults.toml
+    type: operational_slo
+    path: product/v0-spec/config-defaults.toml
+    description: "Pinned tunable defaults (heartbeat/stale, latency SLOs, cost, seats)"

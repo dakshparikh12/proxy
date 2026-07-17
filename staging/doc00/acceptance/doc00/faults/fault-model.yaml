@@ -1,0 +1,1140 @@
+# Fault Model — Doc 00 Foundation (Part A: P0 security + durable-substrate faults)
+# Per GENERATOR.md §9.5/§9.6. Every P0 criterion detects >=1 canonical fault per material
+# class it protects; every P1 detects >=1 representative behavioral fault. detection_requirement
+# 1.0 = the paired criterion MUST catch this fault.
+---
+
+# ── P0 security / isolation ──────────────────────────────────────────────
+- fault_id: F-SHARED-TENANT-KEY
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "A single shared envelope key is used across tenants instead of a distinct per-tenant key."
+  must_be_detected_by: [AC-HOST-013]
+  detection_requirement: 1.0
+- fault_id: F-SHRED-AFFECTS-OTHER-TENANT
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "Destroying tenant A's key also renders tenant B undecryptable (blast radius not bounded)."
+  must_be_detected_by: [AC-HOST-014]
+  detection_requirement: 1.0
+- fault_id: F-TABLE-NO-TENANT-SCOPE
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "A tenant-scoped durable table is created with no tenant_id / no FK chain to tenants."
+  must_be_detected_by: [AC-TEN-001]
+  detection_requirement: 1.0
+- fault_id: F-CROSS-TENANT-READ
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "A tenant-B request reads a tenant-A meeting/draft/notes (server-side tenant check missing/bypassed)."
+  must_be_detected_by: [AC-TEN-002]
+  detection_requirement: 1.0
+- fault_id: F-CROSS-TENANT-ACCEPT
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "A member of tenant B can accept a staged draft belonging to tenant A."
+  must_be_detected_by: [AC-INV-011]
+  detection_requirement: 1.0
+- fault_id: F-UNAUTH-ACCEPT
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "An unauthenticated caller can accept/reject a draft (missing protected() guard)."
+  must_be_detected_by: [AC-INV-011]
+  detection_requirement: 1.0
+- fault_id: F-CAP-TOKEN-GRANTS-ACCEPT
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "A read-only chat-link capability token can invoke the accept route (privilege escalation)."
+  must_be_detected_by: [AC-INV-012]
+  detection_requirement: 1.0
+- fault_id: F-SECRET-IN-LOG
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "A detected secret value appears in log output / a query result (no read-path redaction)."
+  must_be_detected_by: [AC-INV-008]
+  detection_requirement: 1.0
+- fault_id: F-FLEET-SHARED-SANDBOX-SECRET
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "Sandboxes share one fleet HS256 secret instead of a per-sandbox random secret; in-sandbox code could exfiltrate it."
+  must_be_detected_by: [AC-INV-009]
+  detection_requirement: 1.0
+- fault_id: F-TRANSCRIPT-TO-SIDE-EFFECT
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "A transcript-triggered path reaches an outward side-effect (push/apply/outbound) without a human click."
+  must_be_detected_by: [AC-INV-004]
+  detection_requirement: 1.0
+- fault_id: F-UNFENCED-TRANSCRIPT
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "The live transcript is placed unfenced into a prompt, so an injected instruction is honored."
+  must_be_detected_by: [AC-INV-005]
+  detection_requirement: 1.0
+- fault_id: F-WORLD-TOUCHING-ALLOWED
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "A world-touching tool is present in allowed_tools (not disallowed_tools) on a workroom/repo query()."
+  must_be_detected_by: [AC-INV-006]
+  detection_requirement: 1.0
+- fault_id: F-TOKEN-CACHED
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "A GitHub token is cached in a module/class variable and reused across operations."
+  must_be_detected_by: [AC-TEN-003]
+  detection_requirement: 1.0
+- fault_id: F-TOKEN-LOGGED
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "A GitHub token value is written to logs (e.g. logging the Authorization header)."
+  must_be_detected_by: [AC-TEN-003]
+  detection_requirement: 1.0
+
+# ── P0 concurrency / durability substrate ────────────────────────────────
+- fault_id: F-NO-PARTIAL-UNIQUE-INDEX
+  category: state_consistency
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "operation_runs lacks the partial unique index, allowing two running rows for one (scope_id, operation_type)."
+  must_be_detected_by: [AC-SUB-002]
+  detection_requirement: 1.0
+- fault_id: F-FULL-UNIQUE-INDEX-BLOCKS-RECLAIM
+  category: state_consistency
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "A non-partial unique index blocks a new running row when a completed row exists (re-claim broken)."
+  must_be_detected_by: [AC-SUB-003]
+  detection_requirement: 1.0
+- fault_id: F-FENCE-HEARTBEAT-UNGATED
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "The heartbeat UPDATE omits the AND status='running' guard, so a reclaimed process still thinks it owns."
+  must_be_detected_by: [AC-SUB-007]
+  detection_requirement: 1.0
+- fault_id: F-FENCE-IGNORES-ROWCOUNT-ZERO
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "rowcount 0 from the fencing heartbeat is ignored; is_owner stays True (zombie survives)."
+  must_be_detected_by: [AC-SUB-008]
+  detection_requirement: 1.0
+- fault_id: F-ZOMBIE-DOUBLE-SPEAK
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "A reclaimed (is_owner=False) process emits into the meeting a replacement now owns (double-speak)."
+  must_be_detected_by: [AC-SUB-009]
+  detection_requirement: 1.0
+- fault_id: F-UNGATED-EMIT-VERB
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "One of speak/send_chat/apply/dispatch is not gated on is_owner (a leak in the fencing net)."
+  must_be_detected_by: [AC-SUB-009]
+  detection_requirement: 1.0
+- fault_id: F-CLAIM-WRONG-OWNER
+  category: state_consistency
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "The atomic-claim returns null to the process that actually inserted the running row (ownership inverted)."
+  must_be_detected_by: [AC-SUB-011]
+  detection_requirement: 1.0
+- fault_id: F-DOUBLE-JOIN-OWNER
+  category: state_consistency
+  criticality: P0
+  mechanism: duplicate_delivery
+  description: "Two concurrent join events both acquire ownership (two running rows / two harnesses for one meeting)."
+  must_be_detected_by: [AC-SUB-012]
+  detection_requirement: 1.0
+- fault_id: F-COST-RESET-ON-RECYCLE
+  category: data_integrity
+  criticality: P0
+  mechanism: process_termination
+  description: "A recycled orchestrator resets the cost meter to 0 instead of reloading persisted spend (defeats the SLA at recovery)."
+  must_be_detected_by: [AC-SUB-026]
+  detection_requirement: 1.0
+- fault_id: F-MEETING-COST-SCHEMA-DRIFT
+  category: contract
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "meeting_cost is missing a canonical column (e.g. cache_read_usd) or meeting_id is not uuid."
+  must_be_detected_by: [AC-SUB-025]
+  detection_requirement: 1.0
+- fault_id: F-DRAFT-IN-MEMORY-ONLY
+  category: data_integrity
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "propose_change keeps the draft only in the sandbox review_session (not persisted at creation)."
+  must_be_detected_by: [AC-SUB-027]
+  detection_requirement: 1.0
+- fault_id: F-ACCEPT-READS-DEAD-SESSION
+  category: data_integrity
+  criticality: P0
+  mechanism: process_termination
+  description: "The accept-handler reads the torn-down in-memory review_session instead of the persisted draft."
+  must_be_detected_by: [AC-SUB-028]
+  detection_requirement: 1.0
+
+# ── P1 substrate behavioral ──────────────────────────────────────────────
+- fault_id: F-DUP-MEETING-HARNESS-TABLE
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A separate meeting_harness table is (re)introduced instead of the one operation_runs table."
+  must_be_detected_by: [AC-SUB-001]
+  detection_requirement: 1.0
+- fault_id: F-OPRUN-COLUMN-DRIFT
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "operation_runs deviates from the canonical column set (missing pause_requested/created_by/etc.)."
+  must_be_detected_by: [AC-SUB-001]
+  detection_requirement: 1.0
+- fault_id: F-NO-HEARTBEAT
+  category: resilience
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "with_operation_run never advances last_heartbeat_at (crash becomes undetectable)."
+  must_be_detected_by: [AC-SUB-004]
+  detection_requirement: 1.0
+- fault_id: F-STALE-NOT-SWEPT
+  category: resilience
+  criticality: P1
+  mechanism: clock_skew
+  description: "A running row past STALE_AFTER_S is never swept to interrupted on read."
+  must_be_detected_by: [AC-SUB-005]
+  detection_requirement: 1.0
+- fault_id: F-BOOT-SWEEP-MISSING
+  category: resilience
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "The boot-time bulk sweep is absent, leaving orphaned running rows after boot."
+  must_be_detected_by: [AC-SUB-006]
+  detection_requirement: 1.0
+- fault_id: F-PAUSE-IGNORED
+  category: functional
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "pause_requested=true is not surfaced by check_pause(); the build cannot be paused/aborted."
+  must_be_detected_by: [AC-SUB-010]
+  detection_requirement: 1.0
+- fault_id: F-BROKER-COORDINATION
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "Cross-process coordination uses an in-memory lock or a broker (Redis/RabbitMQ) instead of a Postgres claim."
+  must_be_detected_by: [AC-SUB-013]
+  detection_requirement: 1.0
+- fault_id: F-CRITICAL-SECTION-UNLOCKED
+  category: state_consistency
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A per-meeting critical section runs without pg_advisory_xact_lock or leaks work off the locked connection."
+  must_be_detected_by: [AC-SUB-014]
+  detection_requirement: 1.0
+- fault_id: F-MANAGEDRESOURCE-FSM
+  category: contract
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A ManagedResource provisioning/running/stopped/failed state machine is (re)introduced for sandboxes."
+  must_be_detected_by: [AC-SUB-015]
+  detection_requirement: 1.0
+- fault_id: F-SANDBOX-LEAK
+  category: resilience
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A sandbox is not bounded (no E2B timeout, or no destroy on meeting-end, or reconcile doesn't kill past-TTL)."
+  must_be_detected_by: [AC-SUB-016]
+  detection_requirement: 1.0
+- fault_id: F-WARM-POOL
+  category: contract
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A warm pool of idle sandboxes is maintained instead of join/creation-event pre-provision."
+  must_be_detected_by: [AC-SUB-017]
+  detection_requirement: 1.0
+- fault_id: F-RECONCILE-NO-TOKEN
+  category: security
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "POST /internal/reconcile is reachable without the internal token."
+  must_be_detected_by: [AC-SUB-018]
+  detection_requirement: 1.0
+- fault_id: F-RECONCILE-NONIDEMPOTENT
+  category: resilience
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "run_reconcile_sweep() is not idempotent (a second run changes end state)."
+  must_be_detected_by: [AC-SUB-018]
+  detection_requirement: 1.0
+- fault_id: F-STT-REFRESH-ON-CRON
+  category: resilience
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "An availability-critical loop (STT cred refresh) is placed on the scale-to-zero reconcile cron."
+  must_be_detected_by: [AC-SUB-019]
+  detection_requirement: 1.0
+- fault_id: F-REBUILD-EXISTING-DELIVERABLE
+  category: resilience
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A workroom task is rebuilt even though the SQL completion check shows its deliverable exists."
+  must_be_detected_by: [AC-SUB-020]
+  detection_requirement: 1.0
+- fault_id: F-HARNESS-RESUME-DEAD-SESSION
+  category: resilience
+  criticality: P1
+  mechanism: process_termination
+  description: "A crashed harness attempts to resume the dead media session instead of restart-not-resume."
+  must_be_detected_by: [AC-SUB-021]
+  detection_requirement: 1.0
+- fault_id: F-WEBHOOK-NO-DEDUP
+  category: data_integrity
+  criticality: P1
+  mechanism: duplicate_delivery
+  description: "A duplicate delivery_guid is processed twice (missing ON CONFLICT DO NOTHING)."
+  must_be_detected_by: [AC-SUB-022]
+  detection_requirement: 1.0
+- fault_id: F-WEBHOOK-PROCESS-BEFORE-200
+  category: resilience
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "The webhook is processed synchronously before returning 200 (no durable land-then-drain)."
+  must_be_detected_by: [AC-SUB-023]
+  detection_requirement: 1.0
+- fault_id: F-MEETING-EVENTS-BUS
+  category: contract
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A general meeting_events bus/table is introduced beyond webhook_events."
+  must_be_detected_by: [AC-SUB-024]
+  detection_requirement: 1.0
+- fault_id: F-WORKROOM-TASKS-TABLE
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A workroom_tasks table is created instead of reusing operation_runs."
+  must_be_detected_by: [AC-SUB-029]
+  detection_requirement: 1.0
+- fault_id: F-CLOSE-JOBS-TABLE
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A close_jobs table is created instead of reusing operation_runs (operation_type='meeting-close')."
+  must_be_detected_by: [AC-SUB-029]
+  detection_requirement: 1.0
+- fault_id: F-IDENTITY-SCHEMA-DRIFT
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "An identity table is missing / drifts (e.g. meetings.pinned_sha absent, status enum wrong, tenant_id missing)."
+  must_be_detected_by: [AC-SUB-030]
+  detection_requirement: 1.0
+- fault_id: F-UNSIGNED-SESSION
+  category: security
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "An unsigned/forgeable session cookie is accepted by resolve_session."
+  must_be_detected_by: [AC-SUB-031]
+  detection_requirement: 1.0
+- fault_id: F-BINDING-BOT-ID-UNRESOLVED
+  category: functional
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A Recall webhook's bot_id cannot be resolved back to a meetings row (binding broken)."
+  must_be_detected_by: [AC-SUB-032]
+  detection_requirement: 1.0
+- fault_id: F-COST-WRITER-MISSING
+  category: data_integrity
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "One cost writer (Scribe direct, or the seam meter) does not increment model_usd / omits the cache split."
+  must_be_detected_by: [AC-SUB-033]
+  detection_requirement: 1.0
+- fault_id: F-TRANSCRIPT-STATUS-DEFAULT
+  category: data_integrity
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "transcript_segments.status defaults to 'comprehended' instead of 'pending' (the linchpin)."
+  must_be_detected_by: [AC-SUB-034]
+  detection_requirement: 1.0
+- fault_id: F-NONATOMIC-COMPREHEND
+  category: data_integrity
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "The flip to 'comprehended' is committed separately from the note-delta append (non-atomic)."
+  must_be_detected_by: [AC-SUB-034]
+  detection_requirement: 1.0
+
+# ── Contracts / composition ──────────────────────────────────────────────
+- fault_id: F-EXTRA-DEPLOYABLE
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A fourth deployable or a per-service network service is introduced beyond the three deployables."
+  must_be_detected_by: [AC-CMP-001]
+  detection_requirement: 1.0
+- fault_id: F-BUNDLE-EMBEDS-NOTES
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "Bundle embeds the serialized notes object instead of notes_ref (a UUID handle)."
+  must_be_detected_by: [AC-CMP-002]
+  detection_requirement: 1.0
+- fault_id: F-ENVELOPE-STATUS-VERIFIED
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "EnvelopeStatus includes 'verified' or 'draft' as a status member."
+  must_be_detected_by: [AC-CMP-003]
+  detection_requirement: 1.0
+- fault_id: F-CHUNK-KIND-DISCRIMINATOR
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "AgentChunk uses '.kind' as the discriminator or drops/adds a ChunkType member."
+  must_be_detected_by: [AC-CMP-004]
+  detection_requirement: 1.0
+- fault_id: F-DOUBLE-STREAM-DELTAS
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "stream_deltas is applied a second time downstream (double-wrap) or a consumer reads raw AgentChunk."
+  must_be_detected_by: [AC-CMP-005]
+  detection_requirement: 1.0
+- fault_id: F-NOTEOP-HAS-NOTE
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "NoteOp includes 'note' (should be folded into 'add')."
+  must_be_detected_by: [AC-CMP-006]
+  detection_requirement: 1.0
+- fault_id: F-READINESS-HAS-MAPPING
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "Readiness includes 'mapping' (the agentic map is deferred)."
+  must_be_detected_by: [AC-CMP-007]
+  detection_requirement: 1.0
+- fault_id: F-DM-FIELD-NAME
+  category: contract
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "channel-report uses 'dm?' / 'dm-available?' instead of dm_available."
+  must_be_detected_by: [AC-CMP-008]
+  detection_requirement: 1.0
+- fault_id: F-ORPHAN-CONTRACT-FIELD
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A contract field is produced but consumed by no side (field-contract check must fail)."
+  must_be_detected_by: [AC-CMP-009]
+  detection_requirement: 1.0
+- fault_id: F-REDEFINED-SHARED-MECHANISM
+  category: contract
+  criticality: P1
+  mechanism: static
+  description: "dispatch()/AbortRegistry/resume_with_fallback/provider-seam is re-implemented in a service instead of imported."
+  must_be_detected_by: [AC-CMP-010]
+  detection_requirement: 1.0
+- fault_id: F-SIGNAL-IN-CLIENT-REGISTRY
+  category: contract
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A Doc 02 signal-surface event is placed in the client ProxyMessage registry (assert_registry_closed would over-demand a consumer)."
+  must_be_detected_by: [AC-CMP-011]
+  detection_requirement: 1.0
+
+# ── Repository structure ─────────────────────────────────────────────────
+- fault_id: F-MULTIPLE-LOCKFILES
+  category: deployment
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A per-package lockfile is added (violates the single shared uv.lock)."
+  must_be_detected_by: [AC-REPO-001]
+  detection_requirement: 1.0
+- fault_id: F-FLAT-LAYOUT
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A package uses flat-layout instead of src-layout."
+  must_be_detected_by: [AC-REPO-002]
+  detection_requirement: 1.0
+- fault_id: F-MULTI-REQUIRES-PYTHON
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "Two distinct requires-python values exist across the workspace."
+  must_be_detected_by: [AC-REPO-003]
+  detection_requirement: 1.0
+- fault_id: F-UNDECLARED-DEP
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A member imports a package it did not declare as an explicit dependency."
+  must_be_detected_by: [AC-REPO-004]
+  detection_requirement: 1.0
+- fault_id: F-EDITABLE-PROD-IMAGE
+  category: deployment
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A production image is built with an editable install (missing --no-editable/--package)."
+  must_be_detected_by: [AC-REPO-005]
+  detection_requirement: 1.0
+- fault_id: F-WRONG-SERVICES-SET
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "services/ is missing a mechanism package or adds an extra one."
+  must_be_detected_by: [AC-REPO-006]
+  detection_requirement: 1.0
+- fault_id: F-LIBS-CODE-INTEL
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "libs/code_intel is created (service-internal code must live under services/code_intel)."
+  must_be_detected_by: [AC-REPO-007]
+  detection_requirement: 1.0
+- fault_id: F-LIBS-TRANSPORT
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "libs/transport is created (service-internal code must live under services/transport)."
+  must_be_detected_by: [AC-REPO-007]
+  detection_requirement: 1.0
+- fault_id: F-APPS-IN-UV-SYNC
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "apps/* is matched by the uv workspace members glob (should be pnpm-only)."
+  must_be_detected_by: [AC-REPO-008]
+  detection_requirement: 1.0
+- fault_id: F-GOD-PACKAGE
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A catch-all god-package is introduced under libs/."
+  must_be_detected_by: [AC-REPO-009]
+  detection_requirement: 1.0
+
+# ── Hosting / deployables ────────────────────────────────────────────────
+- fault_id: F-CONTROL-PLANE-NOT-CLOUDRUN
+  category: deployment
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "control_plane is deployed off Cloud Run, or missing a required route."
+  must_be_detected_by: [AC-HOST-001]
+  detection_requirement: 1.0
+- fault_id: F-WRONG-TIMEOUT
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "control_plane timeout_seconds != 3600."
+  must_be_detected_by: [AC-HOST-002]
+  detection_requirement: 1.0
+- fault_id: F-CPU-THROTTLING-ON
+  category: deployment
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "cpu-throttling is left true (background provisioning 503s)."
+  must_be_detected_by: [AC-HOST-003]
+  detection_requirement: 1.0
+- fault_id: F-MINSCALE-ZERO-LIVE
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "The live tier has minScale=0 (cold-starts on every request), or the Cloud SQL annotation is missing."
+  must_be_detected_by: [AC-HOST-004]
+  detection_requirement: 1.0
+- fault_id: F-MEETING-RUNTIME-CLOUDRUN
+  category: deployment
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "meeting_runtime is deployed on Cloud Run (violates Amendment A1: must be GCE MIG)."
+  must_be_detected_by: [AC-HOST-005]
+  detection_requirement: 1.0
+- fault_id: F-MEETING-RUNTIME-BROKER
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "meeting_runtime introduces a bus/broker or attaches a volume."
+  must_be_detected_by: [AC-HOST-005]
+  detection_requirement: 1.0
+- fault_id: F-CODE-INTEL-NO-VOLUME
+  category: deployment
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "code_intel has no per-tenant encrypted volume, or is not a stateful host."
+  must_be_detected_by: [AC-HOST-006]
+  detection_requirement: 1.0
+- fault_id: F-DIRECT-PATH-TOUCHES-E2B
+  category: functional
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "The direct-answer path provisions an E2B sandbox or dispatches a Workroom session."
+  must_be_detected_by: [AC-HOST-007]
+  detection_requirement: 1.0
+- fault_id: F-DB-PUBLIC-IP
+  category: security
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "Cloud SQL is exposed on a public IP, or the app uses app-side SSL instead of the Auth Proxy socket."
+  must_be_detected_by: [AC-HOST-008]
+  detection_requirement: 1.0
+- fault_id: F-PROD-NO-PITR
+  category: data_integrity
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "Prod Cloud SQL is not REGIONAL+PITR, or backups are not at 03:00."
+  must_be_detected_by: [AC-HOST-009]
+  detection_requirement: 1.0
+- fault_id: F-GCS-NO-VERSIONING
+  category: data_integrity
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "The notes/artifacts bucket has Object Versioning disabled (breaks if_generation_match concurrency)."
+  must_be_detected_by: [AC-HOST-010]
+  detection_requirement: 1.0
+- fault_id: F-K8S-PRESENT
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A Kubernetes manifest / service mesh / multi-region resource is introduced."
+  must_be_detected_by: [AC-HOST-011]
+  detection_requirement: 1.0
+- fault_id: F-GPU-PROVISIONED
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A GPU accelerator is provisioned, or local model inference is added."
+  must_be_detected_by: [AC-HOST-012]
+  detection_requirement: 1.0
+
+# ── Boot / lifecycle ─────────────────────────────────────────────────────
+- fault_id: F-MISSING-KEY-LAZY-FAIL
+  category: deployment
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A missing required key is not caught at import; the process boots and fails lazily on first use."
+  must_be_detected_by: [AC-BOOT-001]
+  detection_requirement: 1.0
+- fault_id: F-BOOT-ORDER-WRONG
+  category: deployment
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "The lifespan runs steps out of order (e.g. routers mounted before the reaper, or pool after facade)."
+  must_be_detected_by: [AC-BOOT-002]
+  detection_requirement: 1.0
+- fault_id: F-JOIN-BEFORE-PROVISIONER
+  category: resilience
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A handler uses the provisioner without awaiting provisioner_ready (the join-before-wired race)."
+  must_be_detected_by: [AC-BOOT-003]
+  detection_requirement: 1.0
+- fault_id: F-BOOT-REAPER-MISSING
+  category: resilience
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "Routers mount before / without the boot reaper marking orphaned running rows interrupted."
+  must_be_detected_by: [AC-BOOT-004]
+  detection_requirement: 1.0
+- fault_id: F-EPIPE-CRASH
+  category: resilience
+  criticality: P2
+  mechanism: dependency_crash
+  description: "A recoverable BrokenPipeError crashes the process instead of being swallowed + retried."
+  must_be_detected_by: [AC-BOOT-005]
+  detection_requirement: 1.0
+- fault_id: F-UNKNOWN-SWALLOWED
+  category: resilience
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A genuinely-unknown exception is swallowed instead of crashing after a flush delay."
+  must_be_detected_by: [AC-BOOT-005]
+  detection_requirement: 1.0
+- fault_id: F-SERIAL-SHUTDOWN
+  category: resilience
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "Shutdown runs tasks serially (losing trace spans) or lacks the hard-exit backstop."
+  must_be_detected_by: [AC-BOOT-006]
+  detection_requirement: 1.0
+
+# ── Config / secrets ─────────────────────────────────────────────────────
+- fault_id: F-ENV-MANIFEST-DRIFT
+  category: documentation
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A boot-required key is missing from .env.example, or a var is undocumented."
+  must_be_detected_by: [AC-CFG-001]
+  detection_requirement: 1.0
+- fault_id: F-FAKE-MODEL-ID
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A fake model id (claude-haiku-4 / claude-sonnet-4) appears in the seat table."
+  must_be_detected_by: [AC-CFG-002]
+  detection_requirement: 1.0
+- fault_id: F-DUP-SEAT-TABLE
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A per-doc model-seat table duplicates the canonical libs/llm/routing.py table."
+  must_be_detected_by: [AC-CFG-002]
+  detection_requirement: 1.0
+- fault_id: F-NO-INFLIGHT-CAP
+  category: performance
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "The global libs/llm in-flight semaphore is missing; concurrent model calls exceed PROXY_MAX_INFLIGHT_LLM."
+  must_be_detected_by: [AC-CFG-003]
+  detection_requirement: 1.0
+- fault_id: F-SHARED-DOMAIN-KEY
+  category: security
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "One AES key is shared across integration domains (unbounded leak blast radius)."
+  must_be_detected_by: [AC-CFG-004]
+  detection_requirement: 1.0
+- fault_id: F-TUNABLE-IN-ENV
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A numeric tunable is read from an env var instead of config/defaults.toml."
+  must_be_detected_by: [AC-CFG-005]
+  detection_requirement: 1.0
+- fault_id: F-TUNABLE-HARDCODED
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A numeric tunable is hardcoded in code instead of read from config/defaults.toml."
+  must_be_detected_by: [AC-CFG-005]
+  detection_requirement: 1.0
+- fault_id: F-SECRET-DATA-NOT-IGNORED
+  category: deployment
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A secret version lacks lifecycle.ignore_changes=[secret_data] (out-of-band rotations clobbered on apply)."
+  must_be_detected_by: [AC-CFG-006]
+  detection_requirement: 1.0
+- fault_id: F-SECRET-BINDING-DRIFT
+  category: deployment
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A secret exists in Terraform but not the deploy config (or vice versa); check-secret-bindings must fail."
+  must_be_detected_by: [AC-CFG-007]
+  detection_requirement: 1.0
+- fault_id: F-CREDENTIAL-HOME-MIX
+  category: security
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "End-user OAuth is stored in Secret Manager, or the App private key is stored in Nango (homes mixed)."
+  must_be_detected_by: [AC-CFG-008]
+  detection_requirement: 1.0
+- fault_id: F-FEATURE-FLAG-TABLE
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A feature_flags table / reload cache is introduced, or an active runtime flag exists in V0."
+  must_be_detected_by: [AC-CFG-009]
+  detection_requirement: 1.0
+- fault_id: F-MISSING-AUTH-ROUTES
+  category: security
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "An /auth/{login,callback,logout} route is missing, or auth is not Authlib+Google OIDC."
+  must_be_detected_by: [AC-CFG-010]
+  detection_requirement: 1.0
+
+# ── IaC / Docker ─────────────────────────────────────────────────────────
+- fault_id: F-IAC-LAYOUT-DRIFT
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "The infra tree drifts from modules/{bootstrap,platform}+envs/{dev,prod}, or apply order is undocumented."
+  must_be_detected_by: [AC-IAC-001]
+  detection_requirement: 1.0
+- fault_id: F-DIRECT-PROD-PUSH
+  category: deployment
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A direct-push-to-prod path exists (prod must be promote-based from an immutable tag)."
+  must_be_detected_by: [AC-IAC-002]
+  detection_requirement: 1.0
+- fault_id: F-NO-PREVENT-DESTROY
+  category: data_integrity
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A data-bearing resource lacks prevent_destroy."
+  must_be_detected_by: [AC-IAC-003]
+  detection_requirement: 1.0
+- fault_id: F-TF-OWNS-RUNTIME-CONFIG
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "Terraform owns image/env/secrets (Cloud Run template not ignore_changes'd), clobbering deploy config."
+  must_be_detected_by: [AC-IAC-004]
+  detection_requirement: 1.0
+- fault_id: F-SHARED-BROAD-SA
+  category: security
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "One broad service account is shared across roles instead of least-privilege per role."
+  must_be_detected_by: [AC-IAC-005]
+  detection_requirement: 1.0
+- fault_id: F-CUSTOMER-PLATFORM-BUILT
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "The per-customer-GCP-project module instantiates resources in V0 (should be recorded-only)."
+  must_be_detected_by: [AC-IAC-006]
+  detection_requirement: 1.0
+- fault_id: F-NON-FROZEN-BUILD
+  category: deployment
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "An image build omits --frozen/--no-dev/--package (not per-service self-contained)."
+  must_be_detected_by: [AC-DOCK-001]
+  detection_requirement: 1.0
+- fault_id: F-RUNS-AS-ROOT
+  category: security
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "The runtime image runs as root (no non-root uid 1001 USER)."
+  must_be_detected_by: [AC-DOCK-002]
+  detection_requirement: 1.0
+- fault_id: F-HOME-UNSET
+  category: deployment
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "HOME is unset in the runtime image (the Claude Agent SDK write-to-$HOME breaks)."
+  must_be_detected_by: [AC-DOCK-002]
+  detection_requirement: 1.0
+- fault_id: F-NO-MIGRATE-LOCK
+  category: state_consistency
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "env.py runs migrations without pg_advisory_lock, allowing concurrent/partial migrations on parallel boot."
+  must_be_detected_by: [AC-DOCK-003]
+  detection_requirement: 1.0
+- fault_id: F-SANDBOX-HASH-MISMATCH-RUNS
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "An app image runs against a mismatched sandbox base image (SANDBOX_IMAGE_HASH not fail-closed)."
+  must_be_detected_by: [AC-DOCK-004]
+  detection_requirement: 1.0
+
+# ── CI / DB / registry ───────────────────────────────────────────────────
+- fault_id: F-MISSING-FAST-CHECK
+  category: deployment
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A fast merge-blocking check (ruff/mypy/unit/security-contract) is missing."
+  must_be_detected_by: [AC-CI-001]
+  detection_requirement: 1.0
+- fault_id: F-MULTI-HEAD-ACCEPTED
+  category: deployment
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "check-migration-order passes / is skippable with two Alembic heads vs main."
+  must_be_detected_by: [AC-CI-002]
+  detection_requirement: 1.0
+- fault_id: F-QUERY-WITHOUT-TRIAD
+  category: security
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A query() call site missing the SDK-isolation triad flags/block-list is accepted by CI."
+  must_be_detected_by: [AC-CI-003]
+  detection_requirement: 1.0
+- fault_id: F-PIPELINE-STAGE-MISSING
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A Cloud Build stage (build/registry/deploy/migrations) is missing."
+  must_be_detected_by: [AC-CI-004]
+  detection_requirement: 1.0
+- fault_id: F-GUARD-PARITY-GAP
+  category: deployment
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A guard runs in CI but not pre-commit (or vice versa)."
+  must_be_detected_by: [AC-CI-005]
+  detection_requirement: 1.0
+- fault_id: F-E2E-GATES-MERGE
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A heavy/flaky E2E test is made merge-blocking."
+  must_be_detected_by: [AC-CI-006]
+  detection_requirement: 1.0
+- fault_id: F-DEAD-TOKEN-ACCEPTED
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A superseded dead token (session_transcripts/ManagedResource/warm pool/TILE_ADDRESS) passes the banned-strings test."
+  must_be_detected_by: [AC-CI-007]
+  detection_requirement: 1.0
+- fault_id: F-POOL-ARG-DRIFT
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "The asyncpg pool is created with wrong sizing/timeout args."
+  must_be_detected_by: [AC-DB-001]
+  detection_requirement: 1.0
+- fault_id: F-ORM-PRESENT
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "An ORM (SQLAlchemy models/Django ORM) is introduced in libs/db."
+  must_be_detected_by: [AC-DB-002]
+  detection_requirement: 1.0
+- fault_id: F-INTERPOLATED-SQL
+  category: security
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "SQL is built by string interpolation of values (injection risk) instead of parameterized queries."
+  must_be_detected_by: [AC-DB-002]
+  detection_requirement: 1.0
+- fault_id: F-MEETING-ID-TYPE-DRIFT
+  category: data_integrity
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A meeting_id column is text (not uuid), or operation_runs.scope_id is uuid (should be text)."
+  must_be_detected_by: [AC-DB-003]
+  detection_requirement: 1.0
+- fault_id: F-ALEMBIC-NO-LOCK
+  category: state_consistency
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "Alembic env.py does not wrap run_migrations in an advisory lock."
+  must_be_detected_by: [AC-DB-004]
+  detection_requirement: 1.0
+- fault_id: F-NO-AUTO-REGISTER
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A ProxyMessage subclass is not auto-registered (no __init_subclass__ registration)."
+  must_be_detected_by: [AC-REG-001]
+  detection_requirement: 1.0
+- fault_id: F-ORPHAN-MESSAGE-TYPE
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A MessageType member has no registered/consumed model; assert_registry_closed must fail at boot and in CI."
+  must_be_detected_by: [AC-REG-003]
+  detection_requirement: 1.0
+- fault_id: F-UNBOUNDED-FREETEXT
+  category: security
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A free-text contract field lacks Field(max_length=...) (unbounded input)."
+  must_be_detected_by: [AC-REG-004]
+  detection_requirement: 1.0
+- fault_id: F-OPEN-SELECTOR
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A selector field is an open str instead of a Literal[...] (or an id is not UUID)."
+  must_be_detected_by: [AC-REG-004]
+  detection_requirement: 1.0
+- fault_id: F-PROXYEVENT-DUP-REGISTRY
+  category: contract
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A second ProxyEvent/EventType registry exists (should be one ProxyMessage/MessageType registry)."
+  must_be_detected_by: [AC-REG-005]
+  detection_requirement: 1.0
+- fault_id: F-DISPATCH-TRUSTS-TILE
+  category: security
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "The dispatch funnel accepts a malformed/unregistered tile->backend message (tile treated as trusted)."
+  must_be_detected_by: [AC-REG-006]
+  detection_requirement: 1.0
+
+# ── Observability / constitution / invariants / build ────────────────────
+- fault_id: F-NON-JSON-LOGS
+  category: observability
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "Log lines are not structlog JSON on stdout."
+  must_be_detected_by: [AC-OBS-001]
+  detection_requirement: 1.0
+- fault_id: F-SERVICE-NO-SENTRY
+  category: observability
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A service does not initialize the shared Sentry error reporting."
+  must_be_detected_by: [AC-OBS-002]
+  detection_requirement: 1.0
+- fault_id: F-COST-NO-CACHE-SPLIT
+  category: observability
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "Cost telemetry omits the cache-read/creation split or misaggregates per meeting."
+  must_be_detected_by: [AC-OBS-003]
+  detection_requirement: 1.0
+- fault_id: F-SELFHOSTED-LANGFUSE
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A self-hosted Langfuse ClickHouse stack is installed, or flush_tracing is missing from shutdown."
+  must_be_detected_by: [AC-OBS-004]
+  detection_requirement: 1.0
+- fault_id: F-NO-HEALTH-ENDPOINT
+  category: observability
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "/health is unavailable, or the harness emits no heartbeat."
+  must_be_detected_by: [AC-OBS-005]
+  detection_requirement: 1.0
+- fault_id: F-HARDENING-CONTROL-MISSING
+  category: security
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "The hardening script omits a control (root login enabled, firewall-only-one-layer, etc.)."
+  must_be_detected_by: [AC-OBS-006]
+  detection_requirement: 1.0
+- fault_id: F-HOST-CODE-EXEC
+  category: security
+  criticality: P0
+  mechanism: hand_authored_negative_build
+  description: "A path allows arbitrary repo/customer code execution on the host (must be E2B-only)."
+  must_be_detected_by: [AC-OBS-006]
+  detection_requirement: 1.0
+- fault_id: F-RANDOM-LB-ROUTING
+  category: resilience
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A tile-WS reconnect / retried webhook is served by a non-owner via random LB instead of owner affinity."
+  must_be_detected_by: [AC-OBS-007]
+  detection_requirement: 1.0
+- fault_id: F-SKIPLIST-ITEM-BUILT
+  category: deployment
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A skip-list technology is built at V0 (k8s, mesh, OTel/Prometheus, PagerDuty, etc.)."
+  must_be_detected_by: [AC-OBS-008]
+  detection_requirement: 1.0
+- fault_id: F-RULE-NO-ENFORCEMENT
+  category: documentation
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A CLAUDE.md hard rule does not name its enforcement mechanism."
+  must_be_detected_by: [AC-CON-001]
+  detection_requirement: 1.0
+- fault_id: F-INTERNAL-NAME-LEAK
+  category: functional
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A user-visible string contains an internal component name (Orchestrator/Scribe/workroom)."
+  must_be_detected_by: [AC-CON-002]
+  detection_requirement: 1.0
+- fault_id: F-HANDLER-THROWS
+  category: resilience
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A tool handler raises out of its boundary instead of returning an error result."
+  must_be_detected_by: [AC-CON-003]
+  detection_requirement: 1.0
+- fault_id: F-UNWRAPPED-EXTERNAL-CALL
+  category: observability
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "An external call is made without the retry + cost-telemetry wrapper."
+  must_be_detected_by: [AC-CON-004]
+  detection_requirement: 1.0
+- fault_id: F-BASELINE-OVER-CEILING
+  category: cost
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "The listening baseline exceeds the ~$0.95-1.25/hr SLA ceiling on the listening-only sim."
+  must_be_detected_by: [AC-INV-001]
+  detection_requirement: 1.0
+- fault_id: F-TASK-FOLDED-INTO-BASELINE
+  category: cost
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "Task-budget spend (Workroom/E2B/Opus) is folded into the listening baseline meter."
+  must_be_detected_by: [AC-INV-002]
+  detection_requirement: 1.0
+- fault_id: F-BREAKER-MISSING
+  category: cost
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "The soft-cap-degrade / hard-cap-notes-only breaker does not trigger at its caps."
+  must_be_detected_by: [AC-INV-003]
+  detection_requirement: 1.0
+- fault_id: F-COST-LEDGER-PRESENT
+  category: contract
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A meeting_cost_entries category ledger / reserve-settle protocol is introduced."
+  must_be_detected_by: [AC-INV-003]
+  detection_requirement: 1.0
+- fault_id: F-DISPATCH-UNGATED
+  category: cost
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "dispatch_workroom runs without the pre-dispatch estimate gate."
+  must_be_detected_by: [AC-INV-003]
+  detection_requirement: 1.0
+- fault_id: F-CORE-ACCEPT-PUSHES
+  category: security
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A core code-change accept pushes to origin instead of exposing a downloadable bundle (needs contents:write Expansion)."
+  must_be_detected_by: [AC-INV-007]
+  detection_requirement: 1.0
+- fault_id: F-OFFBOARD-LEAVES-DATA
+  category: privacy
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "Tenant offboarding leaves Postgres rows or GCS prefixes behind."
+  must_be_detected_by: [AC-INV-010]
+  detection_requirement: 1.0
+- fault_id: F-TOOL-TELEMETRY-DROP
+  category: observability
+  criticality: P2
+  mechanism: hand_authored_negative_build
+  description: "A tool call executes without a retained telemetry record."
+  must_be_detected_by: [AC-INV-013]
+  detection_requirement: 1.0
+- fault_id: F-SUBSTRATE-BEFORE-SPIKE
+  category: operability
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "The infra substrate is committed before the pre-build spike gates hold (or their fallback is applied)."
+  must_be_detected_by: [AC-BLD-001]
+  detection_requirement: 1.0
+- fault_id: F-SPIKE-SILENT-PATCH
+  category: operability
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A failing spike branch is silently patched to pass instead of applying its named fallback / escalating."
+  must_be_detected_by: [AC-BLD-002]
+  detection_requirement: 1.0
+- fault_id: F-STEP1-PROVABLE-UNMET
+  category: deployment
+  criticality: P1
+  mechanism: hand_authored_negative_build
+  description: "A step-1 provable is unmet (CI red, no self-migrate, /health down, registry not closed, or harness never self-reaps)."
+  must_be_detected_by: [AC-BLD-003]
+  detection_requirement: 1.0

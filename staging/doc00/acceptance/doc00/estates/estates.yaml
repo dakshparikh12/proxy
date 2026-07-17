@@ -1,0 +1,91 @@
+# Estates — Doc 00 Constitution, Architecture & Foundation
+# Per GENERATOR.md §10. Doc 00 is INFRASTRUCTURE: most criteria are settled by cost-free
+# structural oracles (static analysis, schema/config inspection, state-machine assertion,
+# simulation trace) against committed FIXTURES, not against real public repositories.
+# Only the pre-build spike (AC-BLD-001) and who_writes accuracy touch real repos, so those
+# borrow the Doc 01 real-estate roster. Everything else is fixture-scoped and estate-free.
+
+---
+
+# ── Fixture families (committed, fast, deterministic) — the primary "estate" for Doc 00 ──
+fixtures:
+  - id: fixture-repo-skeleton
+    description: "A minimal uv-workspace tree (root pyproject + members glob + uv.lock, services/*, libs/*, apps/*) for structural checks"
+  - id: fixture-migrated-db
+    description: "An ephemeral Postgres migrated to head (operation_runs, webhook_events, meeting_cost, staged_drafts, identity tables, transcript_segments) for schema + state-machine checks"
+  - id: fixture-terraform-plan
+    description: "A terraform plan/JSON of modules/{bootstrap,platform} + envs/{dev,prod} for IaC config inspection"
+  - id: fixture-dockerfiles
+    description: "The per-service Dockerfiles for stage/user/CMD inspection"
+  - id: fixture-ci-workflow
+    description: "The GitHub Actions workflow + pre-commit config for guard-parity + required-check inventory"
+  - id: fixture-contracts-import
+    description: "libs/contracts importable for Pydantic model + Literal introspection"
+  - id: fixture-static-analysis
+    description: "The importable source tree for call-graph / import / reachability scans"
+  - id: fixture-operation-run
+    description: "A harness/workroom operation wrapped in with_operation_run + a controllable clock for heartbeat/fencing/stale tests"
+  - id: fixture-concurrent-claim
+    description: "Two processes racing the atomic claim for one (meeting_id, meeting-harness)"
+  - id: fixture-webhook
+    description: "A webhook POST harness (GitHub + Recall) for ordering + dedupe tests"
+  - id: fixture-staged-draft
+    description: "propose_change staging a draft with a tearable review_session for post-teardown accept"
+  - id: fixture-cost-recycle
+    description: "A meeting_cost row with accrued spend + an orchestrator recycle for reload tests"
+  - id: fixture-boot-env
+    description: "A boot harness with a controllable required-key set for fail-fast tests"
+  - id: fixture-lifespan-trace
+    description: "An instrumented lifespan recording startup step order"
+  - id: fixture-nango-stub
+    description: "A Nango stub recording mint calls, returning distinct sentinel tokens"
+  - id: fixture-log-capture
+    description: "Log capture over an operation using a sentinel secret/token value"
+  - id: fixture-two-tenant-volume
+    description: "Two tenants A/B with distinct envelope keys + encrypted data (crypto-shred tests)"
+  - id: fixture-two-sandbox
+    description: "Two provisioned E2B sandboxes for per-sandbox-JWT-distinctness"
+  - id: fixture-accept-route
+    description: "The /m/{meeting_id}/drafts/{draft_id}/accept route with an authz matrix (unauth / cross-tenant / owner-twice)"
+  - id: fixture-cross-tenant
+    description: "A tenant-B principal attempting to read a tenant-A entity"
+
+# ── Real-estate borrow (ONLY the spike + who_writes accuracy — AC-BLD-001) ──
+estates:
+  - estate_id: estate-flask
+    tier: DEV
+    repo: "pallets/flask"
+    capability_tags: [small-clean, calibration-estate, no-orm]
+    golden_derivation: mechanical
+    role: >
+      Calibration repo for the spike latency measurement (shallow direct-answer path).
+      Borrowed from the Doc 01 roster; pinned SHA recorded in repositories.lock before sealing.
+    pinned_sha: TBD
+
+  - estate_id: estate-django-app
+    tier: HOLDOUT
+    repo: "netbox-community/netbox (mid-size Django app)"
+    capability_tags: [django-orm, who-writes-tier1, mid-size]
+    golden_derivation: mechanical (imports) + cross-family (ORM writes)
+    role: >
+      The spike ORM-accuracy target (branch b): who_writes/get_dependents reliability on a real
+      Django ORM app. A fail here escalates as a challenge-core to the user (never a silent patch).
+    pinned_sha: TBD
+
+# Global pinning requirements (per GENERATOR.md §10.4) — recorded in repositories.lock before sealing:
+pinning_requirements:
+  - repository commit SHA (spike estates)
+  - build-container digest (the test image: python 3.12-slim + uv + alembic + terraform)
+  - dependency lock hash (uv.lock)
+  - compiler/runtime versions (Python 3.12, Postgres 15, Terraform version)
+  - OS and architecture
+  - resource limits per fixture run
+  - network policy (offline for fixture runs; api.anthropic.com + real STT/TTS for the spike only)
+  - fixture content hashes (repo-skeleton, migrated-db seed, terraform-plan JSON, dockerfiles)
+  - setup/cleanup script hashes
+
+coverage_note: >
+  Doc 00 acceptance is dominated by cost-free structural oracles over committed fixtures.
+  Real-repo evidence is confined to the pre-build spike (latency + ORM accuracy). Behavior at
+  ≥1M-LOC scale, exotic infra environments, and OS/hypervisor-level isolation are NOT certified
+  by this bundle (see assurance-limits.yaml).
