@@ -25,8 +25,15 @@ while : ; do
   for d in "${DOCS[@]}"; do done_tag "$d" || { start="$d"; break; }; done
   [ -z "$start" ] && { echo "[supervisor] no unfinished doc but doc09 untagged — check state"; break; }
 
-  if [ "$start" = "$last" ]; then stuck=$((stuck+1)); else stuck=0; fi
-  last="$start"
+  # "stuck" = restarted on the SAME doc AND no new commits happened (no progress). A doc that
+  # simply needs more time (commits growing every restart) is NOT stuck.
+  commits_now=$(git rev-list --count HEAD 2>/dev/null || echo 0)
+  if [ "$start" = "$last" ] && [ "$commits_now" = "${commits_last:-0}" ]; then
+    stuck=$((stuck+1))
+  else
+    stuck=0
+  fi
+  last="$start"; commits_last="$commits_now"
   if [ "$stuck" -ge "$STUCK_LIMIT" ]; then
     echo "[supervisor] $start failed to advance ${STUCK_LIMIT}x in a row — a real blocker needs a human."
     echo "[supervisor] Read: orchestrator/run.log · PROGRESS.md · evidence/$start-*.md · git log. Exiting."
