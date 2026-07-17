@@ -1,0 +1,124 @@
+# Dispositions — Doc 01 Code Intelligence
+# Per GENERATOR.md §1.3: every skipped authority requires explicit disposition.
+
+# ── AGENTS.md invariants: explicit dispositions for those not binding Doc 01 ──
+
+- disposition_id: D-INV-03
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "invariant 3"
+  source_quote: "Zero-copy"
+  disposition: SPEC_BLOCKED_REQUIRES_AMENDMENT
+  rationale: >
+    AGENTS.md invariant 3 (zero-copy) is SUPERSEDED for code_intel by v0-spec
+    Doc 01: the clone IS held on a per-tenant encrypted volume (Doc 01 §3.2),
+    hard-deleted within 15 min on uninstall (Doc 01 §4), and no raw source
+    appears in logs or artifacts (Doc 01 §3.3). The zero-copy invariant as
+    literally stated conflicts with the clone-holding design that is the
+    foundation of Doc 01. AGENTS.md invariant 3 requires a founder amendment
+    to reconcile with the v0-spec. Until amended, this disposition records the
+    conflict; no criterion is generated against the literal invariant.
+
+- disposition_id: D-INV-04
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "invariant 4"
+  source_quote: "Permission-at-read"
+  disposition: not_applicable_doc01
+  rationale: >
+    Permission-at-read governs user-facing access control (ACLs on artifacts).
+    Doc 01 operates on repo clones behind the GitHub App's contents:read scope;
+    per-file permission gating is not part of the code-intelligence layer.
+    The tenant-isolation invariant (R-INVARIANT-09) covers the relevant boundary.
+
+- disposition_id: D-INV-05
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "invariant 5"
+  source_quote: "Truth-is-live"
+  disposition: covered_by_existing_requirement
+  rationale: >
+    Covered by the freshness requirements (R-DOC01-3.6-01 through R-DOC01-3.6-04)
+    and the three deference rules in Doc 01 §2.1. The graph points, code answers;
+    freshness deference; live re-read on doubt. No separate criterion needed.
+
+- disposition_id: D-INV-06
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "invariant 6"
+  source_quote: "Staged-drafts (world-changes need human approval)"
+  disposition: not_applicable_doc01
+  rationale: >
+    Staged-drafts governs world-touching actions (PR creation, notes edits).
+    Doc 01 is a read-only code-intelligence layer; it performs no world-touching
+    actions. The propose_change tool is built in Doc 04/05 scope (see D-BOUNDARY-01).
+
+- disposition_id: D-INV-07
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "invariant 7"
+  source_quote: "Freshness-gated caching (never cache verify/operate)"
+  disposition: covered_by_existing_requirement
+  rationale: >
+    Covered by R-DOC01-3.5-09 (per-meeting cache) and R-DOC01-3.5-10 (cache
+    invalidation on push). The code_intel layer caches tool results, invalidated
+    on push — freshness-gated by design.
+
+- disposition_id: D-INV-08
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "invariant 8"
+  source_quote: "Accelerate-never-gate (uncovered → fall back, never fail)"
+  disposition: covered_by_existing_requirement
+  rationale: >
+    Covered by R-DOC01-3.4-07 (grammarless languages flagged, still searchable),
+    R-DOC01-3.5-11/12 (LSP timeout → grep fallback), and R-DOC01-LSP-DEG-01.
+    Degradation is always to a labeled lower-bound, never to failure.
+
+- disposition_id: D-INV-10
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "invariant 10"
+  source_quote: "Self-host credentials"
+  disposition: covered_by_existing_requirement
+  rationale: >
+    Covered by R-DOC01-3.1-02 (tokens minted per-operation via Nango, never
+    cached or logged). Credentials are managed by Nango + Secret Manager (Doc 00).
+
+- disposition_id: D-INV-11
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "invariant 11"
+  source_quote: "Vertical/size-agnostic (zero industry code)"
+  disposition: covered_by_existing_requirement
+  rationale: >
+    Covered by the Doc 01 §4 "any scale, any language" design principle and
+    the who_writes support-matrix tiering (R-DOC01-3.5-03). No industry-specific
+    code exists in the code-intelligence layer.
+
+# ── Founder decisions ──
+
+- disposition_id: D-FOUNDER-A003
+  authority_type: specification
+  authority_refs: [R-DOC01-3.5-02, A-003]
+  disposition: resolved_founder_decision
+  rationale: >
+    FOUNDER DECISION 2026-07-17: get_dependents transitive closure runs over
+    calls/imports/writes/extends/implements edges ONLY. Reads edges are reported
+    at depth-1 (direct readers) but NEVER traversed transitively. This prevents
+    blast-radius inflation from transitive read chains. R-DOC01-3.5-02 updated.
+
+# ── Boundary dispositions ──
+
+- disposition_id: D-BOUNDARY-01
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§11.7"
+  source_quote: "propose_change is a HOST in-process MCP tool (never a sandbox tool)"
+  disposition: not_built_here
+  rationale: >
+    propose_change appears in the Doc 01 tool matrix (§2.3) as context for the
+    full tool surface, but it is built in Doc 04/05 scope per CANONICAL §11.7.
+    Doc 01 does not implement propose_change; it is a read-only layer.
+    The tool matrix row exists to document the complete surface visible to agents;
+    no implementation requirement or criterion is generated for it in this bundle.

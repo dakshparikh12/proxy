@@ -1,0 +1,45 @@
+bundle:
+  id: ACCEPTANCE-DOC01
+  version: 1.0.0
+  status: SEALED
+  created_at: '2026-07-17T05:28:15.727580+00:00'
+  bundle_hash: f880c679036fd217d981e13ed7cebe327357a8036ac27f0504cf6f1b7b61b1bd
+release_profile:
+  name: autonomous-build-complete
+  blocking_criticalities:
+  - P0
+  - P1
+  - P2
+integrity:
+  authority_hash: f47799505dde8bdb41d7116a217b829899afa1cfd56a342281be51bfae141c9c
+  requirements_hash: 447554e4fe174f12a0046aec0f3fcf4da1787abf934ec8a0d05c2670ee2274a7
+  criteria_hash: 80657e71db0c5541aaa0b95846c2fbe5cf1e0f13c7c99e8422d18ec650973f37
+  verifier_hash: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  fixtures_hash: pending-golden-derivation
+  goldens_hash: pending-golden-derivation
+  protocols_hash: ea97c4a37a90916f232d505d43a14aa0bef67b1aa789e0bc886eba8279df1b32
+  estates_hash: 71ce9bb14d858dcad114ad9b27284c42be741b196cabaf65660702c46cf01ee7
+  faults_hash: d70eee2c80f8380208da67401055a8978e8441ae919305497f964b233faaa886
+counts:
+  authority_clauses: 4
+  requirements: 50
+  derived_obligations: 11
+  blocking_criteria: 78
+  tests_and_evaluations: 78
+  mandatory_faults: 48
+qualification:
+  status: SPEC_QUALIFIED
+  material_ambiguities: 0
+  resolved_founder_decisions: 1
+  spec_blocked_items: 1
+  unresolved_contradictions: 0
+  untestable_blocking_requirements: 0
+spec_blocked:
+- id: D-INV-03
+  description: AGENTS.md invariant 3 (zero-copy) superseded for code_intel by v0-spec
+    Doc 01; requires founder amendment to AGENTS.md
+review:
+  unresolved_identified_gaps: 0
+  reviewer_identity: founder-attended-session-2026-07-17
+  review_artifact_hash: inline-session
+

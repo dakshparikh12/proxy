@@ -1,0 +1,135 @@
+# Estates — Doc 01 Code Intelligence
+# References fixtures/estates/ESTATES.md (authoritative roster)
+# Per GENERATOR.md §10.2 and §10.4
+# Generated: 2026-07-17
+
+---
+
+# Pinned SHAs and container digests SHALL be filled in repositories.lock
+# before the bundle is sealed. This file defines capability tags and roles.
+
+estates:
+
+  - estate_id: estate-cova
+    tier: DEV
+    repo: "Cova backend (private, read-only GitHub App)"
+    capability_tags:
+      - real-startup-mess
+      - supabase-client-writes
+      - nextjs-modal-split
+      - env-routed-config
+      - tier1-orm-target
+    golden_derivation: founder-authored + mechanical
+    role: >
+      Real startup codebase; closest shape to a design partner.
+      Primary estate for ORM write-attribution (Django/SQLAlchemy/Rails tier-1 target).
+    pinned_sha: TBD  # fill in repositories.lock before sealing
+    notes: "Private repo — requires GitHub App credentials in test harness."
+
+  - estate_id: estate-proxy
+    tier: DEV
+    repo: "Proxy repo itself (this repo)"
+    capability_tags:
+      - python-uv-monorepo
+      - dogfood
+      - small-clean
+    golden_derivation: founder-authored + mechanical
+    role: >
+      Python uv-monorepo dogfood loop. Proxy answering questions about Proxy.
+      Cheap to verify; immediate signal on regressions.
+    pinned_sha: TBD  # fill in repositories.lock before sealing
+
+  - estate_id: estate-flask
+    tier: DEV
+    repo: "pallets/flask"
+    capability_tags:
+      - small-clean
+      - canonical-python-package
+      - calibration-estate
+      - no-orm
+    golden_derivation: mechanical (live; demo goldens exist)
+    role: >
+      Calibration estate: if anything fails here the failure is ours, not the repo's.
+      Goldens cheap to hand-verify. Used for baseline P0/P1 criteria sanity checks.
+    pinned_sha: 36e4a824  # pinned per acceptance bundle v1; update in repositories.lock
+    golden_paths:
+      - fixtures/estates/flask/golden/flask.app.json
+      - fixtures/estates/flask/golden/flask.blueprints.json
+
+  - estate_id: estate-fastapi
+    tier: HOLDOUT
+    repo: "fastapi/fastapi"
+    capability_tags:
+      - docs-heavy
+      - docs-code-cross-references
+      - large-docs-dir
+      - single-package-core
+    golden_derivation: mechanical + docs-derived
+    role: >
+      Stresses reference preservation and docs-grounded answers.
+      Holdout: goldens sealed before first gate run; no fix debugged against this estate.
+    pinned_sha: TBD  # fill in repositories.lock before sealing
+    holdout_rules:
+      - Goldens authored once and sealed into acceptance bundle before first gate.
+      - No debugging directly against holdout; reproduce failure on a DEV estate first.
+      - Burned holdout case rotates to DEV; fresh holdout case replaces it.
+
+  - estate_id: estate-django-app
+    tier: HOLDOUT
+    repo: "netbox-community/netbox (mid-size Django app, strong docs)"
+    capability_tags:
+      - django-orm
+      - who-writes-tier1
+      - models-migrations-signals
+      - mid-size
+    golden_derivation: mechanical (imports) + cross-family (ORM writes)
+    role: >
+      The D2 test: Django ORM who_writes on a real app (not the framework itself).
+      Holds the tier-1 ORM write-attribution golden cases.
+    pinned_sha: TBD  # fill in repositories.lock before sealing
+    holdout_rules:
+      - Goldens sealed before first gate run.
+      - Cross-family AI analysis (non-Anthropic model) used for ORM write attribution goldens.
+    swap_note: >
+      Swap to whatever framework the first design partner runs if needed;
+      verify stack against Tusk/Rovr/Helix list before sealing.
+
+  - estate_id: estate-messy
+    tier: HOLDOUT
+    repo: "home-assistant/core (scoped subtree)"
+    capability_tags:
+      - config-routed-indirection
+      - dynamic-loading
+      - async-load-platform
+      - honest-abstention
+      - unsupported-paths-by-design
+    golden_derivation: "mechanical for static part; dynamic-routing cases are abstention goldens"
+    role: >
+      Exists to keep honest-abstention non-empty.
+      High Unknown rates here are CORRECT behavior; the criterion is that the system
+      returns 'not found by this method' rather than fabricating an answer.
+    pinned_sha: TBD  # fill in repositories.lock before sealing
+    holdout_rules:
+      - Goldens sealed before first gate run.
+      - Dynamic-routing abstention goldens: right answer = 'not found by this method'.
+      - Never paper over dynamic-routing blindspot by hand-adding dynamic edges to a mechanical golden.
+
+# Global pinning requirements (per GENERATOR.md §10.4)
+# The following SHALL be recorded in repositories.lock before bundle sealing:
+pinning_requirements:
+  - repository commit SHA and submodule commits
+  - fixture or fork patch hash
+  - dependency lock file hash
+  - build-container digest
+  - compiler and runtime versions (Python version, tree-sitter version, gitleaks version)
+  - OS and architecture
+  - resource limits (CPU, RAM, disk per estate run)
+  - network policy (restricted to api.anthropic.com + pip for production; offline for fixture runs)
+  - golden-output hash per file
+  - setup and cleanup scripts hash
+
+# Coverage note (per assurance-limits.yaml)
+coverage_note: >
+  Six estates with specific capability profiles. Large-monorepo (>=1M LOC), polyglot (TS+Python),
+  and deep-history estates are deferred per ESTATES.md. Unusual repo structures outside these
+  six estates are not certified by this bundle.
