@@ -1,8 +1,0 @@
-{
-  "_doc": "P2 — the core graph product test. 20 real 'what breaks if X changes?' questions with senior-engineer answers.",
-  "_how_to_author": "On estate-service (a real repo you know), a senior engineer writes the dependency set that would actually break for each change. The grader checks the graph's blast_radius() output against this set.",
-  "cases": [
-    {"change": "modify checkout.charge()", "expected_impacts": ["invoicing.sync", "receipts.email", "ledger.write"], "must_cite": true, "max_latency_ms": 1000}
-  ],
-  "threshold": {"set_match_min": 0.85, "citation_required": true, "latency_ms_max": 1000}
-}

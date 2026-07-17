@@ -1,0 +1,67 @@
+# config/defaults.toml — the ONE place every tunable gets an initial value (CANONICAL §12.12 G6)
+# A build loop reads this instead of guessing at bracketed [ranges] in prose.
+# Each key: one initial value + unit + permitted range (in a comment). Benchmarks may emit an
+# ADR that updates a value; no runtime default lives as a prose range.
+# Spec home of each tunable is noted; where a doc shows "[x]", it references this file.
+
+[scribe]                        # Doc 03
+window_seconds        = 45      # s   · range 30–60 · transcript window per micro-call
+window_max_tokens     = 1200    # tok · range 800–1600
+call_timeout_s        = 3.5     # s   · range 3–5 · then SKIP the window (never retry)
+summary_refresh_every_deltas = 20   # count · range 15–30 · rolling-summary regen cadence
+summary_refresh_max_s = 90      # s   · range 60–120
+quality_gate_sample_rate = 0.1  # frac · range 0.05–0.2 · sampled entailment check → escalate
+model                 = "haiku" # seat · scribe micro-call
+
+[orchestrator]                  # Doc 04
+heartbeat_s           = 10      # s   · range 5–15 · operation_runs fencing heartbeat
+stale_after_s         = 40      # s   · range 30–60 · reaper marks a missed-heartbeat row interrupted
+wake_gate_model       = "haiku" # seat · should-I-answer-directly gate
+answer_model          = "sonnet"# seat · grounded direct answer
+max_inflight_llm      = 16      # count · range 8–24 · per-host libs/llm semaphore (PROXY_MAX_INFLIGHT_LLM)
+ack_audible_p95_ms    = 500     # ms  · the "on it" reflex SLO
+wake_max_turns        = 6       # count · range 3–8
+
+[latency_slo]                   # CANONICAL §12.8 · DIRECT-ANSWER shallow path only
+first_text_p50_s      = 2.0
+first_text_p95_s      = 4.0
+first_audio_p50_s     = 2.5
+first_audio_p95_s     = 5.0
+
+[code_intel]                    # Doc 01
+batch_read_max_lines_per_file = 150   # lines · range 100–250
+batch_read_max_files  = 10      # count
+get_dependents_limit  = 50      # count · top-N by PageRank, + truncated_count
+lsp_timeout_s         = 3       # s   · then grep fallback tagged lower-bound
+readiness_reindex_target_s = 10 # s   · incremental re-index target after a push
+# exact-supported (lang, ORM) tier-1 for `who_writes` = Django, SQLAlchemy, Rails
+
+[workroom]                      # Doc 05
+model_quick           = "sonnet"
+model_big_build       = "opus"
+per_meeting_task_semaphore = 3  # count · range 3–5 · concurrent workroom tasks per meeting
+command_timeout_s     = 300     # s   · single sandbox command
+task_wall_clock_budget_min = 20 # min · range 10–30 · a big-build task
+detached_delivery_deadline_min = 30
+
+[sandbox]                       # Doc 05 / E2B
+preprovision_lead_s   = 180     # s   · pre-provision at meeting-CREATION (calendar = Expansion)
+idle_ttl_min          = 20      # min · range 15–30 · reconcile-cron kills idle sandboxes past this
+max_run_duration_h    = 6       # h   · hard backstop for dropped reconcile ticks
+
+[cost]                          # CANONICAL §12.7 · two honest meters
+listening_baseline_low_usd_per_h  = 0.95
+listening_baseline_high_usd_per_h = 1.25
+transport_usd_per_h   = 0.80    # flat wall-clock accrual (bot+STT+TTS)
+soft_cap_frac         = 0.8     # of the listening baseline → degrade
+hard_cap_frac         = 1.0     # → notes-only
+# task budget is separate + disclosed; a dispatch whose estimate > remaining task budget asks-approval
+
+[transport]                     # Doc 02
+barge_in_max_ms       = 200     # ms  · Silero VAD barge-in reflex
+tts_buffer_chunk_ms   = 200     # ms  · small Output-Media buffer so barge-in isn't defeated
+# turn boundaries consume AssemblyAI `end_of_turn` (Smart Turn v3 cut); confirm passthrough at build
+
+[retention]                     # CANONICAL §12.9
+transcripts_days      = 90      # d   · offboard sweep deletes tenant rows + GCS prefixes
+capability_token_ttl_min = 60   # min · signed /m/ read-link for non-signed recipients
