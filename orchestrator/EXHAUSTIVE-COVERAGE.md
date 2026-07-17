@@ -31,5 +31,14 @@ Every criterion states a **situation** (given/when) and the **primary outcome** 
 - **Simulation trace** — the behavior appears in an end-to-end run (a scripted meeting emits a speaking event → the trace shows the pulse state). No live meeting, no API.
 Nothing is graded by an LLM judge that a deterministic or simulated oracle can settle — GENERATOR.md §1.4.
 
+## Density tiers — serious behaviors get their exact boundary nailed
+Breadth is total; *density per behavior scales with consequence.* A cosmetic P2 (orb color) gets one criterion. A **serious behavior** (security boundary, concurrency, money, irreversible write, a routing decision, a staged-draft gate, a latency SLO) gets its **exact accept/reject boundary decomposed into sub-criteria** — because "roughly right" is a failure there:
+- **Boundary values** — the exact threshold and both sides of it (at the limit, one below, one above). E.g. blobless clone at 99,999 vs 100,000 vs 100,001 files; latency at the SLO and just over it.
+- **Exact error/output shape** — not "it errors" but *which* typed error/tag, verbatim (`resolution: lower-bound` with the named missed-reason, not just "not exact").
+- **Ordering & atomicity** — the exact sequence that must hold (DROP-before-INSERT; reconcile-before-pin; secret-redacted-before-persist) and that no interleaving violates it.
+- **Every branch of a decision** — one criterion per routing outcome / per state transition / per task class, not one lumped "routes correctly." (Orchestrator: a criterion per wake-decision branch; Workroom: a criterion per task class that it plans-then-builds correctly.)
+- **The negative frontier** — the precise set of inputs that must be REJECTED, stated as explicitly as the accepted set. "Only this behavior is accepted" means the rejected behaviors are enumerated too.
+The rule of thumb: for a serious behavior, a reader should be able to reconstruct the *exact* accept/reject line from the criteria alone, with no ambiguity about a single input. Take whatever space that needs.
+
 ## The "nothing loose" bar
 Every criterion has a named oracle + a threshold (e.g. `pulse_without_speaking_allowed: 0`). No criterion says "works well" or "looks good." If a behavior can't be pinned to an observable outcome + oracle, it's a spec ambiguity → SPEC_BLOCKED, not a vague criterion. See the worked demonstration in `demo-doc08-orb-criteria.yaml` — every orb behavior in Doc 08 §2.1–2.2, exhaustively, directly from the spec.

@@ -43,7 +43,15 @@ for doc in [00, 01, 02, 03, 04, 05, 08, 09]:            # SPINE-REGISTER order; 
            VERIFICATION  full diff + git log + the test suite, RE-RUNS the tests itself, and for EVERY
            GATE          blocking criterion tries to REFUTE it (see below). Any refutation → back to
                          PHASE 6 with the refutation report. Zero refutations → doc is done.
-  PHASE 8  ADVANCE       record evidence to evidence/<doc>/; git tag; next doc.
+  PHASE 7.5 COMPLETENESS fresh session re-reads the WHOLE spec (not the criteria) and hunts for any
+           SWEEP         behavior no criterion covers — the disciplined form of "keep going until truly
+                         done." A found gap = new criteria → re-seal (Phase 4) → build (Phase 6). Only
+                         when the sweep finds ZERO uncovered spec behavior is the doc complete. "Done"
+                         is never the builder's confidence; it is "the criteria are exhaustive AND all
+                         green AND an independent reader found nothing in the spec left uncovered."
+  PHASE 8  ADVANCE       CROSS-DOC REGRESSION GATE: re-run rung-1 for docs 00..N-1 (later docs import
+                         earlier code; a change here must not break an earlier contract) — all must
+                         still be green. Then record evidence to evidence/<doc>/; git tag; next doc.
 ```
 Between docs there is no shared context — each phase is a fresh session reading only committed artifacts, so no agent can "remember" a shortcut it took.
 
