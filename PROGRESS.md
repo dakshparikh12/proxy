@@ -2718,134 +2718,148 @@ not a doc00 gap. No product edit made, no test weakened, no route-around. Sessio
 ## doc01 plan
 
 *Planner (fresh context, 2026-07-18). Spec: `product/v0-spec/01-CODE-INTELLIGENCE.md` + `CANONICAL-DECISIONS.md`.
-Sealed arbiter: `acceptance/doc01/` (read-only) — **the builder may not edit `acceptance/`, `tests/`,
-`fixtures/`, or `harness/`.** Authored per `orchestrator/skills/writing-plans.md`; independently re-derived
-against the SEALED bundle `ACCEPTANCE-DOC01 v1.0.0` (`bundle_hash f880c679…`); `planner-reviewer` deltas folded
-in §7 below.*
+Sealed arbiter: `acceptance/doc01/` — promoted+sealed at `orchestrator/state/doc01.seal.json`
+(`authority+bundle_sha256 = 13e3c879…`, sealed 2026-07-18 17:19). The promote step archived the bundle out of the
+working tree; its content is the tree at the seal commit's parent (`git show HEAD~1:acceptance/doc01/…`). **The builder
+may not edit `acceptance/`, `tests/`, `fixtures/`, or `harness/`.** Authored per `orchestrator/skills/writing-plans.md`;
+independently re-derived against the SEALED bundle; `planner-reviewer` deltas folded in §7. **This supersedes the earlier
+78-criterion plan revision** — the sealed bundle now carries the merged sweep-gap-closure patch (commit `3d57796`
+"sweep-gap-closure merged into sealed bundle, re-sealed"), so the arbiter is **85 criteria**, not 78.*
 
-### 0 · Bundle status — CLEAN, 78/78 buildable-to-green, 0 open SPEC_BLOCKED
+### 0 · Bundle status — 85 sealed criteria (84 blocking + 1 non-blocking), 0 open SPEC_BLOCKED
 
-`harness/verify.sh` is the sole rung-1 code arbiter: `ruff` (over `services libs src` **+ `tests`**) → `mypy
---strict` (over `services libs src`) → `bandit -r src` → `pytest -q -x --maxfail=1`; exit 0 is the only green;
-it refuses green on zero collected tests. `manifest.yaml`: **78 blocking criteria**, all criticality ∈ {P0,P1,P2}
-in the release profile, `material_ambiguities: 0`, `unresolved_contradictions: 0`, `untestable_blocking_requirements: 0`.
+`harness/verify.sh` is the sole rung-1 code arbiter: `ruff` (over `services libs src` **+ `tests`**) → `mypy --strict`
+(over `services libs src`) → `bandit -r src` → `pytest -q -x --maxfail=1`; exit 0 is the only green; it refuses green on
+zero collected tests. The sealed `criteria/criteria.yaml` carries **85 `criterion_id`s: 84 `blocking: true`, 1
+`blocking: false`** (`AC-M4-012`, P2 token-budgeted-overview property). `material_ambiguities: 0`,
+`unresolved_contradictions: 0`, `untestable_blocking_requirements: 0`.
 
-**The one `spec_blocked` entry (`D-INV-03`) is already RESOLVED and is NOT an open block.** It records that
-AGENTS.md invariant 3 ("zero-copy") was superseded for `code_intel` by Doc 01. The founder amendment is already
-in `AGENTS.md` ("3 Tenant-held code, hard-deleted *(AMENDED 2026-07-17 per D-INV-03…)*" — per-tenant encrypted
-volume, one tenant never sharing volume/process/index, hard-deleted ≤15 min). So the build proceeds against the
-amended invariant; **there is no stop-and-escalate for doc01.** (`D-INV-04` permission-at-read is dispositioned
-N/A for Doc 01's single-App-scope surface — `dispositions.yaml`.)
+**Bundle-bookkeeping note (honest, not a stop):** `manifest.yaml` still records `bundle_hash: f880c679…` and
+`blocking_criteria: 78` — the **pre-sweep** figures. The sweep concat (`3d57796`) appended the 7 gap-closure blocks
+(`AC-M4-011/012`, `AC-M6-005/006/007/008`, `AC-M8-005` + their paired requirements) to `criteria.yaml`/`requirements.yaml`
+but did **not** re-stamp the manifest counters; the promote-seal (`13e3c879`) then covers the concatenated 85. This is a
+manifest counter that lags the criteria file, **not** a coverage gap: **every one of the 85 has a pre-authored `test_*`
+oracle** (verified below), so the plan builds to 85 and treats `manifest.blocking_criteria` as stale metadata. No
+criterion is untestable or contradictory → **no SPEC_BLOCKED for doc01.**
 
-**RTM re-derived against `criteria/criteria.yaml`: 78 criteria, 78/78 mapped to a milestone, 0 dangling, 0 uncovered.**
-Per-prefix: M1 5 · M2 6 · M3 8 · M4 10 · M5 15 · M6 4 · M7 6 · M8 4 · INV 7 · CANON 5 · SANDBOX 2 · GV 2 · LAT 2 · E2E 2
-(= 78). **Rung split:** 74 are rung-1 (a pre-authored pytest file is the oracle); **4 are rung-2** —
-`AC-LAT-001/002` `[performance]` and `AC-E2E-001/002` `[eval]` have **no dedicated `test_*.py` file** and are
-ultimately proven by the real-data eval gate on `fixtures/estates/` (§M13). *Caveat:* `tests/doc01/test_w_workflows.py:335`
-(W11) does assert the LAT thresholds (`p50 ≤ 2.0`, `p95 ≤ 4.0`, `ready ≤ 900s`) in pytest against the tiny small-repo
-fixture — so **M12 must green those too** (they pass trivially fast on a toy repo); the *real* SLO measurement on the
-pinned hardware/estates is M13. So M12 exercises the LAT assertions; M13 is where they mean something. Six rung-1 criteria additionally carry a `real-estate:` evidence
-line (`AC-M4-001/006`, `AC-M5-002/005`, `AC-INV-001/003`) — the unit portion greens in pytest, the `real-estate`
-portion is the section eval gate. **21 P0 criteria** (M1 3 · M2 3 · M3 8 · M4 0 · INV 7 — the tenant-isolation,
-never-exec, secret-leak, and cited-or-abstain families); everything else P1.
+**The one `spec_blocked`-tagged bundle entry (`D-INV-03`) is RESOLVED, not an open block.** It records that AGENTS.md
+invariant 3 ("zero-copy") was superseded for `code_intel` by Doc 01 (per-tenant encrypted volume, one tenant never
+sharing volume/process/index, hard-deleted ≤15 min); the founder amendment is already committed at `AGENTS.md:15`
+("AMENDED 2026-07-17 per D-INV-03"). Build to the amended invariant. (`D-INV-04` permission-at-read is dispositioned N/A
+for Doc 01's single-App-scope surface — `dispositions.yaml`.)
 
-**Pre-authored test surface (the frozen contract):** twelve rung-1 files hold the oracle —
-`test_m1_connection.py`(5 fns) `test_m2_clone.py`(6) `test_m3_exclusions.py`(8) `test_m4_substrate.py`(10)
-`test_m5_tools.py`(15) `test_m6_readiness.py`(4) `test_m7_freshness.py`(6) `test_m8_lsp.py`(4)
-`test_invariants.py`(7) `test_canonical_contracts.py`(5) `test_sandbox_boundary.py`(2) `test_gv_graph_versions.py`(2)
-— plus `tests/doc01/test_w_workflows.py` (end-to-end chains, **0 new criteria**, required for verify.sh green).
-All import product from `services.code_intel.<module>` and pull inputs from the sealed doubles in
+**RTM re-derived against the sealed `criteria.yaml`: 85 criteria, 85/85 mapped to a milestone, 0 dangling, 0 uncovered.**
+Per-prefix: **M1 5 · M2 6 · M3 8 · M4 12 · M5 15 · M6 8 · M7 6 · M8 5 · INV 7 · CANON 5 · SANDBOX 2 · GV 2 · LAT 2 ·
+E2E 2 = 85.** **Rung split:** **81 rung-1** (a pre-authored pytest file is the oracle — the 58 `[unit-example]` + 11
+`[unit-property]` + 9 `[contract]` + 2 `[security-adversarial]` + 1 `[static]`); **4 rung-2** — `AC-LAT-001/002`
+`[performance]` and `AC-E2E-001/002` `[eval]` have **no dedicated `test_*.py`** and are proven by the real-data eval gate
+on `fixtures/estates/` (§M13). *Caveat:* `tests/doc01/test_w_workflows.py:335` (W11) does assert the LAT thresholds
+(`p50 ≤ 2.0`, `p95 ≤ 4.0`, `ready ≤ 900s`) in pytest against the tiny small-repo fixture — so **M12 greens those too**
+(trivially fast on a toy repo); the *real* SLO measurement on pinned hardware/estates is M13. **21 P0 criteria** (M1 3 ·
+M2 3 · M3 8 · INV 7 — tenant-isolation, never-exec, secret-leak, cited-or-abstain); the 7 sweep criteria are all P1
+except `AC-M4-012` (P2, non-blocking); everything else P1.
+
+**Pre-authored test surface (the frozen contract) — re-counted against the sealed sweep:** twelve rung-1 files hold the
+oracle — `test_m1_connection.py`(5) `test_m2_clone.py`(6) `test_m3_exclusions.py`(8) **`test_m4_substrate.py`(12,
++011/012)** `test_m5_tools.py`(15) **`test_m6_readiness.py`(8, +005/006/007/008)** `test_m7_freshness.py`(6)
+**`test_m8_lsp.py`(5, +005)** `test_invariants.py`(7) `test_canonical_contracts.py`(5) `test_sandbox_boundary.py`(2)
+`test_gv_graph_versions.py`(2) — plus `tests/doc01/test_w_workflows.py` (end-to-end chains, **0 new criteria**, required
+for verify.sh green). All import product from `services.code_intel.<module>` and pull inputs from the sealed doubles in
 `tests/fixtures/{repos,stubs,negative_builds}.py`. **Build makes the pre-authored test pass; never edits it.**
 
-### 1 · Collection order ≠ build order — the one sequencing subtlety (planner-reviewer: confirm)
+### 1 · Collection order ≠ build order — the one sequencing subtlety
 
-`pytest --collect-only` (real, run this pass) yields, after the complete doc00 suite:
+`pytest --collect-only` yields, after the complete doc00 suite:
 `test_canonical_contracts` → `test_gv_graph_versions` → `test_invariants` → `test_m1…test_m8` → `test_sandbox_boundary`
 → `tests/doc01/test_w_workflows.py` (**last**). That is *alphabetical*, **not** a build-dependency order:
-`test_canonical_contracts.py` (collected first of doc01) calls `run_full_pipeline(...)` and needs the graph, the
-tools, and the verifier to already exist. So a naive "green one collected file at a time under `verify.sh -x`" is
-**impossible** for doc01 — the first-collected file needs nearly everything.
+`test_canonical_contracts.py` (collected first of doc01) calls `run_full_pipeline(...)` and needs the graph, the tools,
+and the verifier to already exist. A naive "green one collected file at a time under `verify.sh -x`" is **impossible**
+for doc01 — the first-collected file needs nearly everything.
+
+**Verified `pytest --collect-only` order** (run this pass; `testpaths=["tests"]`, no ordering plugin, so pytest sorts
+direntries by name — the subdirectory `tests/doc01/` (`'d'`) sorts **before** every root `tests/test_*.py` (`'t'`)):
+after the complete doc00 suite → **`tests/doc01/test_w_workflows.py` (FIRST of doc01)** → `test_canonical_contracts`
+→ `test_gv_graph_versions` → `test_invariants` → `test_m1…test_m8` → `test_sandbox_boundary`. `test_w_workflows.py`
+(W01) drives the whole pipeline and so fails first under `-x` — reinforcing that a naive "green one collected file at a
+time under `verify.sh -x`" is **impossible** for doc01.
 
 **Resolution (writing-plans rule #1, "…prove, in isolation"):** milestones are ordered **bottom-up by owning-criterion**
 = the numeric `m1…m8` order, then the cross-cutting hardening files, then the integration file, then rung-2. Each
-milestone's **in-isolation exit gate is `pytest <that milestone's file(s)>` green with every earlier milestone still green.**
+milestone's **in-isolation exit gate is `pytest <that milestone's file(s)>` green with every earlier milestone still
+green.** **The exit-gate files are NOT a clean dependency DAG — they cross-cut, so every milestone must scaffold
+importable, side-effect-safe forward-stubs of any not-yet-owned module its file touches** (e.g. `test_m2_clone.py:73,98`
+imports the M4 `GraphBuilder` and calls `.build()`; `test_m3_exclusions.py:54,112,171` reaches M4/M5/M8 —
+`GraphBuilder`, `prepare_sandbox`, `server.find_references().context`). A milestone greens by (a) building its **own**
+criteria for real and (b) shipping empty-but-valid stubs of forward surfaces (a `GraphBuilder.build()` that parses
+nothing but never pushes/execs; MCP tools returning `.results == []`; **`prepare_sandbox(pipeline=…)` returning a
+sandbox object whose `.file_list()` → `[]`** — the tests call `sandbox.file_list()` at `test_m3:127`/`test_w:92`, so a
+bare `[]` stub `AttributeError`s). Real correctness for a stubbed surface is forced by its owning milestone and
+re-proven by M12. **M3-green ≠ "secrets contained":** the leak-*absence* criteria (`AC-M3-003/004/005`) pass trivially
+at M3 because stubs produce nothing to leak; only `AC-M3-001/002` (gitleaks→exclusion-set) and `AC-M3-006/007`
+(redaction) are load-bearing M3 work; leak-proofing is *meaningfully* exercised once M4/M5/M10 populate
+graph/tools/sandbox and M12 re-runs the chain.
 
-**The exit-gate files are NOT a clean dependency DAG — they cross-cut, so every milestone must scaffold importable
-forward-stubs (planner-reviewer BLOCKER).** Two concrete cases verified against the frozen tests: `test_m2_clone.py:73,98`
-does `from services.code_intel.graph_builder import GraphBuilder` and calls `builder.build(clone_path)` (an M4 module);
-`test_m3_exclusions.py` imports `GraphBuilder` (:54), calls `prepare_sandbox` (:112) and `server.find_references` (:171,
-reading `ref.context`) — M4/M5/M8 surface. So a milestone greens by (a) building its **own** criteria for real and
-(b) shipping **side-effect-safe, importable stubs** of any not-yet-owned module its file touches — a `GraphBuilder.build()`
-that parses nothing but never pushes/execs; MCP tool methods returning empty-but-valid shapes; a `prepare_sandbox` that
-returns an empty file list. Real correctness for a stubbed surface is forced by its owning milestone and re-proven by the
-M12 full-verify. **What that means for M3-green (§5a caveat):** the leak-*absence* criteria (`AC-M3-003` graph /
-`AC-M3-004` tool results / `AC-M3-005` sandbox) pass **trivially** at M3 because the stubs produce nothing to leak; only
-`AC-M3-001/002` (gitleaks→exclusion-set) and `AC-M3-006/007` (redaction) are load-bearing M3 work. Leak-proofing is only
-*meaningfully* exercised once M4/M5/M10 populate graph/tools/sandbox and M12 re-runs the chain — so **M3-green is not a
-"secrets are contained" claim.**
-
-The full `harness/verify.sh` (`-x` over the whole repo) is the **final** gate and — because of alphabetical collection +
-`-x`, with `test_canonical_contracts.py` (needs the full pipeline) collected first of doc01 — stays red until the **last**
-rung-1 milestone (M12) lands; that is expected, not a regression. Doc 00's collection order happened to equal its build
-order; doc 01's does not. This is the single deliberate deviation from "collection order == milestone order."
+The full `harness/verify.sh` (`-x` over the whole repo) is the **final** gate and — because `tests/doc01/test_w_workflows.py`
+is collected **first** of doc01 and needs the whole pipeline — stays red until the **last** rung-1 milestone (M12) lands;
+that is expected. Doc 00's collection order happened to equal its build order; doc 01's does not.
 
 ### 2 · Seams — frozen contract homes (import; never redefine — AGENTS.md §"Contract homes")
 
 - **`libs/contracts`** — `Readiness` Literal + `ReadinessReport` already exist (`connecting|cloning|indexing|ready|not_ready`,
-  `readiness.py`) — **reuse, do not re-add.** Add the shared confidence tag `Confidence =
-  Literal["resolved","lower-bound","not-found-by-this-method"]` and the code_intel result/citation value-types (a single
-  `services/code_intel` result module imported everywhere) so every tool's result shape is one type — see §5a for the exact
-  fields the frozen tests read. **Do NOT touch the `ProxyMessage` registry** (planner-reviewer BLOCKER-adjacent): no doc01
-  criterion requires registry membership — the tests read only local objects (`session.notifications[0].text`
-  `test_m7:160`; `collector.emitted_states` `test_m6:22`). The "repo advanced N commits" notice and the readiness emission
-  are **local value objects**; their consumer lives in a later doc (`meeting_runtime`), so registering a produced-but-unconsumed
-  type now would break `assert_registry_closed()` and red the existing doc00 green. Add the registry entry only when its
-  consumer exists.
-- **`libs/llm`** — the metered gateway (`call_model`, `routing.model_for`). The **zero-LLM** criteria (`AC-M4-004`,
-  `AC-M5-013`, `AC-M6-003`) require the graph-build, `lookup_referent`, and coverage paths to route **zero** calls
-  through it; the tests inject an `LLMCallCounter` and assert `count == 0`. The whole structural/graph path is
-  model-free by construction (tree-sitter + PageRank, no LLM).
-- **`libs/http`** — the single `dispatch()` funnel (retry + cost telemetry). Every external call — Nango mint,
-  GitHub `ls-remote`, webhook-side API — goes through it; no raw client anywhere else (AGENTS.md external-calls rule).
+  `readiness.py`) — **reuse, do not re-add.** Define the shared confidence tag `Confidence =
+  Literal["resolved","lower-bound","not-found-by-this-method"]` **locally in `services/code_intel/results.py`, NOT in
+  `libs/contracts`** — no frozen oracle imports it from contracts (the tests assert raw string values), so keeping it
+  local avoids doc00 blast radius on a shared sealed lib. **`find_references` refs additionally admit a fourth, distinct
+  label `"external-references-not-resolved"`** (`AC-M8-005`, `test_m8_lsp.py:123` — it is *not* conflated with the
+  grep-fallback `lower-bound`), so the ref-confidence set is the superset of the four. Put all code_intel
+  result/citation value-types in that single `results.py`, imported everywhere (one result shape per tool — see §5a). **Do NOT touch the `ProxyMessage` registry:** no doc01 criterion requires registry membership; the
+  tests read only local objects (`session.notifications[0].text`; `collector.emitted_states`). Registering a produced-
+  but-unconsumed "repo advanced" type now would break `assert_registry_closed()` and red doc00. Register only when a
+  consumer (a later doc) exists.
+- **`libs/llm`** — the metered gateway (`call_model`, `routing.model_for`). The **zero-LLM** criteria (`AC-M4-003/004`,
+  `AC-M5-013` `lookup_referent`, `AC-M6-003` coverage) require those paths to route **zero** calls; tests inject an
+  `LLMCallCounter` / `llm_call_counter` and assert `count == 0`. The whole structural/graph/coverage path is model-free
+  by construction (tree-sitter + PageRank, no LLM).
+- **`libs/http`** — the single `dispatch()` funnel (retry + cost telemetry). Every external call — Nango mint, GitHub
+  `ls-remote`, webhook-side API — goes through it; no raw client anywhere else (AGENTS.md external-calls rule).
 - **`libs/db`** — asyncpg pool + repos + Alembic. **Postgres holds `meetings.pinned_sha`** (durable substrate,
   `AC-M7-004`). The **dependency graph + coverage are per-repo SQLite** on the tenant volume (canonical §12.2/§12.6,
   `AC-CANON-003`) — **schema code-managed, never Alembic, never Postgres**. Keep the two stores strictly separate.
-- **`libs/ops`** — `with_operation_run` / atomic-claim / TTL reconcile: clone, graph-rebuild, reconcile, and
-  uninstall-delete are operations. The naming lint (`libs.lint.naming`) also lives under `libs/ops/src` — user-visible
-  strings never carry an internal component name.
+- **`libs/ops`** — `with_operation_run` / atomic-claim / TTL reconcile: clone, graph-rebuild, reconcile, uninstall-delete
+  are operations. The naming lint (`libs.lint.naming`) enforces user-visible strings carry no internal component name.
 - **`libs/agentkit`** — the never-throw tool-handler boundary (`libs.agentkit.tools`): **every code_intel MCP tool
-  returns an error result, never raises** (AGENTS.md hard rule; directly serves `batch_read` partial-failure `AC-M5-011`
-  and the tenant-traversal `AC-INV-005`).
-- **Placement seam (enabling, do in M1):** tests import `services.code_intel.cloner` etc., but real code is src-layout
-  under `services/code_intel/src/code_intel/`. The existing `services/code_intel/__init__.py` is a bare facade
-  (`from .src.code_intel.direct import answer_direct`) with **no** `__path__` extension, so `services.code_intel.cloner`
-  does not resolve today. **Additively** extend its own `__path__` — the self-extension pattern already used verbatim at
-  `services/harness/__init__.py:18` and `libs/http/__init__.py:9` (`__path__ = [*__path__, …/src/code_intel]`), NOT the
-  conftest parent-namespace trick — so `services.code_intel.<module>` binds to `src/code_intel/<module>.py` while the
-  `answer_direct` export is preserved. `AC-CANON-001` (no `libs/code_intel/**/*.py`) is already satisfied — keep it so.
+  returns an error result, never raises** (AGENTS.md hard rule; serves `batch_read` partial-failure `AC-M5-011` and the
+  tenant-traversal `AC-INV-005`).
+- **Placement seam (enabling, do in M1):** tests import `services.code_intel.cloner` etc.; real code is src-layout under
+  `services/code_intel/src/code_intel/`. **Additively** extend the package `__path__` — the self-extension pattern used
+  verbatim at `services/harness/__init__.py:18` and `libs/http/__init__.py:9` — so `services.code_intel.<module>` binds
+  to `src/code_intel/<module>.py` while the existing `answer_direct` export is preserved. `AC-CANON-001` (no
+  `libs/code_intel/**/*.py`) is already satisfied — keep it so.
 - **Tunables → `config/defaults.toml`** (one value+unit+range each; `config/` is editable, not sealed):
-  `lsp_timeout_s = 3`, `blobless_file_threshold = 100000`, `lsp_warm_loc_threshold = 500000`,
-  `get_dependents_limit = 50`, `batch_read_max_files = 10`, `ready_deadline_s = 900`, `uninstall_delete_deadline_s = 900`.
-  Code reads the file; the stubs pass over-threshold counts directly, so branches are exercised deterministically.
+  `lsp_timeout_s = 3`, `blobless_file_threshold = 100000`, `lsp_warm_loc_threshold = 500000`, `get_dependents_limit = 50`,
+  `batch_read_max_files = 10`, `batch_read_max_lines_per_file = 150`, `ready_deadline_s = 900`,
+  `uninstall_delete_deadline_s = 900`, and the **new sweep tunable `overview_token_budget = 6000`** (`AC-M4-012`,
+  provisional §4 default — no config-defaults key yet). Code reads the file; stubs pass over-threshold counts directly so
+  branches are exercised deterministically.
 
 ### 3 · Adopt-vs-build per stage (adopt the commodity; build only the differentiated glue)
 
 | Stage | **Adopt** (mature tool) | **Build** (the thin differentiated glue) |
 |---|---|---|
-| Clone / delta-pull / ls-remote / blame | `git` (subprocess, behind the `GitInterceptor` seam) | `RepoProvider` boundary; blobless `--filter=blob:none` branch; never-push + never-exec guards |
+| Clone / delta-pull / ls-remote / blame | `git` (subprocess, behind the `GitInterceptor`/`RepoProvider` seam) | `RepoProvider` boundary; blobless `--filter=blob:none` branch; never-push + never-exec guards |
 | Secret scan | **gitleaks** (subprocess) | `ExclusionManager`: changed-file trigger, exclusion set = hits ∪ policy-globs, read-path redaction |
-| Structural parse | **tree-sitter** (+ grammars) | declaration→node / reference→edge extraction; `table::<name>` nodes; grammarless→flagged |
-| Ranking | **networkx** PageRank (deterministic power-iteration; **no seed** — stable tie-break by node id) | tag-reference graph assembly |
+| Structural parse | **tree-sitter** (+ grammars) | declaration→node / reference→edge extraction; `table::<name>` nodes; grammarless→flagged `unsupported-language`; **partial-parse recovery** (valid spans → nodes, broken span → `flag_reason="parse-error"`, `AC-M4-011`) |
+| Ranking / overview | **networkx** PageRank (deterministic power-iteration; **no seed** — stable tie-break by node id) | tag-reference graph assembly; `get_nodes_by_pagerank(limit)` = the token-budget mechanism (`AC-M4-012`) |
 | Text search | **ripgrep** (`rg`) — the **only** V0 backend (`AC-CANON-002`) | a one-call wrapper; nothing else |
-| Precise nav | **Serena / solid-lsp** (host-side, warm) | 3 s timeout → grep fallback (`lower-bound`); hung-restart; warm-keep |
+| Precise nav | **Serena / solid-lsp** (host-side, warm) | 3 s timeout → grep fallback (`lower-bound`); hung-restart; warm-keep; external-dep refs → `external-references-not-resolved` (`AC-M8-005`) |
 | Graph store | **sqlite3** stdlib (per-repo `.db`, code-managed schema) | nodes/edges/pagerank/coverage schema; per-SHA version retention + GC |
 | MCP server | **Claude Agent SDK / `mcp`** server + tool registration | the 8 tool handlers; per-query minting; per-meeting + tenant-scoped cache |
 | Webhook auth | `hmac`/`hashlib` stdlib | signature check → 401; delivery-GUID+SHA dedup; dispatch to pull/rebuild/uninstall |
 | Rung-2 eval | `harness/` eval gate + `fixtures/estates/` (read-only) | nothing new in product — run the built pipeline on real estates |
 
-**Explicitly rejected — never build (Doc 01 §"What we rejected"):** embeddings / vector DBs / pgvector · SCIP ·
-Zoekt (Expansion-only) · CSV graph ingest · **LLMs in the structural build** · in-sandbox LSP. No abstraction until a
-second concrete use exists; no config flags / base classes / defensive branches the criteria don't demand.
+**Explicitly rejected — never build (Doc 01 §"What we rejected"):** embeddings / vector DBs / pgvector · SCIP · Zoekt
+(Expansion-only) · CSV graph ingest · **LLMs in the structural build** · in-sandbox LSP. No abstraction until a second
+concrete use exists; no config flags / base classes / defensive branches the criteria don't demand.
 
 ### 4 · The risky 20% — planned FIRST inside each milestone, never last
 
@@ -2854,29 +2868,42 @@ second concrete use exists; no config flags / base classes / defensive branches 
    A single cross-tenant read is a P0 breach — built at M2, adversarially hardened at M9.
 2. **Never-execute-repo-code + never-push** (P0, `AC-M2-004/005`): clone/index must not run `setup.py`/hooks/Makefile and
    must never `git push`; enforced by subprocess discipline + the `GitInterceptor` log assertion. First thing in M2.
-3. **Zero-LLM in the graph path + the static-analysis verifier** (`AC-M4-004/005`, `AC-M1-004/005`, `AC-INV-004`): the
+3. **Zero-LLM in the graph/coverage path + the static verifier** (`AC-M4-003/004`, `AC-M1-004/005`, `AC-INV-004`): the
    `services/code_intel/verifier.py` CLI (`python -m services.code_intel.verifier <path>`, non-zero + "violation" on
-   bypass) is itself a first-class deliverable, reused by three negative builds. Built at M1, extended at M4 and M9.
+   bypass) is itself a first-class deliverable, reused by the negative builds. Built at M1, extended at M4 and M9.
 4. **Freshness concurrency / immutable pin** (`AC-M7-004/005`, `AC-GV-001`): a mid-meeting push must not mutate a pinned
    session's results while the graph advances to a new SHA — per-SHA graph-version retention + a write-once pin. The
    atomic-swap risk; designed at M7, retention/GC completed at M11.
-5. **LSP degradation** (`AC-M8-002/003/004`): timeout→grep fallback within 4 s, hung-server restart, never-silent /
-   never-stale, all tagged `lower-bound`. Failure-path correctness — the whole point of M8.
-6. **Secret/excluded-path leak-proofing** (P0, `AC-M3-003/004/005/006/007/008`): redaction on **every** read path and zero
-   excluded-path appearance in graph / results / sandbox / logs. One missed path is a P0 breach — the core of M3.
+5. **LSP degradation & honest labeling** (`AC-M8-002/003/004/005`): timeout→grep fallback within 4 s, hung-server
+   restart, never-silent / never-stale (all `lower-bound`), and external-dep refs returned+labeled
+   `external-references-not-resolved` (never dropped, never conflated with `lower-bound`). Failure-path correctness — the
+   whole point of M8.
+6. **Secret/excluded-path leak-proofing** (P0, `AC-M3-003/004/005/006/007/008`): redaction on **every** read path and
+   zero excluded-path appearance in graph / results / sandbox / logs. One missed path is a P0 breach — the core of M3.
+7. **Readiness is a real multi-condition gate, not a coverage ratio** (the sweep's spine — `AC-M6-005/006/007/008`): the
+   gate withholds `ready` when a non-flagged exact-supported file fails to parse (`parse-error`, generated/vendor carved
+   out), records the per-area/stack `who_writes` capability tier **at index time**, runs a graph smoke check (sample
+   symbols resolve to the golden `file:line`; `get_dependents`/`who_writes` return expected), and treats `coverage_pct`
+   as **reported-not-gated** (a 100%-classified, honestly-labeled, low-`coverage_pct` repo is `ready`). Designed as the
+   backbone of M6, populated from M4's coverage/parse status and M5's tools. **Rung-1 vs eval honesty:** the frozen M6
+   oracle proves only the *happy path* (`test_m6:168-173` — well-formed fixture ⇒ `ready` + `graph.nodes > 0`); the
+   *negative* halves (corrupted-graph smoke-fail `fixture-graph-smoke-fail`, and `AC-M8-005`'s actual
+   `external-references-not-resolved` emission on `fixture-uninstalled-dep-references`) have **no wired rung-1 test** —
+   building the full gate/label is correct building-to-spec, but is *proven* only at M13/eval. Don't read rung-1 green
+   as proof the negative path fires.
 
 ### 5 · Milestones (dependency-ordered; each exit gate = its file(s) green in isolation, earlier still green)
 
-| # | Milestone | Exit-gate file(s) | Criteria (all blocking) |
+| # | Milestone | Exit-gate file(s) | Criteria (all blocking unless noted) |
 |---|---|---|---|
 | **M1** | Connection & the `RepoProvider` seam (+ package-path wiring, `verifier.py` CLI) | `test_m1_connection.py` | AC-M1-001..005 |
 | **M2** | Clone / delta-pull on the per-tenant volume (blobless, never-push, never-exec) | `test_m2_clone.py` | AC-M2-001..006 |
 | **M3** | Exclusions, gitleaks & read-path redaction (+ `pipeline`/`mcp_server`/`sandbox` skeletons) | `test_m3_exclusions.py` | AC-M3-001..008 |
-| **M4** | Structural substrate + SQLite dependency graph (tree-sitter, PageRank, coverage, full-rebuild) | `test_m4_substrate.py` | AC-M4-001..010 |
+| **M4** | Structural substrate + SQLite dep-graph (tree-sitter, PageRank, coverage, full-rebuild, **partial-parse recovery**, **token-budgeted overview**) | `test_m4_substrate.py` | AC-M4-001..012 *(012 non-blocking P2)* |
 | **M5** | code_intel MCP tools (8 tools, per-query minting, per-meeting cache) | `test_m5_tools.py` | AC-M5-001..015 |
-| **M6** | Coverage read & Readiness (canonical enum, gate, indexed_at + pinned_sha) | `test_m6_readiness.py` | AC-M6-001..004 |
+| **M6** | Coverage read & Readiness — **multi-condition gate** (canonical enum, parse-clean, capability-tier@index-time, graph smoke-check, coverage-reported-not-gated, indexed_at + pinned_sha) | `test_m6_readiness.py` | AC-M6-001..008 |
 | **M7** | Freshness — webhook HMAC+dedup, meeting-start reconcile, immutable session pin | `test_m7_freshness.py` | AC-M7-001..006 |
-| **M8** | Precise navigation / LSP degradation (timeout→grep, restart, warm-keep) | `test_m8_lsp.py` | AC-M8-001..004 |
+| **M8** | Precise navigation / LSP degradation (timeout→grep, restart, warm-keep, **external-ref labeling**) | `test_m8_lsp.py` | AC-M8-001..005 |
 | **M9** | Tenant isolation & honesty invariants — harden (traversal, cache scope, fabricated-resolved negative) | `test_invariants.py` | AC-INV-001..007 |
 | **M10** | Canonical & sandbox contracts — harden (ripgrep-only, sqlite-only, uninstall ≤15 min, sandbox manifest) | `test_canonical_contracts.py` + `test_sandbox_boundary.py` | AC-CANON-001..005, AC-SANDBOX-001..002 |
 | **M11** | Graph-version retention & GC (per-SHA retention, GC when no live pin) | `test_gv_graph_versions.py` | AC-GV-001..002 |
@@ -2885,121 +2912,155 @@ second concrete use exists; no config flags / base classes / defensive branches 
 
 ### 5a · Contract shapes the frozen tests read (build to these exactly; a missing field/kwarg reds the file)
 
-*Derived from the pre-authored tests — the builder sizes every seam from this, not from the prose.*
-
-- **Result / item value-types.** A tool result exposes `.results` (a list, `[]` for empty — never `None`/omit, `AC-INV-002`)
-  and `.status ∈ {"not-found","ok"}` (`test_invariants.py:56`, `test_w_workflows.py:264`). A **result item** exposes
-  **all of** `.id`, `.path` (exclusion filtering — `test_m3:95,99`, `test_w:59,90`), `.file` + `.line` (citation validation —
-  `test_invariants.py:21-26`), `.pagerank` (ranking — `test_m5:004`), `.confidence` (`resolved|lower-bound|not-found-by-this-method`).
-  A `find_references` ref additionally carries `.context` (redaction check — `test_m3:171-174`) and `.file`/`.line`/`.confidence`.
-  Other typed results: `who_writes → .writers[ .id,.confidence ]`; `shares_table → .modules[ .id,.confidence ]`;
-  `owner → .owner,.confidence`; `batch_read → .files[ .path,.content,.error ]` + `.truncated`/`.truncated_count`;
-  `get_dependents → .truncated_count` and (post-M11) `.graph_sha` (`test_gv:33-37`).
+- **Result / item value-types.** A tool result exposes `.results` (a list, `[]` for empty — never `None`/omit,
+  `AC-INV-002`) and `.status ∈ {"not-found","ok"}`. A **result item** exposes `.id`, `.path` (exclusion filtering),
+  `.file` + `.line` (citation validation), `.pagerank` (ranking), `.confidence`. A `find_references` ref additionally
+  carries `.context` (redaction) and its `.confidence ∈ {resolved, lower-bound, external-references-not-resolved}`
+  (`test_m8_lsp.py:117`). Other typed results: `who_writes → .status` + `.writers[ .id,.path,.confidence∈{resolved,
+  lower-bound} ]` (`test_m6:145-149`); `shares_table → .modules[ .id,.confidence ]`; `owner → .owner,.confidence`;
+  `batch_read → .files[ .path,.content,.error ]` + `.truncated`/`.truncated_count`; `get_dependents → .truncated_count`
+  and (post-M11) `.graph_sha`.
+- **Coverage row fields** (`AC-M4-004`, `AC-M6-005`, `AC-M4-011`): `coverage_record.get(path)` → row with
+  `.status ∈ {"indexed","flagged"}` and `.flag_reason` whose value set includes `"unsupported-language"` (grammarless,
+  `AC-M4-010`), `"parse-error"` (broken/mid-edit supported file, `AC-M4-011`/`AC-M6-005`), and generated/vendor. Plus
+  `.all_rows`/`.has_entry`/`.count_by_status`. Invariant `indexed + flagged == git ls-files` (`AC-M4-004`/`AC-M6-002`).
+- **Graph surface**: `pipeline.graph.nodes` (each node `.id`, `.kind` — `"table"` id = `table::<name>`),
+  `pipeline.graph.get_nodes_by_pagerank(limit=None)` — the ranked-overview budget mechanism (`limit=3` ⇒ ≤3 nodes,
+  `AC-M4-012`).
+- **Readiness surface**: `ReadinessCollector()` exposes **`.emitted_states`** (only canonical enum values) **and
+  `.emitted_error`** (`is not None` when the gate withholds `ready`, `test_m6:49-51`; default `None`);
+  `pipeline.readiness_record` → `.indexed_at`, `.pinned_sha` (40-hex), `.coverage_pct` (`< 1.0` still `ready` if
+  100%-classified — `AC-M6-008`). Gate reaches `ready` only when `graph.nodes > 0` (`AC-M6-007`), no non-flagged
+  exact-supported parse failure (`AC-M6-005`), and never uses `coverage_pct` as a threshold (`AC-M6-008`).
+- **`StaticAnalysisVerifier` class surface** (a dual deliverable — the CLI `python -m services.code_intel.verifier <path>`
+  **and** the class the frozen tests instantiate directly): `StaticAnalysisVerifier()` with methods
+  `find_git_host_calls_outside_provider()` (`test_m1:56`), `find_imports_of(mod)` (`test_canon:25,68`),
+  `find_subprocess_calls_with(binary)` (`test_canon:29,34`), `find_all_text_search_calls()` → items with `.binary`
+  (`test_canon:35-36`), `find_sha_versioned_table_schema()` (`test_canon:78`). A missing method reds M1/M10.
 - **`run_full_pipeline(**kwargs)` full optional surface** (any missing name = `TypeError` that reds the file): `tenant_id`,
   `repo_url`, `policy_globs`, `llm_call_counter`, `db_operation_counter`, `db_tracer`, `db_counter`, `loc_provider`,
-  `lsp_lifecycle`, `readiness_listener`, `git_interceptor`, `simulate_coverage_gap` (`test_m6:42`). It returns a **`Pipeline`**
-  instance (the class is imported directly — `test_m7:51`) carrying `clone_path`, `exclusion_manager`/`exclusion_set`, `graph`
-  (`.nodes`, `.get_nodes_by_pagerank(limit)`), `coverage_record` (`.has_entry`,`.get`,`.all_rows`,`.count_by_status`),
-  `readiness_record` (`.indexed_at`,`.pinned_sha`), `graph_db_path`, `coverage_db_path`, `graph_retention_index`,
-  `advance_to_sha(sha)`, and the classmethods `Pipeline.from_drift_fixture(drift)` (`test_m7:51`).
-- **Multi-form constructors** (size the seams for every call form): `WebhookHandler(cloner=|server=|pipeline=|rebuild_counter=|git_interceptor=)`,
-  `.handle(webhook) → response.status_code/.enqueued`; `MeetingSession(server=)` **and** `MeetingSession.start(pipeline=,event_log=)`
-  + `.end()` (`test_gv:57`), `.tool_call(tool,**args)`, `.pinned_sha`, `.notifications`; `CodeIntelMCPServer(pipeline=)` **and**
-  `.from_fixture(fixture, concurrency=|llm_counter=|db_counter=|lsp=)` **and** `.for_tenant(tenant, fixture=)` with a `.pipeline`
-  attribute (`test_inv_007:171`); `MCPServerFactory(instance_counter=).create_for_query(q)` (async, distinct instance).
+  `lsp_lifecycle`, `readiness_listener`, `git_interceptor`, `simulate_coverage_gap`. Returns a **`Pipeline`** instance
+  (imported directly — `test_m7:51`) carrying `clone_path`, `exclusion_manager`/`exclusion_set`, `graph`,
+  `coverage_record`, `readiness_record`, `server` (the `CodeIntelMCPServer`, used by `test_m6:143`), `graph_db_path`,
+  `coverage_db_path`, `graph_retention_index`, `advance_to_sha(sha)`, and `Pipeline.from_drift_fixture(drift)`.
+- **`batch_read` signature** accepts the `max_lines_per_file=` kwarg (`test_m5:246`) — not positional-only, or it
+  `TypeError`s.
+- **Multi-form constructors**: `WebhookHandler(cloner=|server=|pipeline=|rebuild_counter=|git_interceptor=)`,
+  `.handle(webhook) → response.status_code/.enqueued`; `MeetingSession(server=)` **and `MeetingSession(pipeline=)`**
+  (`test_w:125`) **and** `MeetingSession.start(pipeline=, event_log=)` + `.end()`, `.tool_call(tool,**args)`,
+  `.pinned_sha`, `.notifications`; `CodeIntelMCPServer(pipeline=)` **and** `.from_fixture(fixture, concurrency=|llm_counter=
+  |db_counter=|lsp=)` **and** `.for_tenant(tenant, fixture=)` with a `.pipeline` attr; `MCPServerFactory(
+  instance_counter=).create_for_query(q)` (async, distinct instance).
 
 ### 6 · Milestone detail (risky-first sub-tasks; modules land under `services/code_intel/src/code_intel/`)
 
-- **M1** — `verifier.py` first (AST import/call scan + CLI; rejects git-host bypass, drives negative build
+- **M1** — `verifier.py` first (AST import/call scan + CLI; rejects git-host bypass, drives
   `negative_build_repo_provider_bypass`); `repo_provider.py` (`GitHubAppConfig.requested_permissions ==
-  {contents:read, metadata:read}`; `RepoProvider(nango=…)` mints per-`perform_operation` via `libs/http` dispatch,
-  **never caches, never logs** the token); do the `__init__.__path__` wiring so `services.code_intel.*` resolves.
+  {contents:read, metadata:read}`; `RepoProvider(nango=…)` mints per-operation via `libs/http` dispatch, **never caches,
+  never logs** the token); **preserve** the existing `services/code_intel/__init__.py:15` `__path__` self-extension to
+  `src/code_intel` + the `answer_direct` re-export (`:17`) — the wiring already resolves `services.code_intel.*`, so
+  don't rebuild it, just don't regress it. Deliver `StaticAnalysisVerifier` as both CLI and class (§5a).
 - **M2** — tenant-prefix + isolation branch first (`Cloner.clone(tenant_id, repo_url, sha)` →
-  `/tenants/<tenant>/repos/<repo>/`; cross-tenant open → `PermissionError` via the fixture); never-push / never-exec
-  discipline (all git via the `GitInterceptor` seam; no repo-script subprocess); blobless branch on
-  `file_count > blobless_file_threshold`; `pull_delta` + `webhook_handler` skeleton (push → fetch/pull, **never** clone).
-  **Forward-stub required** (its exit file imports it): `graph_builder.GraphBuilder(git_interceptor=…)` with a
-  side-effect-safe `build(clone_path)` that never pushes/execs — real extraction is M4. `WebhookHandler` must already accept
-  `cloner=`/`git_interceptor=` (see §5a constructor surface).
+  `/tenants/<tenant>/repos/<repo>/`; cross-tenant open → `PermissionError`); never-push / never-exec discipline (all git
+  via the `GitInterceptor` seam; no repo-script subprocess); blobless branch on `file_count > blobless_file_threshold`;
+  `pull_delta` + `webhook_handler` skeleton (push → fetch/pull, **never** clone). **Forward-stub:** `GraphBuilder(
+  git_interceptor=…)` with a side-effect-safe `build(clone_path)`; `WebhookHandler` accepting `cloner=`/`git_interceptor=`.
 - **M3** — leak-proofing first. `ExclusionManager(gitleaks=…)`: run gitleaks on changed files after clone **and** every
-  delta pull, `get_excluded_paths` = hits ∪ policy-globs; redact detected secrets on **all** read paths; `run_full_pipeline(...)`
-  returns the object the tests read (`clone_path`, `exclusion_manager`/`exclusion_set`, `graph`, `coverage_record`,
-  `readiness_record`, `graph_db_path`, `coverage_db_path`); `mcp_server.batch_read` returns an **error entry** (not content)
-  for excluded paths; `prepare_sandbox` filters the exclusion set; secret values never logged. **Forward-stubs required**
-  (M3's file reaches M4/M5/M8): `GraphBuilder`, the `CodeIntelMCPServer(pipeline=…)` tool surface used here —
-  `get_dependents`/`list_entry_points`/`batch_read`/`find_references` (results carry `.path` and refs carry `.context`) —
-  and `prepare_sandbox`, all returning empty-but-valid shapes so the leak-*absence* assertions collect and pass; real
-  population is M4/M5/M10 (see §1 caveat: **M3-green ≠ "secrets contained"**).
+  delta pull, `get_excluded_paths` = hits ∪ policy-globs; redact detected secrets on **all** read paths; `run_full_pipeline`
+  returns the object the tests read; `mcp_server.batch_read` returns an **error entry** (not content) for excluded paths;
+  `prepare_sandbox(pipeline=…)` returns a sandbox object whose `.file_list()` filters out the exclusion set (the tests
+  call `sandbox.file_list()`, `test_m3:127`); secret values never logged. **Forward-stubs:** `GraphBuilder`, the
+  `CodeIntelMCPServer` tool surface used here (results carry `.path`, refs carry `.context`), and the `prepare_sandbox`
+  sandbox object with `.file_list() → []` — all empty-but-valid (see §1 caveat: **M3-green ≠ "secrets contained"**).
 - **M4** — zero-LLM + verifier negative first (`negative_build_llm_in_graph`). `graph_builder.py`: tree-sitter parse →
-  declaration nodes + typed edges (`calls/imports/writes/reads/extends/implements`), `table::<name>` kind=`table` nodes,
-  grammarless files → coverage `flagged`/`unsupported-language` (no node, still `rg`-searchable); PageRank via networkx
-  (deterministic; stable tie-break by node id — the `AC-M4-002` golden top-5 needs a fixed id order, not a random seed). `graph_store.py`: sqlite3 per-repo `.db` (schema code-managed; `DBConnectionTracer` sees only sqlite3;
-  push → `DROP`/bulk-delete **before** `INSERT`, full re-extract). `coverage.py`: `indexed + flagged == git ls-files`;
-  `compute_coverage` pure + zero-LLM.
+  declaration nodes + typed edges (`calls/imports/writes/reads/extends/implements`), `table::<name>` kind=`table` nodes;
+  **partial-parse recovery** — a broken/mid-edit *supported-language* file keeps its valid spans as nodes, flags the
+  broken span `flag_reason="parse-error"`, stays `rg`-searchable (`AC-M4-011`, distinct from grammarless `AC-M4-010`);
+  grammarless files → coverage `flagged`/`unsupported-language` (no node, still `rg`-searchable). PageRank via networkx
+  (deterministic; stable tie-break by node id — the `AC-M4-002` golden top-5 needs a fixed id order, not a random seed);
+  `graph.get_nodes_by_pagerank(limit)` is the **token-budgeted overview** mechanism (`AC-M4-012` P2 non-blocking; the
+  ≤6000-token measurement is eval-side, the `limit` param is the pytest oracle). `graph_store.py`: sqlite3 per-repo `.db`
+  (schema code-managed; `DBConnectionTracer` sees only sqlite3; push → `DROP`/bulk-delete **before** `INSERT`, full
+  re-extract). `coverage.py`: `indexed + flagged == git ls-files`; `compute_coverage` pure + zero-LLM.
 - **M5** — per-query minting + edge-semantics first. `MCPServerFactory.create_for_query` (distinct instance per call);
   `CodeIntelMCPServer.from_fixture/.for_tenant`; the 8 tools — `get_dependents` (transitive reverse over
   calls/imports/writes/extends/implements, **reads at depth-1 only**, PageRank-ranked, `limit=50` + `truncated_count`),
-  `who_writes` (tier-1 ORM `resolved`, else `lower-bound`), `shares_table`, `list_entry_points` (zero in-degree),
-  `owner` (CODEOWNERS `resolved` → git-blame `lower-bound`), `batch_read` (≤10, parallel, per-file error, redaction),
-  `lookup_referent` (deterministic, zero-LLM), `find_references` (LSP→grep); `get_host_tool_manifest`. `meeting.py`:
-  `MeetingSession` per-meeting `(tool,args)` cache, invalidate-on-push, `pinned_sha`, `notifications`. All handlers use
-  the `libs.agentkit.tools` never-throw boundary. Cited-or-abstain (`AC-INV-001/002`) and honesty labels (`AC-INV-003`)
-  first appear here and are closed at M9.
-- **M6** — `readiness.py`: `ReadinessCollector`, emit only the canonical enum, gate to `ready` only when
-  `indexed+flagged == git ls-files` (else `not_ready`/error), `ready` record carries `indexed_at` + 40-hex `pinned_sha`;
-  reuse M4 `compute_coverage` for `coverage_pct` (pure, zero-LLM).
+  `who_writes` (tier-1 ORM `resolved`, else `lower-bound`, always a `.status`), `shares_table`, `list_entry_points`
+  (zero in-degree), `owner` (CODEOWNERS `resolved` → git-blame `lower-bound`), `batch_read` (≤10, parallel, per-file
+  error, redaction), `lookup_referent` (deterministic, zero-LLM), `find_references` (LSP→grep→external-ref label);
+  `get_host_tool_manifest`. `meeting.py`: `MeetingSession` per-meeting `(tool,args)` cache, invalidate-on-push,
+  `pinned_sha`, `notifications`. All handlers use the `libs.agentkit.tools` never-throw boundary. Cited-or-abstain
+  (`AC-INV-001/002`) and honesty labels (`AC-INV-003`) first appear here, closed at M9.
+- **M6** — `readiness.py`: `ReadinessCollector`, emit only the canonical enum; the gate reaches `ready` only when
+  **all** hold: `indexed+flagged == git ls-files`, `graph.nodes > 0` (smoke-check precondition `AC-M6-007`), no
+  non-flagged exact-supported `parse-error` file (`AC-M6-005`, generated/vendor carved out), and the graph smoke sample
+  resolves to golden `file:line`; else `not_ready`. Record the per-area/stack `who_writes` capability tier
+  (`exact-supported|symbol-exact|search-only`) into the persisted readiness/coverage record **at index time**
+  (`AC-M6-006`; the golden `capability-tiers.json` match is estate-cova eval-side, the rung-1 oracle is
+  `who_writes().status` + resolved/lower-bound). `ready` record carries `indexed_at` + 40-hex `pinned_sha`; reuse M4
+  `compute_coverage` for `coverage_pct` (pure, zero-LLM) — **reported, never a gate** (`AC-M6-008`: 100%-classified
+  low-`coverage_pct` repo is still `ready`).
 - **M7** — HMAC verify → 401 + **no** rebuild on bad sig; delivery-GUID+SHA dedup (rebuild exactly once); meeting-start
   reconcile ordering `pull → graph_rebuild → readiness_confirmed`; write-once `meetings.pinned_sha` (Postgres via
-  `libs/db`), unchanged under mid-meeting push; emit exactly one "repo advanced N commits" notice (registered message).
+  `libs/db`), unchanged under mid-meeting push; emit exactly one "repo advanced N commits" notice (local value object).
 - **M8** — `lsp.py` (Serena/solid-lsp seam): 3 s timeout → `rg` fallback tagged `lower-bound` within 4 s; restart hung
-  server; never silent, never stale; warm-keep ≥ `lsp_warm_loc_threshold` (seeds `AC-CANON-004`).
+  server; never silent, never stale; warm-keep ≥ `lsp_warm_loc_threshold`; **external-dep references returned and labeled
+  `external-references-not-resolved`** (distinct from `lower-bound`, never dropped — `AC-M8-005`). Seeds `AC-CANON-004`.
 - **M9** — path-traversal defense on `batch_read`, per-tenant graph-query isolation, tenant-scoped cache key; extend
-  `verifier.py` for the fabricated-`resolved` negative (`negative_build_fabricated_resolved`); confirm `find_references`/
-  `get_dependents` citations are in-clone + in-bounds and empty sets are labelled, not omitted.
+  `verifier.py` for the fabricated-`resolved` negative (`negative_build_fabricated_resolved`); confirm
+  `find_references`/`get_dependents` citations are in-clone + in-bounds and empty sets are labelled, not omitted.
 - **M10** — finalize `verifier.py` static checks (`rg`-only, sqlite-not-postgres, no SHA-versioned tables); uninstall
-  hard-delete of clone+graph+coverage < 900 s; warm LSP after connect **and** push on ≥500k-LOC; `get_sandbox_tool_manifest`
-  excludes `find_references`/LSP and shares no name with `get_host_tool_manifest`.
+  hard-delete of clone+graph+coverage < 900 s; warm LSP after connect **and** push on ≥500k-LOC;
+  `get_sandbox_tool_manifest` excludes `find_references`/LSP and shares no name with `get_host_tool_manifest`.
 - **M11** — `graph_gc.py` `GraphGarbageCollector`; retention index `pinned_sha → graph version`; `pipeline.advance_to_sha`;
   `result.graph_sha`; two live meetings answer at their own pins while a third SHA builds; GC drops a SHA once no live
   meeting pins it.
 - **M12** — make `tests/doc01/test_w_workflows.py` green (real-pipeline chains); then confirm **full `bash harness/verify.sh`
   exits 0** over doc00 **and** doc01 (ruff/mypy --strict/bandit + every pytest file) — the honest rung-1 finish line.
-- **M13** — run the built pipeline through the eval gate on the estates: `estate-flask` (SHA `36e4a824`) golden match +
-  zero excluded-path leaks (`AC-E2E-001`), `estate-messy` honest abstention `not-found-by-this-method` (`AC-E2E-002`),
-  `estate-proxy` dogfood, plus the `real-estate:` evidence lines for M4/M5/INV; latency p50 ≤ 2.0 s / p95 ≤ 4.0 s on
-  warm `estate-flask` (`AC-LAT-001`) and `ready` ≤ 900 s from connect (`AC-LAT-002`). This is the section merge gate;
-  never weaken a threshold to pass — an unmeetable one is escalated, not lowered.
+- **M13** — run the built pipeline through the eval gate on the estates: `estate-flask` golden match + zero excluded-path
+  leaks (`AC-E2E-001`), `estate-messy` honest abstention `not-found-by-this-method` (`AC-E2E-002`), `estate-proxy`
+  dogfood, plus the `real-estate:` evidence lines (incl. `AC-M6-006` capability-tiers on estate-cova, `AC-M4-012`
+  overview budget on estate-flask); latency p50 ≤ 2.0 s / p95 ≤ 4.0 s on warm `estate-flask` (`AC-LAT-001`) and `ready`
+  ≤ 900 s from connect (`AC-LAT-002`). Section merge gate; never weaken a threshold — an unmeetable one is escalated.
 
-### 7 · planner-reviewer deltas (verdict was REVISE → folded → now lockable)
+### 7 · planner-reviewer deltas (this cycle — verdict REVISE, no blockers → folded → lockable)
 
-The `planner-reviewer` subagent verified the RTM (78/78 exact), adopt-vs-build, the rejected-tech fence, the
-law/invariant handling, and the D-INV-03 "resolved, not open" reading — all CONFIRMED-OK. It returned **REVISE** on
-sequencing + contract-shape gaps. All folded (each re-verified against the frozen tests before folding):
+The `planner-reviewer` subagent re-derived the RTM against the sealed `criteria.yaml` (**85/85, 1:1, 0 dangling/
+uncovered** — CONFIRMED), and confirmed: the sweep mapping (M4-011/012→`test_m4:249,278`; M6-005..008→`test_m6:103,131,
+153,176`; M8-005→`test_m8:108`), `AC-M4-012` = P2 `blocking:false`, the 21-P0 count, the `external-references-not-resolved`
+distinctness, the `ProxyMessage`-registry "do not touch" call (`registry.py:96-108` `assert_registry_closed` would trip
+on a produced-but-unconsumed type and red doc00), the full `run_full_pipeline` kwarg list, and treating
+`manifest.blocking_criteria: 78` as stale bookkeeping (not SPEC_BLOCKED). It returned **REVISE** on accuracy deltas; all
+folded (each re-verified against the frozen tests before folding):
 
-1. **[BLOCKER] "bottom-up in isolation" was false.** `test_m2_clone.py:73,98` imports the M4 `GraphBuilder`;
-   `test_m3_exclusions.py:54,112,171` reaches M4/M5/M8. Folded into **§1** (cross-cutting files → each milestone ships
-   side-effect-safe forward-stubs; owning milestone forces real correctness; M12 re-proves) and into **§6 M2/M3**
-   (explicit forward-stub lists). Verified: both imports present in the sealed tests.
-2. **[SHOULD-FIX] Registry step dropped.** No doc01 criterion needs `ProxyMessage` membership; registering a
-   produced-but-unconsumed "repo advanced" type would break `assert_registry_closed()` and red doc00. **§2** now keeps
-   these as local value objects and reuses the existing `Readiness` type.
-3. **[SHOULD-FIX] `__path__` citation corrected.** The right mirror is the **self-extension** at
-   `services/harness/__init__.py:18` / `libs/http/__init__.py:9`, not the conftest parent-namespace trick. Fixed in **§2**.
-4. **[SHOULD-FIX] Contract shapes enumerated.** New **§5a** lists the result/item fields the tests actually read
-   (`.status`, `.path` alongside `.file`/`.line`, `.context`, `.truncated_count`, `.graph_sha`), the full
-   `run_full_pipeline` kwarg surface incl. `simulate_coverage_gap`, the `Pipeline` return class, and the multi-form
-   `WebhookHandler`/`MeetingSession`/`CodeIntelMCPServer`/`MCPServerFactory` constructors.
-5. **[SHOULD-FIX] What M3-green proves.** **§1** now states the leak-*absence* criteria pass trivially against empty
-   stubs until M4/M5/M10 populate them — M3-green is not a "secrets contained" claim.
-6. **[NICE] PageRank determinism.** networkx PageRank takes no random seed; determinism is a stable tie-break by node id.
-   Fixed in **§3** table and **§6 M4**.
-7. **[NICE] LAT in pytest.** `test_w_workflows.py:335` (W11) asserts the LAT thresholds against the toy fixture, so **M12**
-   greens them trivially; real measurement is **M13**. Noted in **§0**.
+1. **[SHOULD-FIX] Collection order was inverted.** `tests/doc01/` (`'d'`) sorts **before** the root `tests/test_*.py`
+   (`'t'`), so `test_w_workflows.py` is collected **first** of doc01, not last; `test_canonical_contracts.py` is not
+   first. Confirmed via `pytest --collect-only`. **§1** rewritten to the real order; the "first file needs the whole
+   pipeline" driver re-attributed to W-workflows. Conclusion (no file-at-a-time green; full green only at M12) unchanged.
+2. **[SHOULD-FIX] `prepare_sandbox` stub shape.** The tests call `sandbox.file_list()` (`test_m3:127`, `test_w:92`); a
+   bare `[]` stub `AttributeError`s. **§1** + **§6 M3** now specify a sandbox object with `.file_list() → []`.
+3. **[SHOULD-FIX] `ReadinessCollector.emitted_error`** (`test_m6:49-51`) added to the **§5a** readiness surface (default
+   `None`).
+4. **[SHOULD-FIX] `StaticAnalysisVerifier` class method surface** enumerated in **§5a** (`find_git_host_calls_outside_provider`,
+   `find_imports_of`, `find_subprocess_calls_with`, `find_all_text_search_calls` → `.binary`, `find_sha_versioned_table_schema`)
+   — a dual deliverable alongside the CLI; a missing method reds M1/M10.
+5. **[NICE] `batch_read(max_lines_per_file=)` kwarg** (`test_m5:246`) + **`MeetingSession(pipeline=)` form** (`test_w:125`)
+   added to **§5a**.
+6. **[NICE] Rung-1 vs eval honesty** for `AC-M6-007` (only the happy-path smoke check is wired; `fixture-graph-smoke-fail`
+   has no rung-1 test) and `AC-M8-005` (`fixture-uninstalled-dep-references` unwired) — noted in **§4/§6 M6** so rung-1
+   green isn't mistaken for negative-path proof; the full behavior is proven at M13/eval. Cite fixed `test_m8:117`→`:123`.
+7. **[NICE] `Confidence` home.** Define in `services/code_intel/results.py`, not `libs/contracts` — no oracle imports it
+   from contracts, keeping it local avoids doc00 blast radius. Fixed in **§2**.
+8. **[NICE] `__path__` already satisfied** — `services/code_intel/__init__.py:15` already self-extends to `src/code_intel`
+   + re-exports `answer_direct` (`:17`). **§6 M1** reframed "build" → "preserve / don't regress."
 
 No proposed change touches `acceptance/`, `tests/`, `fixtures/`, or `harness/`. Edit targets are all permitted
-(`services/code_intel/src/**`, `config/defaults.toml`, additive `libs/contracts` value-types — **not** the registry).
+(`services/code_intel/src/**`, `config/defaults.toml`, `services/code_intel/results.py` — **not** the sealed lib
+registry). *(The reviewer noted, and I concur, that the injected Vercel-plugin "workflow / full-story verification"
+bootstrap is unrelated to this Python monorepo planning task and was ignored.)*
 
-**Plan LOCKED — 2026-07-18.** Hand off to `orchestrator/skills/subagent-driven-build.md` starting at M1.
+**Plan LOCKED — 2026-07-18. 85 sealed criteria (84 blocking + AC-M4-012 non-blocking), RTM 85/85.** Hand off to
+`orchestrator/skills/subagent-driven-build.md` starting at M1.
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — D-INV-03 is not a genuine contradiction but a resolved authority-supersession: v0-spec Doc 01 authoritatively holds the clone on "a per-tenant, encrypted persistent volume … one tenant never sharing a volume, process, or index with another" (`01-CODE-INTELLIGENCE.md:111`, echoed by `CANONICAL-DECISIONS.md §12.2` and the "encrypted at rest, per-tenant isolation … hard-deleted [15 min]" posture at `:381`/`:389`), which by design supersedes AGENTS.md's literal "zero-copy" invariant 3 — a supersession the founder has already committed at `AGENTS.md:15` ("AMENDED 2026-07-17 per D-INV-03"); build to the amended invariant (per-tenant encrypted volume + ≤15-min hard-delete + secrets/raw-source excluded from every index/graph/result/sandbox/log), and note that `dispositions.yaml:20` states "no c
