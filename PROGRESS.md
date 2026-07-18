@@ -27,9 +27,16 @@ for the conductor.)* **Cross-file appearances (owner corrected after review):** 
 prerequisite `operation_runs.created_by` column, owned by `AC-SUB-036` — so M4 does **not** own AC-OBS-007.
 `AC-HOST-005` is **owned solely by M3** (`test_m02_host.py`); M9's `test_m08_ci.py` mentions it only in a comment
 explaining the AC-CI-007 banned-strings rationale (A-007) — **not** a second assertion. `test_w_workflows.py`
-(M17) introduces **no new criterion** — it re-exercises 38 as end-to-end chains. **0 `SPEC_BLOCKED`** (manifest:
-0 spec-blocked, 0 unresolved contradictions; A-006/A-007/A-009 are *resolved* material contradictions, encoded
-as build rules in §4).
+(M17) introduces **no new criterion** — it re-exercises 38 as end-to-end chains. A-006/A-007/A-009 are *resolved*
+material contradictions, encoded as build rules in §4. **One `SPEC_BLOCKED` (M11 — planner-time static finding,
+2nd planner-reviewer pass):** the sealed `test_m10_reg.py` pins two jointly-unsatisfiable blocking P1 criteria —
+`AC-REG-002` (`test_reg_002`, lines 75–77) asserts `set(get_args(MessageType)) == set(CHANNEL_REGISTRY)`, which
+forces `MessageType` to be a `get_args`-able `Literal`/Union, while `AC-REG-005` (`test_reg_005`, line 211) asserts
+`issubclass(MessageType, enum.Enum)`, whose `get_args()` is always `()`. With `CHANNEL_REGISTRY` non-empty
+(`AC-REG-004`) **no single `MessageType` object satisfies both**, so under `verify.sh`'s `pytest -x` one is always
+red. This is a bundle self-contradiction, not a build defect: **M11 stops the pass and escalates the 002/005 pair
+to the conductor/bundle owner — never resolved by editing the sealed test.** M1–M10 and M12–M17 are unaffected and
+proceed in order.
 
 ### 1 · The seams — frozen contract homes (build against these; never redefine — AGENTS.md §"Contract homes")
 
@@ -52,14 +59,22 @@ homes every later milestone consumes:
 - **`libs/db`** (built-ahead at M4, tested M10): asyncpg pool · `Database.from_connection` facade + `repos`
   namespace (`sessions,repos,meetings,tenants,operations,cost`) — **no ORM** · Alembic.
 - **`libs/ops`** (M4): `with_operation_run` · `claim_meeting` · `sweep_stale_on_read` · `sandbox_provider`
-  (`provision/destroy/health_check`) · `run_reconcile_sweep` · plus the homes the sealed `test_m03_sub` hard-imports:
-  `OperationHandle` · `cost.{MeetingCost, dispatch_workroom, record_micro_call_cost, check_meeting_budget}` ·
-  `logging.{configure_logging, get_logger}` · `sentry.before_send` · `affinity.route_to_owner`.
-- **M4 service surface** (built at M4 against the frozen import homes `test_m03_sub` pins): `services.harness.
-  {build_emitter, recover_meeting_harness, ingest_webhook, drain_pending_webhooks, check_meeting_budget,
-  complete_signin, resolve_session, invite_proxy, resolve_bot_id, record_seam_cost}` · `services.workroom.
-  {recover_task, propose_change, accept_draft}` · `services.scribe.{record_scribe_cost, apply_note_delta}`.
-  (Tests accept alternate homes via try/except; pick the AGENTS.md-canonical one per §3's namespace mapping.)
+  (`provision/destroy/health_check`) · `run_reconcile_sweep` · `OperationHandle` (the `heartbeat`/`check_pause`
+  fencing seam). These are the only `libs/ops` homes the sealed `test_m03_sub` **hard-imports** (`libs.db.Database`
+  too). The `cost.{MeetingCost, dispatch_workroom, record_micro_call_cost, check_meeting_budget}` ·
+  `logging.{configure_logging, get_logger}` · `sentry.before_send` · `affinity.route_to_owner` homes are **not**
+  touched by `test_m03_sub`; they are hard-imported by **M12** (`test_m11_obs`: `logging`:49 / `cost`:113 /
+  `affinity`:284 / `sentry`:385) and **M14** (`test_m13_inv`: `cost.MeetingCost`:96 / `dispatch_workroom`:160), and
+  go green there — build the modules at M4 if convenient, but they are **owned/gated at M12/M14, not M4**.
+- **M4 service surface** (built at M4 against the import homes `test_m03_sub` **hard-imports** — no try/except
+  fallback, so these exact paths are load-bearing): `services.harness.{build_emitter:373, recover_meeting_harness:750,
+  ingest_webhook, drain_pending_webhooks:815, check_meeting_budget:905, complete_signin, resolve_session:1078,
+  invite_proxy, resolve_bot_id:1125, record_seam_cost:1178}` · `services.workroom.recover_task:708` ·
+  `services.scribe.*`. **`check_meeting_budget` is dual-homed** — hard-imported from `services.harness` at M4
+  (`test_m03_sub:905`) **and** from `libs.ops.cost` at M12 (`test_m11_obs:113`); define it **once** in `libs.ops.cost`
+  (DRY) and **re-export** from `services.harness`, never two definitions. The try/except **alternate-home** pattern
+  is real only for **later** files (M12 `configure_logging`/`route_to_owner`, M14 `MeetingCost`) — there pick the
+  AGENTS.md-canonical `libs.ops.*` home per §3; it does **not** apply to the M4 hard homes above.
 - **Concrete API the workflows pin** (must exist by M17): `services.harness.{emit.Emitter, wake.answer_direct,
   budget.check_meeting_budget, orchestrator.run_wake_turn, server.lifespan_trace, settings}` ·
   `services.workroom.{recovery.should_restart, drafts.propose_change/teardown_review_session}` ·
@@ -197,10 +212,14 @@ class/defensive branch a criterion doesn't demand** (V0 has zero runtime flags �
 - **M10 — DB layer (`test_m09_db`, 4).** Pool `min2/max20/lifetime30/timeout10`; `Database` facade + repos, no
   ORM; `meeting_id` uuid everywhere except `operation_runs.scope_id` text; Alembic env.py advisory lock + retry.
   *Criteria:* AC-DB-001..004.
-- **M11 — Contracts registry (`test_m10_reg`, 6).** `ProxyMessage.__init_subclass__` auto-register; single registry
-  + `MessageType` enum; `assert_registry_closed()` (boot + CI); orphan type fails; Pydantic discipline
-  (UUID/`max_length`/`Literal`); dispatch funnel validates client msgs once (tile→backend untrusted);
-  signal-surface excluded (AC-CMP-011). *Criteria:* AC-REG-001..006.
+- **M11 — Contracts registry (`test_m10_reg`, 6) — ⚠ `SPEC_BLOCKED` on AC-REG-002 vs AC-REG-005.**
+  `ProxyMessage.__init_subclass__` auto-register; single registry + `MessageType` discriminator;
+  `assert_registry_closed()` (boot + CI); orphan type fails; Pydantic discipline (UUID/`max_length`/`Literal`);
+  dispatch funnel validates client msgs once (tile→backend untrusted); signal-surface excluded (AC-CMP-011).
+  **AC-REG-001/003/004/006 are buildable; AC-REG-002 and AC-REG-005 are jointly unsatisfiable** (see §0:
+  `get_args(MessageType)` non-empty for 002 vs `issubclass(MessageType, Enum)` ⇒ `get_args()==()` for 005). Build
+  the four, then **stop the pass and escalate the 002/005 pair to the conductor** — do not weaken or edit the
+  sealed test. *Criteria:* AC-REG-001..006 (002 + 005 blocked).
 - **M12 — Observability (`test_m11_obs`, 10).** structlog JSON; Sentry once; cost telemetry cache-read/creation
   split; Langfuse inert; `/health` + Healthchecks; hardening script (both firewall layers); live-WS affinity
   routes reconnects to the `operation_runs` claim owner (**AC-OBS-007 goes green here**, reading M4's `created_by`);
@@ -273,6 +292,33 @@ The following change requests were folded into the plan above:
 Reviewer confirmed all resolved-ambiguity encodings (**A-006/A-007/A-009/A-010/A-011**) faithful to
 `requirements/ambiguities.yaml`, and no milestone builds a skip-list item, a runtime flag (AC-CFG-009), or an
 abstraction no criterion demands. **Plan LOCKED — hand off to `subagent-driven-build`.**
+
+### Review deltas — 2nd `planner-reviewer` pass (fresh planner context, 2026-07-18)
+
+A fresh-context planner re-derived the sealed bundle (155 criteria / 24 P0 / per-prefix counts — all re-confirmed
+exact against `criteria.yaml`) and re-ran the `planner-reviewer`. Verdict: **the plan is sound on
+coverage/order/seams/risky-first/adopt-vs-build, but must record one `SPEC_BLOCKED`.** Three change requests folded,
+each independently re-verified against the sealed tests (maker ≠ checker):
+
+- **[CRITICAL → SPEC_BLOCKED] AC-REG-002 vs AC-REG-005 unsatisfiable (M11).** `test_m10_reg.py::test_reg_002`
+  (75–77) asserts `{str(m) for m in get_args(MessageType)} == {str(k) for k in CHANNEL_REGISTRY}` (forces a
+  `get_args`-able `Literal`/Union `MessageType`); `::test_reg_005` (211) asserts `issubclass(MessageType, enum.Enum)`
+  (an Enum, `get_args()==()`). No object satisfies both with a non-empty registry (`test_reg_004`). → §0's blanket
+  "0 SPEC_BLOCKED" corrected to flag the M11 block; M11 milestone now records the stop-and-escalate action. (This
+  matches the M11 build-session finding recorded below at "SPEC_BLOCKED — M11 registry".)
+- **[IMPORTANT] §1 `libs/ops` seam homes misattributed.** `cost.*`/`logging.*`/`sentry.before_send`/
+  `affinity.route_to_owner` were listed as "homes the sealed `test_m03_sub` hard-imports" — `test_m03_sub` imports
+  none of them (verified); they are hard-imported by M12 `test_m11_obs` (:49/:113/:284/:385) and M14 `test_m13_inv`
+  (:96/:160). → §1 `libs/ops` bullet re-attributed to M12/M14.
+- **[IMPORTANT] §1 M4 surface "try/except alternate homes" note false for M4.** The `services.harness.*` M4 surface
+  is **hard-imported** (no fallback); `check_meeting_budget` is dual-homed (`services.harness`:905 M4 +
+  `libs.ops.cost`:113 M12) so must be defined once in `libs.ops.cost` and re-exported. The try/except alternate-home
+  pattern applies only to later files (M12/M14). → §1 M4 bullet corrected.
+
+Per-rule (2nd pass): rule 1 (order) PASS · rule 2 (coverage) PASS (155/155, 24 P0) · rule 3 (seams) PASS after
+CR-2/CR-3 · rule 4 (adopt-vs-build) PASS · rule 5 (risky-first) PASS · must-NOTs PASS once the SPEC_BLOCKED gate is
+honoured. **Plan re-LOCKED with the M11 `SPEC_BLOCKED` recorded; M1–M10 + M12–M17 hand off to
+`subagent-driven-build`, M11 escalates to the conductor.**
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — No `SPEC_BLOCKED` entry was ever recorded in `PROGRESS.md`; the doc00 plan asserts "0 `SPEC_BLOCKED`, 0 unresolved contradictions," `dispositions.yaml` agrees, and the build is green through M4, so there is nothing genuinely blocked — continue in the mandated milestone order to M5 (`test_m04_boot`, AC-BOOT-001..007). To preempt the one near-frontier ambiguity (the "(prod)"-qualified boot keys), implement the reading the spec and criterion already fix in lockstep — `00-FOUNDATION.md:203` and `AC-BOOT-001` (`criteria.yaml:1632`) both list "`DATABASE_URL`, `GCS_BUCKET`, `SESSION_SECRET` (prod), GCP project (prod), each AES credential key, `RECALL_API_KEY`, `ANTHROPIC_*`": treat `DATABASE_URL`, `GCS_BUCKET`, the AES credential keys, `RECALL_API_KEY`, and `ANTHROPIC_*` as unconditionally req
