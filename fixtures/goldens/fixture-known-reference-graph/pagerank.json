@@ -1,0 +1,51 @@
+{
+  "_derivation": "stdlib power-iteration PageRank (d=0.85, 100 iters) over canonical ids",
+  "top5": [
+    {
+      "id": "graph/f.py::f",
+      "score": 0.365198
+    },
+    {
+      "id": "graph/d.py::d",
+      "score": 0.216157
+    },
+    {
+      "id": "graph/e.py::e",
+      "score": 0.12321
+    },
+    {
+      "id": "graph/b.py::b",
+      "score": 0.109349
+    },
+    {
+      "id": "graph/c.py::c",
+      "score": 0.109349
+    }
+  ],
+  "all": [
+    {
+      "id": "graph/f.py::f",
+      "score": 0.365198
+    },
+    {
+      "id": "graph/d.py::d",
+      "score": 0.216157
+    },
+    {
+      "id": "graph/e.py::e",
+      "score": 0.12321
+    },
+    {
+      "id": "graph/b.py::b",
+      "score": 0.109349
+    },
+    {
+      "id": "graph/c.py::c",
+      "score": 0.109349
+    },
+    {
+      "id": "graph/a.py::a",
+      "score": 0.076736
+    }
+  ]
+}
