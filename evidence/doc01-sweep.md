@@ -1,14 +1,29 @@
- parses cleanly (**excluding `generated` / `vendor`**…)."* `AC-M6-002` only verifies classification completeness (`indexed + flagged == ls-files`); no criterion verifies clean-parse of exact-supported files as a gate condition.
+h node stale vs pinned commit → deference rule (2), re-read live"*).
+> `built_at_sha` = 0 hits in criteria. This is dispositioned in `dispositions.yaml` D-INV-05 as *"No separate criterion needed,"* but no criterion enforces the stale-node → re-read behavior, and the `built_at_sha` node column exists solely to power it.
 
-4. **Readiness gate check — capability tiers recorded at index time.** §3.7 (line 295): *"**capability tiers recorded** — each area/stack carries its `who_writes` tier (exact-supported / symbol-exact / search-only) so the honesty labels are pre-computed, not guessed at query time."* `AC-M5-005/006` test the tags *at query time*; no criterion verifies the tier is recorded per area/stack at index time / in the readiness record.
+**6. Force-push (and parser/grammar upgrade) forces the full rebuild / safe history-rewrite handling.**
+> §3.6: *"A **force-push, a parser/grammar upgrade, or a large change-set forces the full rebuild**"* (also §4: *"force-push → safe full rebuild"*).
+> `force-push` = 0 hits in criteria. AC-M4-009 tests that an ordinary single-file push does a full rebuild, but nothing exercises the force-push / non-fast-forward (history-rewrite) delta-pull path the spec calls out as a distinct safe-handling case.
 
-5. **Readiness gate check — graph smoke check.** §3.7 (line 296): *"**graph smoke check** — a sample of known symbols each resolve to the correct `file:line` through the live path; `get_dependents` and `who_writes` return the expected callers/writers for a sample of known symbols/tables."* No criterion verifies readiness is *gated* on this smoke check. (`AC-E2E-001` runs tool calls end-to-end but is not the readiness precondition; the spec states "`ready` requires all of the above.")
+**7. `git blame` resolves on a blobless clone.**
+> §3.2: *"so huge repos clone in minutes and **`git blame` still works** (we never use *shallow* clones; they break history)."*
+> §3.8 step 2 provable: *"`git blame` resolves on a large repo."* AC-M2-002 verifies the pinned SHA and file tree only; no criterion verifies `git blame` works after a blobless clone (the specific reason shallow clones are rejected).
 
-6. **`coverage_pct` is reported, not a gate.** §3.7 (line 299): *"**`coverage_pct` is reported, not a gate** … the ratio itself no longer blocks a join (a repo that is 100% classified with its gaps honestly labeled is joinable)."* Build-step-6 provable: *"a 100%-classified repo with honestly-labeled gaps is `ready` regardless of `coverage_pct`."* `AC-M6-003` only tests that the ratio is computed deterministically; no criterion asserts that a low `coverage_pct` with full classification still yields `ready`.
+**8. Meeting about a PR pins to the PR head (not the default-branch tip).**
+> §3.6: *"the session **pins to one commit** — the default branch's tip, or the **PR head** for a meeting about a PR."*
+> AC-M7-004 tests pinning to a known SHA (default-tip case) only; the PR-head branch of the pin selection has no criterion.
 
-7. **External references labeled `external-references-not-resolved`, never dropped.** §3.5 (line 267): *"References into uninstalled third-party deps are labeled `external-references-not-resolved`, never dropped."* `AC-M8-001..004` cover `resolved` / grep-fallback `lower-bound` / restart / no-silent-drop-on-timeout, but none covers this distinct label for uninstalled-dep references. Grep for `external-references` across the bundle → zero hits.
+---
 
-8. **Partial parse of an unparseable / mid-edit file.** §4 failure behavior (line 379): *"unparseable/mid-edit file → valid spans index, broken span flagged, search covers it."* Distinct from grammarless flagging (`AC-M4-010`): here a *supported-language* file is broken mid-edit, and the spec promises valid spans are still indexed with the broken span flagged. No criterion covers this partial-parse behavior.
+## Dispositioned / boundary items (asserted behavior, no criterion — but explicitly accounted for, not silently missed)
 
-### Minor / lower-confidence
-9. **Ranked-overview token budget.** §3.4 (line 128): *"the compact, token-budgeted 'table of contents + neighborhoods' … elided to `[~a few thousand tokens]`."* `AC-M4-002` exercises "the ranked overview is built" and its PageRank ordering, but no criterion checks the overview is produced as a token-budgeted artifact. (Weak: the budget is a §4 tunable default, and the overview build is indirectly exercised — flagging for completeness only.)
+Reporting these for completeness; each is a documented decision rather than an oversight:
+
+- **`~10s` push-to-queryable freshness target** — §3.6 *"Target: `[~10s]` push-to-queryable on a pilot-scale repo"* / §4 *"substrate + graph push-to-fresh `[~10s]`."* No latency criterion (AC-LAT covers only direct-answer p50/p95 and 15-min ready). Explicitly dispositioned aspirational-not-a-gate in `ambiguities.yaml` A-001 and A-006.
+- **Sandbox re-provision re-seeds at `meeting.pinned_sha`, not HEAD** — §3.6. No criterion; falls in the Doc 05 / Workroom sandbox boundary (AC-M3-005 only checks sandbox secret-exclusion).
+- **Incremental parse — unchanged files keyed by hash are never re-touched** — §3.4. No criterion; an optimization mechanism (the *graph* rebuild is full and is tested by AC-M4-009).
+- **`propose_change` and the deferred agentic-map tools (`get_capability`/`search_capabilities`/`get_flow`) absent from the core** — dispositioned as not-built-here (`D-BOUNDARY-01`) / Expansion (§5).
+
+---
+
+Note: I made no modifications (read-only sweep). Items 1–8 are the actionable coverage gaps; 1, 2, 6, and 7 are the strongest (each has an explicit "provable" clause in the §3.8 build steps yet no criterion), and 5 is notable because a graph column exists purely to serve a behavior that is never tested.
