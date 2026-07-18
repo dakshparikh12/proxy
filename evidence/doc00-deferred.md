@@ -1,0 +1,4 @@
+
+DEFERRED (genuinely spec-blocked, needs founder spec fix): ## SPEC_BLOCKED — M11 registry (AC-REG-002 vs AC-REG-004/005), 2026-07-17
+; assert union == registry`, `test_m10_reg.py:75-77`) is jointly unsatisfiable with AC-REG-005's `issubclass(MessageType, enum.Enum)` (`:211`) and AC-REG-004's non-empty-registry requirement (`:158`): `typing.get_args` returns `()` for any Enum class (verified empirically), and no object is both an `isinstance(x, type)` Enum subclass and a subscripted generic with non-empty `get_args`, so with the CANONICAL-mandated Enum (`CANONICAL-DECISIONS.md:18`, `08-EXPERIENCE.md:188`) the union is always `set()` and can never equal the non-empty registry; AC-REG-002 was mis-transcribed from the stale Literal-era snippet at `00-FOUNDATION.md:303` and must be changed in the sealed bundle to `set(MessageType) == set(CHANNEL_REGISTRY)` per `09-VERIFICATION.md:16`, which the builder is forbidden to edit.
+
