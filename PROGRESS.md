@@ -948,3 +948,28 @@ re-derived in detail sessions 11–14 and reproduced failing this run.
 (4) add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`. **Recommendation unchanged: halt builder re-invocation** —
 15 independent sessions reproduce the identical 163/167; only founder edits to the four sealed one-liners advance doc00.
 Session ends per the SPEC_BLOCKED protocol.
+
+### Session 16 (2026-07-18) — 16th confirmation; 163/167; the last plausible ten_001 escape hatch (`created_by`→FK) probed and proven dead
+
+Sixteenth builder. Ground truth first: `pytest -q -p no:randomly tests/doc00/` = **163 passed / 4 failed**
+(reg_002, obs_006, inv_010, ten_001 — identical set); `git status` clean. Rather than restate the prior 15
+derivations, this session adversarially closed the one ten_001 escape hatch prior logs asserted but never showed
+they had checked: `_reaches_tenant_id` (test_m15_ten.py:116) passes any table with a **declared FK to a
+tenant-reaching table**, and adding an FK constraint on an *existing* column does NOT change `operation_runs`'s
+strict column set (sub_001:82) — so `created_by`→`users(id)` looked like a product-side fix that keeps sub_001 green.
+
+**Probed and proven dead this session (new evidence, not in sessions 1–15):** `operation_runs.created_by` holds the
+**owner instance-id**, a free worker string — sub_036 (GREEN, `test_m03_sub.py:1345`) asserts `created_by ==
+instance_id` and W02 (GREEN, `test_w_workflows.py:74`) writes `created_by == "inst-A"`. It is `text`, not `uuid`,
+and no `users` row `"inst-A"` exists, so an FK `created_by REFERENCES users(id)` (a) is a type mismatch and (b)
+would fail those two GREEN tests with a foreign-key violation. `scope_id` holds free text (`"workroom:t1"`), so a
+`→meetings(id)` FK breaks W02/W03/W06/W12. No other of the 12 pinned columns is a tenant-reaching FK candidate, and
+the strict set forbids adding one. **ten_001 is genuinely builder-unfixable — the sealed `NON_SCOPED` omission is
+the only fix**, exactly as sessions 8–15 concluded.
+
+reg_002 / obs_006 / inv_010 unchanged (language-level `get_args(Enum)==()`, absolute-path re-root, text-into-uuid
+seed). **Founder fixes (one line each, unchanged):** (1) reg_002:77 → `set(m.value for m in MessageType) ==
+set(CHANNEL_REGISTRY)`; (2) obs_006 read the absolute path directly; (3) inv_010 seed a real uuid; (4) add
+`operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`. **Recommendation unchanged: halt builder re-invocation.**
+No sealed/test/threshold/golden/arbiter touched; no route-around; nothing built speculatively. Session ends per the
+SPEC_BLOCKED protocol.
