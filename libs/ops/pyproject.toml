@@ -3,7 +3,7 @@ name = "ops"
 version = "0.0.0"
 description = "libs.ops — durable substrate (operation_runs, claim, reconcile)."
 requires-python = ">=3.12"
-dependencies = ["contracts", "db", "pydantic>=2"]
+dependencies = ["contracts", "db", "pydantic>=2", "structlog>=24"]
 
 [tool.uv.sources]
 contracts = { workspace = true }

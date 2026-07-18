@@ -1,20 +1,31 @@
 """Repo-root pytest configuration.
 
-Keeps ``services`` a namespace package (no ``services/__init__.py``) so importing
-a service never writes ``services/__pycache__`` — which would otherwise show up
-as a sixth entry under ``services/`` and break the exact-set check in
-``tests/doc00/test_m01_repo.py::test_repo_006``.
+Two responsibilities, both environment wiring (no product code lives here):
 
-The harness-hosted ``control_plane`` deployable-assembly (webhooks, accept,
-authz, boot server) is exposed at the ``services.control_plane`` import path by
-extending the ``services`` namespace ``__path__`` to include
-``services/harness/src`` (where the assembly lives). AC-REPO-006 fixes
-``services/*`` to exactly five directories, so ``control_plane`` can never be a
-sixth ``services/`` directory — it is a package-config exposure only.
+1. ``services`` stays a namespace package (no ``services/__init__.py``) so
+   importing a service never writes ``services/__pycache__`` — which would
+   otherwise appear as a sixth entry under ``services/`` and break the exact-set
+   check in ``tests/doc00/test_m01_repo.py::test_repo_006``. The harness-hosted
+   ``control_plane`` deployable-assembly is exposed at ``services.control_plane``
+   by extending the namespace ``__path__`` to ``services/harness/src`` (where the
+   assembly lives). AC-REPO-006 fixes ``services/*`` to exactly five directories,
+   so ``control_plane`` is a package-config exposure only, never a sixth dir.
+
+2. The Doc-00 durable-substrate tests (tests/doc00/test_m03_sub.py) exercise a
+   real Postgres via ``_support._local_dsn()`` / ``pg_conn()``. Most bodies SKIP
+   when no local database is reachable, but ``test_sub_014`` connects directly
+   and REQUIRES one. This module makes the suite self-sufficient on the build
+   host: if ``TEST_DATABASE_URL`` is not already set, it reuses (or, best-effort,
+   provisions and starts) a throwaway local Postgres and exports the DSN so the
+   substrate is verified for real. Everything here is wrapped so a missing
+   Postgres toolchain never breaks collection — the DB-optional tests then skip.
 """
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
+import time
 
 
 def _wire_control_plane() -> None:
@@ -29,4 +40,87 @@ def _wire_control_plane() -> None:
         services.__path__ = current + [harness_src]  # type: ignore[attr-defined]
 
 
+# Throwaway local test-Postgres coordinates (build host only).
+_PG_DATA = "/tmp/proxy_pgtest/data"  # noqa: S108 - ephemeral test fixture dir
+_PG_SOCK = "/tmp/proxy_pgtest/sock"  # noqa: S108
+_PG_PORT = "55432"
+_PG_USER = "proxy"
+_PG_DB = "proxy_test"
+_PG_DSN = f"postgresql://{_PG_USER}@localhost:{_PG_PORT}/{_PG_DB}"
+
+
+def _dsn_reachable(dsn: str) -> bool:
+    try:
+        import psycopg
+    except Exception:
+        return False
+    try:
+        conn = psycopg.connect(dsn, connect_timeout=2)
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+def _find_pg_bin() -> str | None:
+    for candidate in (
+        "/Library/PostgreSQL/18/bin",
+        "/Library/PostgreSQL/17/bin",
+        "/Library/PostgreSQL/16/bin",
+        "/Library/PostgreSQL/15/bin",
+        "/opt/homebrew/opt/postgresql@15/bin",
+        "/usr/lib/postgresql/15/bin",
+    ):
+        if os.path.exists(os.path.join(candidate, "pg_ctl")):
+            return candidate
+    pg_ctl = shutil.which("pg_ctl")
+    return os.path.dirname(pg_ctl) if pg_ctl else None
+
+
+def _ensure_local_postgres() -> None:
+    # An explicit, already-usable DSN always wins.
+    if os.environ.get("TEST_DATABASE_URL", "").strip():
+        return
+    if _dsn_reachable(_PG_DSN):
+        os.environ["TEST_DATABASE_URL"] = _PG_DSN
+        return
+
+    pg_bin = _find_pg_bin()
+    if pg_bin is None:
+        return  # no toolchain — DB-optional tests will skip
+
+    try:
+        os.makedirs(_PG_SOCK, exist_ok=True)
+        if not os.path.exists(os.path.join(_PG_DATA, "PG_VERSION")):
+            os.makedirs(_PG_DATA, exist_ok=True)
+            subprocess.run(
+                [os.path.join(pg_bin, "initdb"), "-D", _PG_DATA, "-U", _PG_USER,
+                 "--auth=trust"],
+                check=True, capture_output=True, text=True, timeout=120,
+            )
+        subprocess.run(
+            [os.path.join(pg_bin, "pg_ctl"), "-D", _PG_DATA, "-o",
+             f"-k {_PG_SOCK} -p {_PG_PORT} -c listen_addresses=localhost",
+             "-w", "-l", "/tmp/proxy_pgtest/run.log", "start"],  # noqa: S108
+            check=False, capture_output=True, text=True, timeout=60,
+        )
+        for _ in range(20):
+            if _dsn_reachable(f"postgresql://{_PG_USER}@localhost:{_PG_PORT}/postgres"):
+                break
+            time.sleep(0.5)
+        subprocess.run(
+            [os.path.join(pg_bin, "createdb"), "-h", _PG_SOCK, "-p", _PG_PORT,
+             "-U", _PG_USER, _PG_DB],
+            check=False, capture_output=True, text=True, timeout=30,
+        )
+        if _dsn_reachable(_PG_DSN):
+            os.environ["TEST_DATABASE_URL"] = _PG_DSN
+    except Exception:
+        return  # best-effort; DB-optional tests skip if this failed
+
+
 _wire_control_plane()
+try:
+    _ensure_local_postgres()
+except Exception:
+    pass

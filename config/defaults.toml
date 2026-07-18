@@ -1,0 +1,23 @@
+# Proxy tunables — one value + unit + range per key; code reads this file.
+# Env overrides are for secrets/seats only (never these operational tunables).
+
+[ops]
+# A running operation_runs row whose last_heartbeat_at is older than this many
+# seconds is considered orphaned and swept to 'interrupted' (lazy on read + boot
+# bulk sweep + reconcile cron). unit: seconds. range: 10..300.
+stale_after_s = 40
+# Heartbeat cadence for a live owner's fencing UPDATE. unit: seconds. range: 1..30.
+heartbeat_s = 10
+# Reconcile cron cadence (scale-to-zero safe). unit: seconds. range: 60..900.
+reconcile_interval_s = 300
+
+[sandbox]
+# E2B-native sandbox timeout backstop set at provision. unit: seconds. range: 300..7200.
+timeout_s = 3600
+# TTL past which the reconcile sweep destroys a leaked sandbox. unit: seconds. range: 300..7200.
+ttl_s = 3600
+
+[stt]
+# In-process STT credential refresh cadence (availability-critical; never the
+# reconcile cron). unit: seconds. range: 60..3600.
+refresh_interval_s = 600
