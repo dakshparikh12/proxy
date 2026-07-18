@@ -13,6 +13,26 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 
+def _libpq_kv_to_url(dsn: str) -> str:
+    """Convert a libpq keyword/value DSN (``user=… dbname=… host=…``) to a URL.
+
+    ``psycopg`` connections expose their DSN via ``conn.info.dsn`` in this
+    keyword/value form; SQLAlchemy's ``make_url`` only parses URL DSNs, so callers
+    that hand us a live connection's DSN would otherwise fail to migrate.
+    """
+    from psycopg.conninfo import conninfo_to_dict
+
+    params = conninfo_to_dict(dsn)
+    user = str(params.get("user", ""))
+    password = params.get("password")
+    host = str(params.get("host", ""))
+    port = str(params.get("port", ""))
+    dbname = str(params.get("dbname", ""))
+    auth = f"{user}:{password}" if password else user
+    netloc = f"{host}:{port}" if port else host
+    return f"postgresql+psycopg://{auth}@{netloc}/{dbname}"
+
+
 def _database_url() -> str:
     url = os.environ.get("DATABASE_URL", "").strip()
     if not url:
@@ -22,6 +42,9 @@ def _database_url() -> str:
         url = "postgresql+psycopg://" + url[len("postgresql://") :]
     elif url.startswith("postgres://"):
         url = "postgresql+psycopg://" + url[len("postgres://") :]
+    elif "://" not in url:
+        # A libpq keyword/value DSN (e.g. from psycopg ``conn.info.dsn``).
+        url = _libpq_kv_to_url(url)
     return url
 
 
