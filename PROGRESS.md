@@ -2598,3 +2598,21 @@ founder — one-liners unchanged and must land together (`verify.sh` runs `-x --
 re-stalls one milestone later): (1) reg_002 → `{m.value for m in MessageType} == set(CHANNEL_REGISTRY)`;
 (2) obs_006 → read the absolute glob path directly (no `split("/")` re-root); (3) inv_010 → seed a real uuid
 tenant id; (4) ten_001 → add `operation_runs` to `NON_SCOPED`. Session ends.
+
+### Builder session 59 (2026-07-18) — 59th confirmation at HEAD f44b35e; 163/167; halt reaffirmed
+Fresh session, ground truth re-derived not trusted. Clean tree at HEAD `f44b35e` ("locked plan");
+`pytest -q tests/doc00/` → **163 passed, 4 failed** — the identical sealed four. `harness/verify.sh` exit **1**
+(ruff/mypy/bandit clean; `pytest -x --maxfail=1` halts at the first sealed red, reg_002/M11). Re-read all four
+predicates verbatim (none founder-fixed): reg_002 (`test_m10_reg.py:77` `get_args(MessageType)==()` for the
+CANONICAL Enum → union∅ ≠ non-empty `CHANNEL_REGISTRY` {connect-repo, invite-proxy, approve-draft},
+language-unsatisfiable); obs_006 (`test_m11_obs.py:243` `scripts[0].split("/")`+re-root of an ABSOLUTE glob hit
+→ `""` → `:244` fails regardless of `deploy/harden.sh` content); inv_010 (`test_m13_inv.py:527` `"tenant-OFF"`
+INSERTed at `:546` into a `uuid` tenant column → InvalidTextRepresentation before `run_reconcile_sweep` runs);
+ten_001 (`test_m15_ten.py:179` `unscoped==['operation_runs']`; `operation_runs` pinned to 12 tenant-less cols by
+`test_m03_sub.py:82`, `scope_id text` — no legal FK to `tenants`, irreducible cross-test contradiction). All four
+fixes live under `tests/` (guard `PROTECTED[0]=="tests/"` + runner integrity hash) ⇒ builder-forbidden; no product
+edit is correct; no route-around; no test weakened; nothing buildable remains in libs/services. SPEC_BLOCKED
+stands; SB-1..SB-4 remain routed to a founder — one-liners unchanged and must land together (`verify.sh` `-x
+--maxfail=1`, so any single fix re-stalls one milestone later): (1) reg_002 → `{m.value for m in MessageType} ==
+set(CHANNEL_REGISTRY)`; (2) obs_006 → read the absolute glob path directly (no `split("/")` re-root); (3) inv_010
+→ seed a real uuid tenant id; (4) ten_001 → add `operation_runs` to `NON_SCOPED`. Session ends.
