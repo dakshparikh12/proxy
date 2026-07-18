@@ -267,3 +267,14 @@ an existing `operation_runs` column, e.g. `created_by → users`, preserving the
 
 ADJUDICATION: DEFER test_m10_reg.py::test_reg_002_assert_registry_closed_passes_when_set_equal — CANONICAL-DECISIONS §1 (line 18) locks `MessageType` as an `Enum` (AC-REG-004), while 00-FOUNDATION line 303 / AC-REG-002 require `set(get_args(MessageType)) == set(CHANNEL_REGISTRY)`; since `typing.get_args()` of any Enum is `()` by Python's language definition and `CHANNEL_REGISTRY` is non-empty, the two frozen spec decisions are mutually unsatisfiable by every conforming product, and only a founder spec change (Enum→Literal, or the predicate→`{m.value for m in MessageType}`) can resolve it.
 
+
+DEFERRED (builder + debugger both stuck) — plumb later: tests/doc00/test_m13_inv.py::test_inv_010_offboarding_sweep_deletes_tenant_rows_and_gcs_prefixes
+sktop/proxy/tests/doc00/test_m11_obs.py:198: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/doc00/test_m13_inv.py::test_inv_010_offboarding_sweep_deletes_tenant_rows_and_gcs_prefixes
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed, 142 passed, 2 deselected, 1 warning in 10.12s
+
