@@ -404,6 +404,28 @@ def independent_check(doc: str, prompt: str, expect: str) -> tuple[bool, str]:
     return (expect in out), out[-3000:]
 
 
+def merge_sweep_parts(doc: str) -> None:
+    """Merge sweep-gap-closure addenda from staging/<doc>/parts/ into the existing
+    sealed bundle at acceptance/<doc>/. Appends new requirements and criteria without
+    overwriting the existing content. If the staging dir has a complete bundle at
+    staging/<doc>/acceptance/<doc>/, promote() already handles it — this function
+    handles the parts/ patch files that sweeps produce."""
+    parts = STAGING / doc / "parts"
+    if not parts.exists():
+        return
+    target = bundle_dir(doc)
+    for suffix, subdir, fname in [
+        (".reqs.yaml", "requirements", "requirements.yaml"),
+        (".crit.yaml", "criteria", "criteria.yaml"),
+    ]:
+        for patch in sorted(parts.glob(f"*{suffix}")):
+            dst = target / subdir / fname
+            if dst.exists():
+                with dst.open("a") as f:
+                    f.write("\n" + patch.read_text())
+                log(f"[{doc}] merged sweep part {patch.name} -> {dst.relative_to(ROOT)}")
+
+
 def run_doc(doc: str) -> str:
     log(f"########## {doc} ({DOCS[doc]['spec']}) ##########")
     sdir = STAGING / doc
@@ -506,7 +528,11 @@ def run_doc(doc: str) -> str:
         log(f"[{doc}] sweep found gaps — extending criteria + evidence, rebuilding")
         agent("gen_criteria.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]})
         agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]})
-        if not coverage_gate(doc, (sdir / "acceptance" / doc) if (sdir / "acceptance" / doc).exists() else ROOT / "acceptance" / doc):
+        # Merge sweep-gap-closure addenda (staging parts/) into the existing sealed bundle
+        # instead of expecting a complete fresh bundle at staging/acceptance/.
+        merge_sweep_parts(doc)
+        sealed = bundle_dir(doc)
+        if not coverage_gate(doc, sealed):
             return "COVERAGE_GATE_FAILED_POST_SWEEP"
         promote(doc); seal(doc); git_commit(f"{doc}: sweep-extended arbiter re-sealed")
         if build_loop(doc) != "GREEN":
