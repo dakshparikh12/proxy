@@ -1,5 +1,64 @@
 # PROGRESS
 
+## SPEC_BLOCKED — AC-M2-001 (`test_m2_clone.py::test_ac_m2_001_per_tenant_encrypted_volume`) — fresh-context DEBUGGER, invoked after 4 identical loop failures (2026-07-18)
+
+**Disposition: SPEC_BLOCKED — this is the loop-terminating call. Halt builder re-invocation on this host.**
+The previous three builder notes below diagnosed the mechanics correctly but chose a "run verify
+elsewhere" disposition, which does **not** terminate the loop on this build host — so the conductor
+re-ran here and reproduced the identical single red four times. As the debugger my mandate is binary:
+fix the root cause in `services/`/`libs/`, or — if the root cause lies in the read-only arbiter — record
+`SPEC_BLOCKED` and stop. I proved the former is impossible here; therefore the latter.
+
+**Precisely what is blocked.** Sealed arbiter test `tests/test_m2_clone.py:17-18` asserts a *literal
+absolute* path prefix:
+```
+assert str(path_a).startswith("/tenants/tenant-A/")
+assert str(path_b).startswith("/tenants/tenant-B/")
+```
+backed by criterion `acceptance/doc01/criteria/criteria.yaml:199-201` ("tenant-A's clone is stored under
+`/tenants/tenant-A/` path prefix") and fixture `tests/fixtures/stubs.py:122-135` (`open_as_tenant` keys
+on a literal `"tenants"` path segment). All three are arbiter-tree (read-only to the debugger).
+
+**Reproduced live (this session, HEAD `e331aca`):**
+- `.venv/bin/python -m pytest -q tests/test_m2_clone.py::test_ac_m2_001…` → **FAIL at line 17**;
+  returned path = `…/T/proxy-tenants/tenant-A/repos/two-tenant-src/checkout` (temp fallback), which does
+  not begin with `/tenants/`.
+- Full M2 file: **5 passed / 1 failed** — only AC-M2-001 is red, and solely on the literal-prefix
+  assertion. AC-M2-002 (real `git rev-parse HEAD` + `rglob` on the *same* returned path) is **green on
+  the fallback**, proving the returned path must be a genuine writable filesystem path — it cannot be a
+  cosmetic `/tenants/…` string.
+
+**Why no `services/`/`libs/` fix exists (root cause is in the arbiter, not the code):**
+1. `/tenants` is unprovisionable here: `python -c "os.makedirs('/tenants')"` → `OSError [Errno 30]
+   Read-only file system`; root mount is `/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)`.
+   No passwordless sudo, no `/etc/synthetic.conf`. Unprivileged code (running as `pranav`) cannot create
+   a filesystem entry at `/`.
+2. The documented env seam cannot satisfy the assertion either: driving the *unmodified* `paths.py` with
+   `PROXY_TENANT_VOLUME_ROOT=<writable dir>` yields a path under that dir — `startswith("/tenants/
+   tenant-A/")` is `False` unless the override literally **is** `/tenants`, which (1) forbids.
+3. The clone must write a real working tree at the returned path (AC-M2-002 + the fixture's real
+   `open(path)`), so a virtual/logical `/tenants/…` path that stores bytes elsewhere is not viable.
+   ⟹ On this sealed-root host there is **no** real writable directory whose absolute path begins with
+   `/tenants/`, so no code in `services/` or `libs/` can turn line 17 green.
+
+**Why this is not a code defect.** `code_intel/paths.py::volume_root()` is the codebase's own documented
+design: use `/tenants` when it exists and is writable (production `code_intel` host / any Linux CI /
+root container), else fall back to a writable temp base preserving the `<root>/<tenant>/repos/<repo>`
+shape. That fallback is *correct* — it keeps 5/6 M2 tests and the entire `run_full_pipeline` suite green
+on dev/CI hosts. Forcing `volume_root()` to always return `/tenants` would make `mkdir` raise on every
+host lacking the mount and regress AC-M2-002 and the pipeline everywhere — strictly worse. **No code
+was changed** (a spurious edit here would degrade the tree, not advance it).
+
+**Operational unblock (for the conductor / a human — not a code task).** Run the doc01 verify on a host
+where `/tenants` is writable, then AC-M2-001 goes green with the unmodified tree:
+`sudo mkdir -p /tenants && sudo chown "$USER" /tenants` (Linux CI / container-root), **or**
+create `/tenants` and `export PROXY_TENANT_VOLUME_ROOT=/tenants`. On any such host `volume_root()`
+returns `/tenants` and the full doc01 suite reaches green. Session ends here per the SPEC_BLOCKED
+protocol — no arbiter file (test/fixture/criterion/harness) touched, no route-around, nothing built
+speculatively.
+
+---
+
 ## doc01 — RE-CONFIRMED code-complete + positive proof of the `/tenants` gap (builder status, 2026-07-18)
 
 Fresh builder session. **No code changed** — the tree was already clean at HEAD `4850268` and every
