@@ -1494,3 +1494,44 @@ re-derive all four in prose, I opened the sealed binding block (reg_002, the FIR
 (3) `inv_010` seed a real uuid tenant id; (4) add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`.
 **Recommendation unchanged, 31× reproduced: halt builder re-invocation.** No sealed file touched; no route-around;
 nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
+
+### Session 32 (2026-07-18) — DEBUGGER (fresh context); reg_002 root-caused from primary source, not prose
+
+Fresh-context debugger invoked because the loop failed with the IDENTICAL red 4× (build sessions 1–5 in
+`orchestrator/run.log`, each `DEFERRED test_reg_002…`). I distrusted the 31-session prose chain and re-derived
+reg_002 independently, three ways. It is the FIRST red under `verify.sh -x --maxfail=1`, so it alone halts the pass.
+
+**Reproduced (live, this session):**
+`.venv/bin/python -m pytest -q -p no:randomly tests/doc00/test_m10_reg.py -k "reg_002 or reg_005"` →
+`1 failed, 1 passed`. reg_002 fails with `union-only=set(), registry-only={'approve-draft','connect-repo','invite-proxy'}`;
+reg_005 passes. So MessageType is currently the Enum reg_005 mandates, and reg_002's own `get_args` line is the red.
+
+**Root cause (SEALED-TEST CONTRADICTION, unresolvable in `libs/`/`services/`):**
+- `test_m10_reg.py:75` `union = {str(m) for m in get_args(MessageType)}`; `:77` `assert union == registry`.
+- `test_m10_reg.py:211` (reg_005) `assert isinstance(MessageType, type) and issubclass(MessageType, enum.Enum)`.
+- Language probe (`.venv/bin/python`): for any Enum class `get_args(cls) == ()` while `isinstance(cls,type)` and
+  `issubclass(cls,Enum)` are both True; for a `Literal`/`Union` `get_args` is non-empty but `isinstance(…,type)` is
+  False. **No object satisfies reg_002:75 (get_args non-empty) AND reg_005:211 (type + Enum-subclass) at once.**
+- Therefore reg_002:75 `union` is *unconditionally* `set()`. For `:77` to pass, `{str(k) for k in CHANNEL_REGISTRY}`
+  would have to be empty too — but reg_001, reg_004, and reg_002's own first assertion `assert_registry_closed()`
+  require the 3 canonical keys present. So `set() == {3 keys}` can never hold. No `libs/`/`services/` edit can move it.
+
+**Product code is correct and already does the right thing.** `libs/contracts/src/contracts/registry.py`
+`assert_registry_closed()` compares enum `.value`s to the registry keys (`_closure_values`), so reg_002's FIRST
+assertion (and reg_003) pass. Nothing in product code can change what the builtin `get_args()` returns for an Enum,
+which is the only lever the failing SECOND assertion depends on.
+
+**NEW primary-source evidence the prior 31 entries did not cite:** the SAME sealed file, `test_m10_reg.py:251`, does
+`a_known = str(get_args(MessageType)[0]) if get_args(MessageType) else str(list(MessageType)[0].value)` — the suite's
+own authors branch on `get_args(MessageType)` being **empty** and fall back to `list(MessageType)[0].value`. reg_002:75
+omits that exact fallback. This proves reg_002:75 is an internal test-authoring inconsistency (with reg_005:211 and with
+its own file's line 251), not a product gap.
+
+**SPEC_BLOCKED — named precisely:** `tests/doc00/test_m10_reg.py:75,77` (AC-REG-002) is mutually exclusive with
+`tests/doc00/test_m10_reg.py:211` (AC-REG-005). Both are sealed (arbiter/test tree, `harness/guard.py` + integrity
+hash) and read-only to the builder/debugger. The minimal in-test fix a founder can apply: change `:75` to
+`union = {str(m.value) for m in MessageType}` (mirroring line 251 / the product's `_closure_values`), leaving the
+product untouched. I did NOT edit any sealed/test/fixture/harness/criterion file; no route-around; nothing built
+speculatively. The other three long-standing reds (obs_006, inv_010, ten_001) do not run under `-x` because reg_002
+halts first and were previously located in the sealed test/`_support` tree; reg_002 is the active blocker.
+**Recommendation: halt builder re-invocation; route reg_002:75 (one line) to a founder.** Session ends per protocol.
