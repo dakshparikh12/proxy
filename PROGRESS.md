@@ -132,6 +132,19 @@ later milestone consumes:
   `affinity.route_to_owner` homes are **not** touched by `test_m03_sub`; they are hard-imported by **M12**
   (`test_m11_obs`) and **M14** (`test_m13_inv`) and go green there. Build them at M4 if convenient, but they
   are owned/gated at M12/M14.
+- **`libs.lint`** (naming law, M13 · AC-CON-002): a namespace-exposure seam of the **exact same class as
+  `control_plane` (§3)** — the plan must pin it or a builder mis-homes it. `test_m12_con.py:118` imports the
+  lint via `("libs.lint.naming", "libs.lint", "libs.naming_lint")` and calls an entrypoint in
+  `("check_user_visible_strings","lint_user_visible","run","check")` as `fn(dict)->exit_code`. Root
+  `conftest.py:43–60` (`_wire_libs_lint`) extends `libs.__path__` to **`libs/ops/src` only if
+  `libs/ops/src/lint/` exists** — and **AC-REPO-007 forbids a 7th `libs/` dir** — so the **sole
+  conftest-supported home is `libs/ops/src/lint/`** (single-concern, inside the existing `libs/ops`),
+  exposed at the `libs.lint`/`libs.lint.naming` import path. Entrypoint
+  `check_user_visible_strings(strings: dict) -> int` (0 clean; non-zero if any user-visible value contains an
+  internal name Orchestrator/Scribe/workroom). **Never create a `libs/lint/` dir** (reds the already-green
+  `test_m01_repo`/AC-REPO-007 under `-x`) and **never home it under `services/`** (it passes the
+  `grep_python` product-source check at `test_m12_con.py:109–113` but the `libs.lint*` import at `:117–130`
+  will not resolve).
 - **M4 service surface** (`test_m03_sub` **hard-imports** these exact paths — no try/except fallback, so
   load-bearing): `services.harness.{build_emitter, recover_meeting_harness, ingest_webhook,
   drain_pending_webhooks, check_meeting_budget, complete_signin, resolve_session (:1078), invite_proxy,
@@ -291,8 +304,10 @@ flag/base class/defensive branch a criterion doesn't demand** (V0 has zero runti
   script, then **stop the pass and escalate `obs_006` alone** (founder fix = fix the `:243` read path) — never
   edit the sealed test. *Criteria:* AC-OBS-001..010 (006 blocked).
 - **M13 — Constitution (`test_m12_con`, 4).** Root `CLAUDE.md`: every hard rule names its guard; no internal
-  names in user strings (product=Proxy); tool handlers return errors never throw; external calls wrapped
-  retry+telemetry. *Criteria:* AC-CON-001..004.
+  names in user strings (product=Proxy) — enforced by the **naming lint homed at `libs/ops/src/lint/`, exposed
+  as `libs.lint.naming` with entrypoint `check_user_visible_strings(dict)->int`** (§1 `libs.lint` seam; the dir
+  must exist so `conftest._wire_libs_lint` extends `libs.__path__`; never a `libs/lint/` dir — AC-REPO-007);
+  tool handlers return errors never throw; external calls wrapped retry+telemetry. *Criteria:* AC-CON-001..004.
 - **M14 — Consolidated invariants (`test_m13_inv`, 13; R4) — ⚠ SB-4 (AC-INV-010).** Two honest cost meters
   (**A-006**); pre-dispatch estimate gate; **lethal-trifecta** (no transcript→side-effect without a click);
   transcript fenced untrusted; world-touching in `disallowed_tools`; core apply = code-change draft not push;
@@ -496,6 +511,41 @@ change. The sole substantive edit is the M16 minimality clause (CR-M-2). **Hand-
 M13 + M15 + M17 → `subagent-driven-build`; **M11/M12/M14/M16 build everything buildable in-file, then stop the
 pass and escalate their sealed defect (reg_002 / obs_006 / inv_010 / ten_001) to the conductor — never weaken
 or edit the sealed test; the four founder one-liners land together.**
+
+### Review deltas — session-6 fresh-context `planner-reviewer` re-pass (folded; ONE IMPORTANT — a load-bearing seam the plan never pinned)
+
+Verdict: **LOCK-ready after folding one IMPORTANT seam omission; no BLOCKER.** The reviewer independently
+re-derived at primary source and confirmed everything the five prior sessions held: coverage (155 exact, all
+16 prefixes to the integer — CMP 16 · REPO 9 · HOST 14 · SUB 37 · BOOT 7 · CFG 11 · IAC 6 · DOCK 4 · CI 7 ·
+DB 4 · REG 6 · OBS 10 · CON 4 · INV 13 · BLD 3 · TEN 4; 24 P0; manifest `counts.criteria:154` stale-by-one);
+the M1→M17 order (lexicographic collection puts `test_m15_ten`=M16 before `test_w_workflows`=M17 since
+`'m'<'w'`; M17 = 0 new criteria); the `-x` masking chain reg_002(M11) < obs_006(M12) < inv_010(M14) <
+ten_001(M16); **all four SPEC_BLOCKED calls genuine, neither over- nor under-claimed** (SB-1 `get_args` on the
+Enum is `()` while `reg_004` keeps the registry non-empty; SB-3 `_support.glob` absolute-path re-root at
+`test_m11_obs.py:243`; SB-4 non-uuid `"tenant-OFF"` into a uuid tenant column; SB-2 `operation_runs`
+12-col-pin + text `scope_id` ⇒ no legal FK, `_reaches_tenant_id` at `test_m15_ten.py:116–140`); the §3
+`control_plane` seam (`conftest.py:31–40` extends `services.__path__` to `services/harness/src` only); and the
+I-1 dual-convention resolution. Folded:
+
+- **[IMPORTANT CR-6-1] The `libs.lint` naming-lint home was never pinned in the plan proper (§1/§3/M13) —
+  a namespace-exposure seam of the exact same class as `control_plane`.** `test_m12_con.py:118` imports the
+  lint via `("libs.lint.naming","libs.lint","libs.naming_lint")` with entrypoint
+  `check_user_visible_strings(dict)->exit_code` (`:123–142`); root `conftest.py:43–60` (`_wire_libs_lint`)
+  extends `libs.__path__` to `libs/ops/src` **only if `libs/ops/src/lint/` exists** (`:54`), and AC-REPO-007
+  (`criteria.yaml:480–499`) forbids a 7th `libs/` dir — so the **sole conftest-supported home is
+  `libs/ops/src/lint/`**. A builder handed only §0–§8 would create `libs/lint/` (re-redding the already-green
+  `test_m01_repo`/AC-REPO-007 under `-x` — a confusing cross-milestone failure) or home it under `services/`
+  (passing the `grep_python` at `:109–113` but failing the `libs.lint*` import at `:117–130`); the build log
+  itself had to rediscover this as a transparency note (session-7), proving it was never pinned. → §1 gains a
+  `libs.lint` seam bullet (home `libs/ops/src/lint/`, exposed `libs.lint.naming`, entrypoint
+  `check_user_visible_strings(strings: dict) -> int`, never a `libs/lint/` dir, never under `services/`);
+  M13 bullet updated to name the home.
+
+**Plan RE-LOCKED (session-6).** No milestone reorder; no coverage change; no SB-register change. The sole
+substantive edit is the `libs.lint` seam (CR-6-1). **Hand-off unchanged:** M1–M10 + M13 + M15 + M17 →
+`subagent-driven-build`; **M11/M12/M14/M16 build everything buildable in-file, then stop the pass and escalate
+their sealed defect (reg_002 / obs_006 / inv_010 / ten_001) to the conductor — never weaken or edit the sealed
+test; the four founder one-liners land together.**
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
 > **⛔ SUPERSEDED (session-4 planner re-lock) — DO NOT ACT ON THIS NOTE.** Its premise ("no `SPEC_BLOCKED`
