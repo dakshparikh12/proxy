@@ -2299,3 +2299,17 @@ No sealed/test/fixture/support/harness/CANONICAL file touched; no product edit m
 route-around; no test weakened. **The 50-session SPEC_BLOCKED verdict is CONFIRMED by independent debugging.**
 The four are one-line **founder** fixes to sealed tests and must land together (`-x --maxfail=1` re-stalls after
 any single fix). Halt builder/debugger re-invocation; route SB-1..SB-4 to a founder. Debugger session ends.
+
+### Builder session 51 (2026-07-18) — independent primary-source re-confirmation at HEAD 2e98832; 163/167; halt reaffirmed
+
+Fresh builder session. Oriented, then reproduced ground truth without trusting prior prose:
+`.venv/bin/python -m pytest -q -p no:randomly tests/doc00/` at clean HEAD `2e98832` (`git status --porcelain`
+empty) → **163 passed, 4 failed** — the identical sealed four: reg_002 (SB-1), obs_006 (SB-3), inv_010 (SB-4),
+ten_001 (SB-2). Independently re-derived SB-2 from primary source: `test_m15_ten.py:111`
+`NON_SCOPED = {"tenants","sessions","alembic_version"}` omits `operation_runs`, so ten_001 requires it to reach
+`tenant_id`; but `test_m03_sub.py:82` asserts `operation_runs` columns `== _OPRUN_COLS` exactly (canonical set has
+`scope_id text`, no `tenant_id`, per `0001_substrate.py:84-97`). The two sealed tests are mutually exclusive — no
+product/DDL edit satisfies both; the fix is confined to a builder-forbidden test file (`harness/guard.py:14`
+`PROTECTED` begins with `"tests/"` + `runner.py` integrity hash). Nothing buildable remains in `libs/`/`services/`.
+No sealed/test/fixture/harness/CANONICAL file touched; no product edit; no route-around; no test weakened.
+**SPEC_BLOCKED verdict re-confirmed (51st reproduction); route SB-1..SB-4 to a founder. Session ends.**
