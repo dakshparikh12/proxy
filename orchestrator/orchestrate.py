@@ -414,6 +414,7 @@ def merge_sweep_parts(doc: str) -> None:
     if not parts.exists():
         return
     target = bundle_dir(doc)
+    consumed = []
     for suffix, subdir, fname in [
         (".reqs.yaml", "requirements", "requirements.yaml"),
         (".crit.yaml", "criteria", "criteria.yaml"),
@@ -424,6 +425,11 @@ def merge_sweep_parts(doc: str) -> None:
                 with dst.open("a") as f:
                     f.write("\n" + patch.read_text())
                 log(f"[{doc}] merged sweep part {patch.name} -> {dst.relative_to(ROOT)}")
+                consumed.append(patch)
+    # Consume parts files so a rerun doesn't re-detect them as pending work
+    for p in consumed:
+        p.unlink()
+        log(f"[{doc}] consumed (removed) {p.name}")
 
 
 def run_doc(doc: str) -> str:
@@ -463,7 +469,11 @@ def run_doc(doc: str) -> str:
         log(f"[{doc}] P3 generate evidence layer (tests/fixtures/sims/goldens -> staging)")
         agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]})
     # P4: gate + promote + seal (THIS process, deterministic)
-    base = (sdir / "acceptance" / doc) if (sdir / "acceptance" / doc).exists() else bundle_dir(doc)
+    # Prefer the staging bundle only if it has actual content (requirements file); otherwise
+    # fall back to the already-sealed bundle_dir (handles idempotent reruns where staging is
+    # an empty shell left over from a prior promote).
+    staged = sdir / "acceptance" / doc
+    base = staged if (staged / "requirements" / "requirements.yaml").exists() else bundle_dir(doc)
     if not coverage_gate(doc, base):
         return "COVERAGE_GATE_FAILED"
     promote(doc)
