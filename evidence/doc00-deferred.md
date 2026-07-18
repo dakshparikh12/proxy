@@ -183,3 +183,14 @@ rt_registry_closed_passes_when_set_equal — CANONICAL-DECISIONS.md:18 locks `Me
 DEFERRED (genuinely spec-blocked, needs founder spec fix): to a founder. Session ends per the SPEC_BLOCKED protocol.
 py:211-214`) forces `MessageType` to be an `enum.Enum` with members, but `typing.get_args()` returns `()` for any Enum class at the CPython language level (verified live), so reg_002:75 `union = {str(m) for m in get_args(MessageType)}` is unconditionally `∅` while reg_002:76 `registry` holds the 3 mandatory CANONICAL keys, making `:77 assert union == registry` unsatisfiable by any product code; the product's own `assert_registry_closed()` already implements the closure correctly, the "both-empty" path is barred by closure semantics + reg_005's member requirement + the 3 CANONICAL message types, and the sole fix (`:75 → {str(m.value) for m in MessageType}`) touches a PROTECTED sealed test the builder cannot edit — a genuine test-vs-test contradiction only a spec/sealed-test change can fix.
 
+
+DEFERRED (builder + debugger both stuck) — plumb later: tests/doc00/test_m11_obs.py::test_obs_006_one_idempotent_hardening_script_full_control_set
+anav/Desktop/proxy/tests/doc00/test_m11_obs.py:198: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/doc00/test_m11_obs.py::test_obs_006_one_idempotent_hardening_script_full_control_set
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed, 125 passed, 1 deselected, 1 warning in 9.61s
+
