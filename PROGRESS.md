@@ -1995,3 +1995,44 @@ confirmed stuck loop — halt builder re-invocation and route the four sealed on
 land together, else `-x` re-stalls one milestone later after each single fix).** No sealed/test/fixture/support/
 harness/CANONICAL file touched; no route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED
 protocol.
+
+### Session 44 (2026-07-18) — FRESH-CONTEXT DEBUGGER: obs_006 re-derived from scratch; sealed-test read bug; product complete; halt reaffirmed
+
+Invoked as the dedicated debugger after the loop failed 4× on the identical error
+`test_obs_006 … hardening script /Users/pranav/Desktop/proxy/deploy/harden.sh is empty`. I reproduced and
+root-caused from primary source (not the prose chain), then confirmed the product side is genuinely complete.
+
+**SPEC_BLOCKED — named precisely (product-unfixable):** `tests/doc00/_support.py:83-87` (`glob`) does
+`base.rglob(pattern)` on `base = rel(*root_parts) = ROOT.joinpath(...)`, an **absolute** base, so it returns
+**absolute** `pathlib.Path`s. `tests/doc00/test_m11_obs.py:243` then does
+`text = S.read_text(*scripts[0].split("/")) or ""` where `scripts[0] = str(p)` is that absolute path.
+Splitting `/Users/pranav/Desktop/proxy/deploy/harden.sh` on `/` yields
+`['', 'Users', 'pranav', 'Desktop', 'proxy', 'deploy', 'harden.sh']`, which `read_text → rel()` re-anchors onto
+`ROOT` → doubled path `…/proxy/Users/pranav/Desktop/proxy/deploy/harden.sh` → does not exist → `None` → `""`,
+so `:244 assert text.strip()` fails **regardless of the script's real 3359-byte content**. Traced live:
+`S.rel(*scripts[0].split("/")) == /Users/pranav/Desktop/proxy/Users/pranav/Desktop/proxy/deploy/harden.sh`,
+`S.read_text(...) is None`. The suite's own sibling `test_m02_host.py:327` uses the correct idiom
+`S.read_text(*p.relative_to(S.ROOT).parts)`; `:243` simply omits the `.relative_to(S.ROOT)` conversion.
+No product placement can cure an absolute-path re-root — a legitimate `deploy/harden.sh` can never satisfy a
+predicate that reads `<repo>/<repo-abs-path>/deploy/harden.sh`. Both files are under `tests/` →
+`harness/guard.py:14` `PROTECTED` + `runner.py` integrity hash ⇒ builder-forbidden. **Founder one-liner:**
+`test_m11_obs.py:243` → `text = S.read_text(*str(scripts[0].relative_to(S.ROOT)).split("/")) or ""` (or read the
+absolute path directly).
+
+**Product proven complete (this session, verified live).** Because the broken read returns `""`, every prior
+green-looking assertion downstream was never actually exercised — so I replayed the ENTIRE obs_006 body against
+the **real** `deploy/harden.sh` + `infra/` text with a corrected read. All 8 assertions pass: non-empty · all 7
+required controls (`PasswordAuthentication no`, `PermitRootLogin no`, fail2ban, unattended-upgrades, non-root,
+ufw/iptables/nftables, encrypt/luks) · host-firewall-in-script · infra security-group (`firewall.tf`) · E2B-scoped
+· `host_code_exec_path == 0` (no `curl|sh`/eval/exec) · `set -e` · idempotent guards. `git status` clean;
+`deploy/harden.sh` already committed and correct (session 38 removed the forbidden `curl|sh` literal from a
+comment). Nothing buildable remains in `libs/`/`services/` for obs_006.
+
+**Ground truth:** `pytest tests/doc00/test_m11_obs.py::test_obs_006…` → `1 failed in 0.15s`, at `:244`
+`AssertionError: hardening script /Users/pranav/Desktop/proxy/deploy/harden.sh is empty`. Full suite unchanged at
+163/167 (`reg_002`, `obs_006`, `inv_010`, `ten_001` — the identical sealed-defect set from sessions 7–43, all four
+one-liners in `tests/doc00/` + CANONICAL, already recorded in `evidence/doc00-deferred.md`).
+**Recommendation, now 44× reproduced: confirmed stuck loop — halt builder re-invocation and route the four sealed
+one-liners to a founder (all four must land together; `verify.sh` runs `-x --maxfail=1`, so each single fix just
+re-stalls one milestone later).** No sealed/test/fixture/support/harness/CANONICAL file touched; no product change
+needed (product complete); no route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
