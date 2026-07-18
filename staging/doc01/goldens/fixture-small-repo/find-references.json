@@ -1,0 +1,26 @@
+{
+  "_derivation": "stdlib regex \\bhelper\\b occurrence scan (grep-independent of LSP)",
+  "symbol": "helper",
+  "references": [
+    {
+      "file": "pkg/a.py",
+      "line": 1
+    },
+    {
+      "file": "pkg/a.py",
+      "line": 5
+    },
+    {
+      "file": "pkg/b.py",
+      "line": 1
+    },
+    {
+      "file": "pkg/b.py",
+      "line": 5
+    },
+    {
+      "file": "pkg/util.py",
+      "line": 1
+    }
+  ]
+}

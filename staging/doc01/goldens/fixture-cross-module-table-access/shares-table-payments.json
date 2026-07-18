@@ -1,0 +1,8 @@
+{
+  "_derivation": "stdlib scan: top-level modules referencing the shared table model",
+  "table": "payments",
+  "expected_module_ids": [
+    "billing",
+    "reporting"
+  ]
+}

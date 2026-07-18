@@ -1,0 +1,11 @@
+{
+  "_derivation": "stdlib reverse-reachability over the declared call graph",
+  "target": "F",
+  "expected_ids": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E"
+  ]
+}

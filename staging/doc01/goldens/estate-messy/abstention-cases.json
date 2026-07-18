@@ -1,0 +1,18 @@
+{
+  "_derivation": "hand-specified dynamic-dispatch abstention contract (no real repo here)",
+  "_note": "symbols reachable only via dynamic routing must abstain honestly",
+  "cases": [
+    {
+      "symbol": "dispatch_target",
+      "expected_label": "not-found-by-this-method"
+    },
+    {
+      "symbol": "reflectively_called",
+      "expected_label": "lower-bound"
+    }
+  ],
+  "forbidden": {
+    "fabricated_node": true,
+    "fabricated_citation": true
+  }
+}

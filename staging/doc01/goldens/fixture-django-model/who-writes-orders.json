@@ -1,0 +1,18 @@
+{
+  "_derivation": "stdlib ast scan for ORM write markers on a tier-1 stack",
+  "table": "orders",
+  "writers": [
+    {
+      "id": "orders/service.py::cancel_order",
+      "file": "orders/service.py",
+      "line": 8,
+      "confidence": "resolved"
+    },
+    {
+      "id": "orders/service.py::create_order",
+      "file": "orders/service.py",
+      "line": 4,
+      "confidence": "resolved"
+    }
+  ]
+}

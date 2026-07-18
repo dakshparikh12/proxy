@@ -1,0 +1,65 @@
+{
+  "_derivation": "stdlib ast top-level/method declaration walk (maker!=checker)",
+  "declarations": [
+    {
+      "id": "pkg/a.py::some_fn",
+      "kind": "function",
+      "file": "pkg/a.py",
+      "line": 4
+    },
+    {
+      "id": "pkg/b.py::b_fn",
+      "kind": "function",
+      "file": "pkg/b.py",
+      "line": 4
+    },
+    {
+      "id": "pkg/c.py::c_fn",
+      "kind": "function",
+      "file": "pkg/c.py",
+      "line": 4
+    },
+    {
+      "id": "pkg/d.py::d_fn",
+      "kind": "function",
+      "file": "pkg/d.py",
+      "line": 1
+    },
+    {
+      "id": "pkg/e.py::e_fn",
+      "kind": "function",
+      "file": "pkg/e.py",
+      "line": 1
+    },
+    {
+      "id": "pkg/f.py::f_fn",
+      "kind": "function",
+      "file": "pkg/f.py",
+      "line": 1
+    },
+    {
+      "id": "pkg/g.py::g_fn",
+      "kind": "function",
+      "file": "pkg/g.py",
+      "line": 1
+    },
+    {
+      "id": "pkg/h.py::h_fn",
+      "kind": "function",
+      "file": "pkg/h.py",
+      "line": 1
+    },
+    {
+      "id": "pkg/util.py::helper",
+      "kind": "function",
+      "file": "pkg/util.py",
+      "line": 1
+    },
+    {
+      "id": "pkg/util.py::unused_util",
+      "kind": "function",
+      "file": "pkg/util.py",
+      "line": 5
+    }
+  ]
+}
