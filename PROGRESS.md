@@ -1038,3 +1038,23 @@ set(CHANNEL_REGISTRY)`; (2) obs_006 read the absolute path directly (don't `spli
 **Recommendation unchanged: halt builder re-invocation** — 19 independent sessions reproduce the identical
 163/167; only founder edits to the four sealed one-liners advance doc00. No sealed/test/threshold/golden/arbiter
 touched; no route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
+
+### Session 20 (2026-07-18) — 20th confirmation; 163/167; reg_002 + ten_001 re-derived live from sealed lines
+
+Twentieth builder. Ground truth first: `pytest -q -p no:randomly tests/doc00/` = **163 passed / 4 failed**
+(reg_002, obs_006, inv_010, ten_001 — identical set); `git status` clean; no uncommitted work; nothing buildable
+remains. Independently re-derived two blocks this run by opening the exact sealed lines (not the prose):
+- **reg_002** `test_m10_reg.py:75` `union = {str(m) for m in get_args(MessageType)}` — `get_args()` of an Enum is
+  `()` in Python, so `union == set()`; `:77` asserts `union == registry` (3 keys). reg_005 forces the Enum.
+  Language-level unsatisfiable, wholly inside the sealed test body.
+- **ten_001** `test_m15_ten.py:111` `NON_SCOPED = {"tenants","sessions","alembic_version"}` omits `operation_runs`,
+  which GREEN sub_001 pins to 12 tenant-less columns (no `tenant_id`; free-text `scope_id`) — mutually exclusive.
+- **obs_006** / **inv_010** unchanged sealed defects (abs-glob split+re-root onto ROOT; text `'tenant-OFF'` seeded
+  into a `uuid` column → `InvalidTextRepresentation`).
+
+`tests/doc00/` is protected by `harness/guard.py` + the integrity hash, so all four fixes are founder-only.
+**Founder fixes (one line each, unchanged):** (1) reg_002:77 → `set(m.value for m in MessageType) ==
+set(CHANNEL_REGISTRY)`; (2) obs_006 read the absolute path directly; (3) inv_010 seed a real uuid; (4) add
+`operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`. **Recommendation unchanged: halt builder re-invocation** —
+20 independent sessions reproduce the identical 163/167. No sealed/test/threshold/golden/arbiter touched; no
+route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
