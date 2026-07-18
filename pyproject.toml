@@ -49,3 +49,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["harness", ".venv", "node_modules", "fixtures"]
+# doc00 and doc01 each ship a `test_w_workflows.py` / `conftest.py` (no package
+# __init__.py); the default prepend import mode collides on the shared basenames.
+# importlib mode imports each by full path — no sys.path games, no collision.
+addopts = "--import-mode=importlib"
