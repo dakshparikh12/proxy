@@ -20,21 +20,31 @@ earlier file still green. verify.sh also refuses green on zero collected tests.
 **Coverage (RTM re-derived locally against `criteria/criteria.yaml`): 155 criteria, 155/155 mapped to a
 test file, 0 dangling, 0 uncovered.** Per-prefix: CMP 16, REPO 9, HOST 14, SUB 37, BOOT 7, CFG 11, IAC 6,
 DOCK 4, CI 7, DB 4, REG 6, OBS 10, CON 4, INV 13, BLD 3, TEN 4 (= 155). **`manifest.yaml`
-`counts.criteria: 154` is stale-by-one** — the 2nd adversarial review added the P0 `AC-TEN-004` but did
-not bump the count; `criteria.yaml` is source-of-truth and `test_m15_ten.py::test_ten_004` exercises it, so
-this is manifest bookkeeping drift (flag for the conductor), not a coverage gap. **24 P0 criteria** total
+`counts.criteria: 154` is stale-by-one** — the 2nd adversarial review (`manifest.yaml:8`, +5 criteria across
+`AC-SUB-025/027 + AC-TEN-001` …) left the net count un-bumped by one; the specific uncounted `criterion_id`
+is immaterial (identity unverifiable from the manifest note and not load-bearing). `criteria.yaml` is
+source-of-truth (all 155 present and each exercised by its `test_m*` file), so this is manifest bookkeeping
+drift (flag for the conductor), not a coverage gap. **24 P0 criteria** total
 (R2 12 · R3 3 · R4 9 — §2). `test_w_workflows.py` (M17) introduces **no new criterion** — it re-exercises
 existing ones as end-to-end chains.
 
 **SPEC_BLOCKED register (plan-time static contradictions — do NOT weaken or edit the sealed test; build
 everything buildable in the file, then stop the pass and escalate the pair to the conductor):**
 
-- **SB-1 · M11 · AC-REG-002 ⟂ AC-REG-005.** `test_m10_reg.py::test_reg_002` (l.75–76) asserts
-  `{str(m) for m in get_args(MessageType)} == {str(k) for k in CHANNEL_REGISTRY}`, which forces
-  `MessageType` to be a `get_args`-able `Literal`/`Union`; `::test_reg_005` (l.210) asserts
+- **SB-1 · M11 · AC-REG-002 (alone) is unsatisfiable; AC-REG-005 PASSES.** `test_m10_reg.py::test_reg_002`
+  (l.77) asserts `{str(m) for m in get_args(MessageType)} == {str(k) for k in CHANNEL_REGISTRY}`, which
+  forces `MessageType` to be a `get_args`-able `Literal`/`Union`; `::test_reg_005` (l.211) asserts
   `MessageType.__name__=="MessageType"` **and** `issubclass(MessageType, enum.Enum)`, whose `get_args()`
-  is always `()`. With `CHANNEL_REGISTRY` non-empty (`test_reg_004`) **no single `MessageType` object
-  satisfies both** — under `pytest -x` one is always red. Bundle self-contradiction, verified live.
+  is always `()` (the test itself concedes this at l.214). The CANONICAL `MessageType` **is** the Enum
+  (`09-VERIFICATION.md`/`CANONICAL-DECISIONS.md`) — so **reg_005 passes and only reg_002 is irreducibly red**
+  (with `CHANNEL_REGISTRY` non-empty per `test_reg_004`, its `get_args()==()` can never set-equal the
+  registry). Bundle self-contradiction in `reg_002`'s inline predicate, verified live. **The precise
+  founder-only fix is to rewrite reg_002's l.77 predicate to the enum-iteration form
+  `set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)`** (the form the spec docs already use) —
+  never touched by the builder. *(The registry-pollution "second defect" some build-log sessions escalated
+  is NOT sealed-blocked and needs no founder fix: the snapshot/restore reset lives in the **non-sealed root**
+  `conftest.py` autouse `_isolate_contracts_registry` (l.166–180) and already exists — do not re-derive a
+  two-part founder fix.)*
 - **SB-2 · M16 · AC-TEN-001 ⟂ AC-SUB-001 / AC-DB-003 (residual: `operation_runs` alone).**
   `test_m15_ten.py::test_ten_001` clause (c) (l.177–182) enumerates **every** `public` base table minus
   `{tenants, sessions, alembic_version}` and requires each to reach `tenant_id` via a **declared FK chain to
@@ -81,7 +91,17 @@ later milestone consumes:
 - **`libs/db`** (stood up at M4, formally green M10): asyncpg pool · `Database` facade (hard-imported by
   `test_m03_sub` as `from libs.db import Database`) + `repos` namespace — **no ORM** · Alembic migrations.
 - **`libs/ops`** (M4): the only homes `test_m03_sub` **hard-imports** are `with_operation_run`,
-  `run_reconcile_sweep`, `sandbox_provider`, `OperationHandle` (+ `libs.db.Database`). The
+  `run_reconcile_sweep`, `sandbox_provider`, `OperationHandle` (+ `libs.db.Database`).
+  **⚠ `run_reconcile_sweep` red-trap (I-1): ONE symbol must satisfy TWO divergent call conventions.** M4/
+  AC-SUB-018 (`test_m03_sub.py:662`) calls it **async, single positional** — `await run_reconcile_sweep(db)`
+  — and expects the stale-`operation_runs` reconcile (`status→'interrupted'`, idempotent). M14/AC-INV-010
+  (`test_m13_inv.py:550`) calls it **synchronously, multi-kwarg, NOT awaited** —
+  `run_reconcile_sweep(conn=conn, tenant=offboard, gcs=gcs, reason="offboard")` — and expects an immediate
+  DELETE of the tenant's rows + `gcs.delete_prefix`. A naïve `async def run_reconcile_sweep(db)` goes RED at
+  M14 (the offboard call returns an un-awaited coroutine; the DELETE never runs). Satisfy both with a
+  **non-`async def` dispatcher**: when `tenant`/`gcs` kwargs are present, run the sync offboard-DELETE path
+  and return; otherwise return the coroutine for the `(db)` reconcile path. Treat this signature contract as
+  part of the seam inventory. The
   `cost.{MeetingCost,dispatch_workroom,record_micro_call_cost,check_meeting_budget}` · `logging` · `sentry` ·
   `affinity.route_to_owner` homes are **not** touched by `test_m03_sub`; they are hard-imported by **M12**
   (`test_m11_obs`) and **M14** (`test_m13_inv`) and go green there. Build them at M4 if convenient, but they
@@ -227,9 +247,10 @@ flag/base class/defensive branch a criterion doesn't demand** (V0 has zero runti
   `ProxyMessage.__init_subclass__` auto-register; single registry + `MessageType` discriminator;
   `assert_registry_closed()` (boot + CI); orphan type fails; Pydantic discipline (UUID/`max_length`/`Literal`);
   dispatch funnel validates client msgs once (tile→backend untrusted); signal-surface excluded (AC-CMP-011).
-  **AC-REG-001/003/004/006 are buildable; AC-REG-002 and AC-REG-005 are jointly unsatisfiable** (§0 SB-1).
-  Build the four, then **stop the pass and escalate the 002/005 pair** — never weaken or edit the sealed test.
-  *Criteria:* AC-REG-001..006 (002+005 blocked).
+  **AC-REG-001/003/004/005/006 are all buildable and PASS with the CANONICAL Enum `MessageType`; only
+  AC-REG-002's inline `get_args`-predicate is irreducibly red** (§0 SB-1). Build the five, then **stop the
+  pass and escalate `reg_002` alone** (precise founder fix = rewrite its l.77 predicate to the enum-iteration
+  form) — never weaken or edit the sealed test. *Criteria:* AC-REG-001..006 (002 blocked; 005 passes).
 - **M12 — Observability (`test_m11_obs`, 10).** structlog JSON; Sentry once; cost telemetry
   cache-read/creation split; Langfuse inert; `/health` + Healthchecks; **one idempotent hardening script**
   (both firewall layers, E2B-scoped exec, required controls — AC-OBS-006, buildable); live-WS affinity routes
@@ -257,8 +278,12 @@ flag/base class/defensive branch a criterion doesn't demand** (V0 has zero runti
   durable table (webhook_events nullable `tenant_id` FK; `meeting_id`→`meetings(id)` FKs on
   meeting_cost/transcript_segments/note_deltas) so the residual `unscoped` list is exactly `[operation_runs]`.
   **AC-TEN-001 is then unsatisfiable for `operation_runs` alone** (§0 SB-2: exact 12-column pin + `scope_id`
-  text + `created_by`=instance-id ⇒ no legal FK to `tenants`). Build 002/003/004; stop at the ten_001
-  assertion and escalate the `operation_runs` residual. *Criteria:* AC-TEN-001..004 (001 blocked).
+  text + `created_by`=instance-id ⇒ no legal FK to `tenants`). `test_m15_ten.py:177` enumerates the full
+  migrated base-table set (not just the named five), so **before escalating, enumerate the actual
+  `information_schema` base tables and prove none other than `operation_runs` is unscoped** — the escalation
+  set must be provably minimal (and this is what makes the M14 inv_010 tenant-only-insert probe safe on
+  whichever table it picks — see CR-5/CR-6). Build 002/003/004; stop at the ten_001 assertion and escalate
+  the `operation_runs` residual. *Criteria:* AC-TEN-001..004 (001 blocked).
 - **M17 — End-to-end workflows (`test_w_workflows`, 12 chains, 0 new criteria).** W01 connect→bind; W02
   duplicate-join→single-owner→reap→reclaim; W03 reclaimed-zombie-emits-nothing; W04 webhook
   land→200→dedupe→drain; W05 direct-answer-no-E2B; W06 cost-survives-recycle + resume-guard; W07
@@ -301,6 +326,36 @@ oracle + a plain `run_reconcile_sweep`, no contradiction). Folded:
 **Plan LOCKED.** M1–M10 + M12–M15 + M17 hand off to `subagent-driven-build`; **M11 (SB-1) and M16 (SB-2)
 build everything buildable in-file, then stop the pass and escalate their contradiction pair to the
 conductor — never weaken or edit the sealed test.**
+
+### Review deltas — session-2 fresh-context `planner-reviewer` re-pass (folded; independent re-derivation)
+
+Verdict: **fundamentally SOUND, lock-ready after folding I-1 + four MINOR — no BLOCKER.** Re-review
+independently re-derived coverage (155 exact, all 16 prefixes to the integer; manifest 154 stale-by-one),
+both SPEC_BLOCKED calls (SB-1 get_args-vs-Enum and SB-2 `operation_runs` FK — both GENUINE), the M4
+hard-import inventory (complete), the §3 namespace seam (sound — root `conftest.py:31-40` keeps `services` a
+namespace pkg and extends `__path__` to expose `services.control_plane`, `services/*` still exactly five),
+and the OBS-006/INV-010 buildable judgments (both confirmed). Folded:
+
+- **[IMPORTANT I-1] `run_reconcile_sweep` dual call-convention red-trap.** Async single-positional at M4
+  (`await sweep(db)`, reconcile stale op-runs) vs sync multi-kwarg un-awaited at M14
+  (`run_reconcile_sweep(conn=,tenant=,gcs=,reason=)`, offboard DELETE). A naïve `async def …(db)` goes RED at
+  M14. Resolve with a non-`async def` dispatcher (kwargs present → sync offboard path; else return the
+  reconcile coroutine). → §1 `libs/ops` bullet.
+- **[MINOR M-1] SB-1 precision:** reg_005 **passes** with the CANONICAL Enum; **only reg_002 is red**; the
+  founder fix rewrites reg_002's l.77 predicate to `set(m.value for m in MessageType)==set(CHANNEL_REGISTRY)`.
+  → §0 SB-1 + M11.
+- **[MINOR M-2] Registry-pollution "second defect" is NOT sealed-blocked** — the snapshot/restore reset is in
+  the non-sealed root `conftest.py:166-180` (`_isolate_contracts_registry`) and already exists; do not
+  re-derive a two-part founder fix. → §0 SB-1 parenthetical.
+- **[MINOR M-3] 155-vs-154 attribution** pinned to "one uncounted criterion, identity immaterial" (manifest
+  note cites the +5-review touching `AC-SUB-025/027 + AC-TEN-001`, not specifically AC-TEN-004). → §0.
+- **[MINOR M-4] SB-2 minimality:** `test_m15_ten.py:177` enumerates the full migrated base-table set — before
+  escalating, enumerate `information_schema` and prove `operation_runs` is the sole unscoped table (this also
+  makes the M14 inv_010 probe, a non-deterministic `LIMIT 1` with **no `ORDER BY`** over any tenant-scoped
+  table, safe — every tenant-scoped table must accept a tenant-only insert, CR-5). → M16 + M14.
+
+**Plan RE-LOCKED (session-2).** No milestone reorder; no coverage change; deltas are seam-precision and
+blocked-call wording only. Hand-off unchanged.
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — No `SPEC_BLOCKED` entry was ever recorded in `PROGRESS.md`; the doc00 plan asserts "0 `SPEC_BLOCKED`, 0 unresolved contradictions," `dispositions.yaml` agrees, and the build is green through M4, so there is nothing genuinely blocked — continue in the mandated milestone order to M5 (`test_m04_boot`, AC-BOOT-001..007). To preempt the one near-frontier ambiguity (the "(prod)"-qualified boot keys), implement the reading the spec and criterion already fix in lockstep — `00-FOUNDATION.md:203` and `AC-BOOT-001` (`criteria.yaml:1632`) both list "`DATABASE_URL`, `GCS_BUCKET`, `SESSION_SECRET` (prod), GCP project (prod), each AES credential key, `RECALL_API_KEY`, `ANTHROPIC_*`": treat `DATABASE_URL`, `GCS_BUCKET`, the AES credential keys, `RECALL_API_KEY`, and `ANTHROPIC_*` as unconditionally req
