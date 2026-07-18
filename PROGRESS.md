@@ -2455,3 +2455,7 @@ Building `services.code_intel.*` here would violate the build order (00→01, ea
 sealed bundle) and is out of doc00 scope. **doc00 is complete for its scope; nothing buildable remains in doc00.**
 verify.sh cannot reach exit 0 until the doc01 build loop delivers `services.code_intel.*` — a next-doc deliverable,
 not a doc00 gap. No product edit made, no test weakened, no route-around. Session ends.
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+** — The SB-1/reg_002 "conflict" is spec ambiguity resolved by documented precedence, not a genuine contradiction. `CANONICAL-DECISIONS.md:18` (MessageType is an `Enum`) plus the authoritative contract check at `09-VERIFICATION.md:16` (`set(MessageType) == set(CHANNEL_REGISTRY)`) supersede the pre-Enum `get_args` sketch at `00-FOUNDATION.md:303`. Verified independently: `tests/doc00/test_m10_reg.py` → 6 passed, `tests/doc00/` → 167 passed. No founder spec change required.
+
