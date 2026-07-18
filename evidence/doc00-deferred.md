@@ -130,3 +130,14 @@ DEFERRED (genuinely spec-blocked, needs founder spec fix): nothing built specula
 DEFERRED (genuinely spec-blocked, needs founder spec fix): **SPEC_BLOCKED — named precisely:** `tests/doc00/test_m10_reg.py:75,77` (AC-REG-002) is mutually exclusive with
 5:211 (and CANONICAL §1) require `MessageType` to be an `enum.Enum` subclass, for which `typing.get_args()` is unconditionally `()`; thus `union` is always `set()` and can never equal the 3-key registry that reg_001/reg_003/`assert_registry_closed()` require to be populated. No `libs/`/`services/` object can be both a `type`-subclass-of-Enum and yield non-empty `get_args`, and the only corrective edit (reg_002:75 → `{str(m.value) for m in MessageType}`, matching the file's own line-251 fallback and the product's `_closure_values`) sits in a guard-protected sealed test the builder cannot touch. The root cause is a spec contradiction — `00-FOUNDATION.md:303` models `MessageType` as `get_args`-able while `AC-REG-005`/CANONICAL mandate an Enum — that only a founder's spec/test change can fix.
 
+
+DEFERRED (builder + debugger both stuck) — plumb later: tests/doc00/test_m11_obs.py::test_obs_006_one_idempotent_hardening_script_full_control_set
+anav/Desktop/proxy/tests/doc00/test_m11_obs.py:198: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/doc00/test_m11_obs.py::test_obs_006_one_idempotent_hardening_script_full_control_set
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed, 125 passed, 1 deselected, 1 warning in 9.57s
+
