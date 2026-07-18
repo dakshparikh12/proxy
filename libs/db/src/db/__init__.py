@@ -27,9 +27,11 @@ from .config import (
     stt_refresh_interval_s as stt_refresh_interval_s,
 )
 from .database import Database as Database
+from .database import open_pool as open_pool
 
 __all__ = [
     "Database",
+    "open_pool",
     "heartbeat_s",
     "load_defaults",
     "repos",

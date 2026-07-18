@@ -10,6 +10,9 @@ from .src.db import (
 from .src.db import (
     load_defaults as load_defaults,
 )
+from .src.db import (
+    open_pool as open_pool,
+)
 from .src.db import repos as repos
 from .src.db import (
     sandbox_timeout_s as sandbox_timeout_s,

@@ -23,8 +23,6 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
-import asyncpg
-
 from libs.db import Database
 from libs.ops import configure_logging, get_logger
 
@@ -217,16 +215,12 @@ async def _real_tracing(app: Any) -> None:
 
 
 async def _real_pool(app: Any) -> None:
+    from libs.db import open_pool
     from services.harness.src.harness import settings as settings_mod
 
-    dsn = settings_mod.settings.database_url
-    app.state.pool = await asyncpg.create_pool(
-        dsn,
-        min_size=2,
-        max_size=20,
-        max_inactive_connection_lifetime=30,
-        command_timeout=10,
-    )
+    # The one asyncpg pool-construction site lives in libs/db (§11 canonical
+    # config); the boot step just opens it and stashes it on app.state.
+    app.state.pool = await open_pool(settings_mod.settings.database_url)
 
 
 async def _real_database(app: Any) -> None:

@@ -10,7 +10,12 @@ from __future__ import annotations
 import os
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, text
+
+# Constant advisory-lock key shared by every booting container. Wrapping the
+# migration run in ``pg_advisory_lock`` serializes N parallel boots: exactly one
+# container migrates at a time (concurrent_migrations==0, partial_migration==0).
+_MIGRATION_LOCK_KEY = 8675309
 
 
 def _libpq_kv_to_url(dsn: str) -> str:
@@ -67,7 +72,18 @@ def run_migrations_online() -> None:
     with connectable.connect() as connection:
         context.configure(connection=connection)
         with context.begin_transaction():
-            context.run_migrations()
+            # Serialize concurrent boots: acquire a session-level advisory lock
+            # before running migrations, release it after. Losers block here
+            # (or, in the CMD retry loop, retry) until the winner finishes.
+            connection.execute(
+                text("SELECT pg_advisory_lock(:k)"), {"k": _MIGRATION_LOCK_KEY}
+            )
+            try:
+                context.run_migrations()
+            finally:
+                connection.execute(
+                    text("SELECT pg_advisory_unlock(:k)"), {"k": _MIGRATION_LOCK_KEY}
+                )
     connectable.dispose()
 
 

@@ -1,0 +1,22 @@
+name: e2e-nightly
+# Heavy end-to-end suite. Runs nightly via a schedule (Cloud Scheduler / cron) —
+# NEVER on push or pull_request, so a flaky end-to-end run can never gate a
+# merge. Only the fast unit+security suite in guards.yml is merge-blocking.
+on:
+  schedule:
+    # 07:00 UTC nightly
+    - cron: '0 7 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  e2e:
+    name: end-to-end (nightly, non-blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pytest pydantic pydantic-settings
+      - name: end-to-end suite
+        run: pytest -q -m e2e

@@ -1,11 +1,19 @@
 name: guards
 on: [push, pull_request]
 
-# Every guard runs in BOTH pre-commit (local fast-fail) and CI (server-side
-# enforcement) — the discipline lifted from ~/platform. This job is the CI half;
-# .pre-commit-config.yaml is the local half.
+# Fast, merge-blocking CI + every named guard. Each guard runs in BOTH
+# pre-commit (local fast-fail) and CI (server-side enforcement) — the discipline
+# lifted from ~/platform. This workflow is the CI half; .pre-commit-config.yaml
+# is the local half. The heavy end-to-end suite is NOT here — it lives in
+# e2e-nightly.yml and runs on a schedule so it can never gate a merge on flake.
 jobs:
-  guards:
+  # ---------------------------------------------------------------------------
+  # fast-checks: ruff + mypy + unit(pytest) + a fast security/contract suite.
+  # These are the REQUIRED, merge-blocking gates. None of them may opt out of
+  # failure — a required check must fail loud and never be marked advisory.
+  # ---------------------------------------------------------------------------
+  fast-checks:
+    name: fast checks (required / merge-blocking)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -13,9 +21,61 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install ruff mypy bandit pytest pydantic pydantic-settings
+      - name: ruff
+        run: ruff check .
+      - name: mypy
+        run: mypy services libs
+      - name: unit
+        run: pytest -q -m "unit or contract"
+      - name: security
+        run: bandit -r services libs
+
+  # ---------------------------------------------------------------------------
+  # guards: the named enforcement jobs. Every one of these also has a matching
+  # hook in .pre-commit-config.yaml (guard parity — never CI-only).
+  # ---------------------------------------------------------------------------
+  guards:
+    name: named guards (required / merge-blocking)
+    runs-on: ubuntu-latest
+    needs: [fast-checks]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install ruff mypy bandit pytest pydantic pydantic-settings
+
       # check-secret-bindings: Terraform secret map vs deploy config drift gate.
       - name: check-secret-bindings
-        run: python -m ops.check_secret_bindings
-      # check-migration-order: Alembic multiple-heads vs main (fail-loud-never-skip).
+        run: python -m services.ops.check_secret_bindings
+
+      # check-migration-order: Alembic single-head vs origin/main. Fails loud on
+      # multiple heads relative to main — fail-loud-never-skip, no escape hatch.
       - name: check-migration-order
-        run: python -m alembic heads
+        run: |
+          git fetch origin main
+          heads="$(python -m alembic heads | grep -c head)"
+          if [ "$heads" != "1" ]; then
+            echo "Alembic has multiple heads vs main — resolve before merge"; exit 1
+          fi
+
+      # check-sdk-isolation-triad: automated scan asserting that EVERY query()
+      # call site sets the SDK-isolation triad flags AND the SDK_LOCAL_TOOLS
+      # block-list — every site, not a manual re-audit.
+      - name: check-sdk-isolation-triad
+        run: python -m services.ops.check_sdk_isolation_triad --require SDK_LOCAL_TOOLS --every query-call
+
+      # banned-strings: enumerated dead tokens must never be reintroduced. NOTE:
+      # the revived per-meeting GCE-MIG runtime term (A-007, AC-HOST-005) is
+      # deliberately NOT in this banned set — banning it would collide.
+      - name: banned-strings
+        run: |
+          for tok in "session_transcripts" "ManagedResource" "warm pool" "TILE_ADDRESS"; do
+            if git grep -qsF "$tok" -- services libs; then
+              echo "banned dead token reintroduced: $tok"; exit 1
+            fi
+          done
+
+      # field-contract: verify shared field-contract JSON matches emitters.
+      - name: field-contract
+        run: python -m services.ops.check_field_contract

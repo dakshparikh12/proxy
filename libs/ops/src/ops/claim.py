@@ -27,10 +27,13 @@ async def claim_meeting(
 ) -> Any | None:
     """Atomic claim: return the new row id if we won, else None (loser backs off)."""
     async with db.acquire() as conn:
+        # operation_runs.scope_id is the sole text column (§11.2): a meeting claim
+        # casts the meeting id to text at this one call site (§5.2).
         row = await conn.fetchrow(
             """
+            WITH claim AS (SELECT $1 AS meeting_id)
             INSERT INTO operation_runs (scope_id, operation_type, status, created_by)
-            VALUES ($1, $2, 'running', $3)
+            SELECT meeting_id::text, $2, 'running', $3 FROM claim
             ON CONFLICT (scope_id, operation_type) WHERE status = 'running'
             DO NOTHING
             RETURNING id

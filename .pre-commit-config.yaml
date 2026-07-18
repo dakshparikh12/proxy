@@ -1,4 +1,6 @@
 # Every guard runs in BOTH pre-commit AND CI (see .github/workflows/guards.yml).
+# Guard parity is enforced by the acceptance suite: no guard may be CI-only or
+# pre-commit-only.
 repos:
   - repo: local
     hooks:
@@ -8,13 +10,39 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
+
       - id: check-secret-bindings
         name: check-secret-bindings
-        entry: python -m ops.check_secret_bindings
+        entry: python -m services.ops.check_secret_bindings
         language: system
         pass_filenames: false
+
+      # check-migration-order: Alembic single-head vs origin/main (fail-loud-never-skip).
       - id: check-migration-order
         name: check-migration-order
         entry: python -m alembic heads
+        language: system
+        pass_filenames: false
+
+      # check-sdk-isolation-triad: every query() call site must set the triad
+      # flags and the SDK_LOCAL_TOOLS block-list.
+      - id: check-sdk-isolation-triad
+        name: check-sdk-isolation-triad
+        entry: python -m services.ops.check_sdk_isolation_triad --require SDK_LOCAL_TOOLS --every query-call
+        language: system
+        pass_filenames: false
+
+      # banned-strings: enumerated dead tokens must never reappear. (Note: the
+      # revived per-meeting GCE-MIG runtime term is intentionally NOT banned.)
+      - id: banned-strings
+        name: banned-strings
+        entry: python -m services.ops.check_banned_strings
+        language: system
+        pass_filenames: false
+
+      # field-contract: shared field-contract JSON must match emitters.
+      - id: field-contract
+        name: field-contract
+        entry: python -m services.ops.check_field_contract
         language: system
         pass_filenames: false

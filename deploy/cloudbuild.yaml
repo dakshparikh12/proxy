@@ -1,0 +1,59 @@
+# Cloud Build pipeline: build -> Artifact Registry -> migrate -> deploy.
+#
+# Dev auto-deploys from a Cloud Build TRIGGER on push to main. Prod is never
+# pushed to directly; it ships via deploy/promote.sh, which re-tags the exact
+# image digest that already passed dev and promotes it to the prod service.
+#
+# Migrations run as their OWN separate step (id: migrate-db) between build and
+# deploy, so schema changes are applied exactly once, distinct from the image
+# build and the Cloud Run deploy.
+
+substitutions:
+  _REGION: us-central1
+  _AR_REPO: us-central1-docker.pkg.dev/${PROJECT_ID}/proxy
+  _SERVICE: proxy-control-plane
+
+steps:
+  # 1. build the container image
+  - id: 'build'
+    name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - '${_AR_REPO}/${_SERVICE}:${SHORT_SHA}'
+      - '-f'
+      - 'deploy/Dockerfile'
+      - '.'
+
+  # 2. push the image to Artifact Registry
+  - id: 'push-artifact-registry'
+    name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '${_AR_REPO}/${_SERVICE}:${SHORT_SHA}'
+    waitFor: ['build']
+
+  # 3. run database migrations as a SEPARATE step (alembic upgrade head)
+  - id: 'migrate-db'
+    name: '${_AR_REPO}/${_SERVICE}:${SHORT_SHA}'
+    entrypoint: 'python'
+    args: ['-m', 'alembic', 'upgrade', 'head']
+    waitFor: ['push-artifact-registry']
+
+  # 4. deploy the freshly migrated image to the dev Cloud Run service
+  - id: 'deploy'
+    name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_SERVICE}-dev'
+      - '--image=${_AR_REPO}/${_SERVICE}:${SHORT_SHA}'
+      - '--region=${_REGION}'
+    waitFor: ['migrate-db']
+
+images:
+  - '${_AR_REPO}/${_SERVICE}:${SHORT_SHA}'
+
+# NOTE: this config is wired to a Cloud Build TRIGGER (dev, push to main).
+# Prod promotion is a separate, manual step — see deploy/promote.sh (promote).

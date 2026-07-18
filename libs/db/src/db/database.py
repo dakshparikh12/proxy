@@ -24,6 +24,23 @@ def _normalise_dsn(dsn: str) -> str:
     return dsn
 
 
+async def open_pool(dsn: str) -> Any:
+    """The ONE asyncpg pool-construction site (§11 canonical config).
+
+    In prod the DSN is a Cloud SQL Auth Proxy Unix socket (``host=/cloudsql/
+    <project>:<region>:<instance>``) — the proxy terminates TLS, so the DSN
+    carries NO SSL params. ~2 Cloud Run instances × max_size 20 ≈ 40 connections,
+    under the Cloud SQL limit.
+    """
+    return await asyncpg.create_pool(
+        _normalise_dsn(dsn),
+        min_size=2,
+        max_size=20,
+        max_inactive_connection_lifetime=30,
+        command_timeout=10,
+    )
+
+
 class Database:
     """A pooled handle to the durable Postgres substrate."""
 
@@ -46,10 +63,15 @@ class Database:
     ) -> Database:
         if not dsn:
             raise ValueError("Database.connect requires a DSN")
-        pool = await asyncpg.create_pool(
-            _normalise_dsn(dsn), min_size=1, max_size=5
-        )
+        pool = await open_pool(dsn)
         return cls(pool, instance_id or f"proc-{uuid.uuid4().hex}")
+
+    @property
+    def repos(self) -> Any:
+        """The per-domain repository namespace this facade owns (§11)."""
+        from .repos.repositories import Repos
+
+        return Repos(self)
 
     async def close(self) -> None:
         await self._pool.close()
