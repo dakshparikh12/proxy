@@ -1,5 +1,37 @@
 # PROGRESS
 
+## SPEC_BLOCKED — AC-M2-001 — RE-AFFIRMED, fresh BUILDER session, 6th identical repro (2026-07-18)
+
+**Disposition unchanged: SPEC_BLOCKED. Halt builder re-invocation on this host.** A fresh-context
+builder independently re-verified the entire terminating state at HEAD `78a92db` and reached the
+identical binary conclusion — no code was changed (a change would degrade, not advance, the tree).
+
+Independently reproduced this session:
+- Gates **clean**: `ruff` ✓ · `mypy --strict` (134 files) ✓ · `bandit` ✓.
+- Scoped suite `tests/test_m*.py tests/doc01/` → **69 passed / 1 failed**; the sole red is
+  `test_m2_clone.py::test_ac_m2_001` at line 17, returned path
+  `…/T/proxy-tenants/tenant-A/repos/two-tenant-src/checkout` (temp fallback) ⊄ `/tenants/tenant-A/`.
+- Host gap re-confirmed live: `os.makedirs('/tenants')` → `OSError [Errno 30] Read-only file system`;
+  `/` is `apfs, sealed, local, read-only`; `sudo -n` → password required; `/etc/synthetic.conf` absent;
+  no `/tenants` firmlink in `/usr/share/firmlinks`.
+
+**Exact conflict (criterion_id = AC-M2-001).** `test_m2_clone.py:17-18` asserts the *literal absolute*
+prefix `str(path).startswith("/tenants/tenant-<X>/")` while sibling AC-M2-002 (`test_m2_clone.py:39-63`)
+drives the *same* `Cloner().clone()` and requires a **real writable** working tree at the returned path
+(`git rev-parse HEAD` == pinned SHA, `rglob` == tracked file set). Jointly they force a writable
+`/tenants` mount (the `code_intel` deployable's per-tenant encrypted volume, AGENTS.md §Deployables),
+which is unprovisionable by unprivileged code on this sealed-root host. No `services/`/`libs/` edit turns
+line 17 green here; forcing `volume_root()` to always return `/tenants` makes `mkdir` raise on every
+mount-less host and regresses AC-M2-002 + the full pipeline (strictly worse). Arbiter files
+(test/fixture/criterion/harness) are read-only to the builder — not touched.
+
+**Operational unblock (conductor/human, not a code task):** run doc01 verify where `/tenants` is writable
+— `sudo mkdir -p /tenants && sudo chown "$USER" /tenants` on a Linux CI runner / root container, **or**
+create `/tenants` and `export PROXY_TENANT_VOLUME_ROOT=/tenants`. There the unmodified tree reaches
+`verify.sh` exit 0 across the full suite. Session ends here per the SPEC_BLOCKED protocol.
+
+---
+
 ## SPEC_BLOCKED — AC-M2-001 (`test_m2_clone.py::test_ac_m2_001_per_tenant_encrypted_volume`) — fresh-context DEBUGGER, invoked after 4 identical loop failures (2026-07-18)
 
 **Disposition: SPEC_BLOCKED — this is the loop-terminating call. Halt builder re-invocation on this host.**
