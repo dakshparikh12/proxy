@@ -1,6 +1,14 @@
 """libs.ops — dotted package facade (src-layout; real code under src/ops)."""
 from __future__ import annotations
 
+import os as _os
+
+# Extend the package search path to the src-layout module dir so real submodules
+# (``libs.ops.cost`` / ``libs.ops.logging`` / ``libs.ops.affinity`` ...) resolve
+# as genuine importable modules — several suites do ``from libs.ops.cost import
+# ...`` with no facade fallback. Mirrors the proven ``services.harness`` pattern.
+__path__ = [*__path__, _os.path.join(_os.path.dirname(__file__), "src", "ops")]
+
 from .src.ops import (
     MEETING_HARNESS_OP as MEETING_HARNESS_OP,
 )
