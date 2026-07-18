@@ -1,0 +1,1944 @@
+# Requirements — Doc 00 Constitution, Architecture & Foundation
+# Extracted per GENERATOR.md Phase A + EXHAUSTIVE-COVERAGE.md (total breadth) from:
+#   product/v0-spec/00-FOUNDATION.md
+#   product/v0-spec/CANONICAL-DECISIONS.md  (overrides where it conflicts — §0-§12)
+#   product/v0-spec/config-defaults.toml
+#   AGENTS.md (laws + product invariants)
+# Scope: Doc 00 is the FOUNDATION doc — the substrate, contracts, boot, config, IaC,
+#   Docker, CI, DB layer, observability that every service plugs into (build-order step 1 + 1b).
+#   Behaviors whose runtime enforcement lives in a downstream service doc (Doc 01/02/03/04/05)
+#   are carried as dispositions.yaml entries (covered_downstream / not_built_here), NOT as
+#   uncoverable requirements. Requirements here are the FOUNDATION-provable surface:
+#   schemas, substrate mechanisms, contract-registry closure, boot ordering, config/secret
+#   structure, IaC discipline, CI guards, DB layer, and the invariants Doc 00 structurally owns.
+# Milestone grouping mirrors Doc 00 sections §2-§16.
+
+# ══════════════════════════════════════════════════════════════════
+# M1 — System composition & contracts (§2, CANONICAL §1)
+# ══════════════════════════════════════════════════════════════════
+
+- requirement_id: R-DOC00-2-01
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§2 paragraph 3"
+  source_quote: "These six pieces are code packages under services/*, not six network services. They deploy as THREE deployables"
+  normalized_statement: >
+    THE SYSTEM SHALL package the six mechanism pieces as code packages under services/*
+    (not six network services) that deploy as exactly three deployables.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-2-02
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§11.5 Bundle model + §2 the bundle"
+  source_quote: "class Bundle(BaseModel): ask: str; speaker: str; timestamp: datetime; notes_ref: UUID; transcript_tail: str; task_id: UUID"
+  normalized_statement: >
+    WHEN the 04->05 bundle is defined in libs/contracts
+    THE SYSTEM SHALL declare exactly the fields {ask, speaker, timestamp, notes_ref: UUID, transcript_tail, task_id}
+    and SHALL carry notes_ref (a handle) rather than the serialized notes object.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-2-03
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§1.2 + §11.5 Envelope"
+  source_quote: "EnvelopeStatus = Literal[\"done\",\"partial\",\"failed\",\"needs_clarification\",\"needs_review\"]  ... verified/draft are not status values."
+  normalized_statement: >
+    WHEN the 05->04 envelope is defined in libs/contracts
+    THE SYSTEM SHALL constrain status to exactly {done, partial, failed, needs_clarification, needs_review}
+    and SHALL NOT include 'verified' or 'draft' as status values (verification is a separate optional field).
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-2-04
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§1.1 AgentChunk"
+  source_quote: "ChunkType = Literal[\"INIT\",\"TEXT\",\"TOOL_USE\",\"TOOL_RESULT\",\"RESULT\",\"ERROR\"] ... discriminator is `type` (NOT `.kind`)"
+  normalized_statement: >
+    WHEN the AgentChunk union is defined
+    THE SYSTEM SHALL use exactly the six ChunkType members {INIT, TEXT, TOOL_USE, TOOL_RESULT, RESULT, ERROR}
+    with the discriminator field named 'type'.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-2-05
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§1.1 consumer contract + §11.3"
+  source_quote: "Every consumer ... consumes the stream_deltas output, never raw AgentChunk."
+  normalized_statement: >
+    WHEN a downstream consumer (projector, cost meter, transcript logger) reads the agent stream
+    THE SYSTEM SHALL have it read the stream_deltas output, never raw AgentChunk chunks,
+    and stream_deltas SHALL be applied exactly once (inside BehaviorRunner.run()), never re-wrapped downstream.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-2-06
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§1.4 NoteOp"
+  source_quote: "NoteOp = Literal[\"add\",\"patch\",\"close\"]   # `note` is dropped (folded into `add`)"
+  normalized_statement: >
+    WHEN the 03->04 notes-op type is defined
+    THE SYSTEM SHALL constrain NoteOp to exactly {add, patch, close} and SHALL NOT include 'note'.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-2-07
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§1.5 Readiness"
+  source_quote: "Readiness = Literal[\"connecting\",\"cloning\",\"indexing\",\"ready\",\"not_ready\"]   # + coverage_pct: float, gaps: list[str]"
+  normalized_statement: >
+    WHEN the Readiness contract is defined
+    THE SYSTEM SHALL constrain it to exactly {connecting, cloning, indexing, ready, not_ready}
+    plus coverage_pct and gaps, and SHALL NOT include 'mapping'.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-2-08
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§1.6 signal-surface field name"
+  source_quote: "channel-report field is `dm_available: bool`."
+  normalized_statement: >
+    WHEN the channel-report signal is defined
+    THE SYSTEM SHALL name its field 'dm_available' (a bool), not 'dm?' or 'dm-available?'.
+  requirement_type: contract
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-2-09
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§2 paragraph after the contracts list"
+  source_quote: "A field produced by one side and unconsumed by the other is a build error, not a style choice — enforced structurally (§12)"
+  normalized_statement: >
+    WHEN a contract field is produced by one side but consumed by no other side
+    THE SYSTEM SHALL fail the build structurally, never treat it as an accepted style choice.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-2-10
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§2 shared-mechanism DRY homes"
+  source_quote: "libs/http holds the one dispatch() funnel ...; libs/agentkit holds abort.py (the AbortRegistry), resume.py (resume_with_fallback), and the provider seam. Docs 04/05 import these; they do not re-implement them."
+  normalized_statement: >
+    THE SYSTEM SHALL define dispatch() once in libs/http and the AbortRegistry / resume_with_fallback / provider seam once in libs/agentkit,
+    imported by services never re-implemented per service.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-2-11
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§11.8"
+  source_quote: "The Doc 02 signal surface ... are in-process/over-transport internal events ... They are out of assert_registry_closed()'s scope"
+  normalized_statement: >
+    WHEN the closed-graph registry check runs
+    THE SYSTEM SHALL exclude the Doc 02 signal-surface events (internal transport events) from assert_registry_closed()'s scope.
+  requirement_type: contract
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-2-12
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§11.5 Envelope Pydantic model + §1.2"
+  source_quote: "class Envelope(BaseModel): headline: str; detail: str | None = None; artifact: dict | None = None; receipts: list[str] = []; status: EnvelopeStatus; verification: Literal[\"verified\",\"unverified\"] | None = None; draft_id: UUID | None = None; task_id: UUID"
+  normalized_statement: >
+    WHEN the 05->04 Envelope model is defined in libs/contracts
+    THE SYSTEM SHALL declare exactly the fields {headline, detail, artifact, receipts, status, verification, draft_id, task_id}
+    with verification a separate optional Literal["verified","unverified"]|None (NOT a status value), draft_id an optional UUID, and task_id a UUID.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-2-13
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§1.1 AgentChunk metadata keys + §11.3 cost-meter read"
+  source_quote: "RESULT -> {\"session_id\", \"num_turns\", \"total_cost_usd\", \"structured_output\"} ... The cost meter reads RESULT.metadata[\"total_cost_usd\"] off this same stream."
+  normalized_statement: >
+    WHEN an AgentChunk is emitted
+    THE SYSTEM SHALL carry the canonical per-variant metadata keys (INIT->{session_id,tools,mcp_servers}; TEXT->{msg_id};
+    TOOL_USE->{id,name,input}; TOOL_RESULT->{tool_use_id,is_error,structured}; RESULT->{session_id,num_turns,total_cost_usd,structured_output}; ERROR->{message}),
+    so the cost meter can read RESULT.metadata["total_cost_usd"] off the stream_deltas output.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-2-14
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.5 typed BehaviorConfig + DOC-00 §3 libs/agentkit"
+  source_quote: "Replace the YAML behavior registry + loader/schema with typed Python BehaviorConfig module constants (the BehaviorRunner/REGISTRY/register() are unchanged)."
+  normalized_statement: >
+    THE SYSTEM SHALL express the behavior/disposition registry as typed Python BehaviorConfig module constants driven by BehaviorRunner/REGISTRY/register(),
+    and SHALL NOT ship a YAML behavior registry, loader, or schema (the YAML pattern is the documented Expansion path only).
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-2-15
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§11.3 stream_deltas delta-izing behavior"
+  source_quote: "Delta-izes TEXT (yields only the new suffix per msg_id, resets on a new msg_id); passes INIT/TOOL_USE/TOOL_RESULT/RESULT/ERROR through UNCHANGED."
+  normalized_statement: >
+    WHEN stream_deltas processes an upstream AgentChunk iterable
+    THE SYSTEM SHALL yield for each TEXT chunk ONLY the new suffix appended since the last TEXT chunk of the same msg_id
+    (resetting the per-msg_id accumulator when a new msg_id starts) and SHALL pass
+    INIT/TOOL_USE/TOOL_RESULT/RESULT/ERROR chunks through unchanged.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-2-16
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§2 the envelope — progress events"
+  source_quote: "progress events same shape minus finality."
+  normalized_statement: >
+    WHEN the Workroom emits a progress event (an in-flight update rather than a terminal Envelope)
+    THE SYSTEM SHALL give it the same field shape as the Envelope minus finality — it does NOT carry a finalized
+    terminal EnvelopeStatus — so a consumer distinguishes an in-flight progress event from a finalized envelope.
+  requirement_type: contract
+  criticality: P2
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════
+# M2 — Repository structure (§3, CANONICAL §9)
+# ══════════════════════════════════════════════════════════════════
+
+- requirement_id: R-DOC00-3-01
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§3 paragraph 1"
+  source_quote: "A uv-workspace monorepo — one root pyproject.toml with a members glob, one shared uv.lock, internal packages resolved via { workspace = true }"
+  normalized_statement: >
+    THE SYSTEM SHALL be a uv-workspace monorepo with one root pyproject.toml (members glob),
+    one shared uv.lock, and internal packages resolved via { workspace = true }.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-3-02
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§3 rules the build-loop must know"
+  source_quote: "every package uses src-layout (src/<pkg>/)"
+  normalized_statement: >
+    WHEN a workspace package is created
+    THE SYSTEM SHALL use src-layout (src/<pkg>/) for it.
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-3-03
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§3 rules the build-loop must know"
+  source_quote: "one requires-python across the workspace"
+  normalized_statement: >
+    THE SYSTEM SHALL declare one requires-python value across the entire workspace.
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-3-04
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§3 rules the build-loop must know"
+  source_quote: "uv does not prevent a member importing another member's undeclared transitive dep — declare every dependency explicitly"
+  normalized_statement: >
+    WHEN a workspace member imports a package
+    THE SYSTEM SHALL have declared that package as an explicit dependency of the member (no reliance on transitive deps).
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-3-05
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§3 rules the build-loop must know"
+  source_quote: "production images are built with uv sync --package <svc> --no-editable so each container is self-contained"
+  normalized_statement: >
+    WHEN a production image is built
+    THE SYSTEM SHALL build it with `uv sync --package <svc> --no-editable` so the container is self-contained.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-3-06
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§3 repo tree services/*"
+  source_quote: "services/ ... harness ... code_intel ... transport ... scribe ... workroom"
+  normalized_statement: >
+    THE SYSTEM SHALL place the five mechanism services under services/ as {harness, code_intel, transport, scribe, workroom}.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-3-07
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§9 Repo-tree corrections"
+  source_quote: "libs/ = contracts, db, llm, agentkit, ops, http. Add http. Do not add libs/code_intel or libs/transport (service-internal)."
+  normalized_statement: >
+    THE SYSTEM SHALL place exactly {contracts, db, llm, agentkit, ops, http} under libs/,
+    and SHALL NOT create libs/code_intel or libs/transport.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-3-08
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§3 repo tree apps/*"
+  source_quote: "apps/ ... tiny web surfaces — Vite static builds, own pnpm workspace, NOT in uv sync ... connect ... tile"
+  normalized_statement: >
+    THE SYSTEM SHALL place the {connect, tile} web surfaces under apps/ as Vite static builds in their own pnpm workspace,
+    and SHALL NOT include apps/* in uv sync.
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-3-09
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§3 repo tree"
+  source_quote: "libs/ ... focused shared packages (never one god-package — a known PR-bottleneck)"
+  normalized_statement: >
+    THE SYSTEM SHALL keep libs/ as focused per-concern packages and SHALL NOT collapse them into one god-package.
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════
+# M3 — Backend, hosting & the three deployables (§4, CANONICAL §12.1/§12.2)
+# ══════════════════════════════════════════════════════════════════
+
+- requirement_id: R-DOC00-4-01
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.1 topology 1"
+  source_quote: "control_plane — Cloud Run, autoscaling: webhook receiver, connect page + API + the authenticated /m/{meeting_id} surface, WS gateway, /internal/{reconcile,notes}. The auth wall."
+  normalized_statement: >
+    THE SYSTEM SHALL deploy control_plane on Cloud Run (autoscaling) hosting the webhook receiver,
+    connect page + API + authenticated /m/{meeting_id} surface, WS gateway, and /internal/{reconcile,notes}.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-4-02
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§4 representative Cloud Run service + §4 control_plane"
+  source_quote: "timeout_seconds = 3600"
+  normalized_statement: >
+    WHEN the control_plane Cloud Run service is provisioned
+    THE SYSTEM SHALL set timeout_seconds = 3600.
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-4-03
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§4 control_plane"
+  source_quote: "load-bearing — --no-cpu-throttling (their comment: background provisioning 503s under request-scoped CPU)"
+  normalized_statement: >
+    WHEN the control_plane Cloud Run service is provisioned
+    THE SYSTEM SHALL set cpu-throttling to false (--no-cpu-throttling), because background provisioning 503s under request-scoped CPU.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-4-04
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§4 control_plane + §8 representative service"
+  source_quote: "the Cloud SQL connector annotation, Direct-VPC egress, and ... minScale = var.min_instances   # >=1 for the live tier"
+  normalized_statement: >
+    WHEN the control_plane Cloud Run service is provisioned
+    THE SYSTEM SHALL set the Cloud SQL connector annotation, Direct-VPC egress, and minScale >= 1 for the live tier.
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-4-05
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.1 topology 2 (AMENDMENT A1)"
+  source_quote: "meeting_runtime — GCE MIG (or small GKE pool; not Cloud Run): one asyncio harness process per meeting hosting Proxy's orchestrator session + transport, Scribe, and the Workroom host-shell as in-process PACKAGES (asyncio pipes, no bus, no broker). Holds no volume"
+  normalized_statement: >
+    THE SYSTEM SHALL run meeting_runtime on GCE MIG (not Cloud Run), one asyncio harness process per meeting
+    hosting orchestrator + transport + Scribe + Workroom host-shell as in-process packages (no bus, no broker), holding no volume.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-4-06
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.1 topology 3"
+  source_quote: "code_intel — one stateful host (GCE/MIG) with the per-tenant encrypted volume: clones + tree-sitter/PageRank + on-demand LSP + the per-repo SQLite dependency graph"
+  normalized_statement: >
+    THE SYSTEM SHALL run code_intel as one stateful GCE/MIG host with a per-tenant encrypted volume,
+    behind a tenant+SHA-scoped internal API.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-4-07
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.2"
+  source_quote: "The direct-answer path touches neither E2B nor a Workroom session"
+  normalized_statement: >
+    WHEN a direct-answer wake turn runs
+    THE SYSTEM SHALL answer via the code_intel internal API without provisioning an E2B sandbox or a Workroom session.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-4-08
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§4 Cloud SQL"
+  source_quote: "Cloud SQL (Postgres 15) — all durable state ... Private IP only; the app connects via the Cloud SQL Auth Proxy over a Unix socket (no app-side SSL — the proxy terminates TLS + does IAM auth)."
+  normalized_statement: >
+    THE SYSTEM SHALL store all durable state in one Cloud SQL Postgres 15 (private IP only),
+    connecting via the Cloud SQL Auth Proxy over a Unix socket with no app-side SSL.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-4-09
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§4 Cloud SQL"
+  source_quote: "Backups 03:00; prod REGIONAL + PITR (dev ZONAL db-f1-micro, prod db-custom-1-3840)."
+  normalized_statement: >
+    WHEN Cloud SQL is provisioned
+    THE SYSTEM SHALL configure daily backups at 03:00, prod REGIONAL + PITR on db-custom-1-3840, dev ZONAL db-f1-micro.
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-4-10
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§4 GCS"
+  source_quote: "GCS — notes files, artifacts, sandbox-seed snapshots, Terraform remote state. Native Object Versioning on the buckets holding notes/artifacts"
+  normalized_statement: >
+    THE SYSTEM SHALL use GCS for notes/artifacts/sandbox-seed/Terraform-state and SHALL enable native Object Versioning
+    on the buckets holding notes and artifacts.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-4-11
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§4 Explicitly not"
+  source_quote: "Explicitly not: Kubernetes, service mesh, multi-region."
+  normalized_statement: >
+    THE SYSTEM SHALL NOT deploy Kubernetes, a service mesh, or a multi-region topology in V0.
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-4-12
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§4 what must run"
+  source_quote: "No GPU anywhere in V0 — every model is an API."
+  normalized_statement: >
+    THE SYSTEM SHALL provision no GPU anywhere in V0; every model SHALL be accessed as an external API.
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-4-13
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§4 Per-tenant encryption"
+  source_quote: "GCP-KMS-encrypted Persistent Disk as the floor, plus a per-tenant envelope key over each tenant's subdirectory — offboarding = destroy the key = crypto-shred (a single shared key across tenants is a named anti-pattern). No hand-rolled LUKS."
+  normalized_statement: >
+    THE SYSTEM SHALL encrypt customer code with a KMS-encrypted Persistent Disk plus a distinct per-tenant envelope key per subdirectory
+    (never a single shared key, never hand-rolled LUKS), such that destroying a tenant's key crypto-shreds that tenant.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════
+# M4 — Durable-ops substrate (§5, CANONICAL §2/§3/§4/§12.10)
+# ══════════════════════════════════════════════════════════════════
+
+- requirement_id: R-DOC00-5-01
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§2 operation_runs schema"
+  source_quote: "There is one table. ... CREATE TABLE operation_runs ( id uuid PRIMARY KEY ... scope_id text NOT NULL, operation_type text NOT NULL, status text NOT NULL, ... )"
+  normalized_statement: >
+    THE SYSTEM SHALL define exactly one operation_runs table with the canonical column set
+    (id uuid PK, scope_id text, operation_type text, status text, progress jsonb, result_ref jsonb, error text,
+    pause_requested bool, created_by text, started_at, completed_at, last_heartbeat_at) and SHALL NOT define a separate meeting_harness table.
+  requirement_type: state_consistency
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-02
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§2 operation_runs_active index"
+  source_quote: "CREATE UNIQUE INDEX operation_runs_active ON operation_runs (scope_id, operation_type) WHERE status = 'running';"
+  normalized_statement: >
+    THE SYSTEM SHALL enforce a partial UNIQUE INDEX on operation_runs (scope_id, operation_type) WHERE status='running',
+    so at most one running row exists per (scope_id, operation_type).
+  requirement_type: state_consistency
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-03
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§5.1 with_operation_run"
+  source_quote: "Every long-lived operation (a meeting harness, a workroom build) is wrapped in a Postgres row with a heartbeat."
+  normalized_statement: >
+    WHEN a long-lived operation runs
+    THE SYSTEM SHALL wrap it in with_operation_run, which INSERTs a status='running' row and heartbeats it on an interval.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-04
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§5.1 crash detection"
+  source_quote: "a running row past STALE_AFTER_S is swept to interrupted lazily on read and by a boot-time bulk sweep."
+  normalized_statement: >
+    WHEN a running operation_runs row's last_heartbeat_at is older than STALE_AFTER_S
+    THE SYSTEM SHALL sweep it to status='interrupted' both lazily on read and via a boot-time bulk sweep.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-05
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.10 Fencing + §5.1 + §12.3 delivery authority"
+  source_quote: "heartbeat becomes UPDATE operation_runs SET last_heartbeat_at=now() WHERE id=$1 AND status='running'; rowcount 0 ⇒ reclaimed ⇒ set in-process is_owner=False, self-terminate, gate every speak/send_chat/apply/dispatch on is_owner."
+  normalized_statement: >
+    WHEN the fencing heartbeat UPDATE (WHERE id=$1 AND status='running') returns rowcount 0
+    THE SYSTEM SHALL set is_owner=False, self-terminate, and gate every outward emit/delivery/side-effect operation on is_owner —
+    the complete frontier being {speak, send_chat, show_screen (the §12.3/AGENTS.md delivery-authority tools), apply, dispatch} —
+    so a reclaimed zombie cannot emit into a meeting a replacement instance now owns.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-06
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§5.1 check_pause"
+  source_quote: "check_pause() reads pause_requested — this is our 'user interrupts the running build' requirement, for free."
+  normalized_statement: >
+    WHEN pause_requested is set on an operation_runs row
+    THE SYSTEM SHALL surface it via check_pause() so a running build can be paused/aborted mid-flight.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-07
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§5.2 Atomic claim"
+  source_quote: "INSERT INTO operation_runs (...) VALUES ($1, 'meeting-harness', 'running') ON CONFLICT (scope_id, operation_type) WHERE status='running' DO NOTHING RETURNING id; ... Non-null id ⇒ this process owns the meeting; null ⇒ another already does, back off."
+  normalized_statement: >
+    WHEN two processes receive the same meeting-join event
+    THE SYSTEM SHALL arbitrate via the atomic-claim INSERT ... ON CONFLICT DO NOTHING RETURNING id,
+    granting ownership to the non-null returner and making the null returner back off.
+  requirement_type: state_consistency
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-08
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§5.2 standing rule"
+  source_quote: "cross-process coordination = Postgres atomic claim; never in-memory locks; never a broker."
+  normalized_statement: >
+    WHEN cross-process coordination is required
+    THE SYSTEM SHALL use a Postgres atomic claim (or pg_advisory lock), never in-memory locks and never a message broker.
+  requirement_type: state_consistency
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-09
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§5.2 advisory lock"
+  source_quote: "SELECT pg_advisory_xact_lock(hashtext($1),0) for per-meeting critical sections like notes finalization — run all work on the locked connection."
+  normalized_statement: >
+    WHEN a per-meeting critical section (e.g. notes finalization) runs
+    THE SYSTEM SHALL hold pg_advisory_xact_lock and run all of the critical section's work on the locked connection.
+  requirement_type: state_consistency
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-10
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§6 + §5.3"
+  source_quote: "drop ~/platform's ManagedResource state machine ... Keep the idempotent provider verbs (provision/destroy/health)."
+  normalized_statement: >
+    THE SYSTEM SHALL manage E2B sandboxes with only the idempotent provider verbs {provision, destroy, health_check}
+    and SHALL NOT implement a provisioning/running/stopped/failed ManagedResource state machine.
+  requirement_type: resilience
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-11
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§5.3 sandbox lifecycle"
+  source_quote: "E2B-native sandbox timeout as the crash backstop ... Explicit destroy on meeting-end (the ordered close) ... A simple reconcile-cron (§5.4) that lists sandboxes and kills any past TTL."
+  normalized_statement: >
+    THE SYSTEM SHALL bound every E2B sandbox by three mechanisms: an E2B-native timeout backstop, an explicit destroy on meeting-end,
+    and a reconcile-cron that kills any sandbox past its TTL.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-12
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§6 warm pool trim + §5.3"
+  source_quote: "Pre-provision is calendar/join-event driven — spin the one sandbox a scheduled meeting needs a few minutes ahead ... no warm pool."
+  normalized_statement: >
+    WHEN a meeting is scheduled/created
+    THE SYSTEM SHALL pre-provision the one sandbox it needs a few minutes ahead (join/creation-event driven), and SHALL NOT maintain a warm sandbox pool.
+  requirement_type: resilience
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-13
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§5.4 reconcile sweep"
+  source_quote: "One idempotent run_reconcile_sweep() ... behind POST /internal/reconcile (token-gated, mounted outside the auth wall). Prod: Cloud Scheduler hits it every 5 min ...; dev: an in-process interval calls the same function"
+  normalized_statement: >
+    THE SYSTEM SHALL expose one idempotent run_reconcile_sweep() behind token-gated POST /internal/reconcile (outside the auth wall),
+    invoked by Cloud Scheduler every 5 min in prod and by an in-process interval calling the same function in dev.
+  requirement_type: operability
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-14
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§5.4 availability-critical loops"
+  source_quote: "Availability-critical loops (keeping a live meeting's STT creds fresh) stay on an in-process interval where a warm instance exists."
+  normalized_statement: >
+    WHEN a loop is availability-critical (e.g. keeping a live meeting's STT creds fresh)
+    THE SYSTEM SHALL run it on an in-process interval on the warm instance, not on the scale-to-zero reconcile cron.
+  requirement_type: operability
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-15
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§5.5 resume vs restart"
+  source_quote: "A workroom task = restart unless its deliverable already exists (a SQL completion check) ... A meeting harness crash = restart-not-resume ... We do not promise fine-grained checkpoint-resume."
+  normalized_statement: >
+    WHEN a crashed unit recovers
+    THE SYSTEM SHALL restart a workroom task unless a SQL completion check shows its deliverable exists, and SHALL restart-not-resume a meeting harness
+    (re-join Recall, replay recent transcript from progress), never promising fine-grained checkpoint-resume.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-16
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.10 webhook_events + §5.6"
+  source_quote: "webhook_events — durable landing for ALL external webhooks (GitHub + Recall), INSERT ON CONFLICT (delivery_guid) DO NOTHING → 200 → drain on boot. ... so NO general meeting_events bus."
+  normalized_statement: >
+    WHEN any external webhook (GitHub or Recall) is received
+    THE SYSTEM SHALL durably land it in webhook_events via INSERT ON CONFLICT (delivery_guid) DO NOTHING, return 200 immediately,
+    and drain status='pending' rows on boot + periodically; and SHALL NOT introduce a general meeting_events bus.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-17
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§3 meeting_cost + §5.6"
+  source_quote: "meeting_cost — the per-meeting cost meter is persisted (not in-process), so a recycled orchestrator reloads spent cost instead of resetting to 0 ... check_meeting_budget() reads it."
+  normalized_statement: >
+    THE SYSTEM SHALL persist the per-meeting cost meter in the meeting_cost table (canonical column set),
+    so a recycled orchestrator reloads spent cost via check_meeting_budget() rather than resetting to 0.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-18
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§4 staged_drafts + §5.6"
+  source_quote: "staged_drafts — propose_change persists the draft (full content to GCS Object-Versioned + a staged_drafts row) at creation ... a human accepting after the call reads the persisted draft and an accept-handler applies it."
+  normalized_statement: >
+    WHEN propose_change stages a draft
+    THE SYSTEM SHALL persist it at creation (full content to GCS Object-Versioned + a staged_drafts row, status='proposed'),
+    so a human accepting after the call reads the persisted draft and an accept-handler applies it.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-19
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.10 + §5.6"
+  source_quote: "Workroom task state and meeting-close reuse operation_runs — NO new tables. ... There is no workroom_tasks table and no close_jobs table"
+  normalized_statement: >
+    THE SYSTEM SHALL represent Workroom task state (operation_type='workroom:<id>') and meeting-close (operation_type='meeting-close') as operation_runs rows,
+    and SHALL NOT create a workroom_tasks table or a close_jobs table.
+  requirement_type: state_consistency
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-20
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§11.1 identity & tenancy schema + §5.7"
+  source_quote: "CREATE TABLE tenants ...; CREATE TABLE users ...; CREATE TABLE repos ...; CREATE TABLE meetings ...; CREATE TABLE sessions ..."
+  normalized_statement: >
+    THE SYSTEM SHALL define the identity/tenancy schema as the five tables {tenants, users, repos, meetings, sessions}
+    with the canonical columns (including meetings.status live|ended|interrupted and meetings.pinned_sha).
+  requirement_type: state_consistency
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-21
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§11.1 Auth/session"
+  source_quote: "the connect page does Google OAuth ... → creates/loads a users row + a signed session cookie backed by sessions. resolve_session(cookies) → {user_id, tenant_id} reads that cookie."
+  normalized_statement: >
+    WHEN a user signs in on the connect page (Google OAuth)
+    THE SYSTEM SHALL create/load a users row plus a signed session cookie backed by sessions, and resolve_session(cookies) SHALL return {user_id, tenant_id}.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-22
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§11.1 the binding flow"
+  source_quote: "a meeting is created when the user invites Proxy ... → a meetings row bound to (tenant_id, repo_id, pinned_sha=HEAD); the Recall bot is launched and its recall_bot_id written back. Recall webhooks carry the bot_id → look up the meetings row → tenant + repo."
+  normalized_statement: >
+    WHEN a user invites Proxy to a meeting
+    THE SYSTEM SHALL create a meetings row bound to (tenant_id, repo_id, pinned_sha=HEAD), launch the Recall bot, write back recall_bot_id,
+    and resolve subsequent Recall webhooks (carrying bot_id) back to that meetings row's tenant + repo.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-23
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§3 meeting_cost writers"
+  source_quote: "The Scribe writes model_usd (+ the cache split) directly (it's a bare anthropic ... NOT the provider seam ...). The seam-based meter (Proxy wakes + Workroom ...) also increments model_usd."
+  normalized_statement: >
+    WHEN model spend accrues
+    THE SYSTEM SHALL write it to meeting_cost.model_usd from both the Scribe (bare Messages call, plus the cache_read/cache_creation split) and the seam-based meter (wakes + Workroom).
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-24
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.10 transcript_segments status"
+  source_quote: "transcript_segments.status DEFAULT 'pending' (was 'comprehended' — the linchpin; applier flips to comprehended transactionally with the delta append; close backfills pending+gap)."
+  normalized_statement: >
+    THE SYSTEM SHALL default transcript_segments.status to 'pending' and flip it to 'comprehended' transactionally with the note-delta append (close backfills pending+gap).
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-25
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§11.11 live-WS instance affinity + §5.1 operation_runs.created_by + §5.2 atomic claim"
+  source_quote: "route via the operation_runs claim owner (store the owner instance-id on the row; a non-owner instance proxies or hands off)"
+  normalized_statement: >
+    WHEN a meeting_runtime process claims a meeting (the atomic-claim INSERT / with_operation_run creates the operation_runs row)
+    THE SYSTEM SHALL write the owning instance's id into operation_runs.created_by,
+    so live-WS instance affinity has a populated owner-instance source to route reconnects/retries on.
+  requirement_type: state_consistency
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-26
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§2 operation_runs DDL status column (mirrored DOC-00 §5.1)"
+  source_quote: "status            text NOT NULL,          -- running|completed|failed|interrupted"
+  normalized_statement: >
+    WHILE operation_runs rows are written THE SYSTEM SHALL constrain status to exactly
+    {running, completed, failed, interrupted} and SHALL NOT write or accept any out-of-domain status value —
+    the value set the partial-unique index, fencing heartbeat, stale sweep, and boot reaper all key on ('running').
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════
+# M5 — Server boot & lifecycle (§6)
+# ══════════════════════════════════════════════════════════════════
+
+- requirement_id: R-DOC00-6-01
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§6 Env loaded first"
+  source_quote: "pydantic-settings BaseSettings validates the full config at import; a missing required key is a startup crash with a clear message ...: DATABASE_URL, GCS_BUCKET, SESSION_SECRET (prod), GCP project (prod), each AES credential key, RECALL_API_KEY, ANTHROPIC_*."
+  normalized_statement: >
+    WHEN the process boots with a missing required config key
+    THE SYSTEM SHALL fail fast at import (pydantic-settings validation) with a clear message, before any first use.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-6-02
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§6 Ordered lifespan startup"
+  source_quote: "init tracing (synchronously ...) → open the asyncpg pool → construct the Database facade → the provisioner_ready async-readiness gate ... → boot-time stale-row reaper ... → mount routers behind the auth wall + the dispatch funnel."
+  normalized_statement: >
+    WHEN the server starts
+    THE SYSTEM SHALL execute the lifespan in exactly this order: init tracing → open asyncpg pool → construct Database facade →
+    provisioner_ready gate → boot-time stale-row reaper → mount routers behind the auth wall + dispatch funnel.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-6-03
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§6 provisioner_ready gate"
+  source_quote: "request handlers await provisioner_ready before use — defuses the exact race ~/platform hit: a meeting-join event arriving before the bot session is wired"
+  normalized_statement: >
+    WHEN a request handler needs the bot/sandbox provisioner
+    THE SYSTEM SHALL await provisioner_ready before use, so a meeting-join arriving before the provisioner is wired cannot race.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-6-04
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§6 boot-time stale-row reaper"
+  source_quote: "boot-time stale-row reaper (mark orphaned in_meeting/running rows interrupted)"
+  normalized_statement: >
+    WHEN the server boots
+    THE SYSTEM SHALL run a stale-row reaper that marks orphaned running rows 'interrupted' before mounting routers.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-6-05
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§6 EPIPE tolerance"
+  source_quote: "a BrokenPipeError from a crashed Claude-SDK subprocess is recoverable ... the asyncio exception handler swallows it and lets retry recover; genuinely-unknown exceptions crash after a flush delay."
+  normalized_statement: >
+    WHEN a BrokenPipeError arrives from a crashed Claude-SDK subprocess
+    THE SYSTEM SHALL swallow it in the asyncio exception handler and let retry recover, while genuinely-unknown exceptions crash after a flush delay.
+  requirement_type: resilience
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-6-06
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§6 Graceful shutdown"
+  source_quote: "asyncio.gather(flush_tracing(), db.close(), bot.leave_all(), server.shutdown()) in parallel ... + a hard-exit backstop timer ... on both SIGINT/SIGTERM."
+  normalized_statement: >
+    WHEN SIGINT or SIGTERM is received
+    THE SYSTEM SHALL run flush_tracing/db.close/bot.leave_all/server.shutdown concurrently via asyncio.gather with a hard-exit backstop timer.
+  requirement_type: resilience
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-6-07
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§7 Claude SDK auth"
+  source_quote: "Claude SDK auth (ANTHROPIC_API_KEY / OAuth token / Vertex — keep all three modes)"
+  normalized_statement: >
+    THE SYSTEM SHALL keep all three Claude SDK auth modes available — ANTHROPIC_API_KEY, OAuth token, and Vertex —
+    documenting each in the .env.example config contract, and SHALL NOT hard-wire a single auth mode.
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════
+# M6 — Config, secrets & credentials (§7, CANONICAL §12.12)
+# ══════════════════════════════════════════════════════════════════
+
+- requirement_id: R-DOC00-7-01
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§7 .env.example as the config contract"
+  source_quote: ".env.example as the config contract ... every var documented with what-it's-for + where-to-get-it, commented-out = optional-with-default ... .env.example doubles as the required-key manifest for the §6 boot gate."
+  normalized_statement: >
+    THE SYSTEM SHALL maintain .env.example as the config contract (every var documented with purpose + source, commented-out = optional-with-default),
+    doubling as the required-key manifest for the §6 boot gate.
+  requirement_type: documentation
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-7-02
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.12 Model ids + §7 per-role model seats"
+  source_quote: "libs/llm/routing.py = ONE table, 8 seats, real ids (claude-haiku-4-5 / claude-sonnet-4-6 / claude-opus-4-8); ... PROXY_MODEL_{SCRIBE,SCRIBE_CLOSE,GATE,QUALITY_GATE,ANSWER,ORCHESTRATOR,WORKROOM,BIG_BUILD}"
+  normalized_statement: >
+    THE SYSTEM SHALL keep one canonical 8-seat model table in libs/llm/routing.py with real model ids only
+    (claude-haiku-4-5 / claude-sonnet-4-6 / claude-opus-4-8); env vars PROXY_MODEL_{SCRIBE,SCRIBE_CLOSE,GATE,QUALITY_GATE,ANSWER,ORCHESTRATOR,WORKROOM,BIG_BUILD} only override it.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-7-03
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§7 PROXY_MAX_INFLIGHT_LLM"
+  source_quote: "PROXY_MAX_INFLIGHT_LLM=16 (the libs/llm global in-flight semaphore — distinct from the per-meeting [3–5] concurrency)"
+  normalized_statement: >
+    THE SYSTEM SHALL enforce a global libs/llm in-flight semaphore of PROXY_MAX_INFLIGHT_LLM (default 16), distinct from the per-meeting [3-5] concurrency.
+  requirement_type: performance
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-7-04
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§7 per-domain AES keys"
+  source_quote: "per-domain AES-256-GCM credential keys (calendar/Recall/STT — one per integration domain so a leak's blast radius stays bounded)"
+  normalized_statement: >
+    THE SYSTEM SHALL use one AES-256-GCM credential key per integration domain (calendar/Recall/STT), never a shared key, so a leak's blast radius stays bounded.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-7-05
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§7 numeric tunables + CANONICAL §12.12"
+  source_quote: "Numeric/threshold tunables live in config/defaults.toml (one value + unit + range per bracketed constant ...); code reads that file, and env vars override only the secrets/seats above."
+  normalized_statement: >
+    THE SYSTEM SHALL keep every numeric/threshold tunable in config/defaults.toml (one value + unit + range each), read by code;
+    env vars SHALL override only secrets and model seats, never tunables.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-7-06
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§7 Secrets — GCP Secret Manager"
+  source_quote: "Terraform creates the secret resources and auto-populates database-url, session-secret, and the AES credential keys as random_id with lifecycle.ignore_changes=[secret_data] (so out-of-band rotations survive apply)."
+  normalized_statement: >
+    THE SYSTEM SHALL store secrets in GCP Secret Manager, with Terraform creating the resources and auto-populating database-url/session-secret/AES keys
+    as random_id with lifecycle.ignore_changes=[secret_data] so out-of-band rotations survive apply.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-7-07
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§7 check-secret-bindings + §10"
+  source_quote: "A check-secret-bindings CI + pre-commit job parses the Terraform secret map vs the deploy config and fails on drift"
+  normalized_statement: >
+    WHEN the Terraform secret map and the deploy config drift
+    THE SYSTEM SHALL fail the check-secret-bindings job (which runs in both CI and pre-commit).
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-7-08
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§7 Nango vs Secret Manager"
+  source_quote: "Nango holds end-user GitHub OAuth; Secret Manager holds platform credentials + the GitHub-App private key (never expires — manual-rotation runbook)."
+  normalized_statement: >
+    THE SYSTEM SHALL hold end-user GitHub OAuth in Nango and platform credentials + the GitHub-App private key in Secret Manager, never mixing the two.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-7-09
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§7 Feature flags"
+  source_quote: "Feature flags — env vars, no table (V0). V0 has zero active runtime flags ... use plain env vars."
+  normalized_statement: >
+    THE SYSTEM SHALL implement V0 feature flags as plain env vars with zero active runtime flags, and SHALL NOT create a feature_flags table or reload cache.
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-7-10
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.12 Auth + §7 user auth"
+  source_quote: "Auth: Authlib + Google OIDC + /auth/{login,callback,logout} + GOOGLE_CLIENT_ID/SECRET"
+  normalized_statement: >
+    THE SYSTEM SHALL implement user auth with Authlib + Google OIDC, exposing /auth/{login,callback,logout} on control_plane, configured by GOOGLE_CLIENT_ID/SECRET.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════
+# M7 — Infrastructure as Code (§8)
+# ══════════════════════════════════════════════════════════════════
+
+- requirement_id: R-DOC00-8-01
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§8 Terraform layout"
+  source_quote: "infra/ ... modules/{bootstrap,platform} ... envs/{dev,prod}/{bootstrap,platform} ... Apply order per env: bootstrap → platform."
+  normalized_statement: >
+    THE SYSTEM SHALL lay out Terraform as infra/modules/{bootstrap,platform} + infra/envs/{dev,prod}/{bootstrap,platform},
+    applied in the order bootstrap → platform per env.
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-8-02
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§8 dev vs prod deploy"
+  source_quote: "Dev auto-deploys on a Cloud Build trigger; prod is promote-based (their release-registry pattern: Artifact Registry immutable tags + a promote job that ships the exact-tested image — no direct pushes to prod)."
+  normalized_statement: >
+    THE SYSTEM SHALL auto-deploy dev on a Cloud Build trigger and promote prod (Artifact Registry immutable tags + a promote job shipping the exact-tested image),
+    with no direct pushes to prod.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-8-03
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§8 cross-cutting discipline"
+  source_quote: "prevent_destroy on every data-bearing resource (specs bucket, both SQL DBs, credential-key random_ids, the project lien)"
+  normalized_statement: >
+    THE SYSTEM SHALL set prevent_destroy on every data-bearing Terraform resource (specs bucket, both SQL DBs, credential-key random_ids, the project lien).
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-8-04
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§8 cross-cutting discipline"
+  source_quote: "Terraform owns the service shell, the deploy script owns image/env/secrets (Cloud Run template ignore_changes'd so promote/CI fully own runtime config)"
+  normalized_statement: >
+    THE SYSTEM SHALL have Terraform own the Cloud Run service shell (template lifecycle ignore_changes) while the deploy/promote path owns image/env/secrets.
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-8-05
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§8 cross-cutting discipline"
+  source_quote: "least-privilege service-account-per-role with the exact-API-call-per-role comment"
+  normalized_statement: >
+    THE SYSTEM SHALL provision a least-privilege service account per role (never one shared broad SA).
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-8-06
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§8 customer-platform module"
+  source_quote: "The customer-platform per-customer-GCP-project module is the named enterprise-tenancy path — recorded, built nothing now (anti-inflation CUT)."
+  normalized_statement: >
+    THE SYSTEM SHALL record the customer-platform per-customer-GCP-project module as a named path only and SHALL build nothing for it in V0.
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════
+# M8 — The Dockerfile (§9)
+# ══════════════════════════════════════════════════════════════════
+
+- requirement_id: R-DOC00-9-01
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§9 Dockerfile builder"
+  source_quote: "RUN uv sync --frozen --no-dev --package harness   # per-service, self-contained"
+  normalized_statement: >
+    WHEN a service image is built
+    THE SYSTEM SHALL use a multi-stage uv build with `uv sync --frozen --no-dev --package <svc>` so each image is per-service and self-contained.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-9-02
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§9 runtime stage"
+  source_quote: "RUN useradd -m -u 1001 appuser   # HOME REQUIRED — Claude Agent SDK writes to $HOME ... USER appuser ... ENV PORT=8080 HOME=/home/appuser"
+  normalized_statement: >
+    WHEN the runtime image is built
+    THE SYSTEM SHALL run as non-root uid 1001 (appuser) with HOME set (required because the Claude Agent SDK writes to $HOME).
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-9-03
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§9 migrate-retry CMD"
+  source_quote: "CMD [\"sh\",\"-c\",\"n=0; until alembic upgrade head; do n=$((n+1)); [ $n -ge 30 ] && exit 1; sleep 5; done && exec python -m harness.server\"] ... env.py wraps the upgrade in SELECT pg_advisory_lock(...)"
+  normalized_statement: >
+    WHEN N containers boot in parallel
+    THE SYSTEM SHALL serialize Alembic migrations with an advisory lock (env.py) and a 30x5s retry-until-success CMD, then exec the server.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-9-04
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§9 SANDBOX_IMAGE_HASH"
+  source_quote: "The SANDBOX_IMAGE_HASH LABEL is the promote-time coordinate that pins the app release to its matching warm-sandbox base image (fail-closed)."
+  normalized_statement: >
+    WHEN an image is built
+    THE SYSTEM SHALL stamp a SANDBOX_IMAGE_HASH LABEL pinning the app release to its matching warm-sandbox base image (fail-closed if mismatched).
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════
+# M9 — CI/CD (§10, CANONICAL §11.11/§12.12)
+# ══════════════════════════════════════════════════════════════════
+
+- requirement_id: R-DOC00-10-01
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§10 GitHub Actions"
+  source_quote: "GitHub Actions for the fast checks: ruff + mypy, unit + a fast security/contract test suite"
+  normalized_statement: >
+    THE SYSTEM SHALL run ruff + mypy + unit + a fast security/contract suite as fast GitHub Actions checks that block merges.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-10-02
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§10 check-migration-order"
+  source_quote: "check-migration-order (Alembic multiple-heads vs main, fail-loud-never-skip)"
+  normalized_statement: >
+    WHEN Alembic has multiple heads relative to main
+    THE SYSTEM SHALL fail the check-migration-order gate loudly and SHALL NOT skip it.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-10-03
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§11.11 SDK-isolation-triad CI gate + §10"
+  source_quote: "check-sdk-isolation-triad ... a CI check asserting the SDK-isolation triad flags + SDK_LOCAL_TOOLS block-list are present on every query() call site, not a manual re-audit."
+  normalized_statement: >
+    WHEN a query() call site omits the SDK-isolation triad flags or the SDK_LOCAL_TOOLS block-list
+    THE SYSTEM SHALL fail the check-sdk-isolation-triad CI gate.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-10-04
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§10 Cloud Build"
+  source_quote: "Cloud Build for build → Artifact Registry → deploy (dev on trigger; prod via promote; a separate migrations step)."
+  normalized_statement: >
+    THE SYSTEM SHALL run Cloud Build for build → Artifact Registry → deploy, with dev on trigger, prod via promote, and a separate migrations step.
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-10-05
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§10 two disciplines"
+  source_quote: "every guard runs in BOTH pre-commit AND CI (local fast-fail + server-side enforcement)"
+  normalized_statement: >
+    THE SYSTEM SHALL wire every guard (check-migration-order, check-secret-bindings, check-sdk-isolation-triad, banned-strings, field-contract) into BOTH pre-commit and CI.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-10-06
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§10 fast-blocking / slow-nightly split"
+  source_quote: "a fast-blocking / slow-nightly split (unit+security block merges; any heavy E2E runs nightly via Cloud Scheduler and never gates on flake)."
+  normalized_statement: >
+    THE SYSTEM SHALL block merges only on the fast unit+security suite and run heavy E2E nightly via Cloud Scheduler, never gating a merge on E2E flake.
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-10-07
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.12 banned-strings"
+  source_quote: "A ~15-line CI banned-strings test fails on the dead tokens."
+  normalized_statement: >
+    WHEN a superseded dead token (e.g. session_transcripts, ManagedResource, warm pool, TILE_ADDRESS) appears in source
+    THE SYSTEM SHALL fail the CI banned-strings test.
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-10-08
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§11.11 Field-level contract check"
+  source_quote: "Field-level contract check: un-trim it (Doc 08 §4.8) — a cheap Pydantic produce/consume field-diff in CI"
+  normalized_statement: >
+    THE SYSTEM SHALL run a Pydantic produce/consume field-diff contract check in CI that fails when a produced field has no consumer (or vice versa).
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════
+# M10 — The database layer (§11, CANONICAL §11.2)
+# ══════════════════════════════════════════════════════════════════
+
+- requirement_id: R-DOC00-11-01
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§11 asyncpg pool"
+  source_quote: "pool = await asyncpg.create_pool(dsn, min_size=2, max_size=20, max_inactive_connection_lifetime=30, command_timeout=10)"
+  normalized_statement: >
+    THE SYSTEM SHALL create the asyncpg pool with min_size=2, max_size=20, max_inactive_connection_lifetime=30, command_timeout=10, over the Cloud SQL Auth Proxy Unix socket (no SSL).
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-11-02
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§11 Database facade"
+  source_quote: "A Database facade owns the single pool and exposes a repos namespace of thin per-domain repositories ... with plain parameterized SQL — no ORM"
+  normalized_statement: >
+    THE SYSTEM SHALL expose one Database facade owning the single pool, with a repos namespace of thin per-domain repositories using plain parameterized SQL and NO ORM.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-11-03
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§11.2 + §12.10 meeting_id type"
+  source_quote: "meeting_id type is uuid across every app table ... The one exception is operation_runs.scope_id, which stays text ...; the atomic claim casts meeting_id::text at that one call site."
+  normalized_statement: >
+    THE SYSTEM SHALL use uuid for meeting_id across every app table (meetings.id, meeting_cost.meeting_id, staged_drafts.meeting_id, transcript_segments.meeting_id, note_deltas.meeting_id),
+    with operation_runs.scope_id the sole text exception, and cast meeting_id::text only at the atomic-claim call site.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-11-04
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§11 Migrations"
+  source_quote: "Migrations: Alembic (its revision DAG > ~/platform's epoch-filename scheme ...) + the env.py advisory lock + the retry-loop CMD (§9) for parallel-boot safety."
+  normalized_statement: >
+    THE SYSTEM SHALL use Alembic (revision DAG) for Postgres migrations with the env.py advisory lock and the retry-loop CMD for parallel-boot safety.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════
+# M11 — Contracts registry (§12, CANONICAL §1)
+# ══════════════════════════════════════════════════════════════════
+
+- requirement_id: R-DOC00-12-01
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§12 self-register"
+  source_quote: "Every event/message is a Pydantic model that self-registers on definition ... CHANNEL_REGISTRY[cls.model_fields[\"type\"].default] = cls   # auto-register"
+  normalized_statement: >
+    WHEN a ProxyMessage subclass is defined
+    THE SYSTEM SHALL auto-register it in the channel registry keyed on its 'type' discriminator via __init_subclass__.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-12-02
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§12 assert_registry_closed"
+  source_quote: "assert set(get_args(MessageType)) == set(CHANNEL_REGISTRY), \"closed-graph violation\" ... run in CI AND at boot (fail-fast) ... an unregistered (produced-but-no-consumer) message fails the build"
+  normalized_statement: >
+    WHEN the message-type union and the channel registry are not set-equal
+    THE SYSTEM SHALL fail assert_registry_closed() (run both in CI and at boot), so a produced-but-unconsumed message type fails the build.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-12-03
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§12 Pydantic-per-message discipline"
+  source_quote: "every ID is UUID, every free-text field carries Field(max_length=…), every selector is a Literal[...]."
+  normalized_statement: >
+    WHEN a contract message field is defined
+    THE SYSTEM SHALL type every ID as UUID, bound every free-text field with Field(max_length=...), and constrain every selector to a Literal[...].
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-12-04
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§1 Registry base class"
+  source_quote: "ProxyMessage with discriminator MessageType (an Enum). Doc 08's ProxyEvent/EventType is renamed to this. One registry, one assert_registry_closed()."
+  normalized_statement: >
+    THE SYSTEM SHALL name the registry base class ProxyMessage with an Enum discriminator MessageType, with exactly one registry and one assert_registry_closed().
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-12-05
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§12 dispatch validation"
+  source_quote: "This is validated once centrally in the dispatch funnel (Doc 08) — and it adds a layer ...: the connect page is a public URL a meeting guest can open, so tile→backend is not trusted."
+  normalized_statement: >
+    WHEN a client message reaches the backend via the dispatch funnel
+    THE SYSTEM SHALL Pydantic-validate it once centrally, treating tile->backend as untrusted (the connect page is a public URL).
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════
+# M12 — Observability & operational floor (§13)
+# ══════════════════════════════════════════════════════════════════
+
+- requirement_id: R-DOC00-13-01
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§13 Observability"
+  source_quote: "structured JSON logs (structlog, stdout)"
+  normalized_statement: >
+    THE SYSTEM SHALL emit structured JSON logs via structlog to stdout.
+  requirement_type: observability
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-13-02
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§13 Observability"
+  source_quote: "Sentry for errors (one import, all services)"
+  normalized_statement: >
+    THE SYSTEM SHALL wire Sentry error reporting once, shared across all services.
+  requirement_type: observability
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-13-03
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§13 cost telemetry"
+  source_quote: "per-meeting cost telemetry in Postgres — total_cost_usd + the cache-read/creation split per micro-call, aggregated per meeting"
+  normalized_statement: >
+    THE SYSTEM SHALL record per-meeting cost telemetry in Postgres including total_cost_usd and the cache-read/cache-creation split per micro-call, aggregated per meeting.
+  requirement_type: observability
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-13-04
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§13 Langfuse scaffold"
+  source_quote: "Langfuse tracing scaffold wired day-one but inert (trace-wrap the SDK, flush_tracing() in the parallel shutdown; keys unset) ... the self-hosted Langfuse install is deferred"
+  normalized_statement: >
+    THE SYSTEM SHALL wire the Langfuse tracing scaffold day-one but inert (trace-wrap the SDK, flush_tracing() in shutdown, keys unset), deferring the self-hosted install.
+  requirement_type: observability
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-13-05
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§13 Operational floor"
+  source_quote: "UptimeRobot on /health + Healthchecks.io heartbeats from the harness"
+  normalized_statement: >
+    THE SYSTEM SHALL expose /health for UptimeRobot and emit Healthchecks.io heartbeats from the harness.
+  requirement_type: observability
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-13-06
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§13 Operational floor"
+  source_quote: "one idempotent hardening script: key-only SSH, no root login, fail2ban, unattended-upgrades, services as non-root, host firewall AND security group (both layers), customer code only on the encrypted volume, arbitrary code execution only ever inside E2B (never on our host)"
+  normalized_statement: >
+    THE SYSTEM SHALL provide one idempotent hardening script enforcing key-only SSH, no root login, fail2ban, unattended-upgrades, non-root services,
+    host firewall AND security group, customer code only on the encrypted volume, and arbitrary code execution only inside E2B (never on the host).
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-13-07
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§11.11 Live-WS instance affinity + §13"
+  source_quote: "a reconnecting tile WS / retried Recall webhook routes to the instance holding the meeting's harness via the operation_runs claim owner (store the owner instance-id on the row; a non-owner instance proxies or hands off) — never random Cloud Run load-balancing."
+  normalized_statement: >
+    WHEN a tile WS reconnects or a Recall webhook is retried
+    THE SYSTEM SHALL route it to the instance holding the meeting's harness via the operation_runs claim owner (created_by instance-id), non-owners proxying/handing off, never random load-balancing.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-13-08
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§13 skip-list"
+  source_quote: "The skip-list (building any of these at V0 is a defect): Kubernetes/any orchestrator · service mesh · SOC2 tooling ... feature-flag platforms ... multi-region ... OpenTelemetry/Prometheus/Grafana ... self-hosted Langfuse ClickHouse stack ... PagerDuty ... the per-customer-GCP-project onboarding machinery ... impala/BigQuery dialect drivers, Figma ..."
+  normalized_statement: >
+    THE SYSTEM SHALL build none of the skip-list items at V0 (Kubernetes, service mesh, SOC2 tooling, feature-flag platforms, multi-region, Ansible,
+    OpenTelemetry/Prometheus/Grafana, self-hosted Langfuse ClickHouse, CDKTF/Pulumi, auto-rotation infra, PagerDuty, per-customer-GCP-project machinery, impala/BigQuery/Figma).
+  requirement_type: deployment
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-13-09
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§13 Operational floor"
+  source_quote: "managed-Postgres automated backups + daily volume snapshots (clones/indexes/map are rebuildable derived state — treat as cache)"
+  normalized_statement: >
+    THE SYSTEM SHALL take daily snapshots of the code_intel per-tenant volume alongside managed-Postgres automated backups,
+    and SHALL treat the clones/indexes/dependency-graph on that volume as rebuildable derived cache (not the durable source of truth).
+  requirement_type: data_integrity
+  criticality: P2
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════
+# M13 — The project CLAUDE.md constitution (§14)
+# ══════════════════════════════════════════════════════════════════
+
+- requirement_id: R-DOC00-14-01
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§14 CLAUDE.md constitution"
+  source_quote: "Written at repo root, versioned and PR-reviewed; every line must pass 'would removing this cause a mistake?' — and every rule names its enforcement mechanism"
+  normalized_statement: >
+    THE SYSTEM SHALL keep a repo-root CLAUDE.md (versioned, PR-reviewed) in which every hard rule names its enforcement mechanism.
+  requirement_type: documentation
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-14-02
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§14 hard rules + §15 Naming"
+  source_quote: "user-visible strings never contain internal names (Orchestrator/Scribe/workroom) — lint ... the product and the agent are Proxy, everywhere, always."
+  normalized_statement: >
+    WHEN a user-visible string is produced
+    THE SYSTEM SHALL never contain an internal component name (Orchestrator/Scribe/workroom) — enforced by lint — and SHALL name the product/agent 'Proxy'.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-14-03
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§14 hard rules"
+  source_quote: "every tool handler returns errors, never throws"
+  normalized_statement: >
+    WHEN a tool handler encounters an error
+    THE SYSTEM SHALL return an error result, never raise/throw out of the handler.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-14-04
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§14 hard rules"
+  source_quote: "every external call wrapped with retry + cost telemetry"
+  normalized_statement: >
+    WHEN an external call is made
+    THE SYSTEM SHALL wrap it with retry + cost telemetry (no bare unwrapped external calls).
+  requirement_type: observability
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════
+# M14 — Consolidated invariants: cost, safety floor, lethal trifecta (§15)
+# ══════════════════════════════════════════════════════════════════
+
+- requirement_id: R-DOC00-15-01
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.7 + §15 Cost"
+  source_quote: "Listening baseline ~$0.95–1.25/hr ... = the promised SLA ceiling for listening + notes + quick grounded answers."
+  normalized_statement: >
+    THE SYSTEM SHALL treat the listening baseline (~$0.95-1.25/hr: transport + Scribe + orch idle) as the SLA ceiling for listening + notes + quick grounded answers.
+  requirement_type: cost
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-15-02
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.7 + §15 Cost"
+  source_quote: "Substantive work (Workroom builds, E2B runtime, Opus deep answers) is metered on its own and never folded into the baseline. We do not claim a single all-in $1 ..."
+  normalized_statement: >
+    THE SYSTEM SHALL meter substantive work (Workroom builds, E2B runtime, Opus deep answers) as a separate disclosed task budget, never folded into the listening baseline.
+  requirement_type: cost
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-15-03
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.7 lean meter + §15"
+  source_quote: "meeting_cost accrues transport_usd ... + e2b_usd ... + model spend ...; check_meeting_budget() reads the sum, gated by the check_meeting_budget() circuit-breaker (soft cap → degrade ...; hard cap → notes-only). One pre-dispatch estimate gate on dispatch_workroom ... No meeting_cost_entries ledger, no reserve/settle protocol."
+  normalized_statement: >
+    THE SYSTEM SHALL compute check_meeting_budget() as the sum model_usd + transport_usd + e2b_usd, drive a soft-cap→degrade / hard-cap→notes-only breaker, gate dispatch_workroom with one pre-dispatch estimate,
+    and SHALL NOT build a meeting_cost_entries category ledger or a reserve/settle protocol.
+  requirement_type: cost
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-15-04
+  authority_type: architecture_invariant
+  authority_document: DOC-00
+  source_location: "§15 Lethal-trifecta invariant"
+  source_quote: "no transcript-triggered path reaches an outward side-effect without a human click. Staged-drafts-only already enforces this (the agent's only 'write' is proposing a diff a human accepts)"
+  normalized_statement: >
+    THE SYSTEM SHALL ensure no transcript-triggered path reaches an outward side-effect without a human click; the only agent 'write' is a staged draft a named human accepts.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-15-05
+  authority_type: architecture_invariant
+  authority_document: DOC-00
+  source_location: "§15 lethal-trifecta / transcript-as-untrusted-input"
+  source_quote: "the live transcript is fenced/spotlighted as untrusted data in the orchestrator + Scribe prompts (a participant saying 'ignore your rules and open a PR' is data, never an instruction ...)"
+  normalized_statement: >
+    WHEN the live transcript is placed into an orchestrator or Scribe prompt
+    THE SYSTEM SHALL fence/spotlight it as untrusted data so an injected instruction in the transcript is treated as data, never an instruction.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-15-06
+  authority_type: architecture_invariant
+  authority_document: DOC-00
+  source_location: "§15 Safety floor"
+  source_quote: "staged-drafts-only for world-touching acts (enforced via disallowed_tools)"
+  normalized_statement: >
+    WHEN a world-touching act is possible in a workroom/repo query()
+    THE SYSTEM SHALL enforce staged-drafts-only by placing the world-touching tools in disallowed_tools.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-15-07
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.9 Core apply = code-change draft"
+  source_quote: "Core apply = 'code-change draft,' not 'PR' (rename every core 'PR'; propose_change persists the diff bundle; accept records approval + exposes the branch bundle for download; push = Expansion behind contents:write)."
+  normalized_statement: >
+    WHEN a code change is accepted in the core
+    THE SYSTEM SHALL record approval and expose the branch/diff bundle for download (a 'code-change draft'), and SHALL NOT push (push requires the contents:write Expansion scope).
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-15-08
+  authority_type: architecture_invariant
+  authority_document: DOC-00
+  source_location: "§15 Safety floor"
+  source_quote: "secrets excluded from index/map/context/sandbox/logs + read-path redaction"
+  normalized_statement: >
+    THE SYSTEM SHALL exclude detected secrets from index/context/sandbox/logs and redact them at the read path (no raw secret in any log line or artifact).
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-15-09
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.9 Per-sandbox JWT + §15 no live secrets in sandboxes"
+  source_quote: "Per-sandbox random JWT secret minted at provision (host keeps the map) — replaces the fleet-shared HS256 secret that untrusted in-sandbox repo code could exfiltrate."
+  normalized_statement: >
+    WHEN an E2B sandbox is provisioned
+    THE SYSTEM SHALL mint a per-sandbox random JWT secret (host keeps the map), never a fleet-shared secret, so untrusted in-sandbox code cannot exfiltrate a shared secret.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-15-10
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.9 Tenant offboarding + §15"
+  source_quote: "Tenant offboarding: extend run_reconcile_sweep() to delete tenant Postgres rows + GCS prefixes; retention default (transcripts ~90d)."
+  normalized_statement: >
+    WHEN a tenant offboards (or retention elapses, transcripts ~90d)
+    THE SYSTEM SHALL delete that tenant's Postgres rows and GCS prefixes via run_reconcile_sweep().
+  requirement_type: privacy
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-15-11
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.9 ONE authenticated surface"
+  source_quote: "only accept-draft is hard-enforced = authenticated tenant member via /m/ ... GET /m/{meeting_id} ... + POST /m/{meeting_id}/drafts/{draft_id}/accept|reject — protected() + server-side meeting/draft→tenant check ... idempotent + CSRF + audit."
+  normalized_statement: >
+    WHEN a draft accept/reject is posted to /m/{meeting_id}/drafts/{draft_id}
+    THE SYSTEM SHALL require an authenticated tenant member (protected + server-side meeting/draft->tenant check), be idempotent, CSRF-protected, and audited.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-15-12
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.9 capability token"
+  source_quote: "A signed, short-TTL, meeting-scoped, revocable capability token in the chat link lets the forwarded-to-VP read notes (read-only, no accept)."
+  normalized_statement: >
+    WHEN a non-signed-in recipient opens the chat-link notes view
+    THE SYSTEM SHALL authorize read-only access via a signed, short-TTL, meeting-scoped, revocable capability token that never grants accept.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-15-13
+  authority_type: architecture_invariant
+  authority_document: DOC-00
+  source_location: "§15 Safety floor"
+  source_quote: "full tool-call telemetry retained"
+  normalized_statement: >
+    WHEN any tool call executes
+    THE SYSTEM SHALL retain full tool-call telemetry for audit.
+  requirement_type: observability
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-15-14
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.8 pinned SLOs + DOC-00 §1 headline + config [latency_slo]"
+  source_quote: "Three instrumented clocks on the DIRECT-ANSWER path only: ack-audible p95<=500ms · first-grounded-text p50<=2s/p95<=4s · first-grounded-audio p50<=2.5s/p95<=5s."
+  normalized_statement: >
+    THE SYSTEM SHALL pin the direct-answer latency SLOs in config/defaults.toml [latency_slo] to the canonical values
+    (first_text_p50_s=2.0, first_text_p95_s=4.0, first_audio_p50_s=2.5, first_audio_p95_s=5.0, ack_audible_p95_ms=500),
+    encoding the §1 "about a second or two" headline promise as the foundation's pinned SLO contract on the shallow direct-answer path.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════
+# M15 — Build order & the pre-build validation spike (§16, CANONICAL §11.12)
+# ══════════════════════════════════════════════════════════════════
+
+- requirement_id: R-DOC00-16-01
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§11.12 + §16 step 0.5"
+  source_quote: "Before building the infra substrate ... run a throwaway spike ... 1. Sub-2s grounded voice answer ... Gate: p50 ≤ ~2.5s ... 2. who_writes/get_dependents accuracy on 3–5 real ORM codebases ... a fail on (b) is a challenge-core → back to the user"
+  normalized_statement: >
+    BEFORE committing the infra substrate
+    THE SYSTEM SHALL run the founder-present pre-build spike gating on (a) direct-answer p50 ≤ ~2.5s and (b) reliable who_writes/get_dependents on 3-5 real ORM repos, resolving any fail before proceeding.
+  requirement_type: operability
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-16-02
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.12 + §16 step 0.5 fallback"
+  source_quote: "a deterministic fallback per branch: latency-fail → shallow-only + ACK-tile; ORM-fail → restrict the who_writes support matrix + label lower-bound; SDK-message shape differs → write the adapter or fail the build."
+  normalized_statement: >
+    WHEN a pre-build spike branch fails
+    THE SYSTEM SHALL apply its deterministic fallback (latency-fail → shallow-only + ACK-tile; ORM-fail → restrict who_writes matrix + label lower-bound; SDK-shape-differs → adapter or fail-build), never silently patch.
+  requirement_type: operability
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-16-03
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§16 step 1 provable"
+  source_quote: "Provable: CI green, container self-migrates + serves /health, deploy lands, assert_registry_closed() passes, a meeting-harness operation_run heartbeats and self-reaps."
+  normalized_statement: >
+    WHEN Doc 00 step-1 completion is claimed
+    THE SYSTEM SHALL prove: CI green, the container self-migrates and serves /health, deploy lands, assert_registry_closed() passes, and a meeting-harness operation_run heartbeats and self-reaps.
+  requirement_type: deployment
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════
+# Cross-cutting — AGENTS.md product invariants that Doc 00 owns structurally
+# ══════════════════════════════════════════════════════════════════
+
+- requirement_id: R-INV-09
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "Product invariant 9"
+  source_quote: "Tenant isolation (tenant_id in every schema; cross-tenant read = P0 breach)"
+  normalized_statement: >
+    THE SYSTEM SHALL carry tenant_id (directly or via FK) in every durable schema, and any cross-tenant read SHALL be a P0 breach.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-INV-10
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "Product invariant 10"
+  source_quote: "Self-host credentials (Nango holds OAuth; tokens minted per-operation, never cached or logged)"
+  normalized_statement: >
+    THE SYSTEM SHALL hold OAuth in Nango and mint tokens per-operation, never caching or logging a token.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-INV-06
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "Product invariant 6"
+  source_quote: "Staged-drafts (world-changes need a named human's approval)"
+  normalized_statement: >
+    WHEN a world-change is requested
+    THE SYSTEM SHALL require a named human's approval via a staged draft before any apply.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-INV-03-SRC
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "Product invariant 3 (AMENDED 2026-07-17)"
+  source_quote: "no raw source in logs or artifacts"
+  normalized_statement: >
+    THE SYSTEM SHALL never emit raw customer source (clone file contents) into logs or artifacts;
+    the structlog processor chain and the Sentry before_send scrubber SHALL strip customer source before it reaches any log line, error report, or artifact.
+  requirement_type: privacy
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── PATCH (doc00-sweep close): two doc00-scope behaviors surviving the walk uncovered ──
+
+- requirement_id: R-DOC00-2-17
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§2 contracts list (Notes deltas + events, 03->04)"
+  source_quote: "material-change events (claim-landed-checkable, decision-forming/final, contradiction, action-item, question-open/closed)."
+  normalized_statement: >
+    WHEN the 03->04 material-change events contract is defined in libs/contracts (the §2 models built at §16 step 1)
+    THE SYSTEM SHALL enumerate exactly the member set
+    {claim-landed-checkable, decision-forming, decision-final, contradiction, action-item, question-open, question-closed}
+    (the spec's "decision-forming/final" and "question-open/closed" slash-shorthand expanding to the two variants each)
+    and SHALL NOT admit any event kind outside this set.
+    NOTE: the slash-shorthand expansion is the plain reading of the source line; CANONICAL-DECISIONS carries no override, so it is fixed here rather than guessed.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-27
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§5.1 with_operation_run heartbeat body"
+  source_quote: "await db.bump_activity(scope_id)    # keeps the sandbox alive during silent agent work"
+  normalized_statement: >
+    WHILE a long-lived operation runs under with_operation_run
+    THE SYSTEM SHALL call db.bump_activity(scope_id) on each heartbeat tick so the E2B sandbox is kept alive during silent (no-token-emitting) agent work —
+    a heartbeat loop that advances last_heartbeat_at but never bumps activity is non-conformant.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
