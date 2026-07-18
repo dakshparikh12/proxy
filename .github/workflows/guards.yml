@@ -1,0 +1,21 @@
+name: guards
+on: [push, pull_request]
+
+# Every guard runs in BOTH pre-commit (local fast-fail) and CI (server-side
+# enforcement) — the discipline lifted from ~/platform. This job is the CI half;
+# .pre-commit-config.yaml is the local half.
+jobs:
+  guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install ruff mypy bandit pytest pydantic pydantic-settings
+      # check-secret-bindings: Terraform secret map vs deploy config drift gate.
+      - name: check-secret-bindings
+        run: python -m ops.check_secret_bindings
+      # check-migration-order: Alembic multiple-heads vs main (fail-loud-never-skip).
+      - name: check-migration-order
+        run: python -m alembic heads

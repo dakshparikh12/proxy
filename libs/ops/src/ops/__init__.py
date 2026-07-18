@@ -7,6 +7,7 @@ broker and no in-memory cross-process lock.
 """
 from __future__ import annotations
 
+from . import check_secret_bindings as check_secret_bindings
 from . import sandbox_provider as sandbox_provider
 from .affinity import route_to_owner as route_to_owner
 from .claim import (
@@ -46,7 +47,6 @@ from .operation_run import (
     with_operation_run as with_operation_run,
 )
 from .reconcile import run_reconcile_sweep as run_reconcile_sweep
-from .secrets import check_secret_bindings as check_secret_bindings
 from .sentry import before_send as before_send
 
 __all__ = [

@@ -42,6 +42,7 @@ ignore_missing_imports = true
 module = [
     "asyncpg", "asyncpg.*", "psycopg", "psycopg.*", "psycopg_pool", "psycopg_pool.*",
     "alembic", "alembic.*", "testing", "testing.*", "uvicorn", "uvicorn.*",
+    "authlib", "authlib.*",
 ]
 ignore_missing_imports = true
 

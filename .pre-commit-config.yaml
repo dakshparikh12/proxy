@@ -1,0 +1,20 @@
+# Every guard runs in BOTH pre-commit AND CI (see .github/workflows/guards.yml).
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff
+        entry: ruff check
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: check-secret-bindings
+        name: check-secret-bindings
+        entry: python -m ops.check_secret_bindings
+        language: system
+        pass_filenames: false
+      - id: check-migration-order
+        name: check-migration-order
+        entry: python -m alembic heads
+        language: system
+        pass_filenames: false

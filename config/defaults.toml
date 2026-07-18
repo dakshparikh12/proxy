@@ -21,3 +21,20 @@ ttl_s = 3600
 # In-process STT credential refresh cadence (availability-critical; never the
 # reconcile cron). unit: seconds. range: 60..3600.
 refresh_interval_s = 600
+
+[llm]
+# Per-meeting model-call fan-out (distinct from the process-wide
+# PROXY_MAX_INFLIGHT_LLM=16 semaphore). unit: concurrent calls. range: 3..5.
+per_meeting_concurrency = 4
+
+[latency_slo]
+# Direct-answer shallow-path SLOs (CANONICAL §12.8) — the pinned foundation
+# latency contract the pre-build spike gate (M15) and the answer path measure
+# against. unit: seconds.
+first_text_p50_s = 2.0    # first streamed text, median. range: 1.0..4.0
+first_text_p95_s = 4.0    # first streamed text, tail. range: 2.0..8.0
+first_audio_p50_s = 2.5   # first audible token, median. range: 1.0..5.0
+first_audio_p95_s = 5.0   # first audible token, tail. range: 2.0..10.0
+# The "on it" acknowledgement reflex SLO — Proxy must be audibly acking within
+# this budget of a wake. unit: milliseconds. range: 200..800.
+ack_audible_p95_ms = 500
