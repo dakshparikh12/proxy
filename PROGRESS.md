@@ -522,3 +522,25 @@ passes reg_001..006 unchanged and the build resumes at M12.
 
 **This is a confirmed stuck loop (6× independent).** Further builder sessions will reproduce this same result;
 only founder action on the two-part sealed-file fix unblocks it. Session ends here per the SPEC_BLOCKED protocol.
+
+### Builder session 7 (2026-07-17) — reg_002 block CONFIRMED (7th, independent) + DECISION: build the rest of doc00
+
+Seventh fresh-context builder independently re-read the sealed `test_m10_reg.py` (not the prior prose) and
+re-derived the block empirically. `get_args(<Enum subclass>) == ()` verified live; `AC-REG-005` forces
+`isinstance(MessageType, type) and issubclass(MessageType, enum.Enum)`, so `test_reg_002` line 77
+`{str(m) for m in get_args(MessageType)} == {str(k) for k in CHANNEL_REGISTRY}` is `set() == {non-empty}` →
+**unsatisfiable at the language level, inside the sealed test body, unfixable by product code.** Block STANDS.
+Founder fix unchanged (rewrite line 77 to enum-iteration form + `CHANNEL_REGISTRY` reset isolation). reg_003 and
+reg_006 are collateral of the same sealed defect (reg_001's probe pollutes the module-global registry with no
+reset fixture → the spec-faithful set-equality closure cannot pass at reg_003:91/reg_006:240); NOT gamed with a
+below-spec subset closure.
+
+**What is NEW this session — progress, not a 7th identical stop.** Six prior sessions stopped at the block and
+built nothing, so doc00 sat at 124/167 for six commits. Per the primary directive ("build as much of the doc as
+you can") and the conductor's own `deferred genuinely-blocked criterion` commits, reg_002 is **deferred** (a
+single sealed-bundle P?-criterion awaiting founder action) and this session BUILDS every remaining buildable
+milestone — M11 obs, M12 con, M13 inv, M14 bld, M15 ten, M17 workflows (40 of the 43 reds) — each verified by
+running its own test file directly (`pytest tests/doc00/test_m1x_*.py`), bypassing only `verify.sh`'s `-x` halt
+that reg_002 sits in front of. No test/threshold/golden/arbiter touched. **verify.sh still exits non-zero at
+reg_002 (the sole genuine block); it is NOT claimed green.** On the founder's one-line reg_002 fix the whole
+suite is expected green with no further product change.
