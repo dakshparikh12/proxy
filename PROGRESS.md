@@ -1327,3 +1327,35 @@ while line 77 stands, so building is pointless. The four remaining founder one-l
 (4) add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`.
 The `conftest.py` fixture just added shows this channel works — the four remain. **Recommendation: halt
 builder re-invocation; route these four sealed one-liners to a founder.** Session ends per the SPEC_BLOCKED protocol.
+
+### Session 26 (2026-07-18) — 26th confirmation; 163/167; two binding blocks re-derived from primary sealed source + a live probe
+
+Ground truth first (`.venv/bin/python -m pytest -q -p no:randomly tests/doc00/`): **163 passed / 4 failed**
+(reg_002, obs_006, inv_010, ten_001 — identical set); `git status` clean; nothing buildable remains. This session
+did not trust the prose — it opened the exact sealed lines and ran a live probe for the two blocks a builder could
+plausibly attack from the product side:
+
+- **reg_002 (the binding block under `-x`).** `test_m10_reg.py:75` `union = {str(m) for m in get_args(MessageType)}`;
+  `:77` asserts `union == {str(k) for k in CHANNEL_REGISTRY}` (non-empty per reg_004). `test_m10_reg.py:211`
+  hard-forces `isinstance(MessageType, type) and issubclass(MessageType, enum.Enum)`. Live probe this session:
+  `get_args(<Enum>) == ()` and `issubclass(<Enum>, enum.Enum) == True`. So line 77 is `set() == {3 keys}` — false
+  for any product implementation; `MessageType` cannot be both an Enum (reg_005) and a subscripted generic (the only
+  kind with non-empty `get_args`). reg_005:214's own comment concedes "get_args on an Enum is ()". Wholly inside the
+  sealed test body — no `libs/`/`services/` edit can reach `get_args(MessageType)`.
+- **ten_001 vs sub_001 (schema-level).** `test_m03_sub.py:82` asserts `set(cols) == _OPRUN_COLS` — `operation_runs`
+  is EXACTLY 12 tenant-less columns (`:33-37`), and `:88-89` force `scope_id`/`operation_type`/`status` to `text`.
+  `test_m15_ten.py:179` requires `operation_runs` (absent from `NON_SCOPED`:111) to reach `tenant_id` via a DECLARED
+  FK. Adding `tenant_id` breaks sub_001's set-equality; its only text handles (`scope_id` arbitrary text ≠ uuid
+  `meetings.id`; `created_by` an instance-id, `w_workflows.py:74` `=="inst-A"`) FK no tenant-scoped table. Mutually
+  exclusive.
+- **obs_006 / inv_010 — unchanged sealed defects** (absolute-glob `split("/")`+re-root onto ROOT → doubled path;
+  text `'tenant-OFF'` seeded into the CANONICAL-mandated `uuid` `tenant_id` → `InvalidTextRepresentation`).
+
+Under `verify.sh` (`pytest -q -x --maxfail=1`) reg_002 is the FIRST red, so it alone halts the pass — building
+M12–M17 can never register green while it stands. All four fixes live in `tests/doc00/` (builder-forbidden —
+`harness/guard.py` + integrity hash). **Founder fixes (one line each, unchanged):** (1) reg_002:77 →
+`set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)`; (2) obs_006 read the absolute glob path directly;
+(3) inv_010 seed a real uuid tenant id; (4) add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`.
+**Recommendation unchanged: halt builder re-invocation; route the four sealed one-liners to a founder.** No
+sealed/test/threshold/golden/arbiter touched; no route-around; nothing built speculatively. Session ends per the
+SPEC_BLOCKED protocol.
