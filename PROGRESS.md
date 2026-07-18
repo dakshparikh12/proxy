@@ -2240,3 +2240,24 @@ Nothing buildable remains in `libs/`/`services/`; no sealed/test/fixture/harness
 test weakened; no route-around. The four remain one-line **founder** fixes to the sealed tests, which must land
 together (the `-x` mask re-stalls the loop after any single fix). **Halt reaffirmed per the SPEC_BLOCKED
 protocol; session ends.**
+
+### Builder session 50 (2026-07-18) — morning-triage live re-confirmation; 163/167; halt reaffirmed
+
+Fresh builder session. Oriented (AGENTS.md → acceptance/doc00 → 00-FOUNDATION.md → this locked plan) and
+reproduced ground truth at HEAD `cce47a3` (tree clean, `git status --porcelain` empty) without trusting prior prose:
+
+- **`.venv/bin/python -m pytest -q -p no:randomly tests/doc00/` → 163 passed, 4 failed** — exactly the four
+  sealed defects: `test_reg_002` (SB-1), `test_obs_006` (SB-3), `test_inv_010` (SB-4), `test_ten_001` (SB-2).
+  Live `ten_001` message = `tables with no tenant boundary: ['operation_runs']` — the sole irreducible residual,
+  matching §0 SB-2.
+- **Static gates clean:** `ruff check services libs` → all passed; `mypy --strict services libs` → no issues
+  (112 files).
+- **Builder-forbidden confirmed at source:** `harness/guard.py:14` `PROTECTED` begins with `"tests/"`; all four
+  failing assertions live under `tests/doc00/` (obs_006 also reads `tests/.../_support.py`) and are covered by the
+  `runner.py` integrity hash → any edit hard-exits the run.
+
+Nothing buildable remains in `libs/`/`services/`; no sealed/test/fixture/harness/CANONICAL file touched; no test
+weakened; no route-around; nothing built speculatively. The four remain one-line **founder** fixes to the sealed
+tests and must land together (`verify.sh` runs `-x --maxfail=1`, so the `-x` mask re-stalls the loop after any
+single fix: reg_002 → obs_006 → inv_010 → ten_001). **Halt reaffirmed per the SPEC_BLOCKED protocol (50th
+reproduction); route the four sealed one-liners to a founder. Session ends.**
