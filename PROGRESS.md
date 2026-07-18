@@ -361,3 +361,35 @@ the only green." **Required fix (founder-only, builder forbidden to edit `tests/
 `AC-REG-002` to `set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)` (equivalently `set(MessageType)`),
 matching `AC-REG-005` + `CANONICAL-DECISIONS.md:18` + `09-VERIFICATION.md:16`. Once the bundle is corrected the
 existing `registry.py` is expected to pass reg_001..006 unchanged, and the build can resume at M12.
+
+### Independent re-verification (builder session 3, 2026-07-17) — block STANDS; two new decisive artifacts
+
+A third fresh-context builder session re-derived the contradiction independently and confirms it is genuine.
+Two artifacts sharper than the prior sessions', both reproduced this session with `.venv/bin/python`:
+
+1. **Clean-isolation reproduction (removes the reg_001-probe-pollution confound).** Running *only*
+   `pytest tests/doc00/test_m10_reg.py::test_reg_002` (so `CHANNEL_REGISTRY` holds exactly the three CANONICAL
+   client types, no probe leakage): the test's own line 71 `assert_registry_closed()` **passes** (the shipped
+   `_closure_values(MessageType)` iterates Enum members, CANONICAL-correct), then line 77 fails with
+   `union-only=set(), registry-only={'connect-repo','invite-proxy','approve-draft'}`. This proves the blocker is
+   the test's *inline* `union = {str(m) for m in get_args(MessageType)}` (empty for an Enum) vs the non-empty
+   registry — **not** a shipped-code defect, and **not** an artifact of test ordering.
+
+2. **Sealed criterion corroborates the mis-transcription.** `acceptance/doc00/doc00/criteria/criteria.yaml:2493`
+   records AC-REG-002's `source_quote` verbatim as the stale Literal-era line
+   `assert set(get_args(MessageType)) == set(CHANNEL_REGISTRY), "closed-graph violation"`, and its `then`
+   (`:2486`) repeats `set(get_args(MessageType)) == set(CHANNEL_REGISTRY)`. Its `authority_refs: [R-DOC00-12-02]`
+   trace to Doc 00 §12's superseded snippet — the criterion was frozen from the pre-CANONICAL text, before
+   `MessageType` became an Enum (`CANONICAL-DECISIONS.md:18`).
+
+**Full-scope state this session (`pytest tests/doc00/`, no `-x`): 124 passed / 43 failed.** The 43 reds are two
+disjoint sets: (a) M11 `reg_002/003/006` — the blocked closure-calling trio; (b) M12–M17
+(`obs`/`con`/`inv`/`bld`/`ten`/`workflows`) — legitimately unbuilt milestones, unreachable because `verify.sh`'s
+`-x` halts at the M11 red. reg_001/004/005 pass with the shipped Enum registry (so 124 > the earlier 115 baseline
+is only reg_001+reg_004+reg_005 plus a few order-independent M12+ statics, **not** new milestone completion).
+
+**No route-around taken; no test/threshold/golden touched.** Consistent with sessions 1–2: building M12–M17
+speculatively would commit code that `verify.sh` can never bless while `reg_002` fails first under `-x`, so it is
+declined. The single-line founder fix required is unchanged (rewrite AC-REG-002 to `set(m.value for m in
+MessageType) == set(CHANNEL_REGISTRY)`); on that fix the shipped `registry.py` should pass reg_001..006 unchanged
+and the build resumes at M12.
