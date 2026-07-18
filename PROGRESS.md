@@ -1203,3 +1203,62 @@ set(CHANNEL_REGISTRY)`; (2) obs_006 read the absolute path directly (don't `spli
 **Recommendation unchanged: halt builder re-invocation** — 23 independent sessions reproduce the identical 163/167;
 only founder edits to the four sealed one-liners advance doc00. No sealed/test/threshold/golden/arbiter touched; no
 route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
+
+---
+
+## SPEC_BLOCKED — reg_002 (fresh-context DEBUGGER, invoked after 4 identical loop failures)
+
+**Target:** `tests/doc00/test_m10_reg.py::test_reg_002_assert_registry_closed_passes_when_set_equal`
+(criterion **AC-REG-002**). The build loop failed on this identical assertion 4×; I re-ran it from a
+fresh context and root-caused it independently — the conclusion matches the standing 23-session
+consensus. **The root cause is in the arbiter test, not in `libs/` or `services/`, so no product code
+was changed.**
+
+**Reproduced:** `.venv/bin/python -m pytest -q tests/doc00/test_m10_reg.py` → `1 failed, 5 passed`.
+Only reg_002 fails; **reg_001/003/004/005/006 all pass**.
+
+**Failing assertion — `test_m10_reg.py:75-77`:**
+```python
+union    = {str(m) for m in get_args(MessageType)}   # get_args() of an Enum/class is always ()  -> empty
+registry = {str(k) for k in CHANNEL_REGISTRY}        # {'connect-repo','approve-draft','invite-proxy'}
+assert union == registry                             # empty == {3 items} -> AssertionError
+```
+
+**Empirical evidence (live probe, not guesswork):**
+```
+isinstance(MessageType, type) and issubclass(MessageType, enum.Enum) = True   # forced by reg_005:211
+typing.get_args(MessageType)                                        = ()      # () for ANY class/Enum
+[m.value for m in MessageType]                                      = ['connect-repo','approve-draft','invite-proxy']
+sorted(CHANNEL_REGISTRY)                                            = ['approve-draft','connect-repo','invite-proxy']
+assert_registry_closed()                                           # passes (product handles the Enum correctly)
+```
+
+**Why it is unsatisfiable by any product code (the contradiction):**
+- **AC-REG-005** (`test_m10_reg.py:211-213`) hard-forces `issubclass(MessageType, enum.Enum)` — MessageType
+  must be an Enum *class*. `typing.get_args` returns non-empty only for parameterized generic aliases
+  (`Literal[...]`/`Union[...]`/`GenericAlias`); for any *class* (incl. every Enum) it returns `()`. reg_005
+  even comments this: `# get_args on an Enum is ()`.
+- **AC-REG-002** (`:77`) requires `{str(m) for m in get_args(MessageType)}` to equal the non-empty registry
+  (registry is non-empty by reg_001/004). That forces `get_args(MessageType)` to enumerate the discriminator
+  values — i.e. MessageType must be a `Literal`/`Union` alias, **not** a class.
+- The two criteria pull the *same* imported symbol `libs.contracts.MessageType` in opposite directions. No
+  Python object is simultaneously an Enum class *and* a parameterized generic alias. -> No edit to `libs/` or
+  `services/` can make both green. The product already implements §12's *intent* correctly:
+  `assert_registry_closed()` compares the Enum member values against the registry via `_closure_values`
+  (`libs/contracts/src/contracts/registry.py:84-113`) and **passes** — it is only reg_002's redundant
+  `get_args`-based re-derivation (which the doc's illustrative §12 snippet used for a Literal-union design)
+  that is stale against the Enum mandated by AC-REG-005.
+
+**Fix location (founder-only):** `tests/doc00/test_m10_reg.py:77` — protected by the read-only arbiter tree
+(`harness/guard.py` + integrity hash). Not a builder/debugger edit. Minimal one-liner to align reg_002 with
+the Enum discriminator reg_005 mandates:
+```python
+assert {m.value for m in MessageType} == {str(k) for k in CHANNEL_REGISTRY}
+```
+(and drop the `get_args` line at `:75`). This checks the exact fact AC-REG-002 intends — set-equality of the
+discriminator values and the registry keys — using the Enum's members instead of `get_args`.
+
+**No product change committed.** Per the SPEC_BLOCKED protocol the arbiter test is read-only; the debugger
+does not edit it and does not build a route-around. Recommendation stands with the prior 23 sessions:
+**halt builder/debugger re-invocation on doc00** — only a founder edit to this sealed one-liner (and the
+three companions: obs_006, ten_001, inv_010) advances doc00. Session ends per the SPEC_BLOCKED protocol.
