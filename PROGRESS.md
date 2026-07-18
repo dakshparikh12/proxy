@@ -1863,3 +1863,37 @@ the `runner.py` integrity hash ⇒ builder-forbidden; already recorded in `evide
 **Recommendation, now 41× reproduced: confirmed stuck loop — halt builder re-invocation and route the four sealed
 one-liners to a founder.** No sealed/test/fixture/support/harness/CANONICAL file touched; no route-around;
 nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
+
+### Session 42 (2026-07-18) — 42nd confirmation; 163/167; four re-derived from source (not the prose chain); halt reaffirmed
+
+Ground truth (`.venv/bin/python -m pytest -q -p no:randomly tests/doc00/`): **163 passed / 4 failed**
+(`reg_002`, `obs_006`, `inv_010`, `ten_001` — identical set to sessions 7–41); `git status` clean; product
+built through M17; nothing buildable remains. This session I re-opened every sealed source and each
+contradicting partner and re-derived the impossibility myself rather than trusting the log:
+
+- **reg_002 ⟂ reg_005** (`test_m10_reg.py:75,77` vs `:211,214`): reg_005:211 asserts
+  `issubclass(MessageType, enum.Enum)`; CPython `typing.get_args()` returns `()` for any Enum class (its
+  isinstance check excludes Enum types — reg_005:214's own comment concedes this), so reg_002:75
+  `union = {str(m) for m in get_args(MessageType)}` is `∅`, while :77 asserts `union == registry` (3 non-empty
+  CANONICAL keys). Language-level unsatisfiable by any `libs/`/`services/` edit. Founder one-liner: `:75` →
+  `{str(m.value) for m in MessageType}`.
+- **obs_006** (`_support.py:83-87` + `test_m11_obs.py:243`): `S.glob` returns `ROOT.joinpath(...).rglob(...)`
+  = ABSOLUTE paths; the test then does `read_text(*scripts[0].split("/"))` = `ROOT.joinpath('','Users',…)` →
+  doubled non-existent path → `None` → `text=""` → `assert text.strip()` fails. No product-side placement can
+  cure an absolute-path re-root. Founder one-liner: read the absolute glob path directly (no `split("/")`).
+- **inv_010** (`test_m13_inv.py:546`): inserts literal `"tenant-OFF"` into the CANONICAL-`uuid`
+  (`CANONICAL-DECISIONS.md:212`) tenant column → `InvalidTextRepresentation`. Founder one-liner: seed a real uuid.
+- **ten_001 ⟂ sub_001/002/003** (sharper proof): ten_001:178 requires `operation_runs` (base table, not in
+  `NON_SCOPED={tenants,sessions,alembic_version}`) to reach `tenant_id` by declared FK. sub_001:82 asserts
+  `set(cols)==_OPRUN_COLS` (exactly 12 cols, no `tenant_id`); sub_001:89 types `scope_id` `text` (cannot FK the
+  `uuid` `tenants.id`); and sub_002:126 / sub_003:147 raw-`INSERT` arbitrary `scope_id` values with no parent
+  row — so making `scope_id` a declared FK to any tenant-reaching table would raise `ForeignKeyViolation` and
+  turn sub_002/sub_003 red. Adding `tenant_id` breaks sub_001's exact-set. Mutually exclusive; no product schema
+  satisfies all four. Founder one-liner: add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`.
+
+`verify.sh` runs `pytest -x --maxfail=1`, so a single irreducible red makes exit 0 unreachable regardless of the
+other three. All four fixes live in `tests/doc00/` (+ CANONICAL) — in `harness/guard.py` `PROTECTED` (line 14)
+and covered by the `runner.py` integrity hash ⇒ builder-forbidden; already recorded in
+`evidence/doc00-deferred.md`. **Recommendation, now 42× reproduced: confirmed stuck loop — halt builder
+re-invocation and route the four sealed one-liners to a founder.** No sealed/test/fixture/support/harness/
+CANONICAL file touched; no route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
