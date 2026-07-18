@@ -1091,3 +1091,36 @@ set(CHANNEL_REGISTRY)`; (2) obs_006 read the absolute path directly (don't `spli
 **Recommendation unchanged: halt builder re-invocation** — 21 independent sessions reproduce the identical
 163/167; only founder edits to the four sealed one-liners advance doc00. No sealed/test/threshold/golden/arbiter
 touched; no route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
+
+### Session 22 (2026-07-18) — 22nd confirmation; 163/167; the two escape hatches closed with PRIMARY-SOURCE citations (not assumption)
+
+Twenty-second builder. Ground truth first: `pytest -q -p no:randomly tests/doc00/` = **163 passed / 4 failed**
+(reg_002, obs_006, inv_010, ten_001 — identical set); `git status` clean; nothing buildable remains. Rather than
+re-derive the prose, this session **independently chased the two plausible product-side escape hatches to their
+primary source and proved each closed** — converting "we assume blocked" into "the sealed source + the canonical
+spec mandate the exact thing the test contradicts":
+
+- **inv_010 — the "make `tenant_id` text" escape is closed by the CANONICAL SPEC.** db_003 pins only `meeting_id`
+  uuid and pointedly omits `tenant_id`, so a text tenant id *looked* schema-legal. But `00-FOUNDATION.md:187` **and**
+  `CANONICAL-DECISIONS.md:212` both mandate `tenant_id uuid REFERENCES tenants` (and `tenants.id uuid PK`), and
+  CLAUDE.md ranks CANONICAL-DECISIONS as an override. So the product correctly ships uuid tenant ids; inv_010:546
+  `INSERT INTO {table} ({tcol}) VALUES ('tenant-OFF')` seeds non-uuid text into a **canonically-mandated uuid**
+  column → `InvalidTextRepresentation` before `run_reconcile_sweep` runs. **Test contradicts the canonical spec.**
+- **ten_001 — the "`created_by`→FK" escape is closed by w_workflows.** `operation_runs` (not in `NON_SCOPED`,
+  ten_001:111) must reach `tenant_id` via a DECLARED FK, but sub_001:82 pins it to EXACTLY 12 columns and db_003
+  keeps `scope_id` text (can't FK the uuid meetings.id). The only remaining candidate, `created_by`, holds an
+  **instance-id string** — `test_w_workflows.py:74` asserts `created_by == "inst-A"` and sub_036 sets it to the
+  claiming instance-id — a worker-process identifier, not a key into any tenant-scoped table. No 12-column FK path
+  reaches tenants; adding `tenant_id` breaks sub_001's set-equality. **Schema-level contradiction.**
+- **reg_002 / obs_006 — unchanged sealed defects** (reg_005:211 forces the Enum ⇒ `get_args()==()` ⇒ empty union
+  vs non-empty registry; `_support.glob`:83 returns absolute Paths that obs_006:243 `split("/")`+`read_text`
+  re-roots onto ROOT → doubled path). Both wholly inside builder-forbidden sealed bodies.
+
+All four fixes live inside `tests/doc00/` (protected by `harness/guard.py` + integrity hash) → **founder-only**.
+**Founder fixes (one line each, unchanged):** (1) reg_002:77 → `set(m.value for m in MessageType) ==
+set(CHANNEL_REGISTRY)`; (2) obs_006 read the absolute path directly (don't `split("/")`+re-root); (3) inv_010 seed
+a real uuid tenant id (or make the canonical spec's tenant_id text, which the spec forbids); (4) add
+`operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`. **Recommendation unchanged: halt builder re-invocation** —
+22 independent sessions reproduce the identical 163/167, and the two escape hatches are now closed by primary-source
+citation, not assumption. No sealed/test/threshold/golden/arbiter touched; no route-around; nothing built
+speculatively. Session ends per the SPEC_BLOCKED protocol.
