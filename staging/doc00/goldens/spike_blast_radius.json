@@ -1,0 +1,30 @@
+{
+  "_doc": "Mechanical blast-radius golden: reverse importers of orm_app.models.",
+  "_derivation": "stdlib-ast reverse-import graph (derive_goldens.py) — independent of Proxy's tree-sitter/LSP pipeline",
+  "estate": "spike_fixture",
+  "pinned_sha": "f685471a7045a3ee20cf55d580713990719a1c2b",
+  "target_module": "orm_app.models",
+  "question": "What in this repo directly imports orm_app.models and would need review if its interface changed?",
+  "direct_importers": [
+    {
+      "module": "orm_app.repo",
+      "file": "src/orm_app/repo.py"
+    }
+  ],
+  "transitive_importers": [
+    {
+      "module": "orm_app.api",
+      "file": "src/orm_app/api.py"
+    },
+    {
+      "module": "orm_app.repo",
+      "file": "src/orm_app/repo.py"
+    },
+    {
+      "module": "orm_app.service",
+      "file": "src/orm_app/service.py"
+    }
+  ],
+  "grader": "deterministic:set-recall on direct_importers (threshold in scenarios.json); transitive graded leniently (superset allowed)",
+  "known_limits": "static imports only — no dynamic __import__/importlib, no string-routed loading; those gaps are the messy-estate's job, not this golden's"
+}
