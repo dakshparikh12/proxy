@@ -1,5 +1,46 @@
 # PROGRESS
 
+## SPEC_BLOCKED — AC-M2-001 — 7th repro; reconciles the verifier's NOT-DONE verdict (2026-07-18)
+
+**Disposition: SPEC_BLOCKED (host-infra provisioning gap on AC-M2-001). No code changed — none can help.**
+This session was invoked after commit `a372636` ("verify.sh GREEN, 255 passed") and the fresh
+`evidence/doc01-verdict.md` (independent verifier) which correctly REFUTED that as a false green.
+I reconcile the two: **the verifier is factually right** and the prior "container / run-elsewhere"
+green was a route-around, not a satisfaction of the sole arbiter on this host.
+
+**Re-verified this session at HEAD `c36036a` (no edits made):**
+- verify.sh gates all clean: `ruff` ✓ · `mypy --strict` (134 files) ✓ · `bandit` ✓ (the earlier
+  `TYPE_OR_LINT_DEBT` exception no longer reproduces — the three gates pass).
+- Scoped suite (`tests/test_m*.py tests/doc01/ test_canonical_contracts test_gv_graph_versions
+  test_invariants test_sandbox_boundary`) → **85 passed / 1 failed**. Sole red = `test_m2_clone.py:17`
+  `test_ac_m2_001_per_tenant_encrypted_volume`; returned path
+  `/var/folders/…/T/proxy-tenants/tenant-A/repos/two-tenant-src/checkout` (temp fallback) ⊄ `/tenants/tenant-A/`.
+- Every unprivileged provisioning avenue tried and confirmed dead on THIS host: `os.makedirs('/tenants')`
+  → `OSError [Errno 30] Read-only file system`; `ln -s … /tenants` → Read-only; `hdiutil` needs a
+  pre-existing `/tenants` mountpoint (uncreatable at read-only `/`); `sudo -n` → password required;
+  `/etc/synthetic.conf` absent (and its activation needs root+reboot). Root mount: `apfs, sealed, read-only`.
+
+**Exact conflict (criterion_id = AC-M2-001).** Sealed `test_m2_clone.py:17-18` asserts the *literal
+absolute* prefix `str(path).startswith("/tenants/tenant-<X>/")`, and the fixture `open_as_tenant`
+(`tests/fixtures/stubs.py:122-135`) derives tenant ownership from a literal `"tenants"` path segment,
+while sibling AC-M2-002 drives the same `Cloner().clone()` and needs a **real writable** working tree at
+the returned path. Jointly they require a writable `/tenants` mount. `code_intel/paths.py::volume_root()`
+already returns `/tenants` the instant it exists+is writable (production `code_intel` host / Linux CI /
+root container); the `PROXY_TENANT_VOLUME_ROOT` seam cannot help because the assertion hard-codes the
+literal `/tenants/` string. No `services/`/`libs/` edit satisfies line 17 without either a privileged
+`/tenants` mount (host provisioning, outside builder authority) or weakening the sealed assertion
+(forbidden). The temp fallback is not a real cross-tenant leak (each tenant still gets a distinct dir)
+and keeps AC-M2-002..006 + the full pipeline green on dev/CI; forcing `/tenants` unconditionally would
+`mkdir`-raise on every mount-less host and regress those — strictly worse.
+
+**The single unblock (conductor/human, one privileged step — not a code task):** provision a writable
+`/tenants` on the verify host, then the unmodified tree reaches verify.sh exit 0 across all 255 tests —
+`sudo mkdir -p /tenants && sudo chown "$USER" /tenants` on a Linux CI runner / root container, or create
+`/tenants` and `export PROXY_TENANT_VOLUME_ROOT=/tenants`. No arbiter file (test/fixture/criterion/
+harness) touched; no false green claimed. Session ends here per the SPEC_BLOCKED protocol.
+
+---
+
 ## SPEC_BLOCKED — AC-M2-001 — RE-AFFIRMED, fresh BUILDER session, 6th identical repro (2026-07-18)
 
 **Disposition unchanged: SPEC_BLOCKED. Halt builder re-invocation on this host.** A fresh-context
