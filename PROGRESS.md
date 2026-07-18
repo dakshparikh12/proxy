@@ -919,3 +919,32 @@ are unchanged sealed-file defects re-derived in detail sessions 11–13. **Found
 path directly; (3) inv_010 seed a real uuid; (4) add `operation_runs` to `test_m15_ten.py` `NON_SCOPED`.
 **Recommendation unchanged: halt builder re-invocation** — 14 independent sessions reproduce the identical
 163/167; only founder action on the four sealed one-liners advances doc00. Session ends per SPEC_BLOCKED protocol.
+
+### Session 15 (2026-07-18) — 15th independent confirmation; 163/167; all 4 blocks re-derived from sealed source, not prose
+
+Fifteenth builder. Verified ground truth first: `pytest -q -p no:randomly tests/doc00/` = **163 passed / 4 failed**
+(reg_002, obs_006, inv_010, ten_001 — identical set); `git status` clean; no uncommitted work. Sessions 7–11 already
+built every red not behind a sealed defect, so 163/167 is the deterministic maximum. No test/threshold/golden/arbiter
+touched; no route-around; nothing built speculatively.
+
+Re-derived the two blocks where a product-side escape hatch could plausibly hide, straight from the sealed test bodies:
+- **reg_002 (SPEC_BLOCKED).** reg_005 `test_m10_reg.py:212` requires `issubclass(MessageType, enum.Enum)`; line 214's
+  own comment concedes `get_args(<Enum>) == ()`; reg_006:256 falls back to `list(MessageType)[0].value` *because*
+  `get_args` is empty. reg_002:73-77 computes `union = {str(m) for m in get_args(MessageType)}` (= `set()` for any Enum)
+  and asserts it equals the non-empty `CHANNEL_REGISTRY`. No class can satisfy `issubclass(X, Enum)` while `get_args(X)`
+  is non-empty — `get_args` on any class is `()`. Language-level unsatisfiable, wholly inside sealed bodies.
+- **ten_001 (SPEC_BLOCKED).** `test_m03_sub.py:82` asserts `set(cols) == _OPRUN_COLS` STRICTLY; `_OPRUN_COLS` (12 cols,
+  no `tenant_id`, `scope_id` free text) is GREEN. `test_m15_ten.py:111` `NON_SCOPED = {tenants, sessions,
+  alembic_version}` omits `operation_runs`, so :177 demands it reach `tenant_id` — impossible without a `tenant_id`
+  column or scope_id→meetings FK that breaks the strict GREEN sub_001. Two sealed tests mutually exclusive on one table.
+
+obs_006 (read_text `split("/")`+re-join re-roots the absolute glob path onto ROOT → doubled nonexistent path → `None` →
+"empty" for ANY script) and inv_010 (`VALUES ('tenant-OFF')` text literal seeded into a uuid tenant column →
+`InvalidTextRepresentation` before the correct `run_reconcile_sweep` runs) are unchanged sealed-file defects,
+re-derived in detail sessions 11–14 and reproduced failing this run.
+
+**Founder fixes (one line each, unchanged):** (1) reg_002:77 → `set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)`;
+(2) obs_006 read the absolute path directly (don't `split("/")`+re-root onto ROOT); (3) inv_010 seed a real uuid tenant id;
+(4) add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`. **Recommendation unchanged: halt builder re-invocation** —
+15 independent sessions reproduce the identical 163/167; only founder edits to the four sealed one-liners advance doc00.
+Session ends per the SPEC_BLOCKED protocol.
