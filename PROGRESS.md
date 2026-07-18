@@ -1170,3 +1170,36 @@ a real uuid tenant id (or make the canonical spec's tenant_id text, which the sp
 22 independent sessions reproduce the identical 163/167, and the two escape hatches are now closed by primary-source
 citation, not assumption. No sealed/test/threshold/golden/arbiter touched; no route-around; nothing built
 speculatively. Session ends per the SPEC_BLOCKED protocol.
+
+### Session 23 (2026-07-18) — 23rd confirmation; 163/167; all 4 re-derived from primary sealed sources this run
+
+Twenty-third builder. Ground truth first: `pytest -q -p no:randomly tests/doc00/` = **163 passed / 4 failed**
+(reg_002, obs_006, inv_010, ten_001 — identical set to sessions 7–22); `git status` clean; no uncommitted work;
+nothing buildable remains (every red not behind a sealed defect was built in sessions 7–11). This session did NOT
+trust the prose — it re-opened the exact sealed lines + `_support.py` internals + the conflicting GREEN pins and
+independently re-derived all four:
+- **reg_002** `test_m10_reg.py:74` `union = {str(m) for m in get_args(MessageType)}` = `∅` (`get_args` of an Enum
+  is `()`); `:77` asserts `union == CHANNEL_REGISTRY` (non-empty, reg_004). reg_005 `:211` hard-forces
+  `issubclass(MessageType, enum.Enum)`. No object is both an Enum and yields non-empty `get_args` — language-level,
+  wholly inside the sealed body.
+- **obs_006** `_support.glob:83` returns ABSOLUTE Paths (`base=ROOT.joinpath(root_parts)`, `base.rglob`);
+  `test_m11_obs.py:243` `S.read_text(*scripts[0].split("/"))` re-joins the absolute path onto ROOT (empty-string
+  head is ignored by `Path.joinpath`) → DOUBLED nonexistent path → `None or ""` → `assert text.strip()` fails for
+  any `deploy/harden.sh` the product ships. Sealed-helper defect.
+- **ten_001** `test_m15_ten.py:179` requires `operation_runs` (absent from `NON_SCOPED`:111) to reach `tenant_id`
+  via a DECLARED FK; `test_m03_sub.py:33-37` `_OPRUN_COLS` pins it to EXACTLY 12 tenant-less columns (`:82`
+  set-equality). Its only text handles — `scope_id` (free text per db_003; holds arbitrary scope strings, can't FK
+  uuid `meetings.id`) and `created_by` (instance-id string, `w_workflows.py:74` `=="inst-A"`) — reach no
+  tenant-scoped table. Adding `tenant_id` breaks sub_001. Schema-level mutually exclusive.
+- **inv_010** `test_m13_inv.py:546` `INSERT INTO {table} ({tcol}) VALUES (%s)` seeds text `'tenant-OFF'` (`:527`)
+  into the probed `tenant_id` column, which `00-FOUNDATION.md:187` + `CANONICAL-DECISIONS.md:212` mandate as
+  `uuid REFERENCES tenants` → `InvalidTextRepresentation` before `run_reconcile_sweep` runs. Test contradicts the
+  canonical spec (CLAUDE.md ranks CANONICAL-DECISIONS as an override).
+
+All four fixes live inside `tests/doc00/` (protected by `harness/guard.py` + the integrity hash) → **founder-only**.
+**Founder fixes (one line each, unchanged):** (1) reg_002:77 → `set(m.value for m in MessageType) ==
+set(CHANNEL_REGISTRY)`; (2) obs_006 read the absolute path directly (don't `split("/")`+re-root onto ROOT);
+(3) inv_010 seed a real uuid tenant id; (4) add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`.
+**Recommendation unchanged: halt builder re-invocation** — 23 independent sessions reproduce the identical 163/167;
+only founder edits to the four sealed one-liners advance doc00. No sealed/test/threshold/golden/arbiter touched; no
+route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
