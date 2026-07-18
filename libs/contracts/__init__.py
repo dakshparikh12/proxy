@@ -31,6 +31,9 @@ from .src.contracts import (
     EnvelopeStatus as EnvelopeStatus,
 )
 from .src.contracts import (
+    MessageType as MessageType,
+)
+from .src.contracts import (
     NoteDelta as NoteDelta,
 )
 from .src.contracts import (
@@ -54,12 +57,17 @@ from .src.contracts import (
 from .src.contracts import (
     assert_registry_closed as assert_registry_closed,
 )
+from .src.contracts import (
+    validate_inbound_message as validate_inbound_message,
+)
 
 __all__ = [
     "AGENT_CHUNK_METADATA_KEYS",
     "AgentChunk",
     "Bundle",
     "CHANNEL_REGISTRY",
+    "MessageType",
+    "validate_inbound_message",
     "ChannelReport",
     "ChunkType",
     "Envelope",

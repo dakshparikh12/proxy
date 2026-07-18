@@ -20,6 +20,11 @@ locals {
 resource "random_id" "secret" {
   for_each    = local.generated_secrets
   byte_length = each.value
+
+  # Data-bearing credential key material: never regenerate/destroy on apply.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "google_secret_manager_secret" "generated" {

@@ -276,3 +276,57 @@ abstraction no criterion demands. **Plan LOCKED — hand off to `subagent-driven
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — No `SPEC_BLOCKED` entry was ever recorded in `PROGRESS.md`; the doc00 plan asserts "0 `SPEC_BLOCKED`, 0 unresolved contradictions," `dispositions.yaml` agrees, and the build is green through M4, so there is nothing genuinely blocked — continue in the mandated milestone order to M5 (`test_m04_boot`, AC-BOOT-001..007). To preempt the one near-frontier ambiguity (the "(prod)"-qualified boot keys), implement the reading the spec and criterion already fix in lockstep — `00-FOUNDATION.md:203` and `AC-BOOT-001` (`criteria.yaml:1632`) both list "`DATABASE_URL`, `GCS_BUCKET`, `SESSION_SECRET` (prod), GCP project (prod), each AES credential key, `RECALL_API_KEY`, `ANTHROPIC_*`": treat `DATABASE_URL`, `GCS_BUCKET`, the AES credential keys, `RECALL_API_KEY`, and `ANTHROPIC_*` as unconditionally req
+
+## SPEC_BLOCKED — M11 registry (AC-REG-002 vs AC-REG-004/005), 2026-07-17
+
+**Status:** Build is green through M10 (115/115 criteria on test_m00_cmp … test_m09_db;
+ruff + mypy --strict clean). M11 (`test_m10_reg.py`, AC-REG-001..006) is **blocked by a
+test-proven contradiction inside the sealed bundle** — I stopped the pass here per AGENTS.md
+("an untestable/contradictory criterion is a spec bug — record it in PROGRESS.md and stop").
+reg_001/reg_004/reg_005 pass with the CANONICAL-correct registry I built; reg_002 cannot pass.
+
+**Blocked criterion:** `AC-REG-002` — `tests/doc00/test_m10_reg.py::test_reg_002_assert_registry_closed_passes_when_set_equal`.
+
+**Exact conflict (contradiction between three sealed criteria + a CANONICAL override):**
+
+- `AC-REG-002` asserts, on the *live* objects:
+  `union = {str(m) for m in get_args(MessageType)}; registry = {str(k) for k in CHANNEL_REGISTRY}; assert union == registry`.
+- `AC-REG-005` (`test_reg_005`) asserts `isinstance(MessageType, type) and issubclass(MessageType, enum.Enum)`
+  (with error text "MessageType must be an Enum (closed discriminator), not an open alias").
+  This is the CANONICAL decision: `CANONICAL-DECISIONS.md:18` — "discriminator `MessageType` (an `Enum`)";
+  `08-EXPERIENCE.md:188` — `class MessageType(StrEnum)`. Per AGENTS.md, CANONICAL overrides the doc it conflicts with.
+- `AC-REG-004` (`test_reg_004`) asserts `models = list(CHANNEL_REGISTRY.values()); assert models` (registry non-empty).
+
+`typing.get_args(X)` returns `()` for **any** class that is not a subscripted typing generic —
+proven for a plain Enum **and** the CANONICAL `StrEnum`:
+`get_args(<enum.Enum subclass>) == ()` and `get_args(<enum.StrEnum subclass>) == ()`.
+Therefore, when `MessageType` is an Enum (forced by AC-REG-005 + CANONICAL), `union` in AC-REG-002 is
+ALWAYS `set()`, so `union == registry` can only hold when `CHANNEL_REGISTRY` is **empty** — which
+`AC-REG-004` forbids. No object can be simultaneously a subscripted generic (non-empty `get_args`,
+required by AC-REG-002) **and** an `isinstance(x, type)` Enum subclass (required by AC-REG-005). The
+two criteria are jointly unsatisfiable with a non-empty registry.
+
+**Root cause:** `AC-REG-002` was written against the *stale* Doc 00 §12 code snippet
+(`00-FOUNDATION.md:303`: `assert set(get_args(MessageType)) == set(CHANNEL_REGISTRY)`), which presumes
+`MessageType` is a `Literal`. That snippet is superseded by `CANONICAL-DECISIONS.md:18` (Enum) and by the
+canonical closure in `09-VERIFICATION.md:16` (`set(MessageType) == set(CHANNEL_REGISTRY)`, i.e. iterate the
+Enum members, NOT `get_args`). The sealed test kept the stale `get_args` form; with the CANONICAL Enum it is
+unsatisfiable. Fix belongs in the sealed bundle (builder cannot edit `tests/`/`acceptance/`): `AC-REG-002`
+should assert `set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)` (or `set(MessageType)`), matching
+`09-VERIFICATION.md:16` and `AC-REG-005`.
+
+**Evidence (test-proven, not assertion):**
+- `python -c "import enum,typing; class M(enum.StrEnum): A='a'; print(typing.get_args(M))"` → `()`.
+- `pytest test_m10_reg.py::test_reg_002` **in isolation** (no probe pollution) fails with
+  `union-only=set(), registry-only={'invite-proxy','connect-repo','approve-draft'}` — i.e. the product
+  registry (3 CANONICAL client message types) is non-empty while `get_args(MessageType)` is empty.
+- reg_001/reg_004/reg_005 PASS with the same registry (Enum `MessageType`, `__pydantic_init_subclass__`
+  auto-registration keyed on `model_fields["type"].default`, `validate_inbound_message` funnel).
+
+**Work committed with this block (correct-per-CANONICAL, kept for the continuation):**
+`libs/contracts/src/contracts/registry.py` rewritten to the CANONICAL design — `MessageType(enum.Enum)`,
+`ProxyMessage.__pydantic_init_subclass__` auto-registration, three concrete tile→backend messages
+(field-discipline clean: UUID ids, `Field(max_length)` free-text, `Literal` selectors),
+`assert_registry_closed()` (set-equality of Enum values vs registry + signal-surface leak guard),
+`validate_inbound_message()` central funnel; `MessageType`/`validate_inbound_message` exported from
+`libs.contracts`. M1 (AC-CMP-009/011) and M2–M10 remain green.

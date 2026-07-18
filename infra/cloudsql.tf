@@ -45,3 +45,24 @@ resource "google_sql_database_instance" "dev" {
     }
   }
 }
+
+# === databases === the logical application databases on each instance. These are
+# data-bearing: a `terraform apply` must never be able to drop them, so each sets
+# lifecycle.prevent_destroy = true.
+resource "google_sql_database" "prod" {
+  name     = "proxy"
+  instance = google_sql_database_instance.prod.name
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_sql_database" "dev" {
+  name     = "proxy"
+  instance = google_sql_database_instance.dev.name
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}

@@ -19,6 +19,13 @@ resource "google_cloud_run_v2_service" "control_plane" {
   name     = "control-plane"
   location = var.region
 
+  # Terraform stands up the service *shell* only. The real container image, env,
+  # and secret wiring are owned by the deploy/promote path (promote.sh), not by
+  # `terraform apply`, so the whole template is ignore_changes'd here.
+  lifecycle {
+    ignore_changes = [template]
+  }
+
   template {
     # Background provisioning must keep running between requests: CPU is always
     # allocated (--no-cpu-throttling) and the wake turn budget is one hour.
@@ -45,7 +52,9 @@ resource "google_cloud_run_v2_service" "control_plane" {
     }
 
     containers {
-      image = "gcr.io/${var.project_id}/control-plane:latest"
+      # Placeholder image only — the deploy/promote path swaps in the real,
+      # exact-tested image. Terraform never owns the runtime image.
+      image = "gcr.io/cloudrun/placeholder"
 
       # App DSN is a Cloud SQL Auth Proxy unix socket; the proxy terminates TLS,
       # so the DSN carries no app-side SSL params.

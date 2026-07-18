@@ -14,6 +14,7 @@ SERVICE="${SERVICE:-proxy-control-plane}"
 SHA="${1:?usage: promote.sh <git-sha-already-on-dev>}"
 
 IMAGE="${AR_REPO}/${SERVICE}:${SHA}"
+LIVE_SVC="${SERVICE}-prod"
 
 echo "promote: verifying image exists in Artifact Registry: ${IMAGE}"
 gcloud artifacts docker images describe "${IMAGE}" >/dev/null
@@ -23,7 +24,7 @@ echo "promote: running prod migrations (alembic upgrade head)"
 docker run --rm "${IMAGE}" python -m alembic upgrade head
 
 echo "promote: deploying to prod Cloud Run"
-gcloud run deploy "${SERVICE}-prod" \
+gcloud run deploy "${LIVE_SVC}" \
   --image="${IMAGE}" \
   --region="${REGION}"
 
