@@ -2036,3 +2036,25 @@ one-liners in `tests/doc00/` + CANONICAL, already recorded in `evidence/doc00-de
 one-liners to a founder (all four must land together; `verify.sh` runs `-x --maxfail=1`, so each single fix just
 re-stalls one milestone later).** No sealed/test/fixture/support/harness/CANONICAL file touched; no product change
 needed (product complete); no route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
+
+### Session 45 (2026-07-18) — 45th confirmation; 163/167; ground truth re-run live; halt reaffirmed
+
+Fresh-context builder. Oriented (AGENTS.md, sealed bundle read-only, 00-FOUNDATION, locked plan), then
+re-ran ground truth myself rather than trust the prose chain:
+`.venv/bin/python -m pytest -q -p no:randomly tests/doc00/` → **163 passed / 4 failed** — identical set to
+sessions 7–44: `reg_002`, `obs_006`, `inv_010`, `ten_001`. `git status` clean; product built through M17;
+nothing buildable remains in `libs/`/`services/`.
+
+Verified the four are builder-forbidden, not a skill gap: all four failing assertions live in `tests/doc00/`,
+the first entry in `harness/guard.py:14` `PROTECTED` and covered by the `runner.py` integrity hash ⇒ any edit
+hard-exits the run. Each is a one-line **founder** fix to the sealed test (unchanged from the register above):
+reg_002 `test_m10_reg.py:75` `get_args(MessageType)` on an Enum → ∅ (founder: `{str(m.value) for m in MessageType}`);
+obs_006 `test_m11_obs.py:243` re-roots an absolute `rglob` path via `split("/")` → `""` (founder: read the abs
+path directly); inv_010 `test_m13_inv.py:527/546` INSERTs `"tenant-OFF"` into a CANONICAL-`uuid` column (founder:
+seed a real uuid); ten_001 `test_m15_ten.py:111` `NON_SCOPED` omits `operation_runs` whose 12-col pin forbids a
+tenant FK (founder: add `operation_runs` to `NON_SCOPED`). `verify.sh` runs `-x --maxfail=1`, so all four
+one-liners must land together or the loop re-stalls one milestone later.
+
+No sealed/test/fixture/harness/CANONICAL file touched; no route-around; nothing built speculatively; no test
+weakened. Confirmed stuck loop, 45× reproduced — halt builder re-invocation and route the four sealed one-liners
+to a founder. Session ends per the SPEC_BLOCKED protocol.
