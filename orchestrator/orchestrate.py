@@ -232,6 +232,12 @@ def promote(doc: str) -> None:
             if item.is_file():
                 rel = item.relative_to(s / "tests")
                 dst = ROOT / "tests" / rel
+                # Only promote if staged file is newer than what's already in the
+                # working tree, or if the destination doesn't exist. This prevents
+                # stale staging leftovers from clobbering legitimate edits (e.g.
+                # fixtures added by sweep-gap-closure after the initial staging).
+                if dst.exists() and dst.stat().st_mtime >= item.stat().st_mtime:
+                    continue
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(item, dst)
     if (s / "goldens").exists():
@@ -240,8 +246,11 @@ def promote(doc: str) -> None:
         for item in (s / "goldens").rglob("*"):
             if item.is_file():
                 rel = item.relative_to(s / "goldens")
-                (dst / rel).parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(item, dst / rel)
+                target = dst / rel
+                if target.exists() and target.stat().st_mtime >= item.stat().st_mtime:
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(item, target)
 
 
 def seal(doc: str) -> str:
