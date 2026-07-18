@@ -1,0 +1,21 @@
+# Authority Index — Doc 01 Code Intelligence
+authorities:
+  - id: DOC-01
+    type: specification
+    path: product/v0-spec/01-CODE-INTELLIGENCE.md
+    description: "Code Intelligence build spec"
+
+  - id: CANONICAL-DECISIONS
+    type: canonical_decision
+    path: product/v0-spec/CANONICAL-DECISIONS.md
+    description: "Frozen cross-doc decisions (overrides all)"
+
+  - id: AGENTS.md
+    type: architecture_invariant
+    path: AGENTS.md
+    description: "Proxy constitution — shared invariants"
+
+  - id: config-defaults.toml
+    type: operational_slo
+    path: product/v0-spec/config-defaults.toml
+    description: "Pinned tunable defaults"

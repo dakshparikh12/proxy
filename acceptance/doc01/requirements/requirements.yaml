@@ -1,0 +1,793 @@
+# Requirements — Doc 01 Code Intelligence
+# Extracted per GENERATOR.md Phase A from:
+#   product/v0-spec/01-CODE-INTELLIGENCE.md
+#   product/v0-spec/CANONICAL-DECISIONS.md (§0, §1.5, §7, §8, §9, §12.2, §12.6)
+#   product/v0-spec/config-defaults.toml [code_intel]
+#   AGENTS.md (invariants 1-11)
+# Milestone order follows Doc 01 §3.8 build steps.
+
+# ── M1: Connection ──────────────────────────────────────────────
+
+- requirement_id: R-DOC01-3.1-01
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.1 paragraph 1"
+  source_quote: "The App requests exactly contents:read + metadata:read — nothing else."
+  normalized_statement: >
+    WHEN a GitHub App installation is created
+    THE SYSTEM SHALL request only the contents:read and metadata:read scopes.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.1-02
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.1 paragraph 2"
+  source_quote: "Nango stores the App credentials and mints the short-lived installation token for each operation (tokens expire ~hourly — mint per operation, never cache, never log)."
+  normalized_statement: >
+    WHEN an operation requires a GitHub token
+    THE SYSTEM SHALL mint a short-lived token per operation via Nango and SHALL NOT cache or log it.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.1-03
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.1 paragraph 3"
+  source_quote: "All git-host-specific logic (clone, pull, webhook parsing) lives behind one thin RepoProvider interface"
+  normalized_statement: >
+    WHEN git-host operations are performed
+    THE SYSTEM SHALL route them through a RepoProvider interface that encapsulates host-specific logic.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── M2: Clone ──────────────────────────────────────────────
+
+- requirement_id: R-DOC01-3.2-01
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.2 paragraph 1"
+  source_quote: "a per-tenant, encrypted persistent volume (e.g. /tenants/<tenant>/repos/<repo>/), one tenant never sharing a volume, process, or index with another"
+  normalized_statement: >
+    WHEN a repo is cloned
+    THE SYSTEM SHALL store it on a per-tenant encrypted volume with no cross-tenant sharing of volume, process, or index.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.2-02
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.2 paragraph 2"
+  source_quote: "repos above [~100k files] clone blobless (git clone --filter=blob:none)"
+  normalized_statement: >
+    WHEN the repo file count exceeds the blobless_threshold (config: ~100k files)
+    THE SYSTEM SHALL use blobless clone (--filter=blob:none).
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.2-03
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.2 paragraph 3"
+  source_quote: "we never push to origin, and the canonical copy never executes repository code"
+  normalized_statement: >
+    THE SYSTEM SHALL NEVER push to the upstream origin AND SHALL NEVER execute repository code on the canonical clone.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.2-04
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.2 paragraph 2"
+  source_quote: "After the first clone we only ever pull deltas — never re-clone"
+  normalized_statement: >
+    WHEN a cloned repo receives a push
+    THE SYSTEM SHALL pull only the delta, never re-clone.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── M3: Exclusions ──────────────────────────────────────────────
+
+- requirement_id: R-DOC01-3.3-01
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.3 paragraph 1"
+  source_quote: "gitleaks scans the changed files. Its hits plus policy globs — .env*, keys/keystores, node_modules/, vendor/, linguist-generated paths — form the repo's exclusion set"
+  normalized_statement: >
+    AFTER clone and after every delta pull
+    THE SYSTEM SHALL run gitleaks on changed files and combine hits with policy globs to form the exclusion set.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.3-02
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.3 paragraph 1"
+  source_quote: "Excluded paths ... are never indexed, never in the graph, never in any result, never copied into a meeting sandbox, never logged"
+  normalized_statement: >
+    WHEN a path is in the exclusion set
+    THE SYSTEM SHALL exclude it from the index, the dependency graph, all query results, sandbox copies, and logs.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.3-03
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.3 paragraph 1"
+  source_quote: "detected secret values are additionally redacted at the read path"
+  normalized_statement: >
+    WHEN a file containing detected secrets is read through any tool
+    THE SYSTEM SHALL redact detected secret values.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── M4: Structural substrate + dependency graph ──────────────────
+
+- requirement_id: R-DOC01-3.4-01
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.4 paragraph 1"
+  source_quote: "For every non-excluded source file we parse with tree-sitter using each language's tag queries to extract declarations"
+  normalized_statement: >
+    WHEN building the structural substrate
+    THE SYSTEM SHALL parse every non-excluded source file with tree-sitter to extract declarations.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.4-02
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.4 paragraph 1"
+  source_quote: "rank importance with the aider-style PageRank over the tag-reference graph"
+  normalized_statement: >
+    WHEN building the ranked overview
+    THE SYSTEM SHALL rank symbols by PageRank over the tag-reference graph.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.4-03
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.4 paragraph 1"
+  source_quote: "No LLM anywhere (verifiable from logs: zero model calls)"
+  normalized_statement: >
+    WHEN building the structural substrate and dependency graph
+    THE SYSTEM SHALL make zero LLM/model calls.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.4-04
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.4 paragraph 2"
+  source_quote: "The file-coverage record — one row per file: {path, status: indexed | flagged, flag_reason...}. Invariant: indexed + flagged accounts for every tracked file."
+  normalized_statement: >
+    WHEN the file-coverage record is computed
+    THE SYSTEM SHALL produce one row per tracked file where indexed + flagged == the full git ls-files set.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.4-05
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.4 paragraph 3"
+  source_quote: "Table node id = table::<name>, match kind=='table' (kills the endswith collision)"
+  normalized_statement: >
+    WHEN a table node is created in the dependency graph
+    THE SYSTEM SHALL use the canonical id format 'table::<name>' and match on kind=='table'.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.4-06
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.4 paragraph 4"
+  source_quote: "On every relevant push we rebuild the whole per-repo graph (drop + re-extract all rows)"
+  normalized_statement: >
+    WHEN a relevant push is received
+    THE SYSTEM SHALL perform a full graph rebuild (drop + re-extract all rows), not incremental per-file invalidation.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.4-07
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.4 paragraph 2"
+  source_quote: "Grammarless languages are flagged in the coverage record and stay covered by the file tree + live search"
+  normalized_statement: >
+    WHEN a source file uses a language with no tree-sitter grammar
+    THE SYSTEM SHALL flag it with reason 'unsupported-language' and still expose it to live search.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── M5: code_intel MCP tools ──────────────────────────────────
+
+- requirement_id: R-DOC01-3.5-01
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.5 paragraph 2"
+  source_quote: "the graph is wrapped as a fresh, connection-bound, in-memory SDK MCP server, minted per query from a factory"
+  normalized_statement: >
+    WHEN the code_intel MCP server is used
+    THE SYSTEM SHALL mint a fresh server instance per query from a factory (never shared across concurrent workers).
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.5-02
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.5 get_dependents tool"
+  source_quote: "Transitive REVERSE-dependency set of a symbol OR table — top-N by PageRank, + truncated_count"
+  normalized_statement: >
+    WHEN get_dependents(symbol, limit) is called
+    THE SYSTEM SHALL return the transitive reverse-dependency set over calls/imports/writes/extends/implements edges
+    (NOT reads — reads edges are reported at depth-1 only, never traversed transitively),
+    ranked by PageRank, capped at limit (default 50), with truncated_count.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+  # FOUNDER DECISION 2026-07-17: closure over calls/imports/writes/extends/implements only;
+  # reads edges depth-1 only. Recorded in dispositions.yaml D-FOUNDER-A003.
+
+- requirement_id: R-DOC01-3.5-03
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.5 who_writes tool"
+  source_quote: "EXACT (tag 'resolved') only on supported (lang,ORM): Django ORM / SQLAlchemy / Rails ActiveRecord; a labeled 'lower-bound' everywhere else — never a silent exact"
+  normalized_statement: >
+    WHEN who_writes(table) is called
+    THE SYSTEM SHALL return writers tagged 'resolved' on tier-1 stacks (Django/SQLAlchemy/Rails) and 'lower-bound' on all others, never a silent exact.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.5-04
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.5 shares_table tool"
+  source_quote: "Which INDEPENDENT modules/services both touch a given table — the hidden cross-module coupling"
+  normalized_statement: >
+    WHEN shares_table(table) is called
+    THE SYSTEM SHALL return independent modules co-accessing the table with confidence tiering matching who_writes.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.5-05
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.5 list_entry_points tool"
+  source_quote: "Graph roots — nodes with no incoming edges (routes/jobs/handlers/top-level entry points)"
+  normalized_statement: >
+    WHEN list_entry_points() is called
+    THE SYSTEM SHALL return graph root nodes (zero in-degree).
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.5-06
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.5 owner tool"
+  source_quote: "CODEOWNERS is authoritative (tagged 'resolved'); recent git blame on the path is a HINT fallback (tagged 'lower-bound')"
+  normalized_statement: >
+    WHEN owner(path) is called
+    THE SYSTEM SHALL return CODEOWNERS matches tagged 'resolved' or git-blame fallback tagged 'lower-bound'.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.5-07
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.5 batch_read tool"
+  source_quote: "Read up to [N=10] related files in ONE call — internally parallel, partial-failure-tolerant"
+  normalized_statement: >
+    WHEN batch_read(paths, max_lines_per_file) is called
+    THE SYSTEM SHALL read up to 10 files in parallel, returning partial results on per-file failure (never aborting the batch).
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.5-08
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.5 lookup_referent tool"
+  source_quote: "Deterministic (no LLM) map from a meeting term to what it refers to — a graph node id, a core-overview area name, or None"
+  normalized_statement: >
+    WHEN lookup_referent(term) is called
+    THE SYSTEM SHALL deterministically resolve the term to a node_id, area, or None with zero LLM calls.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.5-09
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.5 paragraph 5"
+  source_quote: "A simple per-meeting in-memory cache keyed on (tool, args) returns the stored result for a repeat call"
+  normalized_statement: >
+    WHEN a code_intel tool call is repeated with identical arguments within one meeting
+    THE SYSTEM SHALL return the cached result without re-executing.
+  requirement_type: performance
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.5-10
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.5 paragraph 5"
+  source_quote: "invalidated on a repo change (the push webhook)"
+  normalized_statement: >
+    WHEN a push webhook is received for a repo
+    THE SYSTEM SHALL invalidate all cached tool results for that repo's meetings.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── M6: Coverage read + Readiness ──────────────────────────
+
+- requirement_id: R-DOC01-3.7-01
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.7 paragraph 1"
+  source_quote: "Doc 01 emits the canonical Readiness enum (CANONICAL §1.5)"
+  normalized_statement: >
+    WHEN the readiness state is emitted
+    THE SYSTEM SHALL use exactly the canonical Readiness enum: connecting|cloning|indexing|ready|not_ready.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.7-02
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.7 paragraph 2"
+  source_quote: "100% files classified — the SQLite coverage record accounts for every tracked file (indexed + flagged == git ls-files)"
+  normalized_statement: >
+    WHEN the readiness gate checks file classification
+    THE SYSTEM SHALL verify indexed + flagged == the full set of git ls-files tracked files.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.7-03
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.7.1"
+  source_quote: "coverage_pct + gaps are computed by a pure, deterministic function — no model call"
+  normalized_statement: >
+    WHEN coverage_pct and gaps are computed
+    THE SYSTEM SHALL use a pure deterministic function with zero model calls.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.7-04
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.7 paragraph 3"
+  source_quote: "readiness record stamps indexed_at and is tied to the commit SHA it was built at"
+  normalized_statement: >
+    WHEN readiness is reported as 'ready'
+    THE SYSTEM SHALL include indexed_at timestamp and the pinned SHA.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── M7: Freshness ──────────────────────────────────────────────
+
+- requirement_id: R-DOC01-3.6-01
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.6 paragraph 1"
+  source_quote: "the webhook is signature-validated, then enqueued durably and deduplicated by delivery-GUID + commit SHA"
+  normalized_statement: >
+    WHEN a push webhook is received
+    THE SYSTEM SHALL validate its signature and deduplicate by delivery-GUID + commit SHA.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.6-02
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.6 paragraph 2"
+  source_quote: "the session opens with a reconcile (ls-remote vs our tip); any drift is pulled and the graph rebuilt, before readiness is confirmed"
+  normalized_statement: >
+    WHEN a meeting starts
+    THE SYSTEM SHALL reconcile (ls-remote vs local tip), pull any drift, rebuild the graph, and then confirm readiness.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.6-03
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.6 paragraph 2"
+  source_quote: "the session pins to one commit — the default branch's tip, or the PR head"
+  normalized_statement: >
+    WHEN a meeting session starts
+    THE SYSTEM SHALL pin to a single commit SHA written to meetings.pinned_sha.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.6-04
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.6 paragraph 3"
+  source_quote: "a mid-meeting push emits a 'repo advanced N commits' notice but the meeting keeps answering at its pinned SHA"
+  normalized_statement: >
+    WHEN a push occurs during a meeting
+    THE SYSTEM SHALL continue serving queries at the pinned SHA and emit a notification.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── M8: Precise navigation (LSP) ──────────────────────────
+
+- requirement_id: R-DOC01-3.5-11
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.5 find_references tool"
+  source_quote: "Exact symbol references via the warm HOST-SIDE language server (Serena/solid-lsp). Tagged 'resolved'; on timeout/unsupported language falls back to grep tagged 'lower-bound'"
+  normalized_statement: >
+    WHEN find_references(symbol) is called
+    THE SYSTEM SHALL return exact references tagged 'resolved' from the host-side LSP, falling back to grep tagged 'lower-bound' on timeout or unsupported language.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.5-12
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.5 paragraph 7"
+  source_quote: "every call under a hard timeout ([~3s]), falling back to grep with an honest lower-bound tag; hung servers restart"
+  normalized_statement: >
+    WHEN an LSP call exceeds the timeout (config: 3s)
+    THE SYSTEM SHALL fall back to grep with a 'lower-bound' tag and restart the hung server.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── M9: Prepare-ahead + seeding ──────────────────────────
+
+- requirement_id: R-DOC01-3.6-05
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.6 paragraph 4"
+  source_quote: "Repos above [~500k LOC] also get their language server(s) kept warm"
+  normalized_statement: >
+    WHEN a repo exceeds 500k LOC
+    THE SYSTEM SHALL keep its language server(s) warm after connect/push.
+  requirement_type: performance
+  criticality: P2
+  testability: executable
+  status: qualified
+
+# ── Latency (from config-defaults.toml [latency_slo] + Doc 01 §4) ──────
+
+- requirement_id: R-DOC01-LAT-01
+  authority_type: operational_slo
+  authority_document: config-defaults.toml
+  source_location: "[latency_slo]"
+  source_quote: "first_text_p50_s = 2.0 / first_text_p95_s = 4.0"
+  normalized_statement: >
+    WHEN an in-meeting code_intel tool answers a grounded question on the direct-answer path
+    THE SYSTEM SHALL deliver first grounded text at p50 ≤ 2.0s and p95 ≤ 4.0s.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-LAT-02
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.8 step 1 + §4"
+  source_quote: "Within minutes we hold a fresh copy of their code ... and a complete index"
+  normalized_statement: >
+    WHEN a pilot-scale repo is connected
+    THE SYSTEM SHALL reach Readiness 'ready' within 15 minutes.
+  requirement_type: performance
+  criticality: P2
+  testability: executable
+  status: qualified
+  # Provisional-until-baseline: the 15-minute bound is a reasonable pilot target;
+  # adjust after baseline measurements.
+
+# ── Graph version retention (CANONICAL §12.2) ─────────────
+
+- requirement_id: R-DOC01-GV-01
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.2"
+  source_quote: "code_intel answers at meeting.pinned_sha; ... retains active-meeting SHAs (light retention on its own SQLite, GC when unpinned)"
+  normalized_statement: >
+    WHEN active meetings hold pinned SHAs
+    THE SYSTEM SHALL retain the graph version for each active-meeting pinned SHA
+    and GC graph versions when no live meeting pins them.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── LSP degradation honesty (Doc 01 §3.5 + config lsp_timeout_s) ──
+
+- requirement_id: R-DOC01-LSP-DEG-01
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.5 paragraph 7"
+  source_quote: "every call under a hard timeout ([~3s]), falling back to grep with an honest lower-bound tag"
+  normalized_statement: >
+    WHEN an LSP call exceeds lsp_timeout_s (config: 3s)
+    THE SYSTEM SHALL return grep-based results tagged 'lower-bound' (never silently drop the answer or return stale LSP results).
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── No in-sandbox LSP / no duplicate tool names (CANONICAL §12.2/§12.6) ──
+
+- requirement_id: R-DOC01-SANDBOX-01
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.2, §12.6"
+  source_quote: "a sandbox has no warm LSP, so in-sandbox is out ... Delete every duplicate name"
+  normalized_statement: >
+    THE SYSTEM SHALL NOT include find_references or any LSP tool in the E2B sandbox tool manifest,
+    and SHALL NOT duplicate any code_intel tool name across host-side and sandbox surfaces.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Cross-cutting: invariants from AGENTS.md ──────────────
+
+- requirement_id: R-INVARIANT-01
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "invariant 1"
+  source_quote: "Cited-or-abstain"
+  normalized_statement: >
+    WHEN the system provides a grounded claim
+    THE SYSTEM SHALL cite file:line from the current clone or abstain.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-INVARIANT-02
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "invariant 2"
+  source_quote: "Lossless-or-honest"
+  normalized_statement: >
+    WHEN a result is incomplete or uncertain
+    THE SYSTEM SHALL honestly label it (lower-bound / not-found-by-this-method), never convert incomplete evidence into an absolute claim.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-INVARIANT-09
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "invariant 9"
+  source_quote: "Tenant isolation"
+  normalized_statement: >
+    WHEN multiple tenants exist
+    THE SYSTEM SHALL ensure no tenant can access another tenant's clone, index, graph, or query results.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Cross-cutting: canonical contract requirements ──────────
+
+- requirement_id: R-CANONICAL-9-01
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§9"
+  source_quote: "Do not add libs/code_intel ... The index/dep-graph code lives in services/code_intel"
+  normalized_statement: >
+    THE SYSTEM SHALL place all code-intelligence code under services/code_intel, never under libs/code_intel.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-CANONICAL-12.6-01
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.6"
+  source_quote: "Cut Zoekt → ripgrep-only for V0"
+  normalized_statement: >
+    THE SYSTEM SHALL use ripgrep as the only search backend in V0.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-CANONICAL-12.6-02
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§12.6"
+  source_quote: "Graph stays per-repo SQLite — NO graph-in-Postgres, NO SHA-versioned-graph tables"
+  normalized_statement: >
+    THE SYSTEM SHALL store the dependency graph in per-repo SQLite, not Postgres.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-4-01
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§4 failure behavior"
+  source_quote: "App uninstalled → clone, index, graph, and snapshots hard-deleted (target [15 min]), never a stale ghost copy"
+  normalized_statement: >
+    WHEN a GitHub App is uninstalled for a repo
+    THE SYSTEM SHALL delete the clone, index, graph, and snapshots within 15 minutes.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+# ══════════════════════════════════════════════════════════════════
+# doc01 PATCH — sweep gap-closure requirements (evidence/doc01-sweep.md)
+# APPEND these blocks to acceptance/doc01/requirements/requirements.yaml.
+# Authored by the criteria-author lead; the guard (harness/guard.py) blocks an
+# agent from writing the protected acceptance/*/requirements path directly, so the
+# conductor must concatenate this file into the bundle before the coverage gate.
+# ids are unique (continue the R-DOC01-<section>-NN sequence). Nothing existing changed.
+# ══════════════════════════════════════════════════════════════════
+
+- requirement_id: R-DOC01-3.7-05
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.7 gate bullet 2"
+  source_quote: "100% parse on exact-supported files — every non-flagged file in an exact-supported (language, ORM) stack parses cleanly (excluding generated / vendor, which are legitimately flagged)"
+  normalized_statement: >
+    WHEN the readiness gate evaluates parse coverage
+    THE SYSTEM SHALL require every non-flagged file in an exact-supported (language, ORM) stack to parse cleanly,
+    excluding files flagged generated / vendor, and SHALL withhold 'ready' otherwise.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.7-06
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.7 gate bullet 3"
+  source_quote: "capability tiers recorded — each area/stack carries its who_writes tier (exact-supported / symbol-exact / search-only) so the honesty labels are pre-computed, not guessed at query time"
+  normalized_statement: >
+    WHEN the index build completes
+    THE SYSTEM SHALL record, per area/stack, its who_writes capability tier
+    (one of exact-supported | symbol-exact | search-only) into the persisted readiness/coverage record at index time (not computed at query time).
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.7-07
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.7 gate bullet 4"
+  source_quote: "graph smoke check — a sample of known symbols each resolve to the correct file:line through the live path; get_dependents and who_writes return the expected callers/writers for a sample of known symbols/tables"
+  normalized_statement: >
+    WHEN the readiness gate runs
+    THE SYSTEM SHALL execute a graph smoke check (sample known symbols resolve to correct file:line via the live path;
+    get_dependents/who_writes return expected callers/writers) and SHALL withhold 'ready' if any smoke-check sample fails.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.7-08
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.7 paragraph after gate"
+  source_quote: "coverage_pct is reported, not a gate ... the ratio itself no longer blocks a join (a repo that is 100% classified with its gaps honestly labeled is joinable)"
+  normalized_statement: >
+    WHILE a repo is 100% classified with gaps honestly labeled
+    THE SYSTEM SHALL emit 'ready' regardless of a low coverage_pct (coverage_pct is reported for honesty, never a gate).
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.5-13
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.5 find_references paragraph"
+  source_quote: "References into uninstalled third-party deps are labeled external-references-not-resolved, never dropped."
+  normalized_statement: >
+    WHEN find_references encounters a reference into an uninstalled third-party dependency
+    THE SYSTEM SHALL label it 'external-references-not-resolved' and SHALL NOT drop it silently.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-4-02
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§4 failure behavior"
+  source_quote: "unparseable/mid-edit file → valid spans index, broken span flagged, search covers it"
+  normalized_statement: >
+    WHEN a supported-language file is broken/mid-edit (partially unparseable)
+    THE SYSTEM SHALL index the valid spans (as graph nodes), flag the broken span, and keep the file covered by live search.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.4-08
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.4 ranked overview bullet"
+  source_quote: "The ranked overview — the compact, token-budgeted 'table of contents + neighborhoods' ... elided to [~a few thousand tokens]"
+  normalized_statement: >
+    WHEN the ranked overview is built
+    THE SYSTEM SHALL produce it as a token-budgeted artifact bounded to the configured overview budget (default ~a few thousand tokens).
+  requirement_type: performance
+  criticality: P2
+  testability: analyzable
+  status: qualified
+  # Threshold is a §4 tunable default (no config-defaults key yet); provisional cap 6000 tokens.

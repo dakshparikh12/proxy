@@ -216,17 +216,44 @@ def bundle_dir(doc: str) -> pathlib.Path:
 def promote(doc: str) -> None:
     """Deterministic promotion of staged arbiter artifacts into protected trees (this
     process only — agents cannot). staging/<doc>/acceptance -> acceptance/<doc>;
-    staging/<doc>/tests -> tests/ (doc-scoped subdir or fixtures)."""
+    staging/<doc>/tests -> tests/ (doc-scoped subdir or fixtures).
+
+    Acceptance bundles are replaced atomically: the staged source is validated
+    (criteria.yaml + requirements.yaml must exist and be non-trivial), built
+    in a temp directory, then swapped in via rmtree+rename.  If the staged
+    source is empty or missing the required files, the promote is skipped
+    (existing bundle preserved) with a logged warning — never leaving the
+    destination in a partially-overwritten state."""
     s = STAGING / doc
     if (s / "acceptance").exists():
-        # The staged bundle lives at staging/<doc>/acceptance/<doc>/. Copy THAT dir, not its
-        # parent — copying the parent double-nests to acceptance/<doc>/<doc>/, which the
-        # "already sealed?" skip-check never finds, so it regenerates from scratch every run.
+        # Resolve the staged bundle root (may be nested as acceptance/<doc>/).
         src = (s / "acceptance" / doc) if (s / "acceptance" / doc).exists() else (s / "acceptance")
-        dst = ROOT / "acceptance" / doc
-        if dst.exists():
-            shutil.rmtree(dst)
-        shutil.copytree(src, dst)
+        # --- sanity: staged source must contain real content ---
+        crit = src / "criteria" / "criteria.yaml"
+        reqs = src / "requirements" / "requirements.yaml"
+        if not (crit.is_file() and reqs.is_file()):
+            log(f"[{doc}] promote: staged acceptance has no criteria/requirements files — "
+                f"skipping acceptance copy (existing bundle preserved)")
+        elif crit.stat().st_size < 20 or reqs.stat().st_size < 20:
+            log(f"[{doc}] promote: staged acceptance files are trivially small — "
+                f"skipping acceptance copy (existing bundle preserved)")
+        else:
+            # Atomic replace: copy into a temp sibling, then swap.
+            dst = ROOT / "acceptance" / doc
+            tmp = dst.with_name(f".{doc}.promote_tmp")
+            if tmp.exists():
+                shutil.rmtree(tmp)
+            shutil.copytree(src, tmp)
+            # Final validation of the copy before replacing the live bundle.
+            tmp_crit = tmp / "criteria" / "criteria.yaml"
+            tmp_reqs = tmp / "requirements" / "requirements.yaml"
+            if not (tmp_crit.is_file() and tmp_reqs.is_file()):
+                shutil.rmtree(tmp)
+                raise RuntimeError(
+                    f"promote({doc}): copytree produced a bundle without criteria/requirements — aborting")
+            if dst.exists():
+                shutil.rmtree(dst)
+            tmp.rename(dst)
     if (s / "tests").exists():
         for item in (s / "tests").rglob("*"):
             if item.is_file():
