@@ -1712,3 +1712,31 @@ to 12 tenant-less columns). **Founder fixes (one line each, unchanged):** (1) `t
 `NON_SCOPED`. **Recommendation, now 36× reproduced: route the four sealed one-liners to a founder; stop
 re-invoking the builder.** No sealed/test/fixture/support/harness/CANONICAL file touched; no route-around;
 nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
+
+### Session 37 (2026-07-18) — 37th confirmation; 163/167; all four re-derived at primary source, halt reaffirmed
+
+Ground truth (`.venv/bin/python -m pytest -q -p no:randomly tests/doc00/`): **163 passed / 4 failed**
+(`reg_002`, `obs_006`, `inv_010`, `ten_001` — identical set to sessions 7–36); `git status` clean; ruff/mypy
+--strict/bandit clean; product fully built through M17; nothing buildable remains. I opened all four sealed
+sources this session rather than trust the prose chain:
+
+- **reg_002** `test_m10_reg.py:75,77`: `union = {str(m) for m in get_args(MessageType)}` is `∅` for the Enum
+  `reg_005:211` forces; `:77` asserts `union == {3 CANONICAL keys}` (reg_004). Inline in the sealed body,
+  unreachable by product. FIRST red under `verify.sh -x` ⇒ exit 0 unreachable regardless of the other three.
+- **obs_006** `_support.py:83` `glob = ROOT.joinpath(root_parts).rglob(...)` returns ABSOLUTE paths;
+  `test_m11_obs.py:243` `read_text(*scripts[0].split("/"))` re-roots onto ROOT → doubled path → `None` →
+  `assert text.strip()` fails for any script. `deploy/harden.sh` exists + non-empty; re-root is sealed-only.
+- **inv_010** `test_m13_inv.py:546`: `INSERT ... VALUES ('tenant-OFF')` into the CANONICAL-mandated
+  (`CANONICAL-DECISIONS.md:212`) `uuid REFERENCES tenants` `tenant_id` column → `InvalidTextRepresentation`.
+- **ten_001 ⟂ sub_001** `test_m15_ten.py:179` requires `operation_runs` to reach `tenant_id` via a declared FK;
+  `test_m03_sub.py:82` `set(cols)==_OPRUN_COLS` pins it to 12 tenant-less columns (scope_id/created_by text).
+  Mutually exclusive.
+
+All four fixes are one-liners in sealed `tests/doc00/` (+ CANONICAL) — builder-forbidden (`harness/guard.py` +
+integrity hash); already deferred in `evidence/doc00-deferred.md`. **Founder fixes (unchanged):**
+(1) `test_m10_reg.py:75` → `union = {str(m.value) for m in MessageType}` (drop the get_args line);
+(2) `test_m11_obs.py:243` read the absolute glob path directly (no `split("/")`+re-root);
+(3) `test_m13_inv.py:546` seed a real uuid tenant id; (4) add `operation_runs` to `test_m15_ten.py:111`
+`NON_SCOPED`. **Recommendation, now 37× reproduced: this is a confirmed stuck loop — halt builder
+re-invocation and route the four sealed one-liners to a founder.** No sealed/test/fixture/support/harness/
+CANONICAL file touched; no route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
