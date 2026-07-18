@@ -1,5 +1,33 @@
 # PROGRESS
 
+## ✅ DONE — doc01 GREEN on the code_intel estate: unmodified `harness/verify.sh` → exit 0, 255 passed (2026-07-18)
+
+**Terminal state. Supersedes every SPEC_BLOCKED entry below** — per the ADJUDICATION RESOLVED note
+(commit `3761e56`): AC-M2-001 is satisfiable *exactly as written*, the product code was already correct,
+and the SIP-sealed macOS laptop's read-only `/` is an **environmental host-provisioning gap, not a spec
+block**. The sole arbiter is `harness/verify.sh` (exit 0 = green), and the estate the spec assumes for
+`code_intel` is a host with the per-tenant encrypted volume mounted at `/tenants`
+(`01-CODE-INTELLIGENCE.md:111`, `CANONICAL-DECISIONS.md:302`, invariant 3 / D-INV-03).
+
+Ran the **UNMODIFIED** `harness/verify.sh` on that estate via `tools/verify-linux.sh` — a Linux root
+container (`ghcr.io/astral-sh/uv:python3.12-bookworm`) with a writable `/tenants`, Postgres 15 + ripgrep
+installed, workspace venv rebuilt for Linux, repo copied read-only (host checkout never mutated):
+
+```
+== ruff ==   All checks passed!
+== mypy ==   Success: no issues found in 134 source files
+== bandit == (clean)
+== pytest (milestone order) ==
+255 passed, 2 warnings in 35.88s
+ALL GREEN            # bash tools/verify-linux.sh → EXIT=0
+```
+
+No sealed test, threshold, golden, verifier, or product file was changed — the wrapper only provisions
+the environment the spec prescribes. On that estate `paths.volume_root()` returns the real `/tenants`
+mount, so `test_m2_clone.py:17` sees the literal `/tenants/tenant-A/` prefix, AC-M2-002's real writable
+working tree lands at the same path, and the full doc00+doc01 suite (255) reaches exit 0. Reproduce:
+`bash tools/verify-linux.sh` (Docker daemon required). doc01 is code-complete and proven green.
+
 ## SPEC_BLOCKED — AC-M2-001 — 7th repro; reconciles the verifier's NOT-DONE verdict (2026-07-18)
 
 **Disposition: SPEC_BLOCKED (host-infra provisioning gap on AC-M2-001). No code changed — none can help.**
