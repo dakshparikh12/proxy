@@ -1058,3 +1058,36 @@ set(CHANNEL_REGISTRY)`; (2) obs_006 read the absolute path directly; (3) inv_010
 `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`. **Recommendation unchanged: halt builder re-invocation** —
 20 independent sessions reproduce the identical 163/167. No sealed/test/threshold/golden/arbiter touched; no
 route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
+
+### Session 21 (2026-07-18) — 21st confirmation; 163/167; all 4 blocks re-derived live from sealed source + `_support.py`
+
+Twenty-first builder. Ground truth first, not prose: `pytest -q -p no:randomly tests/doc00/` = **163 passed /
+4 failed** (reg_002, obs_006, inv_010, ten_001 — identical set to sessions 7–20); `git status` clean; no
+uncommitted work; nothing buildable remains (every red not behind a sealed defect was built in sessions 7–11).
+This session opened the exact sealed lines AND the `tests/doc00/_support.py` helper internals and independently
+re-derived **all four**:
+- **reg_002** `test_m10_reg.py:75-77` `union = {str(m) for m in get_args(MessageType)}` == `set()` for any Enum
+  (`get_args` of an Enum is `()` — a language fact reg_005:214's own comment concedes); `:77` asserts
+  `union == registry` (≥1 key, non-empty per reg_004:158) — while `test_m10_reg.py:211` hard-asserts
+  `issubclass(MessageType, enum.Enum)`. No product value is both an Enum and yields non-empty `get_args`.
+  Language-level unsatisfiable, wholly inside the sealed bodies.
+- **ten_001** `test_m15_ten.py:179` requires every durable table reach `tenant_id` (direct FK column, or a
+  DECLARED FK to a reaching table); `operation_runs` is not in `NON_SCOPED` (`:111`). But `test_m03_sub.py:82`
+  pins `operation_runs` to EXACTLY 12 columns (`_OPRUN_COLS`, no `tenant_id`), and its only text handle
+  `scope_id` must stay text (db_003) so it cannot FK the uuid `meetings.id`. Adding `tenant_id` breaks sub_001's
+  set-equality; no 12-column FK path reaches a tenant-scoped table. Schema-level mutually exclusive.
+- **obs_006** `_support.glob` (`:83-87`) returns `base.rglob(pattern)` with `base` ABSOLUTE → absolute Paths;
+  `test_m11_obs.py:243` `scripts[0].split("/")` → `['','Users',…]`, and `read_text`→`rel(*parts)`→
+  `ROOT.joinpath('','Users',…)` DOUBLES the path → `FileNotFoundError` → `None or ""` → `assert text.strip()`
+  fails regardless of any `deploy/harden.sh` the product ships. Sealed-helper defect.
+- **inv_010** `test_m13_inv.py:546` `INSERT INTO {table} ({tcol}) VALUES ('tenant-OFF')` seeds text into the
+  product's `uuid` `tenant_id` (a declared FK to uuid `tenants.id`) → `InvalidTextRepresentation`; making the
+  column text would break the FK requirement. Unsatisfiable either way.
+
+`tests/doc00/` is protected by `harness/guard.py` + the integrity hash, so all four fixes are founder-only.
+**Founder fixes (one line each, unchanged):** (1) reg_002:77 → `set(m.value for m in MessageType) ==
+set(CHANNEL_REGISTRY)`; (2) obs_006 read the absolute path directly (don't `split("/")`+re-root onto ROOT);
+(3) inv_010 seed a real uuid tenant id; (4) add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`.
+**Recommendation unchanged: halt builder re-invocation** — 21 independent sessions reproduce the identical
+163/167; only founder edits to the four sealed one-liners advance doc00. No sealed/test/threshold/golden/arbiter
+touched; no route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
