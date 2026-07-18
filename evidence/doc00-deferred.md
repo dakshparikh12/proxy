@@ -92,3 +92,9 @@ ADJUDICATION: DEFER test_m10_reg.py::test_reg_002_assert_registry_closed_passes_
 DEFERRED (genuinely spec-blocked, needs founder spec fix): Session ends per the SPEC_BLOCKED protocol.
 num)` (line 213), because `typing.get_args()` of any class — every Enum included — is always `()`, so the left set is empty while the registry is non-empty (reg_001/004); the two criteria constrain the identical imported `libs.contracts.MessageType` to be an Enum class and a parameterized generic alias at once, which is impossible in Python. AC-REG-005 correctly encodes the locked CANONICAL-DECISIONS.md:18 mandate ("discriminator `MessageType` (an `Enum`)"), so the Enum side is authoritative and the `get_args` form in reg_002 (mirroring the stale illustrative snippet at 00-FOUNDATION.md:303) is the spec defect; only a founder edit to the sealed test — comparing `{m.value for m in MessageType}` to the registry — can resolve it, and no product code in libs/ or services/ can make both green.
 
+
+DEFERRED (genuinely spec-blocked, needs founder spec fix): builder re-invocation; route these four sealed one-liners to a founder.** Session ends per the SPEC_BLOCKED protocol.
+mplementation.
+
+ADJUDICATION: DEFER tests/doc00/test_m10_reg.py::test_reg_002_assert_registry_closed_passes_when_set_equal — reg_002:77 hard-codes `{str(m) for m in get_args(MessageType)}`, but CANONICAL-DECISIONS.md:18 locks `MessageType` as an Enum (independently enforced by the passing, sealed reg_005), and `typing.get_args()` of any Enum is unconditionally `()`; so the left set is empty while the registry is non-empty, making `set() == {registry keys}` unsatisfiable for every possible product implementation. The §12 `get_args(MessageType)` snippet is stale pseudocode from the pre-Enum `Literal[...]` discriminator era that CANONICAL overrode; reconciling line 77 to the Enum value-set form is a sealed-test/spec edit the builder cannot make — a genuine contradiction, not mere difficulty.
+
