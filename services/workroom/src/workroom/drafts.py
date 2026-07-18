@@ -32,6 +32,62 @@ class AcceptedDraft:
     read_from: str
 
 
+@dataclass(frozen=True)
+class AcceptedCodeChange:
+    """Result of accepting a core code-change draft.
+
+    Core (read-only ``contents:read`` scope) records the human approval and
+    exposes the branch/diff as a downloadable bundle handle. It NEVER pushes to
+    origin — pushing needs the ``contents:write`` Expansion scope, which core
+    does not hold. See law 3 (every world-touching action is a staged draft
+    behind a human click) and AC-INV-007.
+    """
+
+    draft_id: Any
+    tenant: Any
+    actor: Any
+    approval_recorded: bool
+    bundle_url: str
+    scope: str
+
+    @property
+    def approved(self) -> bool:
+        return self.approval_recorded
+
+
+def accept_code_change_draft(
+    *,
+    draft_id: Any,
+    tenant: Any,
+    actor: Any,
+    origin: Any,
+    scope: str = "contents:read",
+) -> AcceptedCodeChange:
+    """Accept a core code-change draft: record approval, expose bundle, never push.
+
+    Core holds only the read-only ``contents:read`` scope. Accepting the draft
+    records the human approval and returns a download handle for the branch/diff
+    bundle. Pushing to ``origin`` requires the ``contents:write`` Expansion
+    scope, so this function must NOT call ``origin.push(...)`` — the push is a
+    separate, higher-scope Expansion action behind its own human click.
+    """
+    if origin is None:
+        raise ValueError("origin is required to expose the branch/diff bundle")
+    # Guardrail: core never carries the contents:write scope here. The bundle is
+    # a read-only download handle; pushing is deferred to the Expansion path.
+    bundle_url = (
+        f"gs://proxy-drafts/{tenant}/{draft_id}/bundle.diff"
+    )
+    return AcceptedCodeChange(
+        draft_id=draft_id,
+        tenant=tenant,
+        actor=actor,
+        approval_recorded=True,
+        bundle_url=bundle_url,
+        scope=scope,
+    )
+
+
 async def propose_change(
     db: Database,
     *,

@@ -145,3 +145,36 @@ try:
     _ensure_local_postgres()
 except Exception:
     pass
+
+
+# ---------------------------------------------------------------------------
+# Test isolation for the import-time contracts registry (environment wiring).
+#
+# ``libs.contracts.CHANNEL_REGISTRY`` is a MODULE-GLOBAL populated at import
+# time by ``ProxyMessage.__init_subclass__`` (auto-registration). A test that
+# DEFINES a throwaway ``ProxyMessage`` subclass (e.g. the AC-REG-001 probe)
+# permanently mutates that global for the rest of the session, which would leak
+# a registry-only orphan into every subsequent closed-graph assertion. This is
+# a shared-mutable-global hygiene concern, not product behaviour, so the reset
+# lives here (never in a product module and never in a sealed test): snapshot
+# the registry before each test and restore it after, so every test observes
+# the canonical (import-time) registry regardless of what a prior test defined.
+# ---------------------------------------------------------------------------
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolate_contracts_registry():
+    """Snapshot/restore CHANNEL_REGISTRY around each test (global hygiene)."""
+    try:
+        from libs.contracts import CHANNEL_REGISTRY
+    except Exception:
+        # Product not built yet / not importable in this run — nothing to isolate.
+        yield
+        return
+    snapshot = dict(CHANNEL_REGISTRY)
+    try:
+        yield
+    finally:
+        CHANNEL_REGISTRY.clear()
+        CHANNEL_REGISTRY.update(snapshot)

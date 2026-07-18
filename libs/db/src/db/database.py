@@ -10,11 +10,14 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import asyncpg
 
 from .config import stale_after_s
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .sync import _SyncDatabase
 
 
 def _normalise_dsn(dsn: str) -> str:
@@ -65,6 +68,18 @@ class Database:
             raise ValueError("Database.connect requires a DSN")
         pool = await open_pool(dsn)
         return cls(pool, instance_id or f"proc-{uuid.uuid4().hex}")
+
+    @classmethod
+    def from_connection(cls, conn: Any) -> _SyncDatabase:
+        """Wrap one raw (autocommit) psycopg3 connection in the SYNC facade.
+
+        The async pool path (:meth:`connect`) is untouched; this is a separate,
+        connection-scoped mirror for the broker-free sync workflow. The caller
+        owns the connection's lifetime — the facade never opens or closes it.
+        """
+        from .sync import _SyncDatabase
+
+        return _SyncDatabase(conn)
 
     @property
     def repos(self) -> Any:

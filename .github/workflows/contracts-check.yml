@@ -1,0 +1,24 @@
+name: contracts-check
+# The second (CI) half of the closed-graph contract gate. The SAME
+# assert_registry_closed() that runs at service boot (fail-fast) is enforced
+# here on every push/PR: a ProxyMessage type produced but not in the
+# CHANNEL_REGISTRY (a closed-graph violation / orphan MessageType) fails the
+# build server-side, not just at runtime. This is the CI gate that pairs with
+# the boot gate (AC-REG-003: dual-gated at boot AND in CI).
+on: [push, pull_request]
+
+jobs:
+  registry-closed-graph:
+    name: contracts registry closed-graph check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pydantic
+      # Enforce the closed contract graph in CI (the boot-time fail-fast gate's
+      # server-side twin): import the registry and assert_registry_closed().
+      - name: assert_registry_closed
+        run: |
+          python -c "from libs.contracts import assert_registry_closed; assert_registry_closed()"

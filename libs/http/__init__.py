@@ -9,5 +9,7 @@ import os as _os
 __path__ = [*__path__, _os.path.join(_os.path.dirname(__file__), "src", "http")]
 
 from .src.http import dispatch as dispatch
+from .src.http.internal import get_notes as get_notes
+from .src.http.internal import internal_notes as internal_notes
 
-__all__ = ["dispatch"]
+__all__ = ["dispatch", "get_notes", "internal_notes"]
