@@ -1013,3 +1013,28 @@ set(CHANNEL_REGISTRY)`; (2) obs_006 read the absolute path directly; (3) inv_010
 18 independent sessions reproduce the identical 163/167; only founder edits to the four sealed one-liners advance
 doc00. No sealed/test/threshold/golden/arbiter touched; no route-around; nothing built speculatively. Session ends
 per the SPEC_BLOCKED protocol.
+
+### Session 19 (2026-07-18) — 19th confirmation; 163/167; all 4 blocks re-derived from sealed source + helper internals
+
+Nineteenth builder. Ground truth first, not prose: `pytest -q -p no:randomly tests/doc00/` = **163 passed / 4
+failed** (reg_002, obs_006, inv_010, ten_001 — identical set); `git status` clean; no uncommitted work; nothing
+buildable remains (sessions 7–11 built every red not behind a sealed defect). This session opened the sealed test
+bodies AND the `tests/doc00/_support.py` helper internals to trace each failure to its exact mechanic:
+- **reg_002** `test_m10_reg.py:74` `union = {str(m) for m in get_args(MessageType)}` = `set()` for any Enum
+  (reg_005:214's own comment concedes `get_args on an Enum is ()`), while reg_005:211 forces
+  `issubclass(MessageType, enum.Enum)`; `:77` asserts `union == registry` (3 non-empty keys). Language-level
+  unsatisfiable — no class is both an Enum and has non-empty `get_args`.
+- **obs_006** `_support.glob` returns absolute `Path`s; `test_m11_obs.py:243` `scripts[0].split("/")` yields
+  `['','Users',…]` and `_support.read_text` → `rel(*parts)` re-joins onto `ROOT` → doubled nonexistent path →
+  `None` → `""` → `assert text.strip()` fails regardless of `deploy/harden.sh` content.
+- **inv_010** `test_m13_inv.py:527` `offboard = "tenant-OFF"` seeded via `:548 INSERT … VALUES (%s)` into the
+  product's `uuid` tenant column → `InvalidTextRepresentation` before `run_reconcile_sweep` runs.
+- **ten_001** `test_m15_ten.py:111` `NON_SCOPED = {tenants, sessions, alembic_version}` omits `operation_runs`,
+  pinned to exactly 12 columns (no `tenant_id`, free-text `scope_id`) by GREEN sub_001:82 → mutually exclusive.
+
+**Founder fixes (one line each, unchanged):** (1) reg_002:77 → `set(m.value for m in MessageType) ==
+set(CHANNEL_REGISTRY)`; (2) obs_006 read the absolute path directly (don't `split("/")`+re-root onto ROOT);
+(3) inv_010 seed a real uuid tenant id; (4) add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`.
+**Recommendation unchanged: halt builder re-invocation** — 19 independent sessions reproduce the identical
+163/167; only founder edits to the four sealed one-liners advance doc00. No sealed/test/threshold/golden/arbiter
+touched; no route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
