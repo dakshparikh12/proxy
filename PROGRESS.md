@@ -330,3 +330,34 @@ should assert `set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)` (or `
 `assert_registry_closed()` (set-equality of Enum values vs registry + signal-surface leak guard),
 `validate_inbound_message()` central funnel; `MessageType`/`validate_inbound_message` exported from
 `libs.contracts`. M1 (AC-CMP-009/011) and M2–M10 remain green.
+
+### Independent re-verification (builder session 2, 2026-07-17) — block STANDS, still needs a founder sealed-bundle fix
+
+A second fresh builder session re-derived the contradiction from scratch and **confirms it is genuine**, not a
+builder-skill gap. State reproduced: `test_m00_cmp … test_m09_db` = **115/115 green** (ruff + mypy --strict clean);
+`test_m10_reg.py` first-red at `test_reg_002` (order: reg_001 pass → reg_002 FAIL), so under the `-x` harness
+(`verify.sh`: `pytest -q -x --maxfail=1`) M11 halts M12–M17 entirely — ~40 downstream criteria are stuck behind
+this one mis-transcribed criterion.
+
+**Decisive new proof (stronger than the get_args-on-Enum observation):** the two criteria demand mutually
+exclusive Python facts of the *same live object* `libs.contracts.MessageType`:
+- `AC-REG-005` (`test_m10_reg.py:211`): `isinstance(MessageType, type) and issubclass(MessageType, enum.Enum)`.
+- `AC-REG-002` (`:75-77`): `union = {str(m) for m in get_args(MessageType)}` must equal the (non-empty,
+  per `AC-REG-004:158`) registry.
+
+`typing.get_args(x)` returns a non-empty tuple **only** when `x` is an instance of `_GenericAlias` /
+`types.GenericAlias` / `types.UnionType` / `_AnnotatedAlias`. Empirically verified this session that **every**
+such object has `isinstance(x, type) == False` (`list[int]`, `List[int]`, `int|str`, `Union[int,str]`,
+`Annotated[int,'x']` all give `get_args non-empty=True, isinstance(type)=False`). Conversely every Enum class
+gives `get_args == ()`. Therefore no object can satisfy REG-005 (`isinstance(type)=True`) **and** yield the
+non-empty `get_args` REG-002 needs — the intersection is empty **at the language level**, independent of any
+implementation choice. The shipped product `assert_registry_closed()` (`registry.py:96`) is already
+CANONICAL-correct (iterates Enum members per `09-VERIFICATION.md:16`); the defect is purely the sealed test's
+stale `get_args` form.
+
+**No route-around taken.** Building M12–M17 speculatively was declined: it can never register green through
+`verify.sh` while reg_002 fails first under `-x`, and shipping unverifiable code violates "verify.sh exit 0 is
+the only green." **Required fix (founder-only, builder forbidden to edit `tests/`/`acceptance/`):** change
+`AC-REG-002` to `set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)` (equivalently `set(MessageType)`),
+matching `AC-REG-005` + `CANONICAL-DECISIONS.md:18` + `09-VERIFICATION.md:16`. Once the bundle is corrected the
+existing `registry.py` is expected to pass reg_001..006 unchanged, and the build can resume at M12.
