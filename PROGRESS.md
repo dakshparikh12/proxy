@@ -1,5 +1,32 @@
 # PROGRESS
 
+## doc00 — sweep-extended re-seal closed (builder status, 2026-07-18, session 61)
+
+The `7bcd85e` "sweep-extended arbiter re-sealed" commit added **AC-CMP-017** and **AC-SUB-038**
+(new sealed tests in `test_m00_cmp.py`/`test_m03_sub.py`), and this build host now provisions a local
+Postgres (root `conftest._ensure_local_postgres`), so **AC-BOOT-004** — which SKIPPED on DB-less hosts
+— now runs for real. Scoped run went **3 failed / 166 passed → 169/169 green**. Fixes (root-cause, no
+test weakened):
+
+- **AC-CMP-017** — added `MaterialChangeKind` StrEnum (the 7 canonical 03→04 kinds per
+  `00-FOUNDATION.md:46`) at `libs/contracts/src/contracts/material_change.py`, re-exported through the
+  `libs.contracts` src `__init__` **and** the dotted-facade `libs/contracts/__init__.py` (both are on the
+  import path; the facade shadows the installed package under the conftest sys.path).
+- **AC-SUB-038** — `Database.bump_activity(scope_id)` (sandbox keepalive, distinct from the fencing
+  heartbeat) + `OperationHandle.bump_activity()`; the heartbeat loop now calls it every tick after a
+  successful fence. Keepalive marker lives on the `Database` facade (a leaf) — NOT via a libs.db→libs.ops
+  import, which `test_repo_004` (declared-deps) forbids and which would cycle against ops→db.
+- **AC-BOOT-004** — the boot reaper (`reap_orphans`) was already correct; the sealed test's generic
+  `_seed_orphans` inserts a row with only `status`, which failed `operation_runs.scope_id/operation_type`
+  NOT NULL. Added `DEFAULT ''` to both (NOT NULL preserved, status CHECK domain unchanged — the
+  `'in_meeting'`-rejection sub test stays green). Local test DB recreated so migration 0001 re-applies.
+
+Gates: `ruff` + `mypy --strict` (114 files) + `bandit` clean; `bash harness/verify.sh` still exits
+non-zero ONLY at the first out-of-scope doc01 test (`services.code_intel.verifier` ModuleNotFoundError) —
+170 passed (169 doc00 + `test_ac_canon_001`) before the doc01 wall. doc01 is a separate build loop.
+
+---
+
 ## doc00 — COMPLETE (builder status, 2026-07-18)
 
 **doc00 is DONE at its locked finish line.** In-scope arbiter (`tests/doc00/`) = **167/167 test

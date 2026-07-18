@@ -7,6 +7,7 @@ boot bulk sweep) live here because they are the substrate's read barrier.
 """
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -50,6 +51,9 @@ class Database:
     def __init__(self, pool: Any, instance_id: str) -> None:
         self._pool = pool
         self._instance_id = instance_id
+        # Per-scope sandbox keepalive markers (process-local; the heartbeat loop
+        # refreshes these during silent agent work — see :meth:`bump_activity`).
+        self._sandbox_activity: dict[str, float] = {}
 
     @property
     def instance_id(self) -> str:
@@ -95,6 +99,25 @@ class Database:
     async def acquire(self) -> AsyncIterator[Any]:
         async with self._pool.acquire() as conn:
             yield conn
+
+    def last_activity_at(self, scope_id: str) -> float | None:
+        """Monotonic time of this scope's last keepalive bump, or None if never."""
+        return self._sandbox_activity.get(scope_id)
+
+    async def bump_activity(self, scope_id: str) -> None:
+        """Keep the scope's E2B sandbox alive during silent agent work.
+
+        The heartbeat loop calls this (through the db facade it already holds) on
+        every tick — distinct from the fencing heartbeat: advancing
+        ``last_heartbeat_at`` proves ownership, whereas this refreshes the
+        scope's keepalive marker so its sandbox is not reaped while the
+        operation_run remains 'running'. The marker lives on this substrate facade
+        (a leaf) and is exposed via :meth:`last_activity_at` for the TTL reconcile
+        (libs.ops, which depends on this facade) to spare a still-active scope.
+        Recording it here — never in libs.ops — keeps libs.db free of an upward
+        dependency.
+        """
+        self._sandbox_activity[scope_id] = time.monotonic()
 
     # ── operation-run reaper barrier ────────────────────────────────────────
     async def sweep_stale_operation_runs(self) -> int:

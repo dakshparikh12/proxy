@@ -83,8 +83,8 @@ def upgrade() -> None:
         """
         CREATE TABLE operation_runs (
             id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-            scope_id text NOT NULL,
-            operation_type text NOT NULL,
+            scope_id text NOT NULL DEFAULT '',
+            operation_type text NOT NULL DEFAULT '',
             status text NOT NULL DEFAULT 'running'
                 CHECK (status IN ('running', 'completed', 'failed', 'interrupted')),
             progress jsonb,

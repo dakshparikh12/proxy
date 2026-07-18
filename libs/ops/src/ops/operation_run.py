@@ -58,6 +58,14 @@ class OperationHandle:
         self._is_owner = affected == 1
         return self._is_owner
 
+    async def bump_activity(self) -> None:
+        """Refresh this scope's sandbox keepalive (every heartbeat tick).
+
+        Distinct from :meth:`heartbeat` (which fences ownership): this keeps the
+        E2B sandbox alive during silent, token-less agent work.
+        """
+        await self._db.bump_activity(self._scope_id)
+
     async def check_pause(self) -> bool:
         """Surface pause_requested so a running build can be paused/aborted."""
         async with self._db.acquire() as conn:
@@ -116,6 +124,8 @@ async def _heartbeat_loop(handle: OperationHandle, interval_s: float) -> None:
             await asyncio.sleep(interval_s)
             if not await handle.heartbeat():
                 return  # lost the fence — stop heartbeating (self-terminate)
+            # Still own the row: keep the scope's sandbox alive for this tick.
+            await handle.bump_activity()
     except asyncio.CancelledError:
         return
 

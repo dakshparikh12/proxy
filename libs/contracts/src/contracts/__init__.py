@@ -21,6 +21,7 @@ from .envelopes import (
 from .envelopes import (
     ProgressEvent as ProgressEvent,
 )
+from .material_change import MaterialChangeKind as MaterialChangeKind
 from .notes import NoteDelta as NoteDelta
 from .notes import NoteOp as NoteOp
 from .readiness import Readiness as Readiness
@@ -58,6 +59,7 @@ __all__ = [
     "ChunkType",
     "Envelope",
     "EnvelopeStatus",
+    "MaterialChangeKind",
     "NoteDelta",
     "NoteOp",
     "ProgressEvent",

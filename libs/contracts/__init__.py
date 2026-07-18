@@ -31,6 +31,9 @@ from .src.contracts import (
     EnvelopeStatus as EnvelopeStatus,
 )
 from .src.contracts import (
+    MaterialChangeKind as MaterialChangeKind,
+)
+from .src.contracts import (
     MessageType as MessageType,
 )
 from .src.contracts import (
@@ -72,6 +75,7 @@ __all__ = [
     "ChunkType",
     "Envelope",
     "EnvelopeStatus",
+    "MaterialChangeKind",
     "NoteDelta",
     "NoteOp",
     "ProgressEvent",
