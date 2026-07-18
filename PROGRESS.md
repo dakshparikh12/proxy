@@ -587,3 +587,92 @@ the repo-root `conftest.py`, mirroring the pre-existing `_wire_control_plane()` 
 way to satisfy con_002's `import libs.lint.naming` WITHOUT adding a 7th `libs/` subdir (AC-REPO-007 forbids it) or a
 `libs/*.py` module (whose `libs/__pycache__` also trips the exact-set check). It alters no assertion/threshold and
 `conftest.py` is neither guard-protected nor integrity-hashed; flagged for verifier review.
+
+### Builder session 8 (2026-07-17) — 139→153 green; 4 sealed contradictions confirmed + services/harness guard false-positive mapped
+
+Eighth fresh-context builder. Independently re-derived every prior block empirically (not from prose), then
+BUILT every remaining buildable milestone via non-guard-blocked import paths. Full doc00 moved
+**139 → 153 passed / 14 failed** (`pytest -p no:randomly tests/doc00/`, clean local Postgres). ruff + mypy `--strict`
++ bandit clean on `services`+`libs` (104 mypy source files, 0 issues). Committed increments:
+`974f7cf` (reg isolation + CI closed-graph gate; llm fence prompts; db sync facade; workroom accept+cache) and
+`59137bd` (libs.ops dual-path redaction / per-sandbox JWT / capability tokens / tool telemetry / sync claim+sweep+reconcile).
+
+**+14 newly green this session:** reg_003, reg_006 (root-conftest `CHANNEL_REGISTRY` snapshot/restore autouse fixture
+[shared-global hygiene, not product; also un-blocks reg_006] + `.github/workflows/contracts-check.yml` boot+CI dual
+gate); inv_001 (1-hr `cache_control` on orchestrator-wake `libs.agentkit.wake_cache` + Workroom
+`services.workroom.agent_config`, not Scribe-only); inv_005 (`libs.llm.prompts` transcript-as-untrusted fence);
+inv_006 (`disallowed_tools=[Bash,Write,Edit]` + `propose_change` sole write); inv_007
+(`services.workroom.drafts.accept_code_change_draft` — approval+bundle, never push); inv_008 (`libs.ops.redaction`);
+inv_009 (`libs.ops.sandbox` per-sandbox JWT); inv_012 (`libs.ops.capability`); inv_013 (`libs.ops.telemetry`);
+W01 (`libs.db.Database.from_connection` sync facade); W02 (`libs.ops.claim_meeting`/`sweep_stale_on_read` sync);
+W12 (`sandbox_provider.verbs` + sync token-gated `run_reconcile_sweep`). obs_003 confirmed a stale-DB artifact
+(persistent local PG accumulates fixed-`meeting_id` rows across runs), not a product bug — green on a clean table.
+
+#### Two NEW sealed-bundle contradictions confirmed this session (each reproduced live) — SPEC_BLOCKED
+
+1. **AC-TEN-001 (`test_m15_ten.py::test_ten_001_every_durable_table_reaches_tenant_id`) × AC-SUB-001 / CANONICAL §2+§11.2.**
+   ten_001 part (c) enumerates EVERY `public` base table minus `NON_SCOPED = {tenants, sessions, alembic_version}`
+   and requires each to reach `tenant_id` via a DECLARED FK. `operation_runs` cannot: AC-SUB-001
+   (`test_m03_sub.py:82`) asserts its column set is EXACTLY the 12 canonical columns (`set(cols)==_OPRUN_COLS`), and
+   CANONICAL-DECISIONS §2 + §11.2 LOCK `scope_id` as `text` ("only `operation_runs.scope_id` stays text… casts
+   `meeting_id::text` at the call site", "no new column"). So it can take neither a `tenant_id` column (breaks the
+   pinned set) nor a declared FK on any existing column (`scope_id` is text, not a uuid handle; `id` is its own PK).
+   ten_001's `NON_SCOPED` exempts the structurally-identical text-keyed coordination store `sessions` but NOT
+   `operation_runs`. **Exact conflict:** a table CANONICAL forbids from carrying any tenant FK is nonetheless required
+   by ten_001 to declare one. **Founder fix (sealed):** add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`
+   (the coordination-store exemption already granted to `sessions`), per CANONICAL §2/§11.2. Product side is complete:
+   `meeting_cost_telemetry` now carries a nullable `tenant_id` FK (this session), so `operation_runs` is the SOLE
+   remaining unscoped table — the block is clean.
+
+2. **AC-INV-010 (`test_m13_inv.py::test_inv_010_offboarding_sweep_deletes_tenant_rows_and_gcs_prefixes`) × the uuid
+   tenant-id schema (CANONICAL §11.2).** The test probes `information_schema` for any table with a `tenant`/`tenant_id`
+   column (`LIMIT 1`, no `ORDER BY`) and, at its OWN seed line (`test_m13_inv.py:546`), does
+   `INSERT INTO <table> (<tcol>) VALUES ('tenant-OFF')`. Every migrated tenant column is `uuid` (users/repos/meetings/
+   sessions/webhook_events — mandated uuid by CANONICAL §11.2 + AC-TEN-001's `tenant_id REFERENCES tenants(id)`), so
+   the text literal `'tenant-OFF'` raises `psycopg.errors.InvalidTextRepresentation: invalid input syntax for type
+   uuid` BEFORE `run_reconcile_sweep` is ever called. Unfixable by product code (the failing INSERT is in the sealed
+   test body). **Founder fix (sealed):** seed a real uuid tenant id (or a text-tenant fixture table). Product side is
+   complete and correct: sync `libs.ops.reconcile.run_reconcile_sweep(conn=, tenant=, gcs=, reason=)` deletes every
+   tenant-scoped row via `psycopg.sql.Identifier`-composed `<col>::text = %s` (never mis-casts, never raises) and calls
+   `gcs.delete_prefix("tenants/<tenant>/")`; it simply can't be reached.
+
+(reg_002 [get_args(Enum)==() vs non-empty registry] and obs_006 [`scripts[0].split('/')` on an ABSOLUTE rglob path
+re-joins onto ROOT → reads 0 bytes] remain SPEC_BLOCKED exactly as documented in sessions 3–7. Re-confirmed live.)
+
+#### `services/harness/**` guard false-positive — 7 criteria environmentally blocked (NOT spec, NOT built)
+
+`harness/guard.py` PROTECTED uses a SUBSTRING match (`path.find("harness/") >= 0`), which blocks not just the sealed
+top-level `harness/` tooling dir but ALSO `services/harness/**` — paths the builder charter explicitly authorizes
+("INTEGRATE into services/*"). `runner.py`'s integrity WALL covers only the real sealed trees (tests/ fixtures/
+harness/ criteria/ acceptance/ product/ .claude/), NOT `services/harness`, so this is purely a guard false-positive.
+Confirmed empirically this session: Write to `services/harness/src/harness/*` → blocked; Write to
+`services/workroom`, `libs/*`, `services/code_intel`, `.github/`, root `conftest.py` → allowed. It was NOT
+circumvented (deliberately routing around a security hook via Bash tricks was declined as out-of-charter). Also note
+`services.control_plane` physically lives at `services/harness/src/control_plane/` (AC-REPO-006 fixes `services/*` to
+exactly five dirs, so no top-level `services/control_plane/` may exist) → it is guard-blocked too. The 7 criteria
+whose ONLY import home is under `services/harness/**` (no writable `libs.*`/`services.{workroom,code_intel}` fallback
+in the sealed test) therefore cannot be built without the guard fix:
+  - **obs_004** — `flush_tracing` must be defined once IN `libs/`, but it is frozen inside
+    `services/harness/src/harness/server.py:132` (a prior session placed it there); it cannot be relocated, and
+    adding a `libs/` copy makes `count_def_sites==2` (fails "exactly once").
+  - **obs_005** — `services.harness.heartbeat.emit_heartbeat` (+ a `/health` route on the control_plane app).
+  - **inv_011** — `services.harness.accept_route.handle_accept` / `services.harness.routes.handle_accept`.
+  - **W03** — `services.harness.emit.Emitter.attempt`/`drain_wire` on the frozen `services/harness/src/harness/emit.py`.
+  - **W04** — `services.control_plane.webhooks.ingest`/`drain_pending` (lives under `services/harness/src`).
+  - **W05** — `services.harness.wake.answer_direct`.
+  - **W06** — needs a SYNC `services.harness.budget.check_meeting_budget(conn, meeting_id)` returning a number, but the
+    frozen `services/harness/src/harness/budget.py:11` defines it `async (db: Database, meeting_id) -> MeetingCost`
+    (incompatible signature; uneditable).
+  - **W07** — `services.control_plane.accept.accept_draft` (workroom half `propose_change`/`teardown` is buildable, but
+    the accept import lives under `services/harness/src`).
+  - **W08** — `services.harness.orchestrator.run_wake_turn`.
+  - **W09** — `services.control_plane.authz.read_meeting` (lives under `services/harness/src`).
+  **Recommended one-line founder fix:** anchor the guard pattern to the top-level dir (match `^harness/` / an exact
+  `harness/` path prefix) instead of a bare substring, so `services/harness/**` becomes editable as the charter
+  intends. On that fix these 7 build with the same dual-path pattern already used for libs/ops and libs/db.
+
+**Net:** 14 reds remain = 4 sealed contradictions (reg_002, obs_006, ten_001, inv_010) needing one-line sealed-file
+founder fixes + 10 criteria behind the `services/harness/**` guard false-positive needing the one-line guard anchor.
+Zero of the 14 is a genuine product gap. No test/threshold/golden/arbiter touched; no route-around; nothing built
+speculatively. verify.sh still exits non-zero (its `-x` halts at the first blocked test, reg_002) and is NOT claimed
+green — but 153/167 doc00 criteria are green deterministically, every buildable one this session included.
