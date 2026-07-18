@@ -3031,3 +3031,48 @@ for either. Session ends.**
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — AC-M2-001 is satisfiable exactly as written and the product code is already correct; the block is a read-only-`/` macOS test host that cannot provision the canonical `/tenants` mount, which per `R-DOC01-3.2-01` (spec:111 — *"a per-tenant, encrypted persistent volume (e.g. `/tenants/<tenant>/repos/<repo>/`)"*) and `CANONICAL-DECISIONS.md:302` (*"code_intel — one stateful host (GCE/MIG) with the per-tenant encrypted volume"*) is the real production layout, so the builder must run `harness/verify.sh` on the code_intel estate / a Linux runner (or root/container) where `/tenants` is writable — an infra provisioning step, the DEBUGGER's own "code-complete path" — and must not weaken the sealed test, fabricate the prefix, or treat this environmental limitation as the spec impossibility that DE
+
+---
+
+## ✅ RESOLVED — doc01 verify.sh GREEN (rung 1) — 2026-07-18
+
+**`harness/verify.sh` exits 0 — ALL GREEN, 255 passed** (ruff + mypy `--strict` + bandit clean;
+full milestone-ordered pytest green). Reproduced deterministically via `bash tools/verify-linux.sh`
+(needs a running Docker daemon). The two standing walls (SB-M2, SB-M5) are both cleared — the first
+by running in the adjudication-prescribed environment, the second by a legitimate non-sealed
+test-isolation fix. Evidence lives here (the `evidence/` tree is write-protected).
+
+### SB-M2 / AC-M2-001 — CLEARED by the prescribed infra path (no code change)
+The repeated adjudication was explicit: AC-M2-001 is satisfiable exactly as written and the product
+code is already correct; the only block was this **read-only-`/` macOS dev host**, which SIP forbids
+from creating the canonical `/tenants` mount (`mkdir /tenants` → `Read-only file system`; `sudo` needs
+a password; no `/etc/synthetic.conf`). The prescribed "code-complete path" is to run the **unmodified**
+`verify.sh` where `/tenants` is writable — a Linux **root container**. Done: `tools/verify-linux.sh`
+runs verify.sh in `ghcr.io/astral-sh/uv:python3.12-bookworm` with a writable `/tenants`, and the
+unmodified `Cloner` / `paths.volume_root()` green AC-M2-001..006. The sealed test is untouched; the
+`/tenants/tenant-A/` prefix is real, not fabricated. (A Docker daemon was available on this host —
+the one enabling condition the prior six sessions never exercised.)
+
+### SB-M5 / AC-M5-001 — CLEARED by a non-sealed test-isolation hygiene fixture (`conftest.py`, +25 lines)
+Once M2 no longer halts `-x`, the next-collected failure is
+`tests/test_m5_tools.py::test_ac_m5_001_mcp_server_minted_fresh_per_query`
+(`RuntimeError: There is no current event loop`). Root cause is a **cross-test global-state leak**,
+not a product defect: many Doc-00 tests call `asyncio.run()`, whose teardown does
+`events.set_event_loop(None)` (latching `_set_called`); on Python 3.12 the sealed AC-M5-001 probe's
+`asyncio.get_event_loop()` (`test_m5_tools.py:22`) then raises. AC-M5-001 passes in isolation.
+Fix: a third autouse hygiene fixture `_restore_current_event_loop` in the **root `conftest.py`** (the
+documented, non-sealed environment-wiring file — NOT under `tests/`), restoring a clean current loop
+before each test **only when it has been nulled**. Same category as the file's existing
+`CHANNEL_REGISTRY` snapshot/restore and DB-accumulator reset. No product behaviour changes, no sealed
+test is modified, no threshold weakened. This wall was invisible on macOS because AC-M2-001 halted
+first; it is a genuine, necessary fix for the suite to be green on ANY host with a writable `/tenants`
+(the real code_intel runtime / CI). The prior "no services/libs fix greens it" diagnosis was correct
+as far as it went — the correct surface was the non-sealed conftest, not `services/**`/`libs/**`.
+
+### Evidence
+- Container: `255 passed`, `VERIFY_EXIT=0`, `ALL GREEN` (ruff/mypy/bandit all clean).
+- macOS dev host (unchanged limitation): `254 passed, 1 failed` — the sole red is AC-M2-001's
+  host-gated `/tenants` prefix; every other doc00+doc01 criterion, incl. AC-M5-001, is green there too
+  (confirming the conftest fix is a net improvement and regresses nothing).
+- Reproduce: `bash tools/verify-linux.sh`. Pinned Linux env: `tools/linux-verify-requirements.txt`.
+- Diff for this pass: `conftest.py` (+25), `tools/verify-linux.sh` (new), `tools/linux-verify-requirements.txt` (new).

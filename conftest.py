@@ -184,6 +184,31 @@ import pytest  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def _restore_current_event_loop():
+    """Ensure a usable current event loop for each test (global-state hygiene).
+
+    ``asyncio.run()`` (used by many Doc-00 substrate/boot/config tests) calls
+    ``events.set_event_loop(None)`` in its teardown, nulling the main thread's
+    current loop AND latching ``_set_called``. On Python 3.12 a later test that
+    reaches for ``asyncio.get_event_loop()`` (e.g. the sealed AC-M5-001 probe at
+    ``tests/test_m5_tools.py:22``) then hits ``RuntimeError: There is no current
+    event loop`` — a cross-test pollution leak, not a product defect (that test
+    passes in isolation). This restores a clean current loop before each test,
+    the same category of shared-global hygiene as the CHANNEL_REGISTRY reset
+    above; it changes no product behaviour and touches no sealed test. It only
+    intervenes when the loop has actually been nulled — a well-behaved test that
+    already owns a running/current loop is left untouched.
+    """
+    import asyncio
+
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolate_contracts_registry():
     """Snapshot/restore CHANNEL_REGISTRY around each test (global hygiene)."""
     try:
