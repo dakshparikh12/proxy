@@ -1772,3 +1772,39 @@ E2B-scoped · host_code_exec==0 · set -e · idempotent guard). Evidence in comm
 product side is now genuinely complete and proven. SB register otherwise unchanged (reg_002, inv_010, ten_001).
 Only `deploy/harden.sh` (product) touched — no sealed/test/fixture/support/harness/CANONICAL file edited; no
 route-around. Halt recommendation stands: route the read-bug one-liner to a founder. Session ends per protocol.
+
+### Session 39 (2026-07-18) — 39th confirmation; 163/167; all four re-derived at primary source, halt reaffirmed
+
+Ground truth (`.venv/bin/python -m pytest -q -p no:randomly tests/doc00/`): **163 passed / 4 failed**
+(`reg_002`, `obs_006`, `inv_010`, `ten_001` — identical set to sessions 7–38); `git status` clean; product
+fully built through M17; nothing buildable remains. I re-opened all four sealed sources this session and ran the
+predicates live rather than trust the prose chain:
+
+- **reg_002** `test_m10_reg.py:74–77`: `union = {str(m) for m in get_args(MessageType)}`; reg_005:211 forces
+  `issubclass(MessageType, enum.Enum)`, and `get_args()` of a class is `()` ⇒ `union` is unconditionally `∅`.
+  Live `verify.sh` output: `union-only=set(), registry-only={'connect-repo','invite-proxy','approve-draft'}`
+  (the 3 reg_004 CANONICAL keys). `set() == {3}` is language-level unsatisfiable by any `libs/`/`services/`
+  edit. FIRST red under `verify.sh` (`-x --maxfail=1`) ⇒ exit 0 unreachable regardless of the other three.
+- **obs_006** `_support.py:83` `base.rglob(...)` on an absolute `base` returns ABSOLUTE paths; `test_m11_obs.py:243`
+  `read_text(*scripts[0].split("/"))` re-roots the absolute string under ROOT (`rel('', 'Users', …)`) → doubled
+  path → `None` → `""`. Simulated live: glob → `/Users/pranav/Desktop/proxy/deploy/harden.sh`, read → `''`,
+  though the file is a real 3359-byte script. Replaying the ENTIRE obs_006 body against the real text with a
+  corrected read yields all 8 assertions green (non-empty · 7 controls · host firewall · infra sec-group ·
+  E2B-scoped · host_code_exec==0 · set -e · idempotent) — session 38's product-side fix holds; the ONLY
+  remaining blocker is the sealed read bug.
+- **inv_010** `test_m13_inv.py:527,546`: `offboard = "tenant-OFF"` INSERTed into the CANONICAL-mandated
+  (`CANONICAL-DECISIONS.md:212` `tenant_id uuid REFERENCES tenants`) uuid column → `InvalidTextRepresentation`.
+- **ten_001 ⟂ sub_001** `test_m15_ten.py:177–181` requires every base table minus `NON_SCOPED`
+  (`{tenants, sessions, alembic_version}`) to reach `tenant_id` via a declared FK; `test_m03_sub.py:82`
+  `set(cols) == _OPRUN_COLS` pins `operation_runs` to exactly 12 tenant-less columns (`scope_id` typed `text`,
+  so it cannot FK a uuid PK). Mutually exclusive — no product schema satisfies both.
+
+All four fixes are one-liners in sealed `tests/doc00/` (+ CANONICAL) — `tests/` is in `harness/guard.py`
+`PROTECTED` (line 14) plus the runner integrity hash ⇒ builder-forbidden; already deferred in
+`evidence/doc00-deferred.md`. **Founder fixes (unchanged):** (1) `test_m10_reg.py:74` →
+`union = {str(m.value) for m in MessageType}` (drop the get_args line); (2) `test_m11_obs.py:243` read the
+absolute glob path directly (no `split("/")`+re-root); (3) `test_m13_inv.py:546` seed a real uuid tenant id;
+(4) add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`. **Recommendation, now 39× reproduced: this is a
+confirmed stuck loop — halt builder re-invocation and route the four sealed one-liners to a founder.** No
+sealed/test/fixture/support/harness/CANONICAL file touched; no route-around; nothing built speculatively.
+Session ends per the SPEC_BLOCKED protocol.
