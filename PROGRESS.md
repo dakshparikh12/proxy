@@ -2908,3 +2908,91 @@ No proposed change touches `acceptance/`, `tests/`, `fixtures/`, or `harness/`. 
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — `AC-M2-001` is not a spec contradiction but a host-provisioning gap; the sealed test `tests/test_m2_clone.py:17` (`startswith("/tenants/tenant-A/")` + cross-tenant `PermissionError`) is fully satisfiable and the unmodified `Cloner`/`paths.volume_root()` already satisfy it, per `01-CODE-INTELLIGENCE.md:111` ("a per-tenant, encrypted persistent volume (e.g. `/tenants/<tenant>/repos/<repo>/`), one tenant never sharing a volume, process, or index with another"); build/verify to the criterion exactly as written — do not weaken the test or change the spec — and run `harness/verify.sh` on a host where `/tenants` is writable (production `code_intel` host, a Linux CI runner, or a root container; or `export PROXY_TENANT_VOLUME_ROOT=/tenants` after creating it), which is an infrastructure action f
+
+## Fresh-context DEBUGGER (2026-07-18) — AC-M2-001 (5th identical reproduction) root-caused from primary source; SPEC_BLOCKED (host-unprovisionable literal `/tenants` root); NO services/libs fix exists. Latent SB-M5 also diagnosed.
+
+Invoked after the build loop failed **4× identically** on
+`tests/test_m2_clone.py::test_ac_m2_001_per_tenant_encrypted_volume`, with the last session making no
+progress. Fresh context; ground truth re-derived, not trusted. Systematic debugging (reproduce → hypothesis →
+verify with evidence → fix root cause **or** SPEC_BLOCKED). **No code change made — none can green the target.**
+
+### Reproduction (the sole arbiter's actual first stop)
+`.venv/bin/python -m pytest -q -x --maxfail=1` (verify.sh line 10) → **`1 failed, 200 passed`**, halting at
+`tests/test_m2_clone.py:17`:
+```
+assert str(path_a).startswith("/tenants/tenant-A/")
+E  '/var/folders/7c/…/T/proxy-tenants/tenant-A/repos/two-tenant-src/checkout'.startswith('/tenants/tenant-A/') → False
+```
+M2 is genuinely the first-collected doc01 failure under `-x`; M5 (below) is only *reachable* once M2 is out of
+the path. So AC-M2-001 is the live wall, exactly as the 4× loop reported.
+
+### Root cause — VERIFIED, not asserted (the criterion/test require an OS-forbidden absolute path)
+1. **The requirement is a filesystem-absolute string.** Test `test_m2_clone.py:17-18` asserts
+   `startswith("/tenants/tenant-A/")` / `.../tenant-B/`; criterion `AC-M2-001.then` (`criteria/criteria.yaml:199-200`)
+   mandates "stored under `/tenants/tenant-A/` path prefix". Both demand a path rooted at the literal absolute
+   mount `/tenants/`.
+2. **`/tenants` is unprovisionable on this sealed host — proven, not guessed.** `mkdir -p /tenants` →
+   `mkdir: /tenants: Read-only file system` (macOS SIP; `/` is a read-only system volume). Creating `/tenants`
+   requires editing `/etc/synthetic.conf` + reboot (an OS action), or a writable-root container — **none available
+   in this non-interactive sealed session**, and none of them is a `services/**`/`libs/**` edit.
+3. **The product code is already correct.** `services/code_intel/src/code_intel/paths.py::volume_root()` prefers
+   `$PROXY_TENANT_VOLUME_ROOT` → the canonical `/tenants` mount → a writable temp base *only when `/tenants` is
+   unwritable*; `Cloner.clone()` materialises `<root>/<tenant>/repos/<repo>/checkout` and enforces cross-tenant
+   `PermissionError`. On a host where `/tenants` is writable, all six AC-M2-00x pass. Here the fallback yields
+   `…/T/proxy-tenants/…`, which is a correct isolation layout but does not *string-match* the absolute prefix.
+   **200/201 doc01 tests pass; the only red is this absolute-prefix string assertion.**
+
+### Why NO `services/**` / `libs/**` fix can green it (dispositive)
+AC-M2-001 needs a **writable** path *literally* under `/tenants/`; sibling **AC-M2-002** needs a **real git
+working tree** (`subprocess git rev-parse` with `cwd=clone_path`, then `clone_path.rglob("*")`) under the *same*
+`volume_root()`. On a read-only-`/` host these are mutually exclusive: any writable root is **not** `/tenants`,
+and `/tenants` is **not** writable. Returning a fabricated `/tenants/…` path (to satisfy the M2-001 string) would
+make M2-002's real-tree operations fail (the dir would not exist). No code can make a string-prefix assertion pass
+against a mount the OS forbids creating. This is an environment/criterion constraint, not a code defect.
+
+### Authority tension (why the criterion over-constrains its own source)
+Authority `R-DOC01-3.2-01` = `product/v0-spec/01-CODE-INTELLIGENCE.md:111`: "a per-tenant, encrypted persistent
+volume **(e.g. `/tenants/<tenant>/repos/<repo>/`)** … (Provider choice and infra layout are Doc 00's; **this doc's
+requirement is per-tenant encrypted persistent storage with compute next to it**)." The spec offers `/tenants/…`
+as an *example* and states the *requirement* as per-tenant isolation. `AC-M2-001.then` hardened that illustrative
+example into a **literal absolute mount**, which is what makes the criterion unsatisfiable on any host lacking a
+writable `/tenants`.
+
+### Verdict & terminal routing (STOP re-adjudicating on this host)
+**SPEC_BLOCKED (SB-M2 / AC-M2-001)** — genuine, independently reconfirmed (5th identical reproduction). Per the
+DEBUGGER protocol (root cause in the sealed criterion/test → do NOT edit it; append SPEC_BLOCKED naming it), I made
+**no** code change; no test weakened; no route-around. Re-running `verify.sh` on this read-only-`/` macOS host will
+reproduce this **identically, forever** — the prior "ADJUDICATION RESOLVED — proceed" loop cannot terminate here
+because the resolution it prescribes (a writable `/tenants`) is an OS/infra action, not a buildable one. **Founder
+decision required, one of:**
+- **(infra)** run `verify.sh` where `/tenants` is writable — a Linux CI runner / root container
+  (`sudo mkdir -p /tenants && sudo chown "$USER" /tenants`), or `export PROXY_TENANT_VOLUME_ROOT=/tenants` with
+  `/tenants` writable. Unmodified `Cloner`/`volume_root()` then green AC-M2-001..006. **This is the code-complete path.**
+- **(criterion)** amend `AC-M2-001.then` + `test_m2_clone.py:17-18` to assert the *isolation invariant* — clone under
+  a per-tenant `<root>/<tenant>/` prefix **plus** cross-tenant `PermissionError` — instead of the literal `/tenants/`
+  mount, matching the authority's "e.g." + "per-tenant encrypted persistent storage" wording. (Requires editing the
+  sealed arbiter, which only the founder may do.)
+
+### Secondary latent finding — SB-M5 (the NEXT wall once M2 is provisioned/deselected)
+When M2 is out of the `-x` path, the arbiter's next stop is
+`tests/test_m5_tools.py::test_ac_m5_001_mcp_server_minted_fresh_per_query` (this is what session 6 hit after
+deferring M2). Also a **sealed-test** issue, not a product defect:
+- **Consumer (sealed):** `test_m5_tools.py:22` uses the deprecated `asyncio.get_event_loop().run_until_complete(...)`.
+  In Python 3.12 `get_event_loop()` raises `RuntimeError: There is no current event loop` once the main-thread loop
+  has been nulled.
+- **Polluters (sealed):** `tests/doc00/test_m03_sub.py` (20+ `asyncio.run()` calls), `test_m04_boot.py`
+  (boot-ordering tests via `server.lifespan_trace()`), and `test_m05_cfg.py` each call `asyncio.run()`, whose
+  `Runner.close()` does `events.set_event_loop(None)` — leaking that nulled state into every later test in the process.
+- **Evidence:** `pytest test_m5_tools.py::test_ac_m5_001` alone → **1 passed**. `pytest tests/doc00/test_m03_sub.py
+  <same test>` → **FAILED** (RuntimeError); same after `test_m04_boot.py` and after `test_m05_cfg.py`. Product code
+  (`MCPServerFactory.create_for_query`) is correct — the failure is a stdlib call in sealed test code, *before* any
+  product code runs.
+- **No services/libs fix greens it** (both polluter and consumer are sealed; the raising call precedes product code).
+  One genuine services-code smell worth a founder note: `services/harness/src/harness/server.py:324` `lifespan_trace()`
+  also leaks global loop state via `asyncio.run()` — a real defect — but hardening it to a private `new_event_loop()`
+  does **not** green M5, because the sealed `test_m03_sub.py`/`test_m05_cfg.py` polluters dominate and run first.
+- **Founder fix:** change the sealed `test_m5_tools.py:22` to `asyncio.run(run_two_concurrent())`, or add a sealed
+  conftest autouse fresh-event-loop fixture; optionally harden `lifespan_trace()` as above.
+
+**SB-M2 confirmed; SB-M5 newly diagnosed. Both route to a founder — no buildable `services/**`/`libs/**` work remains
+for either. Session ends.**
