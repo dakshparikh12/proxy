@@ -1415,3 +1415,35 @@ set(CHANNEL_REGISTRY)` (drop the `:74` `get_args` line); (2) `obs_006` read the 
 `test_m15_ten.py:111` `NON_SCOPED`. **Recommendation unchanged and now 28× reproduced: halt builder re-invocation;
 route the four sealed one-liners to a founder.** No sealed/test/threshold/golden/arbiter touched; no route-around;
 nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
+
+### Session 29 (2026-07-18) — 29th confirmation; 163/167; all four re-derived at primary source; gates otherwise fully green
+
+Twenty-ninth builder. Ground truth first (`.venv/bin/python -m pytest -q -p no:randomly tests/doc00/`):
+**163 passed / 4 failed** (reg_002, obs_006, inv_010, ten_001 — identical set to sessions 7–28).
+Gates independently confirmed CLEAN this session: `ruff check` (services libs tests) = all passed;
+`mypy --strict` = no issues in 113 files; `bandit -r src` = clean; `git status` = clean. So the ONLY
+reds are the four sealed-defect criteria — the product is otherwise fully built and lint/type/security clean.
+
+All four opened at primary source (not trusting prior prose), plus `_support.glob/rel/read_text` traced:
+- **reg_002** `test_m10_reg.py:75` `union = {str(m) for m in get_args(MessageType)}` = ∅ because `reg_005:211`
+  hard-forces `issubclass(MessageType, enum.Enum)` and `get_args()` of any class is `()` (`:214`'s own comment
+  concedes it); `:77` asserts `union == CHANNEL_REGISTRY` (3 keys per reg_004). ∅ == {3} — language-level
+  unsatisfiable; `get_args(MessageType)` is inline in the sealed body, unreachable by product code.
+- **obs_006** `_support.glob:83-87` = `sorted(rel(*root_parts).rglob(pattern))`, `rel`=`ROOT.joinpath` → ABSOLUTE
+  paths; `test_m11_obs.py:243` `read_text(*scripts[0].split("/"))` → `rel('','Users',…)` = `ROOT.joinpath('','Users',…)`
+  doubles onto ROOT → `None or ""` → `assert text.strip()` fails for ANY hardening script the product ships. Sealed helper.
+- **ten_001 vs sub_001** `test_m03_sub.py:82` `set(cols)==_OPRUN_COLS` pins `operation_runs` to EXACTLY 12 tenant-less
+  columns; `created_by` must stay TEXT (sub_036:1345 needs `'instance-abc-123'`, w_workflows:74 needs `'inst-A'`),
+  scope_id/operation_type/status are arbitrary non-referential text — no column can FK a tenant-reaching table, and
+  adding one breaks the set-equality. `test_m15_ten.py:178` requires `operation_runs` to reach `tenant_id`. Mutually exclusive.
+- **inv_010** `test_m13_inv.py:546` `INSERT INTO {table} ({tcol}) VALUES ('tenant-OFF')` seeds text into the probed
+  `tenant_id` column that CANONICAL-DECISIONS.md:212 + ten_001 mandate `uuid REFERENCES tenants` → `InvalidTextRepresentation`.
+
+Under `verify.sh` (`-x --maxfail=1`) reg_002 (M11) is the FIRST red and halts the pass. All four fixes live in
+`tests/doc00/` (builder-forbidden — `harness/guard.py` + integrity hash). **Founder fixes (one line each, unchanged):**
+(1) `reg_002:77` → `set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)` (drop the `:75` `get_args` line);
+(2) `obs_006` read the absolute glob path directly (don't `split("/")`+re-root onto ROOT);
+(3) `inv_010` seed a real uuid tenant id; (4) add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`.
+**Recommendation unchanged and now 29× reproduced: halt builder re-invocation; route the four sealed one-liners to a
+founder.** No sealed/test/threshold/golden/arbiter touched; no route-around; nothing built speculatively. Session ends
+per the SPEC_BLOCKED protocol.
