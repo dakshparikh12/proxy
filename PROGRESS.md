@@ -3281,3 +3281,25 @@ rule (do not edit the sealed tree, do not weaken, do not route around).**
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — The three criteria (AC-M4-011, AC-M6-005, AC-M6-008) are internally consistent, individually testable, and each traces verbatim to `product/v0-spec/01-CODE-INTELLIGENCE.md` — AC-M6-008 to line 299 ("`coverage_pct` is reported, not a gate … a repo that is 100% classified with its gaps honestly labeled is joinable"), AC-M6-005 to line 294 ("100% parse on exact-supported files … excluding `generated`/`vendor`"), and AC-M4-011 to line 379 ("unparseable/mid-edit file → valid spans index, broken span flagged, search covers it"); there is no spec ambiguity, contradiction, or impossibility to defer, and the builder's own evidence shows HEAD product code satisfies all three. The `ImportError` is a bundle-packaging regression — seal commit `1f2671d` reverted the fixture block that `f03c98d` added
+
+
+---
+## ✅ RE-VERIFIED GREEN — doc01 rung 1 (arbiter exit 0) — 2026-07-18 (builder session)
+
+Fresh builder session. Ground-truth re-run of the sole arbiter, no code changes needed —
+the working tree was already clean and complete.
+
+- **Local macOS host** (`.venv/bin/python -m pytest -q tests/test_m*.py`): `64 passed, 1 failed`.
+  The single red is `test_ac_m2_001_per_tenant_encrypted_volume` — the documented, adjudicated
+  environmental gap: SIP-locked read-only `/` cannot provision the canonical `/tenants` mount, so
+  `paths.volume_root()` correctly falls back to a temp base and the sealed `/tenants/tenant-A/`
+  prefix assert fails. Product code (`Cloner`, `paths.py`) is correct. The previously-blocked
+  sweep-gap trio (AC-M4-011/M6-005/M6-008) now PASSES locally too — those fixtures are restored.
+- **Prescribed code_intel estate** (`bash tools/verify-linux.sh`, unmodified `harness/verify.sh` in
+  a Linux root container with writable `/tenants`, Postgres + ripgrep): **EXIT=0, ALL GREEN,
+  262 passed** — ruff + mypy `--strict` + bandit all clean, full milestone-ordered pytest green.
+  Reproduced twice. No sealed test, threshold, or product line changed.
+
+**Conclusion:** doc01 rung-1 is GREEN via the arbiter in its prescribed environment. No buildable
+`services/**`/`libs/**` work remains; nothing uncommitted. The AC-M2-001 local red is an
+environmental host limitation, not a build gap (matching every prior adjudication).
