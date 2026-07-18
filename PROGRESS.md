@@ -29,7 +29,14 @@ drift (flag for the conductor), not a coverage gap. **24 P0 criteria** total
 existing ones as end-to-end chains.
 
 **SPEC_BLOCKED register (plan-time static contradictions — do NOT weaken or edit the sealed test; build
-everything buildable in the file, then stop the pass and escalate the pair to the conductor):**
+everything buildable in the file, then stop the pass and escalate the FOUR defects to the conductor).**
+**Honest finish line: 151/155 criteria are buildable-to-green; FOUR are irreducible sealed-bundle bugs
+(SB-1 `reg_002`, SB-2 `ten_001`, SB-3 `obs_006`, SB-4 `inv_010`), each needing a one-line founder fix to the
+sealed test — never a builder edit.** These are the exact four reds the downstream build log converges on
+(163/167 test functions; the 12-test gap over 155 criteria is `test_w_workflows.py` re-exercising criteria as
+chains). **`-x` masking (flag for the conductor): under `verify.sh` (`pytest -x --maxfail=1`) the four reds
+surface sequentially — reg_002 (M11) masks obs_006 (M12) masks inv_010 (M14) masks ten_001 (M16). All four
+founder one-liners must land together, or the loop re-stalls one milestone later after each single fix.**
 
 - **SB-1 · M11 · AC-REG-002 (alone) is unsatisfiable; AC-REG-005 PASSES.** `test_m10_reg.py::test_reg_002`
   (l.77) asserts `{str(m) for m in get_args(MessageType)} == {str(k) for k in CHANNEL_REGISTRY}`, which
@@ -61,12 +68,31 @@ everything buildable in the file, then stop the pass and escalate the pair to th
   to exactly `[operation_runs]`. **A-009 does not cover it.** Build AC-TEN-002/003/004; stop the pass at the
   ten_001 assertion and escalate the AC-TEN-001 vs AC-SUB-001/AC-DB-003 conflict for `operation_runs`.
 
-*(The doc00 build log below records the loop also flagging `AC-OBS-006` and `AC-INV-010` as blocked across
-many sessions. Static analysis of `test_obs_006` and `test_inv_010` finds them **buildable** — a single
-idempotent hardening script with the required control patterns + both firewall layers + E2B-scoped exec, and
-a `run_reconcile_sweep(conn, tenant, gcs, reason)` that DELETEs the offboarded tenant's rows and GCS prefixes.
-The plan builds both normally in M12/M14. If the builder hits a concrete unsatisfiable assertion, record a
-build-time SPEC_BLOCKED then — do not pre-weaken.)*
+- **SB-3 · M12 · AC-OBS-006 is unsatisfiable — a sealed-harness read-path bug, product-independent.**
+  `test_m11_obs.py:243` does `text = S.read_text(*scripts[0].split("/"))`, but `scripts[0]` is an **absolute**
+  path string: `_support.glob` (`_support.py:83–87`) returns `sorted(base.rglob(pattern))` with
+  `base = rel("deploy")` (absolute), so each hit is absolute. `scripts[0].split("/")` yields
+  `['', 'Users', …, 'deploy', 'harden.sh']`, and `read_text` re-roots those parts through `rel()` =
+  `ROOT.joinpath(...)` (`_support.py:51–52`) → a **doubled, nonexistent** path → `read_text` returns `None`
+  → `text = ""` → `:244 assert text.strip()` fails. A correct `deploy/harden.sh` (single idempotent hardening
+  script, both firewall layers, E2B-scoped exec, all required controls) can **never** turn this green.
+  **Build the product side normally in M12** (the script IS required and correct), then **stop the pass and
+  escalate `obs_006` alone.** Precise founder fix = read the absolute glob path directly at `test_m11_obs.py:243`
+  (drop the `split("/")` re-root, e.g. `open(scripts[0])`), never a builder edit. *(This corrects the earlier
+  plan/review judgment that obs_006 was "buildable" — falsified at the `:243` read path; the two prior review
+  passes missed it, the 40+-session build log did not.)*
+- **SB-4 · M14 · AC-INV-010 is unsatisfiable — a sealed-test type bug, product-independent.**
+  `test_m13_inv.py:527` sets `offboard = "tenant-OFF"` (a non-uuid string) and `:546` runs
+  `INSERT INTO {table} ({tcol}) VALUES (%s)` with it into a `tenant`/`tenant_id` column. But every tenant
+  column is pinned **`uuid`** (`CANONICAL-DECISIONS.md:212`; AC-SUB-030 identity schema · AC-DB-003
+  `meeting_id`/tenant uuid · AC-TEN-001), so the INSERT raises `InvalidTextRepresentation` before the sweep
+  ever runs. A correct `run_reconcile_sweep(conn=,tenant=,gcs=,reason=)` (the sync offboard-DELETE path per
+  I-1) can **never** turn this green. Making `tenant_id` `text` to accept the string would red AC-SUB-030 /
+  AC-DB-003 — a genuine cross-criterion contradiction. **Build the product side normally in M14** (the sweep
+  IS required and correct), then **stop the pass and escalate `inv_010` alone.** Precise founder fix = seed a
+  real uuid at `test_m13_inv.py:527/546`, never a builder edit. *(Corrects the earlier "buildable" judgment;
+  CR-5 got close — it flagged the tenant-only-INSERT seed — but reasoned only about NOT-NULL-without-default
+  columns and missed that the seed **value** is a non-uuid string against a uuid column.)*
 
 ### 1 · The seams — frozen contract homes (build against these; never redefine — AGENTS.md §"Contract homes")
 
@@ -251,22 +277,30 @@ flag/base class/defensive branch a criterion doesn't demand** (V0 has zero runti
   AC-REG-002's inline `get_args`-predicate is irreducibly red** (§0 SB-1). Build the five, then **stop the
   pass and escalate `reg_002` alone** (precise founder fix = rewrite its l.77 predicate to the enum-iteration
   form) — never weaken or edit the sealed test. *Criteria:* AC-REG-001..006 (002 blocked; 005 passes).
-- **M12 — Observability (`test_m11_obs`, 10).** structlog JSON; Sentry once; cost telemetry
-  cache-read/creation split; Langfuse inert; `/health` + Healthchecks; **one idempotent hardening script**
-  (both firewall layers, E2B-scoped exec, required controls — AC-OBS-006, buildable); live-WS affinity routes
-  reconnects to the `operation_runs` claim owner (AC-OBS-007 green here, reading M4's `created_by`); skip-list
-  clean; **no raw source in logs/Sentry/artifacts**; volume snapshots. *Criteria:* AC-OBS-001..010.
+- **M12 — Observability (`test_m11_obs`, 10) — ⚠ SB-3 (AC-OBS-006).** structlog JSON; Sentry once; cost
+  telemetry cache-read/creation split; Langfuse inert; `/health` + Healthchecks; **one idempotent hardening
+  script** (both firewall layers, E2B-scoped exec, required controls — build it, it IS required); live-WS
+  affinity routes reconnects to the `operation_runs` claim owner (AC-OBS-007 green here, reading M4's
+  `created_by`); skip-list clean; **no raw source in logs/Sentry/artifacts**; volume snapshots. **The other
+  nine build to green; only AC-OBS-006 is irreducibly red** (§0 SB-3: sealed read-path bug at
+  `test_m11_obs.py:243` — the product script is correct but the test re-roots an absolute glob path). Build the
+  script, then **stop the pass and escalate `obs_006` alone** (founder fix = fix the `:243` read path) — never
+  edit the sealed test. *Criteria:* AC-OBS-001..010 (006 blocked).
 - **M13 — Constitution (`test_m12_con`, 4).** Root `CLAUDE.md`: every hard rule names its guard; no internal
   names in user strings (product=Proxy); tool handlers return errors never throw; external calls wrapped
   retry+telemetry. *Criteria:* AC-CON-001..004.
-- **M14 — Consolidated invariants (`test_m13_inv`, 13; R4).** Two honest cost meters (**A-006**);
-  pre-dispatch estimate gate; **lethal-trifecta** (no transcript→side-effect without a click); transcript
-  fenced untrusted; world-touching in `disallowed_tools`; core apply = code-change draft not push; secret
-  read-path redaction; per-sandbox random JWT (AC-INV-009); offboarding sweep (AC-INV-010: `run_reconcile_sweep`
-  DELETEs offboarded rows + GCS prefixes, keep-tenant untouched — buildable; **caution:** `test_inv_010` seeds
-  an arbitrary tenant-scoped table with a tenant-only INSERT, so every tenant-scoped table must permit a
-  tenant-only insert — no other NOT-NULL-without-default column may block it); accept requires authenticated
-  tenant member (CSRF+idempotent+audit); read-only capability token; full tool telemetry. *Criteria:* AC-INV-001..013.
+- **M14 — Consolidated invariants (`test_m13_inv`, 13; R4) — ⚠ SB-4 (AC-INV-010).** Two honest cost meters
+  (**A-006**); pre-dispatch estimate gate; **lethal-trifecta** (no transcript→side-effect without a click);
+  transcript fenced untrusted; world-touching in `disallowed_tools`; core apply = code-change draft not push;
+  secret read-path redaction; per-sandbox random JWT (AC-INV-009); offboarding sweep (`run_reconcile_sweep`
+  DELETEs offboarded rows + GCS prefixes, keep-tenant untouched — build it, it IS required, via the I-1
+  non-`async def` dispatcher; **caution:** the test seeds a tenant-scoped table with a tenant-only INSERT, so
+  every tenant-scoped table must permit a tenant-only insert — no other NOT-NULL-without-default column may
+  block it); accept requires authenticated tenant member (CSRF+idempotent+audit); read-only capability token;
+  full tool telemetry. **The other twelve build to green; only AC-INV-010 is irreducibly red** (§0 SB-4: the
+  test seeds the non-uuid string `"tenant-OFF"` into a `uuid` tenant column — unsatisfiable by any correct
+  product). Build the sweep, then **stop the pass and escalate `inv_010` alone** (founder fix = seed a real
+  uuid at `test_m13_inv.py:527/546`) — never edit the sealed test. *Criteria:* AC-INV-001..013 (010 blocked).
 - **M15 — Build order & spike (`test_m14_bld`, 3).** Pre-build spike gate (p50 ≤ ~2.5s direct-answer +
   reliable `who_writes`/`get_dependents`); deterministic fallback per branch, never a silent patch; step-1
   completion proof (CI-green + self-migrate/`/health` + deploy-lands + registry-closed + harness
@@ -356,6 +390,37 @@ and the OBS-006/INV-010 buildable judgments (both confirmed). Folded:
 
 **Plan RE-LOCKED (session-2).** No milestone reorder; no coverage change; deltas are seam-precision and
 blocked-call wording only. Hand-off unchanged.
+
+### Review deltas — session-3 fresh-context `planner-reviewer` re-pass (folded; ONE BLOCKER — the register was incomplete)
+
+Verdict: **structurally sound on order / coverage (155 re-counted, all 16 prefixes to the integer; manifest
+154 stale-by-one) / seams / adopt-vs-build / risky-first / SB-1 / SB-2 / the I-1 dual-convention / the §3
+namespace seam — all re-verified GENUINE at primary source. But NOT approvable as-was: the SPEC_BLOCKED
+register was INCOMPLETE.** The reviewer falsified — at the sealed-test source — the earlier plan+two-review
+judgment that `AC-OBS-006` and `AC-INV-010` were "buildable." Both are irreducible sealed-bundle bugs, exactly
+the SB-1/SB-2 kind, and they are precisely the extra two reds the 40+-session build log converges on
+(163/167). Folded:
+
+- **[BLOCKER] The register must enumerate FOUR defects, not two.** Promote **AC-OBS-006 → SB-3** (sealed
+  read-path bug: `test_m11_obs.py:243` `read_text(*scripts[0].split("/"))` re-roots an **absolute** glob path
+  (`_support.py:83–87` `rglob` on an absolute base) into a doubled nonexistent path → `text=""` → `:244` fails;
+  a correct `deploy/harden.sh` can't pass) and **AC-INV-010 → SB-4** (sealed type bug: `test_m13_inv.py:527`
+  `offboard="tenant-OFF"` INSERTed at `:546` into a `uuid` tenant column (`CANONICAL-DECISIONS.md:212`;
+  AC-SUB-030/AC-DB-003) → `InvalidTextRepresentation`; a correct `run_reconcile_sweep` can't pass, and making
+  the column `text` reds the schema criteria). Both verified independently at source by the planner before
+  folding. → §0 SB-3 + SB-4; M12 + M14 reworded to stop-and-escalate; the false "buildable" parenthetical and
+  its two prior-review endorsements are **superseded** by this delta.
+- **[from BLOCKER] Honest finish line = 151/155 buildable-to-green + 4 sealed blockers** (SB-1 reg_002 · SB-2
+  ten_001 · SB-3 obs_006 · SB-4 inv_010), each a one-line **founder** fix to the sealed test. → §0 intro.
+- **[from BLOCKER] `-x` sequential-masking note for the conductor:** under `pytest -x --maxfail=1` the four
+  reds surface one milestone at a time (reg_002→obs_006→inv_010→ten_001); **all four founder one-liners must
+  land together** or the loop re-stalls after each single fix. → §0 intro.
+
+**Plan RE-LOCKED (session-3).** No milestone reorder; no coverage change; the sole substantive change is
+completing the SPEC_BLOCKED register from two to four (the two additions verified at primary source, matching
+build ground truth). **Hand-off:** M1–M10 + M13 + M15 + M17 → `subagent-driven-build`; **M11/M12/M14/M16 build
+everything buildable in-file, then stop the pass and escalate their sealed defect (reg_002 / obs_006 / inv_010
+/ ten_001) to the conductor — never weaken or edit the sealed test.**
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — No `SPEC_BLOCKED` entry was ever recorded in `PROGRESS.md`; the doc00 plan asserts "0 `SPEC_BLOCKED`, 0 unresolved contradictions," `dispositions.yaml` agrees, and the build is green through M4, so there is nothing genuinely blocked — continue in the mandated milestone order to M5 (`test_m04_boot`, AC-BOOT-001..007). To preempt the one near-frontier ambiguity (the "(prod)"-qualified boot keys), implement the reading the spec and criterion already fix in lockstep — `00-FOUNDATION.md:203` and `AC-BOOT-001` (`criteria.yaml:1632`) both list "`DATABASE_URL`, `GCS_BUCKET`, `SESSION_SECRET` (prod), GCP project (prod), each AES credential key, `RECALL_API_KEY`, `ANTHROPIC_*`": treat `DATABASE_URL`, `GCS_BUCKET`, the AES credential keys, `RECALL_API_KEY`, and `ANTHROPIC_*` as unconditionally req
