@@ -880,3 +880,19 @@ no route-around; nothing built speculatively (M-reds behind reg_002 can never re
 **Loop status:** confirmed stuck 12× independently. All four fixes live in builder-forbidden sealed files
 (`tests/`/`acceptance/`); only founder action unblocks them. On any single-line sealed fix the rest of the suite is
 expected green with no further product change. Session ends here per the SPEC_BLOCKED protocol.
+
+### Session 13 (2026-07-18, morning triage) — 163/167 re-confirmed from ground truth; 4 blocks re-derived from the SEALED TEST SOURCE; no product path exists
+
+Thirteenth builder. Trusted no prior prose — read the sealed test bodies + `tests/doc00/_support.py` directly and
+skeptically probed each of the 4 reds for a product-side escape hatch. `pytest -q -p no:randomly tests/doc00/` =
+**163 passed / 4 failed** (reg_002, obs_006, inv_010, ten_001 — exactly the documented set). Tree clean; no
+uncommitted work; nothing buildable (sessions 7–11 built every red not behind a sealed defect). No
+test/threshold/golden/arbiter touched; no route-around.
+
+Escape-hatch probes this session (all dead — confirming builder-unfixable, not builder-skill):
+- **reg_002** — `get_args(<Enum>) == ()` is inline in the sealed body; reg_005 forces `MessageType` to be an Enum. Language-level; no product code alters it.
+- **obs_006** — `_support.glob` → `base.rglob` returns ABSOLUTE paths; `S.read_text(*scripts[0].split("/"))` re-roots onto ROOT (`ROOT.joinpath('', 'Users', …)`) → doubled nonexistent path → `None` → "empty" for ANY script. No placement defeats it (needs ROOT==`/`).
+- **inv_010** — seed `VALUES ('tenant-OFF')` (text) into a uuid tenant column; adding a decoy text `tenant` column to game the `LIMIT 1`/no-`ORDER BY` probe would break ten_001 and route around a broken test — declined.
+- **ten_001** — `operation_runs` (12 exact cols pinned GREEN by sub_001, `scope_id` free text) has no FK to a tenant-reaching table; can carry no `tenant_id` col nor scope_id→meetings FK. `NON_SCOPED` exempts `sessions` but not the identical `operation_runs`.
+
+**Founder fixes (one line each, unchanged):** (1) reg_002 line 77 → `set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)`; (2) obs_006 read the absolute path directly; (3) inv_010 seed a real uuid; (4) add `operation_runs` to `test_m15_ten.py` `NON_SCOPED`. **Recommendation: halt builder re-invocation** — 13 independent sessions reproduce the identical result; only founder action on the four sealed one-liners advances doc00. Session ends per SPEC_BLOCKED protocol.
