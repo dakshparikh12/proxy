@@ -2616,3 +2616,39 @@ stands; SB-1..SB-4 remain routed to a founder — one-liners unchanged and must 
 --maxfail=1`, so any single fix re-stalls one milestone later): (1) reg_002 → `{m.value for m in MessageType} ==
 set(CHANNEL_REGISTRY)`; (2) obs_006 → read the absolute glob path directly (no `split("/")` re-root); (3) inv_010
 → seed a real uuid tenant id; (4) ten_001 → add `operation_runs` to `NON_SCOPED`. Session ends.
+
+### Fresh-context DEBUGGER (2026-07-18) — reg_002 root-caused independently; SPEC_BLOCKED (SB-1) reconfirmed
+Dispatched after the build loop hit the **identical** reg_002 failure 4× in a row. Re-derived ground truth from
+scratch (did not trust the 59 prior confirmations) and reproduced/verified every link empirically:
+
+- **Reproduce.** `pytest -q tests/doc00/test_m10_reg.py` → `1 failed, 5 passed`; only
+  `test_reg_002_assert_registry_closed_passes_when_set_equal` red at **line 77**:
+  `AssertionError … union-only=set(), registry-only={'approve-draft','connect-repo','invite-proxy'}`.
+- **Root cause (verified, not guessed).** The test's own supplemental re-derivation (lines 74–79) computes
+  `union = {str(m) for m in get_args(MessageType)}`. Ran it live: `get_args(MessageType)` is **`()`** because
+  `MessageType` is an `enum.Enum` (`libs/contracts/src/contracts/registry.py:36`), and `typing.get_args()` of any
+  class is unconditionally `()`. Meanwhile `CHANNEL_REGISTRY` is non-empty (3 auto-registered models, required by
+  reg_001/reg_004). So `set() == {3 keys}` is false for **every** conformant product — language-level unsatisfiable.
+- **It is a two-sealed-criteria contradiction, not a product gap.** `test_reg_005` (which **passes**) hard-requires
+  `issubclass(MessageType, enum.Enum)`; `test_reg_002` requires `get_args(MessageType)` to enumerate the registry.
+  No Python object is both an `Enum` subclass and a `get_args`-able generic alias → mutually exclusive. Confirmed
+  against the sealed criteria: `criteria.yaml:2477` AC-REG-002 `source_quote` = "assert set(get_args(MessageType)) ==
+  set(CHANNEL_REGISTRY)"; `criteria.yaml:2539` AC-REG-005 `source_quote` = "ProxyMessage with discriminator
+  MessageType (an Enum)".
+- **The product is already CANONICAL-correct.** `CANONICAL-DECISIONS.md:18` locks "`MessageType` (an `Enum`)" and
+  `09-VERIFICATION.md:16` makes the canonical closure `set(MessageType) == set(CHANNEL_REGISTRY)` (member-iteration),
+  which **supersedes** the pre-Enum `get_args` snippet at `00-FOUNDATION.md:303` that AC-REG-002 was frozen from.
+  `libs/contracts/registry.py` implements exactly that: `assert_registry_closed()` iterates Enum members via
+  `_closure_values` and **passes** (the test confirms at its line 71 — no exception; AC-REG-002's *primary* oracle
+  `closure_assert_pass` / threshold `false_closure_failure: 0` is met). Only the test's extra `get_args` line is red.
+- **No buildable fix in `libs/`/`services/`.** Changing `MessageType` to a `get_args`-able Literal/Union to satisfy
+  reg_002 would immediately break reg_005's `issubclass(..., enum.Enum)` and violate CANONICAL §1. The shipped
+  product needs **no** change. The only corrective edit is to the sealed test predicate
+  (`tests/doc00/test_m10_reg.py:77` → `{m.value for m in MessageType} == {str(k) for k in CHANNEL_REGISTRY}`, i.e.
+  the canonical `set(MessageType)` form the file's own `:251` fallback and the product already use), which is
+  read-only to the builder/debugger.
+
+**Verdict: SPEC_BLOCKED (SB-1 / reg_002) — genuine, independently reconfirmed.** Root cause is a sealed-criteria
+contradiction (AC-REG-002's stale `get_args` predicate vs AC-REG-005 + CANONICAL-DECISIONS §1's Enum lock). Routed
+to a founder for a one-line sealed-test edit; no product edit is correct. (SB-2 obs_006, SB-3 inv_010, SB-4 ten_001
+unchanged — untouched this pass; reg_002 is the first `-x --maxfail=1` halt.) Debugger stops.
