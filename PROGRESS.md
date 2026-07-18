@@ -1359,3 +1359,41 @@ M12–M17 can never register green while it stands. All four fixes live in `test
 **Recommendation unchanged: halt builder re-invocation; route the four sealed one-liners to a founder.** No
 sealed/test/threshold/golden/arbiter touched; no route-around; nothing built speculatively. Session ends per the
 SPEC_BLOCKED protocol.
+
+### Session 27 (2026-07-18) — 27th confirmation; 163/167; ALL FOUR opened at primary source + the obs_006 helper personally traced
+
+Twenty-seventh builder. Ground truth first: `pytest -q -p no:randomly tests/doc00/` = **163 passed / 4 failed**
+(reg_002, obs_006, inv_010, ten_001 — identical set to sessions 7–26); `git status` clean; nothing buildable
+remains. This session did not trust prior prose — it opened each sealed line (and, for the one helper defect no
+prior session showed it had read directly, the `_support.py` internals) and re-derived all four independently:
+
+- **reg_002** `test_m10_reg.py:75` `union = {str(m) for m in get_args(MessageType)}` = `∅` because `:211`
+  hard-forces `issubclass(MessageType, enum.Enum)` and `get_args()` of any class is `()` (`:214`'s own comment
+  concedes "get_args on an Enum is ()"); `:77` asserts `union == CHANNEL_REGISTRY` (3 non-empty keys per reg_004).
+  Language-level unsatisfiable — no object is both an Enum class and a subscripted generic.
+- **ten_001** `test_m15_ten.py:178` requires `operation_runs` (absent from `NON_SCOPED`:111) to reach `tenant_id`
+  via a direct FK column or a declared FK to a reaching table. `test_m03_sub.py:82` pins `operation_runs` to
+  EXACTLY `_OPRUN_COLS` (12 tenant-less columns) by set-equality, and `:88-89` force `scope_id`/`operation_type`/
+  `status` to `text`; its only non-uuid handles cannot FK the uuid tenant spine. Adding `tenant_id` breaks sub_001;
+  omitting it breaks ten_001. Schema-level mutually exclusive.
+- **obs_006** — helper traced personally this session: `_support.glob` (`:83-87`) does `base = rel(*root_parts)`
+  (absolute, `ROOT.joinpath`) then `base.rglob(...)`, so it returns ABSOLUTE Paths; `test_m11_obs.py:243`
+  `S.read_text(*scripts[0].split("/"))` splits that absolute string into `['','Users',…]` and `read_text` →
+  `rel(*parts)` = `ROOT.joinpath('','Users',…)` DOUBLES the path onto ROOT → `FileNotFoundError` → `None or ""` →
+  `assert text.strip()` fails for ANY `deploy/harden.sh` the product ships. Sealed-helper defect, no product-side
+  location produces a relative path here.
+- **inv_010** `test_m13_inv.py:546` `INSERT INTO {table} ({tcol}) VALUES ('tenant-OFF')` seeds text into the
+  `tenant_id` column that ten_001 (`:130`) AND `CANONICAL-DECISIONS.md:212`/`00-FOUNDATION.md:187` mandate as
+  `uuid REFERENCES tenants` → `InvalidTextRepresentation` before `run_reconcile_sweep` runs. Test contradicts the
+  canonical spec (CLAUDE.md ranks CANONICAL-DECISIONS an override).
+
+Under `verify.sh` (`pytest -q -x --maxfail=1`) reg_002 (M11) is the FIRST red and halts the pass, so M12–M17 can
+never register green while it stands — building is pointless. All four fixes live in `tests/doc00/`
+(builder-forbidden — `harness/guard.py` + integrity hash). **Founder fixes (one line each, unchanged):**
+(1) `reg_002:77` → `set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)` (drop the `:75` `get_args` line);
+(2) `obs_006` read the absolute glob path directly (don't `split("/")`+re-root onto ROOT);
+(3) `inv_010` seed a real uuid tenant id;
+(4) add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`.
+**Recommendation unchanged: halt builder re-invocation; route the four sealed one-liners to a founder.** No
+sealed/test/threshold/golden/arbiter touched; no route-around; nothing built speculatively. Session ends per the
+SPEC_BLOCKED protocol.
