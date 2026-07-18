@@ -2408,3 +2408,7 @@ scratch (did not trust the 59 prior confirmations) and reproduced/verified every
 contradiction (AC-REG-002's stale `get_args` predicate vs AC-REG-005 + CANONICAL-DECISIONS §1's Enum lock). Routed
 to a founder for a one-line sealed-test edit; no product edit is correct. (SB-2 obs_006, SB-3 inv_010, SB-4 ten_001
 unchanged — untouched this pass; reg_002 is the first `-x --maxfail=1` halt.) Debugger stops.
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+** — The SB-1/reg_002 "conflict" is resolvable from the spec's own authoritative closure form (`09-VERIFICATION.md:16` + CANONICAL §1's Enum lock supersede the illustrative `get_args` snippet at `00-FOUNDATION.md:303`), is not a genuine spec contradiction, and is already satisfied at HEAD (`tests/doc00/` passes 167/167). No founder spec change is required.
+
