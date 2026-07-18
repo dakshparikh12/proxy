@@ -38,3 +38,21 @@ first_audio_p95_s = 5.0   # first audible token, tail. range: 2.0..10.0
 # The "on it" acknowledgement reflex SLO — Proxy must be audibly acking within
 # this budget of a wake. unit: milliseconds. range: 200..800.
 ack_audible_p95_ms = 500
+
+[code_intel]
+# Precise-nav LSP call budget before grep fallback. unit: seconds. range: 1..10.
+lsp_timeout_s = 3
+# Repo file count above which clone switches to blobless (--filter=blob:none).
+# unit: files. range: 10000..1000000.
+blobless_file_threshold = 100000
+# Repo LOC above which the language server is kept warm after connect/push.
+# unit: lines. range: 100000..2000000.
+lsp_warm_loc_threshold = 500000
+# get_dependents result cap before truncation signalling. unit: nodes. range: 10..200.
+get_dependents_limit = 50
+# batch_read per-call file cap. unit: files. range: 1..25.
+batch_read_max_files = 10
+# Readiness deadline from connect. unit: seconds. range: 60..1800.
+ready_deadline_s = 900
+# Hard-delete deadline after App uninstall. unit: seconds. range: 60..1800.
+uninstall_delete_deadline_s = 900
