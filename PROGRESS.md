@@ -1662,3 +1662,32 @@ directly; (3) `test_m13_inv.py:546` seed a real uuid tenant id; (4) add `operati
 `test_m15_ten.py:111` `NON_SCOPED`. **Recommendation, now 34× reproduced: STOP re-invoking the builder — route
 the four sealed one-liners to a founder.** No sealed/test/fixture/support/harness/CANONICAL file touched; no
 route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
+
+### Session 35 (2026-07-18) — 35th confirmation; 163/167; halting blocker (reg_002) re-verified at primary source
+
+Ground truth (`.venv/bin/python -m pytest -q tests/doc00/`): **163 passed / 4 failed** — exactly
+`reg_002`, `obs_006`, `inv_010`, `ten_001` (identical set to sessions 7–34). `git status` clean; nothing
+buildable remains (product fully built through M17; the four reds are the only failures).
+
+I did not trust the prose chain: I opened the sealed halting blocker directly this session and confirmed the
+contradiction is inline in the sealed test body, not a product gap —
+- `test_m10_reg.py:75`: `union = {str(m) for m in get_args(MessageType)}`
+- `:77`: `assert union == {str(k) for k in CHANNEL_REGISTRY}` (3 CANONICAL keys per reg_004)
+- `:210`: `assert isinstance(MessageType, type) and issubclass(MessageType, enum.Enum)` (reg_005)
+- `:214` (the sealed file's own comment): `# get_args on an Enum is ()`; `:251` even branches on
+  `get_args(MessageType)` being empty and falls back to `list(MessageType)[0].value`.
+`get_args()` of any class is `()`, so `union` is unconditionally `set()`; `set() == {3 keys}` is
+language-level unsatisfiable and no `libs/`/`services/` edit can move it. Under `verify.sh` (`-x --maxfail=1`,
+filename order) `reg_002` is the FIRST red and halts the pass, so exit 0 is unreachable regardless of the
+other three. Shipped `assert_registry_closed()` already iterates enum members (CANONICAL-correct).
+
+The other three (obs_006 absolute-glob-path re-root; inv_010 text `'tenant-OFF'` into a CANONICAL uuid
+`tenant_id`; ten_001⟂sub_001 `operation_runs` pinned to 12 tenant-less columns) stand unchanged and are not
+reached under `-x`. All four fixes live in sealed `tests/doc00/` (+ CANONICAL) — builder-forbidden
+(`harness/guard.py` + integrity hash), already deferred in `evidence/doc00-deferred.md`. **Founder fixes
+(one line each, unchanged):** (1) `test_m10_reg.py:75` → `union = {str(m.value) for m in MessageType}`;
+(2) `test_m11_obs.py:243` read the absolute glob path directly (no `split("/")`+re-root); (3)
+`test_m13_inv.py:546` seed a real uuid tenant id; (4) add `operation_runs` to `test_m15_ten.py:111`
+`NON_SCOPED`. **Recommendation, now 35× reproduced: STOP re-invoking the builder — this is a confirmed stuck
+loop; route the four sealed one-liners to a founder.** No sealed/test/fixture/support/harness/CANONICAL file
+touched; no route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
