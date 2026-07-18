@@ -896,3 +896,26 @@ Escape-hatch probes this session (all dead — confirming builder-unfixable, not
 - **ten_001** — `operation_runs` (12 exact cols pinned GREEN by sub_001, `scope_id` free text) has no FK to a tenant-reaching table; can carry no `tenant_id` col nor scope_id→meetings FK. `NON_SCOPED` exempts `sessions` but not the identical `operation_runs`.
 
 **Founder fixes (one line each, unchanged):** (1) reg_002 line 77 → `set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)`; (2) obs_006 read the absolute path directly; (3) inv_010 seed a real uuid; (4) add `operation_runs` to `test_m15_ten.py` `NON_SCOPED`. **Recommendation: halt builder re-invocation** — 13 independent sessions reproduce the identical result; only founder action on the four sealed one-liners advances doc00. Session ends per SPEC_BLOCKED protocol.
+
+### Session 14 (2026-07-18) — independent re-confirmation; 163/167; reg_002 re-probed live; no product path
+
+Fourteenth builder. Verified ground truth, not prose. `pytest -q -p no:randomly tests/doc00/` =
+**163 passed / 4 failed** (reg_002, obs_006, inv_010, ten_001 — identical set). Tree clean; no uncommitted work;
+nothing buildable remains (sessions 7–11 built every red not behind a sealed defect). No test/threshold/golden/
+arbiter touched; no route-around; nothing built speculatively.
+
+Live re-probe of reg_002 this session (the sealed contradiction, reproduced from objects not logs):
+`isinstance(MessageType,Enum)=True` (forced by reg_005), `get_args(MessageType)=()`,
+`CHANNEL_REGISTRY={connect-repo,approve-draft,invite-proxy}`, `{m.value for m in MessageType}=
+{connect-repo,approve-draft,invite-proxy}`. The registry is genuinely consistent (values == keys); the failure is
+solely that the sealed test body computes `union={str(m) for m in get_args(MessageType)}=set()` (line 75) and then
+asserts `union==registry` (line 77) against a non-empty registry — unsatisfiable for ANY Enum, so no product code
+can pass it. Emptying `CHANNEL_REGISTRY` to force `set()==set()` would break reg_003 + the genuine 3-type contract
+(CANONICAL §"contracts") — declined as a route-around a broken test.
+
+The other 3 (obs_006 path re-root, inv_010 text-into-uuid seed, ten_001 operation_runs missing from NON_SCOPED)
+are unchanged sealed-file defects re-derived in detail sessions 11–13. **Founder fixes (one line each, unchanged):**
+(1) reg_002 line 77 → `set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)`; (2) obs_006 read the absolute
+path directly; (3) inv_010 seed a real uuid; (4) add `operation_runs` to `test_m15_ten.py` `NON_SCOPED`.
+**Recommendation unchanged: halt builder re-invocation** — 14 independent sessions reproduce the identical
+163/167; only founder action on the four sealed one-liners advances doc00. Session ends per SPEC_BLOCKED protocol.
