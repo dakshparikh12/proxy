@@ -264,7 +264,28 @@ def coverage_gate(doc: str, base: pathlib.Path) -> bool:
     return r.returncode == 0
 
 
-DESELECTED: list[str] = []          # genuinely-impossible criteria deferred for morning (recorded)
+# DESELECTED (deferred/genuinely-blocked criteria) is persisted to disk so a conductor
+# restart re-loads the morning-triage backlog instead of re-discovering it from scratch:
+# load on start (if present), write on every append.
+_DESELECTED_PATH = ORCH / "state" / "doc00.deselected.json"
+
+
+def _load_deselected() -> list[str]:
+    """Read the persisted deferral backlog (empty list if absent/corrupt)."""
+    try:
+        data = json.loads(_DESELECTED_PATH.read_text())
+    except (FileNotFoundError, ValueError):
+        return []
+    return [str(x) for x in data] if isinstance(data, list) else []
+
+
+def _persist_deselected() -> None:
+    """Write the current deferral backlog to disk (called on every append)."""
+    _DESELECTED_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _DESELECTED_PATH.write_text(json.dumps(DESELECTED, indent=1))
+
+
+DESELECTED: list[str] = _load_deselected()   # deferred criteria — persisted across restarts
 _seen_blocked = 0
 
 
@@ -295,6 +316,7 @@ def adjudicate(doc: str, entry: str) -> bool:
     target = m.group(1) if m else ""
     if target:
         DESELECTED.append(target)
+        _persist_deselected()
     (ROOT / "evidence").mkdir(exist_ok=True)
     (ROOT / "evidence" / f"{doc}-deferred.md").open("a").write(
         f"\nDEFERRED (genuinely spec-blocked, needs founder spec fix): {entry}\n{out[-800:]}\n")
@@ -358,6 +380,7 @@ def build_loop(doc: str) -> str:
         node = m.group(1) if m else None
         if node and node not in DESELECTED:
             DESELECTED.append(node)
+            _persist_deselected()
             (ROOT / "evidence").mkdir(exist_ok=True)
             (ROOT / "evidence" / f"{doc}-deferred.md").open("a").write(
                 f"\nDEFERRED (builder + debugger both stuck) — plumb later: {node}\n{out[-600:]}\n")
