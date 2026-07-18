@@ -487,3 +487,38 @@ passes reg_001..006 unchanged and the build resumes at M12.
 never register green through `verify.sh`'s `-x --maxfail=1` while reg_002 fails first — per the build skill
 "verify.sh exit 0 is the only green"). This is a stuck loop confirmed 5× independently; founder action on the
 two-part fix above is the only path forward. Session ends here per the SPEC_BLOCKED protocol.
+
+### Builder session 6 (2026-07-17) — block STANDS; SPEC_BLOCKED AC-REG-002 reaffirmed with ground-truth pytest output
+
+Sixth fresh-context builder re-derived the block empirically (not by prose). No sealed/test/threshold/golden/arbiter
+file touched; no route-around; nothing built speculatively (M12–M17 can never register green behind verify.sh's
+`-x --maxfail=1` halt at reg_002 — "verify.sh exit 0 is the only green"). Full scope unchanged: `pytest tests/doc00/`
+= **124 passed / 43 failed** (identical to sessions 3–5). AC-REG-005 passes → `MessageType` Enum lock holds.
+
+**Two independent sealed-bundle defects, each reproduced live this session:**
+
+1. **get_args-vs-Enum (reg_002 line 77) — `pytest ::test_reg_002` in isolation:**
+   `AssertionError: union-only=set(), registry-only={'connect-repo','approve-draft','invite-proxy'}`.
+   `union = {str(m) for m in get_args(MessageType)}` is `set()` because `typing.get_args()` of any Enum class is
+   `()` (isinstance-gated on `_GenericAlias/GenericAlias/UnionType`; an Enum class is none of these — verified
+   empirically this session). AC-REG-005 (`:211`) forces `issubclass(MessageType, enum.Enum)`; AC-REG-004 forces
+   the registry non-empty. `get_args(MessageType)` is computed **inside the sealed test body** — no product code
+   can alter it. Unsatisfiable at the language level.
+
+2. **Registry pollution (reg_001→reg_002 line 71) — `pytest test_m10_reg.py` in file order:**
+   `AssertionError: closed-graph violation: union-only=set(), registry-only={'ac-reg-001-probe'}`. reg_001's inline
+   `_AcReg001Probe` auto-registers into the module-global `CHANNEL_REGISTRY`; no fixture in `tests/doc00/conftest.py`
+   or root `conftest.py` resets it. reg_003 then *requires* the same `assert_registry_closed()` to FAIL on exactly
+   such a registry-only orphan → the one shipped closure must both pass (reg_002:71) and fail (reg_003) on identical
+   polluted state. Unsatisfiable by any shipped `assert_registry_closed()`.
+
+**Blocked criterion:** `AC-REG-002` (`tests/doc00/test_m10_reg.py::test_reg_002_assert_registry_closed_passes_when_set_equal`).
+**Both fixes live in builder-forbidden sealed files.** Required founder fix (two-part, unchanged from sessions 4–5):
+(a) rewrite reg_002 line 77 to the CANONICAL enum-iteration form `set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)`
+(per `CANONICAL-DECISIONS.md:18` + `09-VERIFICATION.md:16`, which supersede the pre-Enum `get_args` snippet at
+`00-FOUNDATION.md:303`); AND (b) add `CHANNEL_REGISTRY` test isolation (autouse snapshot/restore fixture in
+`tests/doc00/conftest.py`, or reg_001 popping its probe in a `finally`). On that change the shipped `registry.py`
+passes reg_001..006 unchanged and the build resumes at M12.
+
+**This is a confirmed stuck loop (6× independent).** Further builder sessions will reproduce this same result;
+only founder action on the two-part sealed-file fix unblocks it. Session ends here per the SPEC_BLOCKED protocol.
