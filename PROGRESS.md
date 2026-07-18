@@ -1535,3 +1535,46 @@ product untouched. I did NOT edit any sealed/test/fixture/harness/criterion file
 speculatively. The other three long-standing reds (obs_006, inv_010, ten_001) do not run under `-x` because reg_002
 halts first and were previously located in the sealed test/`_support` tree; reg_002 is the active blocker.
 **Recommendation: halt builder re-invocation; route reg_002:75 (one line) to a founder.** Session ends per protocol.
+
+### Session 33 (2026-07-18) — 33rd builder; independent fresh re-derivation of ALL FOUR from primary source
+
+Ground truth this session: `.venv/bin/python -m pytest -q -p no:randomly tests/doc00/` = **163 passed /
+4 failed** (reg_002, obs_006, inv_010, ten_001 — identical set to sessions 7–32); `git status` clean.
+Rather than trust the 32-entry prose chain, I re-opened each of the four sealed tests + the product schema
+and re-derived each block from the code itself:
+
+- **reg_002** `test_m10_reg.py:75,77`: `union = {str(m) for m in get_args(MessageType)}`; `:77` asserts
+  `union == {str(k) for k in CHANNEL_REGISTRY}` (3 CANONICAL keys). reg_005 `:211` forces
+  `isinstance(MessageType, type) and issubclass(MessageType, enum.Enum)`. `typing.get_args()` returns `()`
+  for any class (only `_GenericAlias`/`types.GenericAlias`/`ParamSpec*` yield args, and none of those are
+  `type` instances / Enum subclasses) ⇒ `union` is unconditionally `set()`, so `set() == {3 keys}` is
+  unsatisfiable. No `libs/`/`services/` object satisfies both; the only lever (`get_args`) is a stdlib builtin
+  the product cannot legitimately alter. Confirmed against the file's OWN `:251` fallback
+  `... if get_args(MessageType) else str(list(MessageType)[0].value)` — the suite's authors elsewhere branch
+  on `get_args(MessageType)` being empty; `:75` omits that fallback.
+- **obs_006** `test_m11_obs.py:243`: `deploy/harden.sh` EXISTS and is non-empty (verified on disk). The test
+  reads it via `read_text(*scripts[0].split("/"))`, but `S.glob` (sealed `_support.py:83` = `rel(*root_parts)
+  .rglob(...)`, `rel = ROOT.joinpath`) returns an ABSOLUTE Path; `str(...).split("/")` → `['', 'Users', …]`,
+  and `read_text`→`rel`→`ROOT.joinpath` re-roots those onto ROOT, doubling the path → file-not-found →
+  `None or ""` → `assert text.strip()` fails. Product cannot change a re-rooted absolute path (sealed test +
+  sealed `_support`).
+- **inv_010** `test_m13_inv.py:546`: probes `information_schema` for a `tenant`/`tenant_id` column, then
+  `INSERT INTO {table} ({tcol}) VALUES ('tenant-OFF')` — text into the CANONICAL-mandated
+  (`CANONICAL-DECISIONS.md:212`) `uuid REFERENCES tenants(id)` column → `InvalidTextRepresentation`.
+- **ten_001 vs sub_001**: `test_m15_ten.py:179` requires `operation_runs` to reach `tenant_id` (directly or
+  via a DECLARED FK to a tenant-scoped table). `test_m03_sub.py:82` pins `operation_runs` to EXACTLY 12
+  columns; per `0001_substrate.py` `scope_id`/`created_by` are `text` (created_by holds a claiming
+  instance-id, not a user — `db/database.py:56`), and the only uuid column is its own PK `id`. No existing
+  column can FK to a tenant-scoped table and sub_001 forbids adding one ⇒ mutually exclusive.
+
+Under `verify.sh` (`-x --maxfail=1`, filename order) reg_002 (m10) is the FIRST red and halts the pass, so
+verify.sh can NEVER reach exit 0 regardless of the other three. All four fixes live in sealed files
+(`tests/doc00/` + CANONICAL) — builder-forbidden (`harness/guard.py` + integrity hash); already deferred in
+`evidence/doc00-deferred.md`. **Founder fixes (unchanged, one line each):** (1) `test_m10_reg.py:75` →
+`union = {str(m.value) for m in MessageType}` (mirror `:251` / the product's `_closure_values`, drop the
+`get_args` line); (2) `test_m11_obs.py:243` read the absolute glob path directly (don't `split("/")`+re-root);
+(3) `test_m13_inv.py:546` seed a real uuid tenant id; (4) add `operation_runs` to `test_m15_ten.py:111`
+`NON_SCOPED` (or add `tenant_id`/`meeting_id` to the canonical `operation_runs` DDL + `_OPRUN_COLS`).
+**Recommendation, now 33× reproduced and independently re-derived from primary source this session: STOP
+re-invoking the builder — route the four sealed one-liners to a founder.** No sealed/test/fixture/support/
+harness/CANONICAL file touched; no route-around; nothing built speculatively. Session ends per protocol.
