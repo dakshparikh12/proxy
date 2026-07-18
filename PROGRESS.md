@@ -2340,3 +2340,28 @@ weakened; nothing built speculatively. Nothing buildable remains in `libs/`/`ser
 re-confirmed (52nd reproduction); the four are one-line founder fixes to sealed tests and must land together
 (`verify.sh` runs `-x --maxfail=1`, so any single fix re-stalls the loop). Route SB-1..SB-4 to a founder.
 Session ends.**
+
+### Builder session 53 (2026-07-18) — independent primary-source re-confirmation at HEAD 6941383; 163/167; halt reaffirmed
+
+Fresh builder session. Oriented (AGENTS.md → acceptance/doc00 → 00-FOUNDATION.md → this plan) and reproduced
+ground truth WITHOUT trusting prior prose. `git status --porcelain` empty at clean HEAD `6941383`;
+`.venv/bin/python -m pytest -q -p no:randomly tests/doc00/` → **163 passed, 4 failed** — the identical sealed
+four: reg_002 (SB-1), obs_006 (SB-3), inv_010 (SB-4), ten_001 (SB-2). Live ten_001 residual =
+`tables with no tenant boundary: ['operation_runs']`.
+
+Re-derived SB-2 from primary source this session (not from the log): `test_m15_ten.py:111`
+`NON_SCOPED = {"tenants","sessions","alembic_version"}` omits `operation_runs`, so `_reaches_tenant_id`
+(`:117-142`) must find it a declared FK path to `tenants`; but `test_m03_sub.py:82` asserts
+`set(cols) == _OPRUN_COLS`, and `_OPRUN_COLS` (`:33-37`) = `{id, scope_id, operation_type, status, progress,
+result_ref, error, pause_requested, created_by, started_at, completed_at, last_heartbeat_at}` — no `tenant_id`
+and exactly one `uuid` column (PK `id`). The DDL (`0001_substrate.py:84-100`) confirms `scope_id`/`operation_type`/
+`created_by` are all `text`, and Postgres rejects a `text`→`uuid` FK. The only greens are (1) add a uuid-FK
+column → breaks AC-SUB-001's exact-set assertion, or (2) add `operation_runs` to the sealed `NON_SCOPED` set →
+edits a builder-forbidden `tests/` file (`harness/guard.py:14` `PROTECTED[0] == "tests/"` + `runner.py` integrity
+hash). Both blocked; the migrations are correct. SB-2 is product-unfixable — re-verified independently.
+
+No sealed/test/fixture/support/harness/CANONICAL file touched; no product edit (none is correct); no route-around;
+no test weakened; nothing built speculatively. Nothing buildable remains in `libs/`/`services/`. **SPEC_BLOCKED
+verdict re-confirmed (53rd reproduction); the four are one-line founder fixes to sealed tests and must land
+together (`verify.sh` runs `-x --maxfail=1`, so any single fix re-stalls the loop). Route SB-1..SB-4 to a
+founder. Session ends.**
