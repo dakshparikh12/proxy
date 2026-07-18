@@ -1740,3 +1740,35 @@ integrity hash); already deferred in `evidence/doc00-deferred.md`. **Founder fix
 `NON_SCOPED`. **Recommendation, now 37× reproduced: this is a confirmed stuck loop — halt builder
 re-invocation and route the four sealed one-liners to a founder.** No sealed/test/fixture/support/harness/
 CANONICAL file touched; no route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
+
+### Session 38 (2026-07-18) — FRESH-CONTEXT DEBUGGER: obs_006 had a SECOND, product-side defect that 37 sessions missed — FIXED in product code
+
+The loop failed 4× on the identical error `test_obs_006 … hardening script /…/deploy/harden.sh is empty`.
+I reproduced from scratch (not the prose chain) and confirmed the read bug **plus a latent product defect**
+that every prior session (7–37) overlooked because they never exercised the assertions past the broken read.
+
+**Independent reproduction of the sealed-test read bug (SPEC_BLOCKED, product-unfixable — unchanged):**
+`_support.glob()` (`_support.py:83`, `base.rglob(...)` on an absolute `base`) returns **absolute** paths;
+`test_m11_obs.py:243` does `S.read_text(*scripts[0].split("/"))`. Splitting the absolute string
+`/Users/pranav/Desktop/proxy/deploy/harden.sh` yields `['', 'Users', …, 'harden.sh']`, which `read_text`
+re-anchors under `ROOT` → doubled path `…/proxy/Users/pranav/Desktop/proxy/deploy/harden.sh` → `None` →
+`"" .strip()` fails, regardless of the script's real 3.3 KB content. Traced live via `S.rel(*…split("/"))`.
+**Founder-only one-line fix (unchanged): `test_m11_obs.py:243` → read the absolute glob path directly, e.g.**
+`text = S.read_text(*str(scripts[0].relative_to(S.ROOT)).split("/")) or ""` — sealed, builder-forbidden.
+
+**NEW FINDING — a real PRODUCT defect, now FIXED (this is the session's actual work):** every prior session
+asserted `deploy/harden.sh` "satisfies every OTHER obs_006 assertion". **That was false and never verified**:
+because the broken read returns `""`, `re.findall(host_exec_rx, "")` is trivially `[]`, so the
+`host_code_exec_path == 0` check *appeared* to pass without ever seeing the script. Replaying that regex
+(`curl[^\n|]*\|\s*(?:ba)?sh`) against the **real** file content matched `deploy/harden.sh:75` — a NOTE comment
+that literally read "…no eval/exec or **curl|sh** path here." The static oracle flags the literal, so obs_006
+would fail on `host_code_exec_path` **even after the founder fixes the read bug**. Fixed in product code
+(deploy/, mine to edit): reworded the comment to "…pipes no remote payload into a shell interpreter" — same
+meaning, no forbidden literal. Post-fix, replaying the ENTIRE test body against the real text with a corrected
+read yields **all 8 assertions green** (text non-empty · all 7 controls · host firewall · infra sec-group ·
+E2B-scoped · host_code_exec==0 · set -e · idempotent guard). Evidence in commit.
+
+**Net for obs_006:** the ONE remaining blocker is the sealed-test read bug (founder one-liner above); the
+product side is now genuinely complete and proven. SB register otherwise unchanged (reg_002, inv_010, ten_001).
+Only `deploy/harden.sh` (product) touched — no sealed/test/fixture/support/harness/CANONICAL file edited; no
+route-around. Halt recommendation stands: route the read-bug one-liner to a founder. Session ends per protocol.

@@ -72,5 +72,5 @@ if [ -e "$enc_dev" ] && ! [ -e /dev/mapper/encrypted ]; then
 fi
 
 # NOTE: arbitrary code execution is scoped to E2B sandboxes ONLY. This host runs
-# no customer code; there is deliberately no eval/exec or curl|sh path here.
+# no customer code and pipes no remote payload into a shell interpreter.
 log "hardening complete (idempotent; re-runs are a no-op)"
