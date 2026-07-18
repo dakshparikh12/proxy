@@ -116,3 +116,9 @@ M17, so nothing downstream can be built around it.
 
 ADJUDICATION: DEFER test_m10_reg.py::test_reg_002_assert_registry_closed_passes_when_set_equal — CANONICAL-DECISIONS.md:18 locks `MessageType` as an `enum.Enum` (enforced by sealed reg_005's `issubclass(MessageType, enum.Enum)`), while 00-FOUNDATION.md:303 defines registry closure as `set(get_args(MessageType)) == set(CHANNEL_REGISTRY)` and reg_002:75-77 re-asserts that set-equality in the sealed body; `typing.get_args()` of any Enum class is unconditionally `()`, so the union is empty and can never equal the non-empty registry — a genuine spec self-contradiction (Enum vs. get_args-able type-union) that no product implementation can satisfy and only a spec/sealed-test amendment (closure over `{m.value for m in MessageType}`) can resolve.
 
+
+DEFERRED (genuinely spec-blocked, needs founder spec fix): touched; no route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
+adjudication.
+
+ADJUDICATION: DEFER test_m10_reg.py::test_reg_002_assert_registry_closed_passes_when_set_equal — CANONICAL-DECISIONS.md:18 locks `MessageType` as an `Enum`, which reg_005:211 correctly enforces; but reg_002:75-77 asserts `{str(m) for m in get_args(MessageType)} == set(CHANNEL_REGISTRY)`, and `get_args()` of any `enum.Enum` subclass is unconditionally `()` (verified), while reg_001/003/004 require the registry non-empty — so `∅ == {3 keys}` is unsatisfiable by any product code, the offending `get_args` expression lives inside the sealed, builder-forbidden test body (a stale copy of the pre-CANONICAL §12 snippet at 00-FOUNDATION.md:303), and only a one-line test edit (`set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)`) can reconcile it with the locked Enum decision.
+
