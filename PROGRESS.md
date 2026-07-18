@@ -174,7 +174,11 @@ build-config (hatchling force-include / package-dir mapping under uv) so that (a
 `import services.harness.emit` resolve to the dotted namespace; (b) the `control_plane` deployable-assembly
 code (webhooks/accept/authz/boot server) lives **inside the five allowed packages** yet is exposed at the
 `services.control_plane.*` import path via package config, never as a 6th `services/` dir; (c) each member
-still presents `src/<pkg>/` for the static check with one root `uv.lock`.
+still presents `src/<pkg>/` for the static check with one root `uv.lock`. **The home is
+`services/harness/src` specifically, not "any of the five" (CR-M-1):** root `conftest.py:31–40`
+(`_wire_control_plane`) extends `services.__path__` to `services/harness/src`, so `import
+services.control_plane` resolves only from there — put `control_plane/` under any other package and it is off
+the extended `__path__`, failing the M17 `services.control_plane.{webhooks,accept,authz}` imports.
 
 **M1 exit gate includes a walking-skeleton import proof run inside the `uv`-synced venv (`.venv/bin/python`,
 the interpreter `verify.sh` uses), NOT bare repo-root** — because `conftest` puts repo-root on `sys.path`
@@ -422,7 +426,52 @@ build ground truth). **Hand-off:** M1–M10 + M13 + M15 + M17 → `subagent-driv
 everything buildable in-file, then stop the pass and escalate their sealed defect (reg_002 / obs_006 / inv_010
 / ten_001) to the conductor — never weaken or edit the sealed test.**
 
+### Review deltas — session-4 fresh-context `planner-reviewer` re-pass (folded; ONE BLOCKER — a contradicting note, not a plan defect)
+
+Verdict: **the plan proper (§0–§8) is LOCK-ready — order / coverage (155 re-counted, all 16 prefixes to the
+integer; manifest 154 stale-by-one) / seams / adopt-vs-build / risky-first / the I-1 dual-convention / the §3
+namespace seam all re-verified GENUINE at primary source, and ALL FOUR SPEC_BLOCKED calls independently
+re-confirmed unsatisfiable at the sealed-test source (reg_002 `test_m10_reg.py:75-77` vs `:211/:214`; ten_001
+`test_m15_ten.py:111` `NON_SCOPED` + `:177-182` vs `test_m03_sub.py:82`; obs_006 `test_m11_obs.py:243-244` +
+`_support.py` `glob`/`rel`/`read_text`; inv_010 `test_m13_inv.py:527/546` vs the uuid tenant pin
+`CANONICAL-DECISIONS.md:212`). The four are neither over- nor under-claimed.** Folded:
+
+- **[BLOCKER — resolved] The stale `## ADJUDICATION RESOLVED` note (`PROGRESS.md:425`) contradicted this
+  plan** and would whipsaw a builder reading the file top-to-bottom: it asserted "0 `SPEC_BLOCKED`, 0
+  unresolved contradictions … nothing genuinely blocked — continue to M5," directly against the four-defect
+  register (§0), the live SPEC_BLOCKED log below it, and git HEAD (session-48: "163/167 … four sealed defects
+  builder-forbidden; halt reaffirmed"). All four blocks re-proven genuine at source this pass, so the note is
+  factually false. **Resolved by marking it SUPERSEDED in place** (history preserved; pointer to the §0
+  four-defect register). It is a stale adjudication note, not part of this locked plan and not a sealed file.
+- **[IMPORTANT — reinforced] The four founder one-liners must land as a SINGLE atomic sealed-bundle fix, not
+  one at a time.** Under `verify.sh`'s `pytest -x --maxfail=1` the reds surface strictly sequentially —
+  reg_002 (M11) < obs_006 (M12) < inv_010 (M14) < ten_001-residual (M16) — so fixing any subset re-stalls the
+  loop exactly one milestone later. Register the four (reg_002 `:77` → enum-iteration predicate; obs_006
+  `:243` → read the absolute glob path directly; inv_010 `:527/546` → seed a real uuid; ten_001 `:177` →
+  add `operation_runs` to `NON_SCOPED`) as one conductor deliverable. → §0 intro already states this; elevated
+  from note to hard hand-off condition.
+- **[MINOR CR-M-1] `control_plane` home pinned** to `services/harness/src/control_plane/` specifically (not
+  "any of the five") — `conftest.py:31-40` extends `services.__path__` to `services/harness/src` only, so any
+  other home fails the M17 `services.control_plane.*` imports. → §3 reworded.
+- **[MINOR] manifest `counts.criteria:154` stale-by-one** — no builder action; already routed to the conductor
+  (§0). Confirmed against the 155 in `criteria.yaml`.
+
+**Plan RE-LOCKED (session-4).** No milestone reorder; no coverage change; no seam change. Deltas are: the
+BLOCKER contradiction neutralized (note marked superseded), the atomic-landing hand-off condition elevated,
+and the §3 `control_plane` home pinned. **Hand-off unchanged:** M1–M10 + M13 + M15 + M17 →
+`subagent-driven-build`; **M11/M12/M14/M16 build everything buildable in-file, then stop the pass and escalate
+their sealed defect to the conductor — never weaken or edit the sealed test; the four founder one-liners land
+together.**
+
 ## ADJUDICATION RESOLVED — proceed with this reading:
+> **⛔ SUPERSEDED (session-4 planner re-lock) — DO NOT ACT ON THIS NOTE.** Its premise ("no `SPEC_BLOCKED`
+> entry was ever recorded … nothing genuinely blocked") is factually false: the `## doc00 plan` §0
+> four-defect register (SB-1 reg_002 · SB-2 ten_001 · SB-3 obs_006 · SB-4 inv_010) and the live SPEC_BLOCKED
+> log below are authoritative, and all four were re-proven genuine at the sealed-test source. The
+> boot-key reading it recommends (unconditionally-required `DATABASE_URL`/`GCS_BUCKET`/AES keys/`RECALL_API_KEY`/
+> `ANTHROPIC_*`; `SESSION_SECRET`+GCP-project prod-only) remains correct and is folded into M5 — but the
+> "nothing is blocked, proceed" directive is void. Kept for history only.
+
  — No `SPEC_BLOCKED` entry was ever recorded in `PROGRESS.md`; the doc00 plan asserts "0 `SPEC_BLOCKED`, 0 unresolved contradictions," `dispositions.yaml` agrees, and the build is green through M4, so there is nothing genuinely blocked — continue in the mandated milestone order to M5 (`test_m04_boot`, AC-BOOT-001..007). To preempt the one near-frontier ambiguity (the "(prod)"-qualified boot keys), implement the reading the spec and criterion already fix in lockstep — `00-FOUNDATION.md:203` and `AC-BOOT-001` (`criteria.yaml:1632`) both list "`DATABASE_URL`, `GCS_BUCKET`, `SESSION_SECRET` (prod), GCP project (prod), each AES credential key, `RECALL_API_KEY`, `ANTHROPIC_*`": treat `DATABASE_URL`, `GCS_BUCKET`, the AES credential keys, `RECALL_API_KEY`, and `ANTHROPIC_*` as unconditionally req
 
 ## SPEC_BLOCKED — M11 registry (AC-REG-002 vs AC-REG-004/005), 2026-07-17
