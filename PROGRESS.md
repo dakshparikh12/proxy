@@ -3028,3 +3028,6 @@ deferring M2). Also a **sealed-test** issue, not a product defect:
 
 **SB-M2 confirmed; SB-M5 newly diagnosed. Both route to a founder — no buildable `services/**`/`libs/**` work remains
 for either. Session ends.**
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — AC-M2-001 is satisfiable exactly as written and the product code is already correct; the block is a read-only-`/` macOS test host that cannot provision the canonical `/tenants` mount, which per `R-DOC01-3.2-01` (spec:111 — *"a per-tenant, encrypted persistent volume (e.g. `/tenants/<tenant>/repos/<repo>/`)"*) and `CANONICAL-DECISIONS.md:302` (*"code_intel — one stateful host (GCE/MIG) with the per-tenant encrypted volume"*) is the real production layout, so the builder must run `harness/verify.sh` on the code_intel estate / a Linux runner (or root/container) where `/tenants` is writable — an infra provisioning step, the DEBUGGER's own "code-complete path" — and must not weaken the sealed test, fabricate the prefix, or treat this environmental limitation as the spec impossibility that DE
