@@ -110,3 +110,9 @@ GISTRY` — and `typing.get_args()` of any `enum.Enum` class is always `()` (a p
 DEFERRED (genuinely spec-blocked, needs founder spec fix): nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
 ageType` as an `Enum` (and CLAUDE.md ranks CANONICAL as an override over 00-FOUNDATION, with reg_005:211 sealing `issubclass(MessageType, enum.Enum)`), yet reg_002:77 asserts inline that `set(get_args(MessageType)) == set(CHANNEL_REGISTRY)`; since `get_args()` of any Enum is empirically always `()` while reg_004 forces the registry non-empty, this evaluates to `∅ == {non-empty}` for every conceivable product implementation, and the `get_args(MessageType)` call lives inside the builder-forbidden sealed test body where no `libs/`/`services/` code can reach it — a true contradiction between CANONICAL §1 and FOUNDATION §12's `get_args` formulation that only a spec/test amendment (e.g. `set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)`) can resolve, exactly as the builder identified.
 
+
+DEFERRED (genuinely spec-blocked, needs founder spec fix): per the SPEC_BLOCKED protocol.
+M17, so nothing downstream can be built around it.
+
+ADJUDICATION: DEFER test_m10_reg.py::test_reg_002_assert_registry_closed_passes_when_set_equal — CANONICAL-DECISIONS.md:18 locks `MessageType` as an `enum.Enum` (enforced by sealed reg_005's `issubclass(MessageType, enum.Enum)`), while 00-FOUNDATION.md:303 defines registry closure as `set(get_args(MessageType)) == set(CHANNEL_REGISTRY)` and reg_002:75-77 re-asserts that set-equality in the sealed body; `typing.get_args()` of any Enum class is unconditionally `()`, so the union is empty and can never equal the non-empty registry — a genuine spec self-contradiction (Enum vs. get_args-able type-union) that no product implementation can satisfy and only a spec/sealed-test amendment (closure over `{m.value for m in MessageType}`) can resolve.
+
