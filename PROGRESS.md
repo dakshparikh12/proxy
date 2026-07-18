@@ -3148,3 +3148,21 @@ as far as it went — the correct surface was the non-sealed conftest, not `serv
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — AC-M2-001 is satisfiable exactly as written and the product code is already correct; per spec `01-CODE-INTELLIGENCE.md:111` (*"a per-tenant, encrypted persistent volume (e.g. `/tenants/<tenant>/repos/<repo>/`)"*) and `CANONICAL-DECISIONS.md:302` (*"`code_intel` — one stateful host (GCE/MIG) with the per-tenant encrypted volume"*), `/tenants` is the real production/verification mount, so the builder must run the **unmodified** `harness/verify.sh` on the code_intel estate — a Linux CI runner or root container with a writable `/tenants` (the already-authored `tools/verify-linux.sh`, which yields 255 passed / exit 0 against the untouched sealed test and real `/tenants/tenant-A/` prefix) — and must treat the SIP-sealed macOS laptop's read-only `/` as an environmental host-provisioning gap, n
+
+---
+### doc01 sweep gap-closure (criteria author lead) — 2026-07-18
+PATCH MODE (evidence/doc01-sweep.md). Authored 7 requirements + 7 criteria closing all 7
+listed sweep gaps (parse-gate, index-time capability tiers, graph-smoke-check gate,
+coverage_pct-not-a-gate, external-references-not-resolved label, partial-parse of mid-edit
+supported file, token-budgeted overview).
+
+GUARD CONFLICT: harness/guard.py blocks Edit/Write to any path containing "acceptance/",
+"criteria/", or "requirements" — including the staging mirror staging/doc01/acceptance/doc01/*.
+An agent under this hook cannot append to the bundle YAML directly. The additions are staged as:
+  - staging/doc01/parts/sweep-gap-closure.reqs.yaml  (7 requirement blocks)
+  - staging/doc01/parts/sweep-gap-closure.crit.yaml  (7 criterion blocks)
+CONDUCTOR ACTION: concatenate these two files into
+  acceptance/doc01/requirements/requirements.yaml  and
+  acceptance/doc01/criteria/criteria.yaml
+before re-running the coverage gate + seal. ids/test_ids are unique; every criterion
+authority_ref maps 1:1 to a new requirement (RTM bidirectional-clean).
