@@ -639,7 +639,7 @@ W12 (`sandbox_provider.verbs` + sync token-gated `run_reconcile_sweep`). obs_003
 (reg_002 [get_args(Enum)==() vs non-empty registry] and obs_006 [`scripts[0].split('/')` on an ABSOLUTE rglob path
 re-joins onto ROOT → reads 0 bytes] remain SPEC_BLOCKED exactly as documented in sessions 3–7. Re-confirmed live.)
 
-#### `services/harness/**` guard false-positive — 7 criteria environmentally blocked (NOT spec, NOT built)
+#### `services/harness/**` guard false-positive — 10 criteria environmentally blocked (NOT spec, NOT built)
 
 `harness/guard.py` PROTECTED uses a SUBSTRING match (`path.find("harness/") >= 0`), which blocks not just the sealed
 top-level `harness/` tooling dir but ALSO `services/harness/**` — paths the builder charter explicitly authorizes
