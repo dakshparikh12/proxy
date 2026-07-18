@@ -62,8 +62,7 @@ def test_reg_001_subclass_auto_registers_on_definition():
 # ── AC-REG-002 ────────────────────────────────────────────────────────────
 @pytest.mark.contract
 def test_reg_002_assert_registry_closed_passes_when_set_equal():
-    """AC-REG-002: assert_registry_closed() passes (no exception) when set(get_args(MessageType)) == set(CHANNEL_REGISTRY)."""
-    from typing import get_args
+    """AC-REG-002: assert_registry_closed() passes (no exception) when {m.value for m in MessageType} == set(CHANNEL_REGISTRY)."""
     from libs.contracts import CHANNEL_REGISTRY, MessageType, assert_registry_closed
 
     # The shipped registry is consistent: closure must pass with NO exception
@@ -71,12 +70,15 @@ def test_reg_002_assert_registry_closed_passes_when_set_equal():
     assert_registry_closed()
 
     # And the equality it asserts actually holds on the live objects: every
-    # MessageType member has a registered model and vice-versa.
-    union = {str(m) for m in get_args(MessageType)}
-    registry = {str(k) for k in CHANNEL_REGISTRY}
-    assert union == registry, (
-        "closure predicate must be a set-equality of the union and the registry: "
-        f"union-only={union - registry}, registry-only={registry - union}"
+    # MessageType member's value has a registered model and vice-versa.
+    # MessageType is an Enum (CANONICAL §1), so the closure compares the enum
+    # *values* against the registry keys — get_args() on an Enum is () and would
+    # be a stale predicate (09-VERIFICATION.md:16, not 00-FOUNDATION.md's get_args).
+    values = {m.value for m in MessageType}
+    registry = set(CHANNEL_REGISTRY)
+    assert values == registry, (
+        "closure predicate must be a set-equality of the enum values and the registry: "
+        f"values-only={values - registry}, registry-only={registry - values}"
     )
 
 

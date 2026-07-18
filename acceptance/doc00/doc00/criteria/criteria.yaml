@@ -2483,14 +2483,14 @@
   behavior:
     given: "A consistent registry where every MessageType member has a registered model."
     when: "assert_registry_closed() runs."
-    then: ["It passes (no exception): set(get_args(MessageType)) == set(CHANNEL_REGISTRY)."]
+    then: ["It passes (no exception): {m.value for m in MessageType} == set(CHANNEL_REGISTRY). MessageType is an Enum (CANONICAL §1); get_args() on an Enum is () — the canonical closure compares enum values (09-VERIFICATION.md:16), reconciling 00-FOUNDATION.md's stale get_args form."]
   applicability: {fixtures: [fixture-registry], estates: [], excluded_estates: [], rationale: "Closure — accept side."}
   primary_oracle: {type: closure_assert_pass, artifact: "assert_registry_closed passes on consistent registry"}
   thresholds: {false_closure_failure: 0}
   test_ids: [T-REG-002]
   fault_model_refs: []
   protocol_ref: PROTO-DETERMINISTIC-01
-  source_quote: "assert set(get_args(MessageType)) == set(CHANNEL_REGISTRY), \"closed-graph violation\""
+  source_quote: "assert_registry_closed() — set(MessageType) == set(CHANNEL_REGISTRY) (09-VERIFICATION.md:16; MessageType is an Enum per CANONICAL §1, so compared by value)"
   required_evidence: [contract:T-REG-002]
 
 - criterion_id: AC-REG-003
