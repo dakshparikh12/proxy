@@ -239,3 +239,7 @@ FAILED tests/doc00/test_m11_obs.py::test_obs_006_one_idempotent_hardening_script
 !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
 1 failed, 125 passed, 2 deselected, 1 warning in 9.68s
 
+
+DEFERRED (genuinely spec-blocked, needs founder spec fix): no test weakened; nothing built speculatively. Nothing buildable remains in `libs/`/`services/`. **SPEC_BLOCKED
+ic_version}`) demands `operation_runs` reach `tenants` via a declared FK, while `AC-SUB-001` and the *locked* `CANONICAL-DECISIONS §2` / `§11.2` / `§12.10` pin `operation_runs` to an exact 12-column set whose sole handle is the polymorphic `scope_id text` ("meeting_id | task_id") with no `tenant_id` and no uuid column eligible for a sane FK — and Postgres forbids the `text`→`uuid` FK that would bridge them. Every product/migration path (add column, FK any existing column) breaks one sealed test or a locked CANONICAL decision; the only fix is to exempt `operation_runs` in the sealed `NON_SCOPED` set (or relax `R-INV-09` for polymorphically-scoped bookkeeping tables), both of which are edits to builder-forbidden sealed test / spec files. No spec reading available to the builder resolves it.
+
