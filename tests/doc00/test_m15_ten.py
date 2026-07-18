@@ -107,8 +107,13 @@ def test_ten_001_every_durable_table_reaches_tenant_id():
         # Non-tenant-scoped tables are excluded from the boundary requirement:
         #   * tenants itself is the root.
         #   * sessions is the server-side session store (keyed by sid, no tenant).
+        #   * operation_runs is the broker-free coordination store: its scope_id
+        #     is polymorphic NOT NULL *text* (partial-unique on (scope_id,
+        #     operation_type)), never a uuid FK — AC-SUB-001 pins its 12 columns
+        #     with no tenant_id/meeting_id, so it has no tenant-reachable path by
+        #     design (same footing as sessions).
         #   * alembic_version is migration bookkeeping.
-        NON_SCOPED = {"tenants", "sessions", "alembic_version"}
+        NON_SCOPED = {"tenants", "sessions", "operation_runs", "alembic_version"}
 
         def _has_column(c, table: str, column: str) -> bool:
             return column in S.table_columns(c, table)
