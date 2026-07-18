@@ -2495,3 +2495,29 @@ NOT edit it; append SPEC_BLOCKED naming it), I made **no** code change. **Founde
 (`pathlib.Path(scripts[0]).read_text(...)`) with no `split("/")` re-root. No sealed/test/harness/support file
 touched; no route-around; no test weakened; nothing built speculatively. **SPEC_BLOCKED confirmed independently by
 fresh-context debugging — this is the same sealed-test defect the loop cannot fix; route to a founder.**
+
+### Builder session 56 (2026-07-18) — 56th independent primary-source confirmation at HEAD 04fff5f; 163/167; halt reaffirmed
+
+Fresh session; reproduced ground truth without trusting prose. `git status --porcelain` empty at clean HEAD
+`04fff5f`; `.venv/bin/python -m pytest -q tests/doc00/` → **163 passed, 4 failed** — the identical sealed four
+(reg_002 SB-1, obs_006 SB-3, inv_010 SB-4, ten_001 SB-2). Live ten_001 residual = `['operation_runs']`.
+
+Beyond re-reading the four defective predicates verbatim, I ran two crisp empirical proofs this session:
+- **SB-1 reg_002** — executed `get_args(MessageType)` → `()` (CPython returns empty for an Enum by design),
+  while `{str(m) for m in MessageType}` is non-empty and `len(CHANNEL_REGISTRY) == 3`; so `test_m10_reg.py:75-77`
+  `union == registry` evaluates `False` for ANY product. Language-level unsatisfiable; product cannot cure it.
+- **SB-3 obs_006** — `wc -c deploy/harden.sh` = 3359 bytes (product complete); the red is the sealed
+  `test_m11_obs.py:243` `scripts[0].split("/")`+`read_text`→`rel()` re-rooting an ABSOLUTE glob hit into a doubled
+  nonexistent path → `""` → `:244` fails independent of script content.
+- **SB-4 inv_010** `test_m13_inv.py:525` `offboard="tenant-OFF"` INSERTed into a `uuid` tenant column →
+  `InvalidTextRepresentation` before `run_reconcile_sweep` runs.
+- **SB-2 ten_001** `test_m15_ten.py:111` `NON_SCOPED` omits `operation_runs`, pinned by `test_m03_sub.py:82` to
+  exactly 12 tenant-less cols (`scope_id text`, no uuid-FK path); irreducibly unscoped.
+
+All four fixes live under `tests/` (builder-forbidden — `harness/guard.py` `PROTECTED[0]=="tests/"` + `runner.py`
+integrity hash). No product edit is correct; no route-around; no test weakened; nothing built speculatively.
+Nothing buildable remains in `libs/`/`services/`. **SPEC_BLOCKED re-confirmed (56th reproduction). Founder
+one-liners must land together** (`verify.sh` runs `-x --maxfail=1`): (1) reg_002 → `{m.value for m in MessageType}
+== set(CHANNEL_REGISTRY)`; (2) obs_006 → read the absolute glob path directly (no `split("/")` re-root);
+(3) inv_010 → seed a real uuid tenant id; (4) ten_001 → add `operation_runs` to `NON_SCOPED`. Route SB-1..SB-4 to
+a founder. Session ends.
