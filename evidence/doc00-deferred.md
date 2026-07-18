@@ -52,3 +52,9 @@ DEFERRED (genuinely spec-blocked, needs founder spec fix): SPEC_BLOCKED protocol
 DEFERRED (genuinely spec-blocked, needs founder spec fix): route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
 FER test_m10_reg.py::test_reg_002_assert_registry_closed_passes_when_set_equal — 00-FOUNDATION.md:303 writes the closure over `set(get_args(MessageType))`, but CANONICAL-DECISIONS.md:18 and 08-EXPERIENCE.md:188 lock `MessageType` as a `StrEnum`/`Enum`, for which `get_args()` is language-guaranteed to return `()`; the sealed test body (reg_002:75-77) recomputes `{str(m) for m in get_args(MessageType)}` and asserts it equals the non-empty `CHANNEL_REGISTRY`, which is unsatisfiable for any Enum and directly contradicts the GREEN reg_005:211/214 (which requires the Enum and concedes `get_args==()`) — a genuine spec self-contradiction that no product code can bridge and that only a spec fix (line 303 → `set(MessageType) == set(CHANNEL_REGISTRY)`, with reg_002:75 corrected in kind) can resolve.
 
+
+DEFERRED (genuinely spec-blocked, needs founder spec fix): per the SPEC_BLOCKED protocol.
+or m in MessageType}`, or reconciling §12 with CANONICAL) can advance it — the builder cannot touch sealed tests.
+
+ADJUDICATION: DEFER tests/doc00/test_m10_reg.py::test_reg_002_assert_registry_closed_passes_when_set_equal — CANONICAL-DECISIONS §1 (line 18) locks `MessageType` as an `Enum`, enforced green by sealed reg_005 (`issubclass(MessageType, enum.Enum)`), yet 00-FOUNDATION §12 (line 303) and this test require `set(get_args(MessageType)) == set(CHANNEL_REGISTRY)`; `typing.get_args()` returns `()` for every Enum class as a language invariant, so the union is permanently empty while the registry is non-empty by contract — the two authoritative spec passages are mutually unsatisfiable for one object, an impossibility no product code can bridge and only a spec/sealed-test change can fix.
+
