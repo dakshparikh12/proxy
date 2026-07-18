@@ -194,3 +194,9 @@ FAILED tests/doc00/test_m11_obs.py::test_obs_006_one_idempotent_hardening_script
 !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
 1 failed, 125 passed, 1 deselected, 1 warning in 9.61s
 
+
+DEFERRED (genuinely spec-blocked, needs founder spec fix): and route the four sealed one-liners to a founder.** Session ends per the SPEC_BLOCKED protocol.
+rmer preserves the CANONICAL lock). Not a route-around a builder can take.
+
+ADJUDICATION: DEFER tests/doc00/test_m10_reg.py::test_reg_002_assert_registry_closed_passes_when_set_equal — CANONICAL-DECISIONS §1:18 locks `MessageType` as an `enum.Enum`, and reg_005:211 enforces that lock; reg_002:75-77 asserts `{str(m) for m in get_args(MessageType)} == {str(k) for k in CHANNEL_REGISTRY}`, but `typing.get_args()` returns `()` for every Enum subclass, so its `union` is empty against a mandatorily non-empty registry. No single object is both an Enum subclass and a generic alias yielding non-empty `get_args`, so the product cannot make reg_002 and reg_005 green simultaneously — the unsatisfiable assertion lives in a sealed, builder-forbidden test and only a founder spec/test edit can resolve it.
+
