@@ -1,0 +1,16 @@
+[project]
+name = "code_intel"
+version = "0.0.0"
+description = "services.code_intel — per-tenant clone/index/graph host."
+requires-python = ">=3.12"
+dependencies = ["contracts", "pydantic>=2"]
+
+[tool.uv.sources]
+contracts = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/code_intel"]

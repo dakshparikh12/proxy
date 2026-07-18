@@ -1,0 +1,5 @@
+# apps/ is its own pnpm workspace (Vite static builds), NOT part of the uv
+# workspace — never `uv sync`'d (AC-REPO-008).
+packages:
+  - "connect"
+  - "tile"
