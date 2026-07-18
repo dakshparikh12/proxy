@@ -149,3 +149,11 @@ ty `get_args` — is not a `type` and would fail reg_005, so the two sealed crit
 DEFERRED (genuinely spec-blocked, needs founder spec fix): touched; no route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
  "MessageType (an `Enum`)", and Python guarantees `get_args()` of any Enum class is `()` (verified by live probe and conceded by the same file's `:214` comment and `:251` fallback); therefore the sealed re-check at `:75` (`union = {str(m) for m in get_args(MessageType)}` asserted equal to the 3-key registry) is unconditionally `set() == {3 keys}` and unsatisfiable by any product object, while the criterion's actual normative oracle (`closure_assert_pass`, `assert_registry_closed()` passes) is already green — this is a genuine internal contradiction between the §12 `get_args` sketch transcribed into `:75` and the locked CANONICAL Enum decision, fixable only by editing the sealed test line (to `{str(m.value) for m in MessageType}`) or the spec sketch, neither of which the builder may touch.
 
+
+DEFERRED (genuinely spec-blocked, needs founder spec fix): nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
+ry_closed()` already does.
+
+I modified no files.
+
+ADJUDICATION: DEFER tests/doc00/test_m10_reg.py::test_reg_002_assert_registry_closed_passes_when_set_equal — 00-FOUNDATION.md §12 (line 303) mandates `set(get_args(MessageType)) == set(CHANNEL_REGISTRY)` while CANONICAL-DECISIONS.md:18 locks `MessageType` to be a Python `Enum` ("not an open alias"); `typing.get_args` on any Enum is unconditionally `()` (verified empirically), so the spec's own closure assertion — transcribed verbatim as reg_002's inline `get_args(MessageType)` check — is unsatisfiable against a non-empty registry, and no product-code edit can change a stdlib builtin's result on a CANONICAL-locked Enum; only a spec change to §12 (comparing enum members, not `get_args`) plus the corresponding sealed-test line can resolve it.
+
