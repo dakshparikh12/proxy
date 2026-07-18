@@ -393,3 +393,49 @@ speculatively would commit code that `verify.sh` can never bless while `reg_002`
 declined. The single-line founder fix required is unchanged (rewrite AC-REG-002 to `set(m.value for m in
 MessageType) == set(CHANNEL_REGISTRY)`); on that fix the shipped `registry.py` should pass reg_001..006 unchanged
 and the build resumes at M12.
+
+### Independent re-verification (builder session 4, 2026-07-17) — block STANDS; the required founder fix is LARGER than sessions 1–3 stated
+
+A fourth fresh-context builder session re-derived the block and confirms it is genuine. State reproduced
+exactly: `bash harness/verify.sh` runs ruff + mypy --strict + bandit clean, then pytest halts under `-x` at
+**`test_m10_reg.py::test_reg_002`** (M1–M10 = 116 green up to that point; shipped `registry.py` is
+CANONICAL-correct — `MessageType(enum.Enum)`, closure iterates enum members). Full scope `pytest tests/doc00/`
+(no `-x`) = **124 passed / 43 failed** (reg_002/003/006 + the legitimately-unbuilt M12–M17, unreachable behind
+the `-x` halt). No test/threshold/golden/arbiter touched; no route-around; nothing built speculatively (it could
+never register green through the `-x` arbiter while reg_002 fails first — per the build skill "verify.sh exit 0
+is the only green" / "impossible without changing the arbiter ⇒ SPEC_BLOCKED, not license to edit the arbiter").
+
+**New, decisive finding — there are TWO independent sealed-suite defects, not one, and each is proven
+implementation-independently this session with `.venv/bin/python`:**
+
+1. **get_args-vs-Enum contradiction (reg_002 line 77), proven in isolation.** `pytest ::test_reg_002` alone →
+   fails line 77 with `union-only=set(), registry-only={'connect-repo','approve-draft','invite-proxy'}`.
+   `get_args(x)` is non-empty ONLY for `_GenericAlias`/`GenericAlias`/`UnionType`/`ParamSpec*`, and every such
+   object has `isinstance(x,type)==False`; every Enum class has `get_args==()`. reg_005 (`isinstance(MessageType,
+   type) and issubclass(MessageType, enum.Enum)`) + reg_004 (registry non-empty) therefore make line 77's
+   `set(get_args(MessageType)) == set(CHANNEL_REGISTRY)` unsatisfiable at the language level.
+
+2. **Registry-pollution / internal suite inconsistency (reg_002 line 71 AND reg_003 baseline line 91), proven
+   under the real milestone order.** reg_001 defines a throwaway `_AcReg001Probe` that auto-registers
+   `'ac-reg-001-probe'` into the **module-global** `CHANNEL_REGISTRY`; there is **NO fixture in
+   `tests/doc00/conftest.py` (or root `conftest.py`) that snapshots/resets the registry between tests**, so the
+   probe persists. Consequently, running `reg_001` then (`reg_002`|`reg_003`): the shipped
+   `assert_registry_closed()` raises `closed-graph violation: registry-only={'ac-reg-001-probe'}` at
+   reg_002:71 and reg_003:91 — yet reg_003 also *requires* that same closure to **fail** on exactly such a
+   registry-only orphan (its injection step). The identical closure, on the identical polluted state, is required
+   to both pass (reg_002 line 71 / reg_003 baseline) and fail (reg_003 injection) → unsatisfiable by ANY shipped
+   `assert_registry_closed()`, independent of the get_args issue.
+
+**Therefore the founder fix in sessions 1–3 (rewrite line 77 to `set(m.value for m in MessageType) ==
+set(CHANNEL_REGISTRY)`) is NECESSARY BUT INSUFFICIENT** — with only that change, reg_002:71 and reg_003:91 would
+still fail on the un-cleaned probe. The complete sealed-bundle fix requires BOTH: (a) line 77 rewritten to the
+CANONICAL enum-iteration form (matching `09-VERIFICATION.md:16` + `CANONICAL-DECISIONS.md:18`); **and** (b) test
+isolation for `CHANNEL_REGISTRY` — e.g. an autouse fixture in `tests/doc00/conftest.py` that snapshots and
+restores `CHANNEL_REGISTRY` around each reg test, or `reg_001` popping its own probe in a `finally`. Both are in
+`tests/`/`acceptance/` — **builder-forbidden**.
+
+**Loop status (escalation): this is a stuck loop.** Four independent builder sessions have now confirmed the same
+sealed-bundle defect from scratch; no builder session can advance doc00 past M11 because the fix lives in sealed
+files the builder may not edit. Spawning further builder sessions will reproduce this same result. **Founder
+action is required** to apply the two-part fix above; on that fix the shipped `registry.py` is expected to pass
+reg_001..006 unchanged and the build resumes at M12.
