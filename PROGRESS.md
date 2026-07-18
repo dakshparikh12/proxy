@@ -3227,3 +3227,54 @@ CONDUCTOR ACTION: concatenate these two files into
   acceptance/doc01/criteria/criteria.yaml
 before re-running the coverage gate + seal. ids/test_ids are unique; every criterion
 authority_ref maps 1:1 to a new requirement (RTM bidirectional-clean).
+
+---
+## SPEC_BLOCKED — sealed-bundle integrity defect: seal dropped sweep-gap fixtures — 2026-07-18
+
+**Blocked criteria:** AC-M4-011, AC-M6-005, AC-M6-008 (three of the seven sweep-gap-closure
+criteria added in commit `f03c98d`).
+
+**Exact conflict (bundle self-inconsistency, NOT missing product code):**
+The sweep-gap commit `f03c98d` ("test: sweep-gap-closure tests for 7 new criteria") added BOTH
+the sealed tests AND the fixtures they import to `tests/fixtures/repos.py` (+67 lines:
+`ParseErrorFixture` / `parse_error_fixture()` and `low_coverage_fully_classified_fixture()`) —
+and reported "All 79 tests pass." The subsequent seal commit `1f2671d`
+("doc01: promote + seal arbiter (bundle+evidence) [13e3c879fed3]") **reverted
+`tests/fixtures/repos.py` back to a pre-sweep version**, deleting those two fixtures, while
+leaving the three tests that import them in the sealed suite. Result: the sealed tests raise
+`ImportError: cannot import name 'parse_error_fixture' / 'low_coverage_fully_classified_fixture'
+from 'tests.fixtures.repos'` — the error fires in **sealed test code, before any product code
+runs**. Verified via `git diff f03c98d HEAD -- tests/fixtures/repos.py` (the two fixtures are the
+only removals).
+
+**Why no `services/**`/`libs/**` fix greens it:** the failure is an import of a non-existent
+sealed fixture; no product code executes. Restoring the fixtures requires editing
+`tests/fixtures/repos.py`, which is a PROTECTED path — the builder is blocked by both
+`harness/guard.py` and the `runner.py` integrity hash over protected trees. Not a builder fix;
+a conductor re-seal, exactly parallel to the "CONDUCTOR ACTION: concatenate…" note above.
+
+**Product code IS complete for these three criteria — proven independently.** HEAD product
+(`services/code_intel/**`, untouched by the seal, which only moved bundle/fixtures/evidence)
+already: flags a parse-error file `status='flagged', flag_reason='parse-error'`
+(`services/code_intel/src/code_intel/graph_builder.py:115`) while keeping the valid sibling
+`indexed` and the broken file live-searchable via ripgrep; and reaches readiness `ready` for a
+fully-classified repo with `coverage_pct < 1.0` (coverage_pct reported, not a gate). A standalone
+harness that restores the seal-removed fixtures in-script and runs the exact sealed-test
+assertions against unmodified HEAD product code yields **3 passed** (AC-M4-011, AC-M6-005,
+AC-M6-008 all green). So this is strictly a bundle-packaging defect, not a build gap.
+
+**CONDUCTOR ACTION (the only fix):** re-apply the sweep-gap fixture block to
+`acceptance`/`tests/fixtures/repos.py` during seal — restore `f03c98d`'s
+`ParseErrorFixture`, `parse_error_fixture()`, and `low_coverage_fully_classified_fixture()`
+(the exact block reverted by `1f2671d`) — then re-run `harness/verify.sh` on the Linux estate
+(`tools/verify-linux.sh`, writable `/tenants`; see the RESOLVED note above). With fixtures
+restored, all four remaining reds go green: AC-M4-011/M6-005/M6-008 (fixture restore) and
+AC-M2-001 (Linux `/tenants` estate).
+
+**Remaining red on this macOS host (unchanged, previously adjudicated):** AC-M2-001 — the
+read-only `/` SIP host cannot provision the canonical `/tenants` mount; product code
+(`Cloner`/`paths.volume_root()`) is correct and greens on the Linux estate. Environmental, not a
+build gap.
+
+**No buildable `services/**`/`libs/**` work remains for doc01. Session ends per the SPEC_BLOCKED
+rule (do not edit the sealed tree, do not weaken, do not route around).**
