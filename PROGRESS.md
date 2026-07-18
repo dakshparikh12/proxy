@@ -2437,3 +2437,7 @@ unchanged — untouched this pass; reg_002 is the first `-x --maxfail=1` halt.) 
 ## ADJUDICATION RESOLVED — proceed with this reading:
 ** — The SB-1/reg_002 "conflict" is resolvable from the spec's own authoritative closure form (`09-VERIFICATION.md:16` + CANONICAL §1's Enum lock supersede the illustrative `get_args` snippet at `00-FOUNDATION.md:303`), is not a genuine spec contradiction, and is already satisfied at HEAD (`tests/doc00/` passes 167/167). No founder spec change is required.
 
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — Implement the registry-closure check as the member-iteration, compared-by-value equality the spec makes authoritative at `09-VERIFICATION.md:16` ("`assert_registry_closed()` — `set(MessageType) == set(CHANNEL_REGISTRY)`") under `CANONICAL-DECISIONS.md:18`'s Enum lock, i.e. `{m.value for m in MessageType} == set(CHANNEL_REGISTRY)`; the `set(get_args(MessageType))` fragment at `00-FOUNDATION.md:303` is a pre-Enum illustrative sketch that the CANONICAL Enum decision and the Doc-09 contract-check predicate supersede, so no founder spec change is required and the shipped `assert_registry_closed()` already satisfies AC-REG-002 (verified: `tests/doc00/test_m10_reg.py` → 6 passed, closure passes with no exception).
+
