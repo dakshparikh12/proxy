@@ -2533,3 +2533,18 @@ ten_001 (`test_m15_ten.py:111` NON_SCOPED omits `operation_runs`, pinned to 12 t
 runner integrity hash) ⇒ builder-forbidden; no product edit is correct; nothing buildable remains in libs/services.
 Confirms the deferral commits (20c026d, 263b327) did not shift ground truth. SPEC_BLOCKED stands; SB-1..SB-4 remain
 routed to a founder (one-liners unchanged, must land together under `verify.sh` `-x --maxfail=1`). Session ends.
+
+### Builder session 58 (2026-07-18) — 58th confirmation at HEAD 90eb8cb; 163/167; halt reaffirmed
+Fresh session, ground truth re-derived not trusted. Clean tree at HEAD `90eb8cb`; `pytest -q tests/doc00/`
+→ **163 passed, 4 failed** — the identical sealed four. Re-read all four predicates verbatim (none
+founder-fixed): reg_002 (`test_m10_reg.py:75` `get_args(MessageType)==()` for the CANONICAL Enum → union∅ ≠
+non-empty registry, language-unsatisfiable); obs_006 (`test_m11_obs.py:243` `scripts[0].split("/")`+re-root of
+an ABSOLUTE glob hit → `""`; `deploy/harden.sh`=3359B, complete); inv_010 (`test_m13_inv.py:525` `"tenant-OFF"`
+INSERTed at `:546` into a `uuid` tenant column → InvalidTextRepresentation before the sweep); ten_001
+(`test_m15_ten.py:111` NON_SCOPED omits `operation_runs`, pinned to 12 tenant-less cols by `test_m03_sub.py:82`).
+Confirmed guard `PROTECTED[0]=="tests/"` (+ runner integrity hash) ⇒ all four fixes builder-forbidden; no product
+edit is correct; nothing buildable remains in libs/services. SPEC_BLOCKED stands; SB-1..SB-4 remain routed to a
+founder — one-liners unchanged and must land together (`verify.sh` runs `-x --maxfail=1`, so any single fix
+re-stalls one milestone later): (1) reg_002 → `{m.value for m in MessageType} == set(CHANNEL_REGISTRY)`;
+(2) obs_006 → read the absolute glob path directly (no `split("/")` re-root); (3) inv_010 → seed a real uuid
+tenant id; (4) ten_001 → add `operation_runs` to `NON_SCOPED`. Session ends.
