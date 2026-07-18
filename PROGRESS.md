@@ -1447,3 +1447,31 @@ Under `verify.sh` (`-x --maxfail=1`) reg_002 (M11) is the FIRST red and halts th
 **Recommendation unchanged and now 29× reproduced: halt builder re-invocation; route the four sealed one-liners to a
 founder.** No sealed/test/threshold/golden/arbiter touched; no route-around; nothing built speculatively. Session ends
 per the SPEC_BLOCKED protocol.
+
+### Session 30 (2026-07-18) — 30th confirmation; 163/167; all four independently re-derived at primary source
+
+Thirtieth builder. Ground truth first (`.venv/bin/python -m pytest -q -p no:randomly tests/doc00/`):
+**163 passed / 4 failed** (reg_002, obs_006, inv_010, ten_001 — identical set to sessions 7–29); `git status`
+clean; nothing buildable remains. All four opened and re-derived this session from the sealed files directly
+(not trusting prior prose):
+
+- **reg_002** `test_m10_reg.py:75-77`: `union = {str(m) for m in get_args(MessageType)}` is `∅` (get_args of any
+  class is `()`), while `reg_005:211` hard-forces `issubclass(MessageType, enum.Enum)` and `:77` asserts
+  `union == CHANNEL_REGISTRY` (3 keys, reg_004). Inline in the sealed body — no product code can reach it.
+- **obs_006** `_support.glob:83-87` = `rel(*root_parts).rglob(...)` with `rel = ROOT.joinpath` → ABSOLUTE Paths;
+  `test_m11_obs.py:243` `read_text(*scripts[0].split("/"))` re-roots the absolute string onto ROOT (traced
+  `read_text→rel→ROOT.joinpath`), doubling the path → `None or ""` → `assert text.strip()` fails for ANY script.
+- **ten_001 vs sub_001** `test_m03_sub.py:82` `set(cols)==_OPRUN_COLS` pins `operation_runs` to EXACTLY 12
+  tenant-less `text`-keyed columns; `test_m15_ten.py:179` requires it to reach `tenant_id` via a declared FK.
+  Mutually exclusive.
+- **inv_010** `test_m13_inv.py:546` seeds text `'tenant-OFF'` into the CANONICAL-mandated (`CANONICAL-DECISIONS.md:212`)
+  `uuid REFERENCES tenants` `tenant_id` column → `InvalidTextRepresentation`.
+
+Under `verify.sh` (`-x --maxfail=1`) reg_002 (M11) is the FIRST red and halts the pass; M12–M17 products are built
+and pass when the suite runs without `-x`. All four fixes live in `tests/doc00/` (builder-forbidden — `harness/guard.py`
++ integrity hash); already deferred to founder triage in `evidence/doc00-deferred.md`. **Founder fixes (unchanged):**
+(1) `reg_002:77` → `set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)` (drop the `:75` get_args line);
+(2) `obs_006` read the absolute glob path directly (don't `split("/")`+re-root); (3) `inv_010` seed a real uuid tenant
+id; (4) add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`. **Recommendation unchanged and now 30× reproduced:
+halt builder re-invocation; route the four sealed one-liners to a founder.** No sealed/test/threshold/golden/arbiter
+touched; no route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
