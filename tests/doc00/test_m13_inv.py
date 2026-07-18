@@ -524,8 +524,13 @@ def test_inv_010_offboarding_sweep_deletes_tenant_rows_and_gcs_prefixes():
 
         # Seed rows for the offboarded tenant and a keep tenant (in whatever
         # tenant-scoped table the product exposes -- we probe for one).
-        offboard = "tenant-OFF"
-        keep = "tenant-KEEP"
+        # Tenant ids are uuids (tenants.id is a uuid PK) and every tenant-scoped
+        # table's tenant_id is a DECLARED FK to tenants(id) (AC-TEN-001), so a
+        # bare string like "tenant-OFF" is rejected by the uuid column AND would
+        # violate the FK -- seed real uuids that exist in tenants (below).
+        import uuid
+        offboard = str(uuid.uuid4())
+        keep = str(uuid.uuid4())
 
         # Find a tenant-scoped table to seed. Prefer a meetings/videos-style table.
         cur = conn.execute(
@@ -542,6 +547,11 @@ def test_inv_010_offboarding_sweep_deletes_tenant_rows_and_gcs_prefixes():
             (table,),
         )
         tcol = tcol_cur.fetchone()[0]
+
+        # The scoped table's tenant handle is a declared FK to tenants(id), so the
+        # referenced tenants rows must exist before we can seed the scoped table.
+        conn.execute('INSERT INTO tenants (id) VALUES (%s)', (offboard,))
+        conn.execute('INSERT INTO tenants (id) VALUES (%s)', (keep,))
 
         conn.execute(f'INSERT INTO {table} ({tcol}) VALUES (%s)', (offboard,))
         conn.execute(f'INSERT INTO {table} ({tcol}) VALUES (%s)', (keep,))
