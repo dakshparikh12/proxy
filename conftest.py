@@ -60,6 +60,25 @@ def _wire_libs_lint() -> None:
         libs.__path__ = current + [ops_src]  # type: ignore[attr-defined]
 
 
+def _wire_interpreter_on_path() -> None:
+    """Make bare ``python`` resolve to the active interpreter in subprocesses.
+
+    Several sealed doc01 verifier tests shell out with ``["python", "-m",
+    services.code_intel.verifier", ...]`` (frozen argv). When pytest runs under
+    the workspace venv without that venv activated, bare ``python`` is not on
+    ``PATH`` and the subprocess raises ``FileNotFoundError``. Prepending the
+    running interpreter's ``bin`` dir (which carries the ``python`` symlink) makes
+    the frozen tests resolve on any host. Environment wiring only — no product
+    behaviour and no sealed test is touched.
+    """
+    import sys
+
+    bindir = os.path.dirname(os.path.abspath(sys.executable))
+    path = os.environ.get("PATH", "")
+    if bindir and bindir not in path.split(os.pathsep):
+        os.environ["PATH"] = bindir + os.pathsep + path if path else bindir
+
+
 # Throwaway local test-Postgres coordinates (build host only).
 _PG_DATA = "/tmp/proxy_pgtest/data"  # noqa: S108 - ephemeral test fixture dir
 _PG_SOCK = "/tmp/proxy_pgtest/sock"  # noqa: S108
@@ -141,6 +160,7 @@ def _ensure_local_postgres() -> None:
 
 _wire_control_plane()
 _wire_libs_lint()
+_wire_interpreter_on_path()
 try:
     _ensure_local_postgres()
 except Exception:
