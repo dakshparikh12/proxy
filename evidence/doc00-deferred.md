@@ -141,3 +141,7 @@ FAILED tests/doc00/test_m11_obs.py::test_obs_006_one_idempotent_hardening_script
 !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
 1 failed, 125 passed, 1 deselected, 1 warning in 9.57s
 
+
+DEFERRED (genuinely spec-blocked, needs founder spec fix): route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
+ty `get_args` — is not a `type` and would fail reg_005, so the two sealed criteria are mutually exclusive and no legitimate `libs/`/`services/` edit can satisfy both. The FOUNDATION closure pseudocode was written for a `get_args`-subscriptable discriminator and the later locked CANONICAL decision changed `MessageType` to an `Enum` without updating that predicate (or AC-REG-002, which quotes it); the product already implements the correct Enum-member closure and `assert_registry_closed()` passes. The one-line fix — `union = {str(m.value) for m in MessageType}`, matching the test file's own `:251` fallback and the shipped implementation — lives in the sealed test tree the builder cannot edit, so this is a genuine spec contradiction requiring a founder-side spec/test change, not a build gap.
+
