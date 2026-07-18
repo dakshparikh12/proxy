@@ -973,3 +973,20 @@ set(CHANNEL_REGISTRY)`; (2) obs_006 read the absolute path directly; (3) inv_010
 `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`. **Recommendation unchanged: halt builder re-invocation.**
 No sealed/test/threshold/golden/arbiter touched; no route-around; nothing built speculatively. Session ends per the
 SPEC_BLOCKED protocol.
+
+### Session 17 (2026-07-18) — 17th confirmation; 163/167; reg_002 re-derived live from sealed source
+
+Seventeenth builder. Ground truth first, not prose: `pytest -q -p no:randomly tests/doc00/` = **163 passed / 4
+failed** (reg_002, obs_006, inv_010, ten_001 — identical set); `git status` clean; no uncommitted work; nothing
+buildable remains. Independently re-derived reg_002 from the sealed bodies this run: reg_005:211 asserts
+`issubclass(MessageType, enum.Enum)` (forced Enum) and :214's own comment concedes `get_args(<Enum>) == ()`;
+reg_002:75 sets `union = {str(m) for m in get_args(MessageType)}` = `set()` for any Enum, then :77 asserts
+`union == CHANNEL_REGISTRY` (3 non-empty keys). No class is both an Enum and has non-empty `get_args` →
+language-level unsatisfiable, wholly inside sealed bodies; emptying `CHANNEL_REGISTRY` breaks reg_003 (declined
+as route-around). ten_001 flagged `operation_runs` reproduced directly in this run's failure output; obs_006 /
+inv_010 unchanged sealed defects. **Founder fixes (one line each, unchanged):** (1) reg_002:77 →
+`set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)`; (2) obs_006 read the absolute path directly;
+(3) inv_010 seed a real uuid; (4) add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`. **Recommendation
+unchanged: halt builder re-invocation** — 17 independent sessions reproduce the identical 163/167; only founder
+edits to the four sealed one-liners advance doc00. No sealed/test/threshold/golden/arbiter touched; no
+route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
