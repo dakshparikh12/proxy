@@ -2102,3 +2102,29 @@ together. No sealed/test/fixture/support/harness/CANONICAL file touched; product
 byte-clean tree; no route-around; nothing built speculatively; no test weakened. **Confirmed stuck loop, 46×
 reproduced (this time with an executed-and-reverted product-fix disproof for reg_002) — halt builder re-invocation
 and route the four sealed one-liners to a founder.** Session ends per the SPEC_BLOCKED protocol.
+
+### Session 47 (2026-07-18) — 47th confirmation; 163/167; reg_002 & ten_001 re-derived from primary source; halt reaffirmed
+
+Fresh-context builder. Re-ran ground truth rather than trust the 46-session prose chain:
+`.venv/bin/python -m pytest -q -p no:randomly tests/doc00/` → **163 passed / 4 failed** — identical set
+(`reg_002`, `obs_006`, `inv_010`, `ten_001`). Tree clean at HEAD ea617c3.
+
+Independently re-verified builder-forbidden status + two contradictions from primary source (not prose):
+- `harness/guard.py:14` `PROTECTED` begins with `"tests/"` → every edit to a sealed test hard-exits the run.
+  All four failing assertions live under `tests/doc00/` and are covered by the `runner.py` integrity hash.
+- reg_002 `test_m10_reg.py:75`: `union = {str(m) for m in get_args(MessageType)}`. `typing.get_args` returns
+  `()` for an `enum.Enum` subclass, so `union == ∅ ≠ registry` always; but reg_005 `:211` asserts
+  `issubclass(MessageType, enum.Enum)`. Literal-vs-Enum: mutually exclusive sealed tests (matches session 46's
+  executed-and-reverted disproof). Founder: iterate enum members, or make the closure a `set(...) == CHANNEL_REGISTRY`
+  and drop reg_005's Enum assertion.
+- ten_001 `test_m15_ten.py:111`: `NON_SCOPED = {"tenants","sessions","alembic_version"}` omits `operation_runs`;
+  live failure = `tables with no tenant boundary: ['operation_runs']`. CANONICAL §2 locks `operation_runs` to 12
+  cols (polymorphic `text` `scope_id`) and `test_m03_sub.py:82` pins it to exactly those → it cannot carry a
+  `tenant_id` FK. Founder: add `operation_runs` to `NON_SCOPED`.
+- obs_006 / inv_010 unchanged from the register above (absolute-path re-root in the sealed read; non-uuid seed
+  literal into a uuid column) — both product-unfixable, both one-line founder fixes to sealed files.
+
+`verify.sh` runs `-x --maxfail=1`, so all four one-liners must land together or the loop re-stalls one milestone
+later. No sealed/test/fixture/support/harness/CANONICAL file touched; no route-around; nothing built speculatively;
+no test weakened. **Confirmed stuck loop, 47× reproduced — halt builder re-invocation and route the four sealed
+one-liners to a founder.** Session ends per the SPEC_BLOCKED protocol.
