@@ -1578,3 +1578,32 @@ verify.sh can NEVER reach exit 0 regardless of the other three. All four fixes l
 **Recommendation, now 33× reproduced and independently re-derived from primary source this session: STOP
 re-invoking the builder — route the four sealed one-liners to a founder.** No sealed/test/fixture/support/
 harness/CANONICAL file touched; no route-around; nothing built speculatively. Session ends per protocol.
+
+### Session 34 (2026-07-18) — 34th confirmation; 163/167; reg_002 + obs_006 re-derived at primary source
+
+Ground truth (`.venv/bin/python -m pytest -q -p no:randomly tests/doc00/`): **163 passed / 4 failed**
+(reg_002, obs_006, inv_010, ten_001 — identical set to sessions 7–33). `ruff`/`mypy --strict`/`bandit`
+clean; `git status` clean. Nothing buildable remains — product is fully built through M17.
+
+Distrusting the prose chain, I re-opened two of the four sealed tests + helper and re-derived them myself:
+- **reg_002** (`test_m10_reg.py:74-77`): `union = {str(m) for m in get_args(MessageType)}` is unconditionally
+  `set()` because `reg_005:211` forces `issubclass(MessageType, enum.Enum)` and `get_args()` of any class is
+  `()` (the file's own `:214` comment concedes it, and `:251` even branches on `get_args(MessageType)` being
+  empty); `:77` asserts `union == CHANNEL_REGISTRY` (3 keys, reg_004). `set() == {3}` — inline in the sealed
+  body, unreachable by product code. Shipped `assert_registry_closed()` already iterates enum members (CANONICAL-correct).
+- **obs_006** (`test_m11_obs.py:243` + sealed `_support.py:59,82`): `S.glob(root_parts=("deploy",))` returns
+  ABSOLUTE paths (`base = ROOT.joinpath("deploy")`); `read_text(*scripts[0].split("/"))` → `rel('','Users',…)`
+  = `ROOT.joinpath('','Users',…)` doubles the path onto ROOT → `None or ""` → `assert text.strip()` fails for
+  ANY hardening script the product ships. `deploy/harden.sh` exists and is non-empty on disk; the re-rooting is
+  in the sealed test + sealed helper.
+- **inv_010** / **ten_001⟂sub_001**: unchanged from sessions 7–33 (text `'tenant-OFF'` into a CANONICAL uuid
+  `tenant_id` column; `operation_runs` pinned to 12 tenant-less columns by sub_001 vs required to reach
+  `tenant_id` by ten_001). Not reached under `-x` (reg_002 halts first) but re-confirmed structurally.
+
+All four fixes live in sealed `tests/doc00/` + CANONICAL (`harness/guard.py` + integrity hash; builder-forbidden).
+**Founder fixes (one line each, unchanged):** (1) `test_m10_reg.py:74` → `union = {str(m.value) for m in
+MessageType}` (mirror `:251`, drop the `get_args` line); (2) `test_m11_obs.py:243` read the absolute glob path
+directly; (3) `test_m13_inv.py:546` seed a real uuid tenant id; (4) add `operation_runs` to
+`test_m15_ten.py:111` `NON_SCOPED`. **Recommendation, now 34× reproduced: STOP re-invoking the builder — route
+the four sealed one-liners to a founder.** No sealed/test/fixture/support/harness/CANONICAL file touched; no
+route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
