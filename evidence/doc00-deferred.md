@@ -278,3 +278,7 @@ FAILED tests/doc00/test_m13_inv.py::test_inv_010_offboarding_sweep_deletes_tenan
 !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
 1 failed, 142 passed, 2 deselected, 1 warning in 10.12s
 
+
+DEFERRED (genuinely spec-blocked, needs founder spec fix): edit is correct; nothing buildable remains in libs/services. SPEC_BLOCKED stands; SB-1..SB-4 remain routed to a
+`", but 00-FOUNDATION.md §12 line 303 defines the closure as `set(get_args(MessageType)) == set(CHANNEL_REGISTRY)`; since `get_args()` of any `enum.Enum` subclass is invariantly `()` while the registry is non-empty, and the sibling sealed test reg_005 (`test_m10_reg.py:211`) independently forces `issubclass(MessageType, enum.Enum)`, no product definition can satisfy reg_002 and reg_005 at once — a value cannot be both an Enum class and a subscripted generic. This is a spec-internal contradiction between two authoritative documents, fixable only by the founder amending the §12 predicate (e.g. to `{m.value for m in MessageType} == set(CHANNEL_REGISTRY)`) or relaxing the CANONICAL "an Enum" lock; the builder cannot resolve it because both encoding tests are under the protected `tests/` tree.
+
