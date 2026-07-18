@@ -228,3 +228,14 @@ lock `scope_id` to polymorphic `text`, so `operation_runs` provably cannot carry
 DEFERRED (genuinely spec-blocked, needs founder spec fix): weakened; nothing built speculatively. Nothing buildable remains in `libs/`/`services/`. **SPEC_BLOCKED verdict
 sub_036`/`test_w_workflows` pin `created_by` to a non-uuid text instance-id, and `operation_type`/`id` are likewise text/PK-pinned — so there is no column on which a `uuid` FK to a tenant-reaching table can be declared, yet `test_ten_001`'s `NON_SCOPED` set omits `operation_runs` and thus demands exactly such a reach. No product-code edit satisfies both; the spec's own artifacts (migration 0003 calling `operation_runs` a coordination store "like sessions," which is already exempt; A-009 resolving this exact pair only for the FK-capable tables) show the defect is the incomplete sealed `NON_SCOPED` set at `test_m15_ten.py:111`, fixable only by a founder adding `"operation_runs"` to it, which must land together with the other three sealed one-liners because `verify.sh` runs `-x --maxfail=1`.
 
+
+DEFERRED (builder + debugger both stuck) — plumb later: tests/doc00/test_m11_obs.py::test_obs_006_one_idempotent_hardening_script_full_control_set
+anav/Desktop/proxy/tests/doc00/test_m11_obs.py:198: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/doc00/test_m11_obs.py::test_obs_006_one_idempotent_hardening_script_full_control_set
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed, 125 passed, 2 deselected, 1 warning in 9.68s
+
