@@ -2808,3 +2808,6 @@ No proposed change touches `acceptance/`, `tests/`, `fixtures/`, or `harness/`. 
 (`services/code_intel/src/**`, `config/defaults.toml`, additive `libs/contracts` value-types — **not** the registry).
 
 **Plan LOCKED — 2026-07-18.** Hand off to `orchestrator/skills/subagent-driven-build.md` starting at M1.
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — D-INV-03 is not a genuine contradiction but a resolved authority-supersession: v0-spec Doc 01 authoritatively holds the clone on "a per-tenant, encrypted persistent volume … one tenant never sharing a volume, process, or index with another" (`01-CODE-INTELLIGENCE.md:111`, echoed by `CANONICAL-DECISIONS.md §12.2` and the "encrypted at rest, per-tenant isolation … hard-deleted [15 min]" posture at `:381`/`:389`), which by design supersedes AGENTS.md's literal "zero-copy" invariant 3 — a supersession the founder has already committed at `AGENTS.md:15` ("AMENDED 2026-07-17 per D-INV-03"); build to the amended invariant (per-tenant encrypted volume + ≤15-min hard-delete + secrets/raw-source excluded from every index/graph/result/sandbox/log), and note that `dispositions.yaml:20` states "no c
