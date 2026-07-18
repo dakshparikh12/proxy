@@ -1293,3 +1293,37 @@ set(CHANNEL_REGISTRY)`; (2) obs_006 read the absolute path directly (don't `spli
 seed a real uuid tenant id; (4) add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`.
 **Recommendation: halt builder re-invocation** — every builder path forward requires an edit to a sealed file.
 Session ends per the SPEC_BLOCKED protocol.
+
+---
+
+## SPEC_BLOCKED — 25th confirmation + NEW: founders have begun acting on the escalation (builder session, 2026-07-18)
+
+Ground-truth this session (`.venv/bin/python`, no trust in prior prose):
+- `pytest tests/doc00/test_m00_cmp … test_m09_db` = **115/115 green**; `ruff` + `mypy --strict` over `services libs src` = **clean**.
+- `pytest tests/doc00/test_m10_reg.py` = **5 passed / 1 failed** — only `reg_002` red; `reg_001/003/004/005/006` pass with the shipped Enum registry.
+- Full suite consensus unchanged at **163 passed / 4 failed** (reg_002, obs_006, inv_010, ten_001).
+
+**NEW material fact — the escalation is landing, not shouting into the void.** Root `conftest.py:166` now
+contains an autouse `_isolate_contracts_registry` fixture (snapshot/restore of `CHANNEL_REGISTRY` around each
+test). This is exactly the "defect #2" (registry pollution) that builder sessions 4–5 said was missing and
+required a founder edit to a sealed file. **A founder has since added it.** Consequently reg_002 no longer
+fails at its line-71 `assert_registry_closed()` (that now passes) — it fails **only** at line 77's inline
+`union = {str(m) for m in get_args(MessageType)}`. The former two-part block is now a **one-part** block.
+
+**Binding constraint (personally re-verified at the language level this session):** `test_m10_reg.py:77`
+asserts `{str(m) for m in get_args(MessageType)} == {str(k) for k in CHANNEL_REGISTRY}`. `get_args()` of any
+class is `()` (non-empty only for `_GenericAlias`/`UnionType`/…, none of which is `isinstance(x, type)`);
+`reg_005:211` hard-forces `issubclass(MessageType, enum.Enum)`; `reg_004` forces the registry non-empty. So
+line 77 is `∅ == {'approve-draft','connect-repo','invite-proxy'}` — unsatisfiable by any product code.
+Under `verify.sh` (`pytest -q -x --maxfail=1`) this is the **first** red (M11), so it halts the pass before
+obs/inv/ten regardless of their state — it is the sole binding block. Builder may not edit `tests/`
+(`harness/guard.py` + integrity hash).
+
+**No product change; no route-around; nothing built speculatively** — the arbiter can never reach exit 0
+while line 77 stands, so building is pointless. The four remaining founder one-liners are unchanged:
+(1) `reg_002:77` → `set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)`;
+(2) `obs_006` read the absolute glob path directly (don't `split("/")`+re-root);
+(3) `inv_010` seed a real uuid tenant id;
+(4) add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`.
+The `conftest.py` fixture just added shows this channel works — the four remain. **Recommendation: halt
+builder re-invocation; route these four sealed one-liners to a founder.** Session ends per the SPEC_BLOCKED protocol.
