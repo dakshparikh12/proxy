@@ -990,3 +990,26 @@ inv_010 unchanged sealed defects. **Founder fixes (one line each, unchanged):** 
 unchanged: halt builder re-invocation** — 17 independent sessions reproduce the identical 163/167; only founder
 edits to the four sealed one-liners advance doc00. No sealed/test/threshold/golden/arbiter touched; no
 route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
+
+### Session 18 (2026-07-18) — 18th confirmation; 163/167; all 4 blocks spot-checked against the SEALED TEST LINES (not prose)
+
+Eighteenth builder. Ground truth first: `pytest -q -p no:randomly tests/doc00/` = **163 passed / 4 failed**
+(reg_002, obs_006, inv_010, ten_001 — identical set); `git status` clean; no uncommitted work; nothing buildable
+remains (sessions 7–11 built every red not behind a sealed defect). Rather than re-derive the prose, this session
+opened the exact sealed lines and confirmed each defect is inside a builder-forbidden test body:
+- **reg_002** `test_m10_reg.py:74` `union = {str(m) for m in get_args(MessageType)}` (= `set()` for any Enum) vs
+  `:77` `union == registry` (3 keys); `reg_005:211` forces the Enum and `:214`'s own comment concedes
+  `get_args(<Enum>) == ()` — the suite self-contradicts. Language-level unsatisfiable.
+- **obs_006** `test_m11_obs.py:243` `S.read_text(*scripts[0].split("/"))` splits an absolute glob path and re-joins
+  onto ROOT → empty read regardless of `deploy/harden.sh` content.
+- **inv_010** `test_m13_inv.py:546` `INSERT INTO {table} ({tcol}) VALUES (%s)` seeds text `'tenant-OFF'` into a
+  `uuid` tenant column → `InvalidTextRepresentation` before the correct `run_reconcile_sweep` runs.
+- **ten_001** `test_m15_ten.py:111` `NON_SCOPED = {tenants, sessions, alembic_version}` omits `operation_runs`,
+  pinned to exactly 12 columns (no `tenant_id`, `scope_id` free text) by GREEN sub_001 — mutually exclusive.
+
+**Founder fixes (one line each, unchanged):** (1) reg_002:77 → `set(m.value for m in MessageType) ==
+set(CHANNEL_REGISTRY)`; (2) obs_006 read the absolute path directly; (3) inv_010 seed a real uuid; (4) add
+`operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`. **Recommendation unchanged: halt builder re-invocation** —
+18 independent sessions reproduce the identical 163/167; only founder edits to the four sealed one-liners advance
+doc00. No sealed/test/threshold/golden/arbiter touched; no route-around; nothing built speculatively. Session ends
+per the SPEC_BLOCKED protocol.
