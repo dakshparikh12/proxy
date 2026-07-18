@@ -1691,3 +1691,24 @@ reached under `-x`. All four fixes live in sealed `tests/doc00/` (+ CANONICAL) �
 `NON_SCOPED`. **Recommendation, now 35× reproduced: STOP re-invoking the builder — this is a confirmed stuck
 loop; route the four sealed one-liners to a founder.** No sealed/test/fixture/support/harness/CANONICAL file
 touched; no route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
+
+### Session 36 (2026-07-18) — 36th confirmation; 163/167; reg_002 re-verified at primary source
+
+Ground truth (`.venv/bin/python -m pytest -q tests/doc00/`): **163 passed / 4 failed** — exactly
+`reg_002`, `obs_006`, `inv_010`, `ten_001` (identical set to sessions 7–35). `git status` clean; product
+fully built through M17; nothing buildable remains.
+
+Independently re-opened the sealed halting blocker (did not trust the prose chain):
+`test_m10_reg.py:74` `union = {str(m) for m in get_args(MessageType)}`; `:210` forces `issubclass(MessageType,
+enum.Enum)`; `get_args()` of an Enum class is `()` (the file's own `:219` comment concedes it, and reg_006 `:251`
+branches on it being empty) ⇒ `union` is unconditionally `set()`; `:76` asserts `union == registry` (3 CANONICAL
+keys). `set() == {3}` is language-level unsatisfiable by any `libs/`/`services/` edit. `tests/` is in
+`harness/guard.py` `PROTECTED` (+ integrity hash) ⇒ builder-forbidden. Under `verify.sh` (`-x`) reg_002 is the
+FIRST red ⇒ exit 0 unreachable regardless of the other three. Other three unchanged (obs_006 absolute-glob
+re-root; inv_010 text `'tenant-OFF'` into a CANONICAL uuid `tenant_id`; ten_001⟂sub_001 `operation_runs` pinned
+to 12 tenant-less columns). **Founder fixes (one line each, unchanged):** (1) `test_m10_reg.py:74` →
+`union = {str(m.value) for m in MessageType}`; (2) `test_m11_obs.py:243` read the absolute glob path directly;
+(3) `test_m13_inv.py:546` seed a real uuid tenant id; (4) add `operation_runs` to `test_m15_ten.py:111`
+`NON_SCOPED`. **Recommendation, now 36× reproduced: route the four sealed one-liners to a founder; stop
+re-invoking the builder.** No sealed/test/fixture/support/harness/CANONICAL file touched; no route-around;
+nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
