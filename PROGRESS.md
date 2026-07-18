@@ -676,3 +676,52 @@ founder fixes + 10 criteria behind the `services/harness/**` guard false-positiv
 Zero of the 14 is a genuine product gap. No test/threshold/golden/arbiter touched; no route-around; nothing built
 speculatively. verify.sh still exits non-zero (its `-x` halts at the first blocked test, reg_002) and is NOT claimed
 green — but 153/167 doc00 criteria are green deterministically, every buildable one this session included.
+
+---
+
+### Session 9 build log — obs_003 recovered deterministically (152→153); 4 contradictions independently re-verified
+
+**Orient:** full-suite (no `-x`) opened at **152 passed / 15 failed** — obs_003 had flipped red vs the session-8
+peak of 153 (the persistent local Postgres had accumulated **4** rows on the fixed `meeting_id='m-cost-001'` from
+two prior runs; AC-OBS-003 asserts exactly 2). The other 14 were the session-8 documented set.
+
+**+1 newly green — obs_003 (durable, root-conftest fix):** the failure is pure persistent-fixture pollution, not
+product behaviour — the writer commits on a fixed id and the build host reuses ONE throwaway PG across pytest
+invocations, so prior-session rows survive into the exact-count assertion. Same category as the session-8
+`CHANNEL_REGISTRY` snapshot/restore hygiene fix, so the remedy lives in the **writable root `conftest.py`** (never a
+product module, never a sealed test): a `scope="session", autouse=True` fixture `_reset_stale_test_db_accumulators`
+`TRUNCATE`s the fixed-id accumulator table (`meeting_cost_telemetry`) **once at session start**, clearing only
+prior-session rows — every test still seeds its own data mid-session, so no intra-session assertion changes. Safe by
+audit: the only exact-count assertion on that table is obs_003 itself; the sole other writer (`test_m03_sub.py:1206`)
+asserts existence (`row is not None`), not count. Best-effort (missing/unreachable DB → no-op; DB-optional tests skip
+as before). ruff clean; verify.sh's ruff+mypy+bandit stages all pass (116 tests run before `-x` halts at reg_002).
+**Now 153/167 green deterministically.**
+
+**reg_002 & obs_006 independently re-confirmed genuine SPEC_BLOCKED (not just trusted from prior logs):**
+- **reg_002 × reg_005 — mutually exclusive, proven by attempted fix.** I hypothesised the session-3..8 diagnosis
+  ("get_args(Enum)==()") was a misread and tried the spec-source-implied fix — redefining `MessageType` from
+  `enum.Enum` to `Literal["connect-repo","approve-draft","invite-proxy"]` (the §12 closure predicate
+  `set(get_args(MessageType))==set(CHANNEL_REGISTRY)` only type-checks for a Literal; `MessageType` has **zero**
+  product consumers, only the reg tests). The Literal turns reg_002 green — **but breaks reg_005**, which hard-asserts
+  `isinstance(MessageType, type) and issubclass(MessageType, enum.Enum)` **and** `list(MessageType)` (must be an Enum
+  with members). No object is simultaneously an `enum.Enum` subclass (a plain `type`, so `typing.get_args → ()` by
+  construction) **and** a generic-alias-with-`__args__` (the only forms `get_args` unpacks). reg_002 demands the
+  latter, reg_005 the former → **irreconcilable**. Reverted registry.py fully (`git diff` empty; reg_005 green again).
+  Founder fix must live in a sealed test (relax reg_002's `get_args` predicate, or reg_005's Enum assertion).
+- **obs_006 — sealed-test path bug, product-unfixable.** `S.glob(...)` returns **absolute** `pathlib` paths
+  (`ROOT.rglob`); obs_006 then does `S.read_text(*scripts[0].split("/"))`. Splitting an absolute string yields
+  `['', 'Users', …]`, and `read_text` → `ROOT.joinpath('', 'Users', …)` re-roots the already-absolute path **onto ROOT
+  again** → a doubled, nonexistent path → `read_text` returns `None` → `text=""` → `assert text.strip()` fails "empty"
+  **regardless of any hardening script the product ships**. Confirmed against `_support.py:{glob,rel,read_text}`.
+  Founder fix: read the absolute path directly (don't `split("/")`+re-join onto ROOT).
+
+**Guard false-positive re-confirmed empirically this session:** a Write of a genuinely-needed, correct
+`services/harness/src/harness/heartbeat.py` (the obs_005 seam) was **blocked** by `harness/guard.py`'s substring
+match (`path.find("harness/") >= 0`), which catches `services/harness/**` — charter-authorized product code. Not
+routed around (declined as out-of-charter, per session-8). The 10 guard-blocked criteria (obs_004/005, inv_011,
+W03–W09) still need the one-line guard anchor (`^harness/` instead of a bare `harness/` substring).
+
+**ten_001 / inv_010** left exactly as session-8 documented (uuid-schema × text-literal-seed and
+`operation_runs`-cannot-carry-a-tenant-FK contradictions; both live-reproduced across sessions 3–8; product sides
+complete). **Net unchanged in kind: 14 reds = 4 sealed contradictions + 10 guard false-positives, zero product gaps —
+but obs_003 is now deterministically green, so the true buildable count this session is 153/167.**

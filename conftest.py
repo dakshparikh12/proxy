@@ -178,3 +178,42 @@ def _isolate_contracts_registry():
     finally:
         CHANNEL_REGISTRY.clear()
         CHANNEL_REGISTRY.update(snapshot)
+
+
+# ---------------------------------------------------------------------------
+# Test isolation for the persistent local test-Postgres (environment wiring).
+#
+# The build host reuses ONE throwaway Postgres across pytest invocations
+# (see ``_ensure_local_postgres`` above), so a table that a product writer
+# COMMITS on a FIXED meeting id accumulates rows across runs. The AC-OBS-003
+# probe asserts an EXACT per-meeting row count on the fixed id ``m-cost-001``,
+# so pollution left by a PRIOR session makes it observe > 2 rows and fail even
+# though it is green on a clean table. This is a persistent-fixture hygiene
+# concern, not product behaviour (identical in category to the CHANNEL_REGISTRY
+# reset above), so the cleanup lives here — never in a product module and never
+# in a sealed test. It runs ONCE at session start, clearing only prior-session
+# rows; every test still seeds its own data mid-session, so no intra-session
+# assertion is affected. Best-effort: a missing/unreachable DB is a no-op and
+# the DB-optional tests simply skip as before.
+# ---------------------------------------------------------------------------
+_STALE_ACCUMULATOR_TABLES = ("meeting_cost_telemetry",)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _reset_stale_test_db_accumulators():
+    """Clear prior-session rows from fixed-id accumulator tables (fixture hygiene)."""
+    dsn = os.environ.get("TEST_DATABASE_URL", "").strip()
+    if dsn:
+        try:
+            import psycopg
+
+            with psycopg.connect(dsn, connect_timeout=3) as conn:
+                for table in _STALE_ACCUMULATOR_TABLES:
+                    try:
+                        conn.execute(f"TRUNCATE {table}")  # noqa: S608 - fixed literal allowlist
+                    except Exception:
+                        conn.rollback()
+                conn.commit()
+        except Exception:
+            pass  # no reachable DB / table not migrated yet — DB tests skip anyway
+    yield
