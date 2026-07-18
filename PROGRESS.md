@@ -1475,3 +1475,22 @@ and pass when the suite runs without `-x`. All four fixes live in `tests/doc00/`
 id; (4) add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`. **Recommendation unchanged and now 30× reproduced:
 halt builder re-invocation; route the four sealed one-liners to a founder.** No sealed/test/threshold/golden/arbiter
 touched; no route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
+
+### Session 31 (2026-07-18) — 31st confirmation; 163/167; binding block personally re-verified at language level
+
+Thirty-first builder. Ground truth: `pytest -q -p no:randomly tests/doc00/` = **163 passed / 4 failed**
+(reg_002, obs_006, inv_010, ten_001 — identical set to sessions 7–30); `git status` clean. Rather than
+re-derive all four in prose, I opened the sealed binding block (reg_002, the FIRST red under `verify.sh`'s
+`-x`, which halts the pass) and ran a language-level probe:
+- `test_m10_reg.py:74` `union = {str(m) for m in get_args(MessageType)}`; `:77` asserts `union == CHANNEL_REGISTRY`
+  (3 CANONICAL keys). `test_m10_reg.py:213` (reg_005) forces `issubclass(MessageType, enum.Enum)`. The sealed
+  test's own `:214` comment concedes `# get_args on an Enum is ()`.
+- Live probe (`.venv/bin/python`): `get_args(<StrEnum>) == ()`, `issubclass(Enum)=True`, `isinstance(type)=True`.
+  → `union` is always `set()`; `set() == {3 keys}` is unsatisfiable by any product code. `get_args(MessageType)`
+  is inline in the sealed body — unreachable by `libs/`/`services/`.
+`harness/guard.py` protects `tests/`; the four fixes are already deferred to founder triage in
+`evidence/doc00-deferred.md`. **Founder fixes unchanged:** (1) `reg_002:77` → `set(m.value for m in MessageType)
+== set(CHANNEL_REGISTRY)` (drop the `:74` get_args line); (2) `obs_006` read the absolute glob path directly;
+(3) `inv_010` seed a real uuid tenant id; (4) add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`.
+**Recommendation unchanged, 31× reproduced: halt builder re-invocation.** No sealed file touched; no route-around;
+nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
