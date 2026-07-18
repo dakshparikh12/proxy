@@ -2313,3 +2313,30 @@ product/DDL edit satisfies both; the fix is confined to a builder-forbidden test
 `PROTECTED` begins with `"tests/"` + `runner.py` integrity hash). Nothing buildable remains in `libs/`/`services/`.
 No sealed/test/fixture/harness/CANONICAL file touched; no product edit; no route-around; no test weakened.
 **SPEC_BLOCKED verdict re-confirmed (51st reproduction); route SB-1..SB-4 to a founder. Session ends.**
+
+### Builder session 52 (2026-07-18) — SB-2 FK-loophole closed from primary source at HEAD 92c5920; 163/167; halt reaffirmed
+
+Fresh builder session. Oriented (AGENTS.md → acceptance/doc00 → 00-FOUNDATION.md → this plan) and reproduced
+ground truth without trusting prior prose: `.venv/bin/python -m pytest -q -p no:randomly tests/doc00/` at clean
+HEAD `92c5920` (`git status --porcelain` empty) → **163 passed, 4 failed** — the identical sealed four:
+reg_002 (SB-1), obs_006 (SB-3), inv_010 (SB-4), ten_001 (SB-2). Live ten_001 residual =
+`tables with no tenant boundary: ['operation_runs']`.
+
+New this session — closed the one loophole prior entries left implicit for SB-2. `_reaches_tenant_id`
+(`test_m15_ten.py:117-142`) accepts reaching `tenants` via *any* DECLARED FK to a reaching table, and an FK
+**constraint** on an existing column does NOT change the column set — so "add an FK on an existing column, no new
+column" appears to satisfy ten_001 without breaking AC-SUB-001's `set(cols) == _OPRUN_COLS`
+(`test_m03_sub.py:82`). It fails at the Postgres layer: operation_runs' only `uuid` column is its own PK `id`
+(FK→tenants(id) is semantically absurd — forces every run id to equal a tenant id); its candidate handle columns
+`scope_id`/`operation_type`/`created_by` are all `text`, while `tenants.id`/`meetings.id` are `uuid`, and
+Postgres rejects a `text`→`uuid` FK ("Key columns are of incompatible types" — no implicit btree equality). So
+the ONLY ways to green ten_001 are (1) add a `tenant_id`/new uuid-FK column → breaks AC-SUB-001, or (2) add
+`operation_runs` to the sealed `NON_SCOPED` set → edits a builder-forbidden `tests/` file
+(`harness/guard.py:14` `PROTECTED[0] == "tests/"` + `runner.py` integrity hash). Both blocked; the migrations
+(`0001_substrate.py:84-100`, `0003_tenant_id_everywhere.py`) are correct. SB-2 is product-unfixable.
+
+No sealed/test/fixture/harness/CANONICAL file touched; no product edit (none is correct); no route-around; no test
+weakened; nothing built speculatively. Nothing buildable remains in `libs/`/`services/`. **SPEC_BLOCKED verdict
+re-confirmed (52nd reproduction); the four are one-line founder fixes to sealed tests and must land together
+(`verify.sh` runs `-x --maxfail=1`, so any single fix re-stalls the loop). Route SB-1..SB-4 to a founder.
+Session ends.**
