@@ -19,8 +19,9 @@ per-micro-call telemetry read by the observability suite).
 """
 from __future__ import annotations
 
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, overload
 
 from libs.db import Database, repos
 
@@ -231,6 +232,12 @@ async def _check_meeting_budget_async(db: Database, meeting_id: Any) -> MeetingC
     )
 
 
+@overload
+def check_meeting_budget(
+    target: Database, meeting_id: Any = None
+) -> Coroutine[Any, Any, MeetingCost]: ...
+@overload
+def check_meeting_budget(target: Any, meeting_id: Any = None) -> dict[str, float]: ...
 def check_meeting_budget(target: Any, meeting_id: Any = None) -> Any:
     """Read a meeting's aggregated spend.
 
