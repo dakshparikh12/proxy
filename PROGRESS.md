@@ -1808,3 +1808,31 @@ absolute glob path directly (no `split("/")`+re-root); (3) `test_m13_inv.py:546`
 confirmed stuck loop — halt builder re-invocation and route the four sealed one-liners to a founder.** No
 sealed/test/fixture/support/harness/CANONICAL file touched; no route-around; nothing built speculatively.
 Session ends per the SPEC_BLOCKED protocol.
+
+### Session 40 (2026-07-18) — 40th confirmation; 163/167; four re-verified independently at source, halt reaffirmed
+
+Ground truth (`.venv/bin/python -m pytest -q -p no:randomly tests/doc00/`): **163 passed / 4 failed**
+(`reg_002`, `obs_006`, `inv_010`, `ten_001` — identical set to sessions 7–39); `git status` clean. This
+session I re-opened all four sealed sources and the two contradicting partners directly (not the prose chain):
+
+- **reg_002 ⟂ reg_005**: `test_m10_reg.py:75` builds `union = {str(m) for m in get_args(MessageType)}`;
+  `test_m10_reg.py:211` forces `issubclass(MessageType, enum.Enum)` and its own `:214` comment states
+  `get_args` of an Enum is `()`. So `union == ∅` always, while `:77` asserts `union == registry` (3 non-empty
+  CANONICAL keys). Unsatisfiable by any `libs/`/`services/` edit. Founder one-liner: `:75` →
+  `union = {str(m.value) for m in MessageType}`.
+- **ten_001 ⟂ sub_001**: `test_m15_ten.py:177-182` requires every base table minus `NON_SCOPED`
+  (`:111` = `{tenants, sessions, alembic_version}`) to reach `tenant_id` via a declared FK;
+  `test_m03_sub.py:82-89` pins `operation_runs` to exactly `_OPRUN_COLS` with `scope_id` typed `text`
+  (no `tenant_id`, cannot FK a uuid PK). Mutually exclusive. Founder one-liner: add `operation_runs` to
+  `test_m15_ten.py:111` `NON_SCOPED`.
+- **inv_010**: `test_m13_inv.py:527,546` inserts literal `"tenant-OFF"` into the tenant column, which
+  CANONICAL mandates as `uuid` → `InvalidTextRepresentation`. Founder one-liner: seed a real uuid.
+- **obs_006**: sealed read bug (`_support.py:83` abs-path `rglob` + `test_m11_obs.py:243` `split("/")` re-root
+  → `""`); product side (`deploy/harden.sh`) already fixed (commit 18e835a). Founder one-liner: read the
+  absolute glob path directly.
+
+All four fixes live in `tests/doc00/` (+ CANONICAL) — in `harness/guard.py` `PROTECTED` (line 14) and covered
+by the `runner.py` integrity hash ⇒ builder-forbidden; already recorded in `evidence/doc00-deferred.md`. Product
+is fully built through M17; nothing buildable remains. **Recommendation, now 40× reproduced: confirmed stuck
+loop — halt builder re-invocation and route the four sealed one-liners to a founder.** No sealed/test/fixture/
+support/harness/CANONICAL file touched; no route-around; nothing built speculatively. Session ends per protocol.
