@@ -1262,3 +1262,34 @@ discriminator values and the registry keys — using the Enum's members instead 
 does not edit it and does not build a route-around. Recommendation stands with the prior 23 sessions:
 **halt builder/debugger re-invocation on doc00** — only a founder edit to this sealed one-liner (and the
 three companions: obs_006, ten_001, inv_010) advances doc00. Session ends per the SPEC_BLOCKED protocol.
+
+---
+
+## SPEC_BLOCKED — re-confirmed from primary sealed sources (builder session, 2026-07-18)
+
+`.venv/bin/python -m pytest -q tests/doc00/` → **163 passed / 4 failed**, identical to the 23-session
+consensus. All four reds independently re-derived this session by reading the sealed test bodies directly
+(not trusting prior notes); each fix lives inside `tests/doc00/` (builder-forbidden — `harness/guard.py`
++ integrity hash). No product code changed; no route-around; nothing built speculatively.
+
+- **AC-REG-002** (`test_m10_reg.py:75-77`): `union = {str(m) for m in get_args(MessageType)}` is `∅` because
+  `get_args()` of a class is `()`, and `AC-REG-005:211` hard-forces `issubclass(MessageType, enum.Enum)`;
+  `:77` asserts `union == CHANNEL_REGISTRY` (non-empty per reg_004). `∅ == {3}` is unsatisfiable at the
+  language level, independent of any product implementation.
+- **AC-OBS-006** (`test_m11_obs.py:243` + `_support.glob`): `glob` returns ABSOLUTE Paths (`rel(...).rglob`);
+  `read_text(*scripts[0].split("/"))` re-joins that absolute path onto `ROOT` (leading `''` dropped by
+  `joinpath`) → doubled nonexistent path → empty read → `assert text.strip()` fails for ANY hardening script
+  the product ships. Sealed-helper defect.
+- **AC-INV-010** (`test_m13_inv.py:546`): seeds text `'tenant-OFF'` into the probed `tenant_id` column, which
+  `ten_001` + `CANONICAL-DECISIONS.md:212` mandate as `uuid REFERENCES tenants` → `InvalidTextRepresentation`
+  before the sweep runs. Test contradicts the CANONICAL spec.
+- **AC-TEN-001** (`test_m15_ten.py:178`): requires `operation_runs` to reach `tenant_id` via a DECLARED FK, but
+  `test_m03_sub.py:82` pins `operation_runs` to EXACTLY 12 tenant-less columns by set-equality, and `:88`
+  forces `scope_id`/`operation_type`/`status` to `text` (its only non-uuid handles can't FK a uuid tenant
+  table). Adding `tenant_id` breaks `sub_001`; omitting it breaks `ten_001`. Schema-level mutually exclusive.
+
+**Founder fixes (one line each, unchanged):** (1) reg_002:77 → `set(m.value for m in MessageType) ==
+set(CHANNEL_REGISTRY)`; (2) obs_006 read the absolute path directly (don't `split("/")`+re-root); (3) inv_010
+seed a real uuid tenant id; (4) add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`.
+**Recommendation: halt builder re-invocation** — every builder path forward requires an edit to a sealed file.
+Session ends per the SPEC_BLOCKED protocol.
