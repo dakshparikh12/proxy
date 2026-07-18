@@ -3278,3 +3278,6 @@ build gap.
 
 **No buildable `services/**`/`libs/**` work remains for doc01. Session ends per the SPEC_BLOCKED
 rule (do not edit the sealed tree, do not weaken, do not route around).**
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — The three criteria (AC-M4-011, AC-M6-005, AC-M6-008) are internally consistent, individually testable, and each traces verbatim to `product/v0-spec/01-CODE-INTELLIGENCE.md` — AC-M6-008 to line 299 ("`coverage_pct` is reported, not a gate … a repo that is 100% classified with its gaps honestly labeled is joinable"), AC-M6-005 to line 294 ("100% parse on exact-supported files … excluding `generated`/`vendor`"), and AC-M4-011 to line 379 ("unparseable/mid-edit file → valid spans index, broken span flagged, search covers it"); there is no spec ambiguity, contradiction, or impossibility to defer, and the builder's own evidence shows HEAD product code satisfies all three. The `ImportError` is a bundle-packaging regression — seal commit `1f2671d` reverted the fixture block that `f03c98d` added
