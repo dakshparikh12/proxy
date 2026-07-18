@@ -2399,3 +2399,34 @@ no test weakened; nothing built speculatively. Nothing buildable remains in `lib
 verdict re-confirmed (53rd reproduction); the four are one-line founder fixes to sealed tests and must land
 together (`verify.sh` runs `-x --maxfail=1`, so any single fix re-stalls the loop). Route SB-1..SB-4 to a
 founder. Session ends.**
+
+### Builder session 54 (2026-07-18) — all four re-verified at primary source at HEAD 992c873; 163/167; halt reaffirmed
+
+Fresh builder session. Oriented (AGENTS.md → acceptance/doc00 → 00-FOUNDATION.md → this plan) and reproduced
+ground truth WITHOUT trusting prior prose. `git status --porcelain` empty at clean HEAD `992c873`;
+`.venv/bin/python -m pytest -q tests/doc00/` → **163 passed, 4 failed** — the identical sealed four:
+reg_002 (SB-1), obs_006 (SB-3), inv_010 (SB-4), ten_001 (SB-2). Live ten_001 residual =
+`tables with no tenant boundary: ['operation_runs']` (minimal — the sole unscoped base table under the final
+migration set, per CR-M-2).
+
+Re-derived all four at the sealed-test source this session (not from the log):
+- **SB-1 reg_002** `test_m10_reg.py:75` — `union = {str(m) for m in get_args(MessageType)}`; `get_args()` on the
+  CANONICAL Enum `MessageType` is `()`, so `union` is always `set()` and can never set-equal a non-empty
+  `CHANNEL_REGISTRY` (`test_reg_004`). reg_005 (`issubclass(MessageType, enum.Enum)`) passes; only reg_002 is red.
+- **SB-3 obs_006** `test_m11_obs.py:243` — `text = S.read_text(*scripts[0].split("/"))`; `scripts[0]` is an
+  absolute glob hit (`_support.glob` rglob on an absolute base), so `split("/")` + `read_text`→`rel()` re-root
+  yields a doubled nonexistent path → `text=""` → `:244` fails. `deploy/harden.sh` is correct and required.
+- **SB-4 inv_010** `test_m13_inv.py:527/547` — `offboard = "tenant-OFF"` (non-uuid) INSERTed into a `uuid`
+  tenant column → `InvalidTextRepresentation` before the sweep runs; every tenant column is pinned `uuid`
+  (CANONICAL-DECISIONS.md:212, AC-SUB-030/AC-DB-003). `run_reconcile_sweep` is correct.
+- **SB-2 ten_001** `test_m15_ten.py:111,179` — `NON_SCOPED` omits `operation_runs`; its exact 12-col pin
+  (`test_m03_sub.py:82` `set(cols) == _OPRUN_COLS`, no `tenant_id`, `scope_id text`) + Postgres rejecting a
+  `text`→`uuid` FK make it irreducibly unscoped. Green requires either breaking AC-SUB-001 or editing the
+  sealed `NON_SCOPED` set (a builder-forbidden `tests/` file — `harness/guard.py` `PROTECTED[0]=="tests/"` +
+  `runner.py` integrity hash).
+
+No sealed/test/fixture/support/harness/CANONICAL file touched; no product edit (none is correct); no route-around;
+no test weakened; nothing built speculatively. Nothing buildable remains in `libs/`/`services/`. **SPEC_BLOCKED
+verdict re-confirmed (54th reproduction); the four are one-line founder fixes to sealed tests and must land
+together (`verify.sh` runs `-x --maxfail=1`, so any single fix re-stalls the loop). Route SB-1..SB-4 to a
+founder. Session ends.**
