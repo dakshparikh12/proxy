@@ -839,3 +839,44 @@ sessions 3–10, re-confirmed live this session as the ONLY failures):**
   `sessions`).
 
 On any of those single-line sealed fixes the rest of the suite is expected green with no further product change.
+
+### Session 12 (2026-07-18) — independent ground-truth re-verification; 163/167 confirmed as the deterministic max; the 4 sealed defects re-derived from the tests (not the logs)
+
+Twelfth fresh-context builder. Trusted no prior prose — re-derived state and the buildable/blocked partition
+directly from the sealed tests + live runs. `pytest -q -p no:randomly tests/doc00/` = **163 passed / 4 failed**;
+`bash harness/verify.sh` runs ruff + mypy `--strict` + bandit clean, then halts under `-x` at
+`test_m10_reg.py::test_reg_002` line 77 (`union-only=set(), registry-only={approve-draft,invite-proxy,connect-repo}`).
+Git tree clean; no uncommitted work; **no product code was buildable** — sessions 7–11 already built every red not
+behind a sealed defect, so 163/167 is the honest deterministic maximum. No test/threshold/golden/arbiter touched;
+no route-around; nothing built speculatively (M-reds behind reg_002 can never register green through `verify.sh`'s
+`-x` — "verify.sh exit 0 is the only green"). Each of the 4 was reproduced live this session with `.venv/bin/python`:
+
+- **reg_002 (SPEC_BLOCKED).** Live: `isinstance(MessageType,type) and issubclass(MessageType,enum.Enum)` = `True`,
+  `get_args(MessageType)` = `()`, registry = `{approve-draft,connect-repo,invite-proxy}`. Test line 75
+  `union={str(m) for m in get_args(MessageType)}` is inside the sealed body and is `set()` for ANY Enum; line 77
+  requires `union == registry` (non-empty). reg_005 line 211 forces the Enum; reg_005 line 214's OWN comment
+  concedes "get_args on an Enum is (), values live on members" — so the suite contradicts itself. Unsatisfiable at
+  the language level; unfixable by product code. Founder fix: rewrite reg_002 line 77 to
+  `set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)` (per CANONICAL-DECISIONS.md:18 + 09-VERIFICATION.md:16).
+- **obs_006 (SPEC_BLOCKED).** Corrects a session-11 misstatement: `deploy/harden.sh` DOES exist and is **non-empty
+  (3363 bytes)**. Live-proven the sealed defect regardless: `S.glob(...)` returns the ABSOLUTE path
+  `/Users/pranav/Desktop/proxy/deploy/harden.sh`; test line 243 `S.read_text(*scripts[0].split("/"))` →
+  `read_text('', 'Users', …)` → `S.rel(...)` re-roots onto ROOT → `…/proxy/Users/pranav/Desktop/proxy/deploy/harden.sh`
+  (doubled, nonexistent) → `read_text` returns `None` → `text=""` → line 244 `assert text.strip()` fails "empty" for
+  ANY script content. Founder fix: read the absolute path directly (don't `split("/")`+re-join onto ROOT).
+- **inv_010 (SPEC_BLOCKED).** Test line 546 seeds a bare text literal `INSERT INTO <table>(<tcol>) VALUES ('tenant-OFF')`
+  into whichever tenant-scoped table `information_schema` returns first; every tenant key is `uuid REFERENCES
+  tenants(id)` (mandated by ten_001 + CANONICAL §11.2), so the text literal raises
+  `InvalidTextRepresentation` before `run_reconcile_sweep` (which is complete + correct) ever runs. A text tenant
+  column would itself break ten_001's uuid-FK requirement — the two are mutually exclusive on the same column.
+  Founder fix: seed a real uuid tenant id (or a text-tenant fixture table).
+- **ten_001 (SPEC_BLOCKED).** Confirmed against sub_001 (GREEN): `_OPRUN_COLS` is exactly the 12 canonical columns
+  (no `tenant_id`) and sub_001 line 82 asserts `set(cols)==_OPRUN_COLS` (strict) + line 88 `scope_id` is free `text`
+  (holds `workroom:t1`, not a `meetings.id`). ten_001 (c) requires `operation_runs` to reach `tenant_id` via a
+  DECLARED FK — impossible: a `tenant_id` column breaks sub_001's exact set, and a `scope_id`→meetings FK breaks the
+  free non-meeting scopes W02/W03/W06/W12 rely on. `NON_SCOPED` already exempts the structurally-identical text-keyed
+  `sessions` store but not `operation_runs`. Founder fix: add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`.
+
+**Loop status:** confirmed stuck 12× independently. All four fixes live in builder-forbidden sealed files
+(`tests/`/`acceptance/`); only founder action unblocks them. On any single-line sealed fix the rest of the suite is
+expected green with no further product change. Session ends here per the SPEC_BLOCKED protocol.
