@@ -725,3 +725,60 @@ W03–W09) still need the one-line guard anchor (`^harness/` instead of a bare `
 `operation_runs`-cannot-carry-a-tenant-FK contradictions; both live-reproduced across sessions 3–8; product sides
 complete). **Net unchanged in kind: 14 reds = 4 sealed contradictions + 10 guard false-positives, zero product gaps —
 but obs_003 is now deterministically green, so the true buildable count this session is 153/167.**
+
+---
+
+### Session 10 — independent fresh-context re-verification of all 14 reds (no logs trusted); 153/167 confirmed at deterministic max
+
+**Orient:** `pytest -q tests/doc00/` opened at **153 passed / 14 failed** (obs_003 held green from session-9's
+root-conftest accumulator reset). I re-derived the buildable-vs-blocked partition from the tests + real runs, not from
+prior logs. Every one of the 14 was live-reproduced this session; each is either a guard false-positive on
+charter-mandated product paths (10) or a sealed test/schema contradiction (4). **Zero product gaps; nothing was
+buildable off the guard-blocked path** — so no product code was written, no test/threshold/golden/arbiter touched,
+nothing routed around.
+
+**4 sealed contradictions — each reproduced live this session:**
+- **inv_010 (AC-INV-010).** Fails INSIDE the test body at `tests/doc00/test_m13_inv.py:546`:
+  `INSERT INTO users (tenant_id) VALUES ('tenant-OFF')` → `psycopg.errors.InvalidTextRepresentation: invalid input
+  syntax for type uuid: "tenant-OFF"`. The test seeds a **text literal** into the **uuid** `tenant_id` FK column. The
+  offboard sweep itself (`libs/ops/reconcile.py:_offboard_sweep_sync`, `::text` cast) is complete and correct — the
+  seed dies before the product runs. Irreconcilable with ten_001/sub_001 (below): a bare-text tenant seed cannot be
+  inserted into a declared uuid FK column with no parent row. Sealed-test/schema founder fix required.
+- **ten_001 (AC-TEN-001) × sub_001 (AC-SUB-001) — exact-column deadlock.** ten_001 asserts every durable table reaches
+  `tenant_id`; only `operation_runs` fails (`tests/doc00/test_m15_ten.py:179`, `unscoped == ['operation_runs']`). But
+  sub_001 (GREEN) asserts `set(cols) == _OPRUN_COLS` (**strict equality**, no `tenant_id`, `test_m03_sub.py:82`) and
+  that `scope_id` stays free **text** (holds `"meeting-w02"`, `"workroom:t1"`, not a `meetings.id`). Adding a
+  `tenant_id` column breaks sub_001's exact set; a FK on `scope_id`→`meetings` breaks W02/W03/W06/W12's free scopes.
+  Independently confirmed the two assertions are mutually exclusive. Sealed-test founder fix required.
+- **reg_002 / obs_006** — re-affirmed exactly as sessions 3–9 (reg_002 × reg_005 Enum-vs-`get_args`; obs_006's
+  `read_text(*abs.split("/"))` re-roots an absolute path → empty). No new evidence needed; both stand.
+
+**10 guard false-positives — all require writing charter-mandated `services/harness/**` / `services/control_plane/**`
+(the latter maps under `services/harness/src/control_plane` via the root-conftest `__path__` wiring), which the guard's
+bare `"harness/"` substring (`harness/guard.py`, `path.find("harness/")>=0`) blocks.** The real enforcement WALL —
+`runner.py` `PROTECTED_TREES` — is `("tests/","harness/","fixtures/","criteria/","acceptance/","product/",".claude/")`,
+i.e. the **top-level** `harness/` tree only; `services/` is NOT integrity-protected, so the substring over-blocks. Live
+simulation of the hook on `services/harness/src/harness/orchestrator.py` returns `decision: block`. Precise per-red seam
+this session:
+  - **W03** `services.harness.emit.Emitter` · **W05** `services.harness.wake.answer_direct` · **W08**
+    `services.harness.orchestrator.run_wake_turn` · **obs_005** `services.harness.heartbeat`+health.
+  - **W04** `services.control_plane.webhooks` · **W07** `services.control_plane.accept` · **W09**
+    `services.control_plane.authz` · **inv_011** control_plane draft-accept authz.
+  - **W06** — subtler: needs new sync `libs/db` repos (`meetings.create_bare`, `operations.create/set_result_ref`,
+    `cost.add_model_spend`) + `services.workroom.recovery.should_restart` (both writable) **BUT** the test calls
+    `check_meeting_budget(conn, meeting_id=...)` **synchronously** on a raw psycopg conn, while the only
+    `services.harness.budget.check_meeting_budget` is `async def` (returns an un-awaitable coroutine → `coro > 0` is a
+    TypeError). Adding the sync dispatch requires editing the guard-blocked `services/harness/src/harness/budget.py`.
+    So W06 is guard-blocked, not workroom-buildable.
+  - **obs_004** — subtler: `flush_tracing()` must be defined exactly once AND `startswith("libs/")`; it currently
+    lives once in the guard-blocked `services/harness/src/harness/server.py:132`. Adding a libs def makes it two
+    (`count_def_sites==2`); removing the server.py one is a guard-blocked edit. So obs_004 is guard-blocked, not
+    libs-buildable. (Corrects the session-8/9 shorthand that implied it was free-standing libs work.)
+
+**Founder actions that unblock (unchanged from session 8, restated precisely):** (1) anchor the guard pattern to a
+top-level match (`^harness/` or an exact `harness/` prefix) instead of a bare substring — unblocks all 10; (2) relax
+reg_002's `get_args` predicate OR reg_005's Enum assertion; (3) fix obs_006 to read the absolute path directly; (4) for
+inv_010/ten_001, either make one tenant-scoped table's tenant key a plain text column the test can seed, or relax
+sub_001's exact-column set to admit a nullable `operation_runs.tenant_id` FK. **verify.sh still exits non-zero** (its
+`-x` halts at reg_002) and is NOT claimed green. 153/167 doc00 criteria green deterministically — the honest maximum for
+a builder operating under the active guard, re-confirmed from ground truth this session.
