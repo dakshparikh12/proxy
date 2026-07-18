@@ -16,9 +16,17 @@ order below is mandated, not discretionary** — criteria can only go green in t
 writing-plans rule #1 ("the sequence in which criteria go green, matching the pre-authored test-file order").
 Each milestone = exactly one test file; its exit gate is that file green with every earlier file still green.
 
-**Coverage (RTM re-derived locally):** 154 criteria, **154/154 referenced by a test file, 0 dangling, 0
-uncovered.** Two criteria are cross-asserted in a second file (built once, re-proven later): `AC-OBS-007`
-(green at **M4**, re-asserted M12) and `AC-HOST-005` (green at **M3**, re-asserted M9). `test_w_workflows.py`
+**Coverage (RTM re-derived locally):** **155 criteria in the sealed `criteria.yaml`** (per-prefix: CMP 16,
+REPO 9, HOST 14, SUB 37, BOOT 7, CFG 11, IAC 6, DOCK 4, CI 7, DB 4, REG 6, OBS 10, CON 4, INV 13, BLD 3,
+TEN 4), **155/155 referenced by a test file, 0 dangling, 0 uncovered.** *(The `manifest.yaml` `counts.criteria`
+field reads 154 — stale by one: the 2nd adversarial review's `+5 criteria` added the P0 `AC-TEN-004` but the
+count field was not bumped. The sealed `criteria.yaml` is the source of truth and `test_m15_ten.py` exercises
+`T-TEN-004`, so this is a manifest bookkeeping drift, **not** a coverage gap and **not** `SPEC_BLOCKED`; flagged
+for the conductor.)* **Cross-file appearances (owner corrected after review):** `AC-OBS-007` is **owned by M12**
+(`test_m11_obs.py` holds the real `route_to_owner` / `served_by_non_owner==0` assertion); M4 only supplies its
+prerequisite `operation_runs.created_by` column, owned by `AC-SUB-036` — so M4 does **not** own AC-OBS-007.
+`AC-HOST-005` is **owned solely by M3** (`test_m02_host.py`); M9's `test_m08_ci.py` mentions it only in a comment
+explaining the AC-CI-007 banned-strings rationale (A-007) — **not** a second assertion. `test_w_workflows.py`
 (M17) introduces **no new criterion** — it re-exercises 38 as end-to-end chains. **0 `SPEC_BLOCKED`** (manifest:
 0 spec-blocked, 0 unresolved contradictions; A-006/A-007/A-009 are *resolved* material contradictions, encoded
 as build rules in §4).
@@ -44,7 +52,14 @@ homes every later milestone consumes:
 - **`libs/db`** (built-ahead at M4, tested M10): asyncpg pool · `Database.from_connection` facade + `repos`
   namespace (`sessions,repos,meetings,tenants,operations,cost`) — **no ORM** · Alembic.
 - **`libs/ops`** (M4): `with_operation_run` · `claim_meeting` · `sweep_stale_on_read` · `sandbox_provider`
-  (`provision/destroy/health_check`) · `run_reconcile_sweep`.
+  (`provision/destroy/health_check`) · `run_reconcile_sweep` · plus the homes the sealed `test_m03_sub` hard-imports:
+  `OperationHandle` · `cost.{MeetingCost, dispatch_workroom, record_micro_call_cost, check_meeting_budget}` ·
+  `logging.{configure_logging, get_logger}` · `sentry.before_send` · `affinity.route_to_owner`.
+- **M4 service surface** (built at M4 against the frozen import homes `test_m03_sub` pins): `services.harness.
+  {build_emitter, recover_meeting_harness, ingest_webhook, drain_pending_webhooks, check_meeting_budget,
+  complete_signin, resolve_session, invite_proxy, resolve_bot_id, record_seam_cost}` · `services.workroom.
+  {recover_task, propose_change, accept_draft}` · `services.scribe.{record_scribe_cost, apply_note_delta}`.
+  (Tests accept alternate homes via try/except; pick the AGENTS.md-canonical one per §3's namespace mapping.)
 - **Concrete API the workflows pin** (must exist by M17): `services.harness.{emit.Emitter, wake.answer_direct,
   budget.check_meeting_budget, orchestrator.run_wake_turn, server.lifespan_trace, settings}` ·
   `services.workroom.{recovery.should_restart, drafts.propose_change/teardown_review_session}` ·
@@ -54,14 +69,17 @@ homes every later milestone consumes:
 
 The harness fixes the *milestone* order, so "risky-first" (writing-plans rule #5) is applied as: **design all
 four clusters up-front (here), then within each owning milestone build its P0 boundary criteria before any
-P1/P2 convenience, and self-attack each before moving on.** 24 P0 criteria cluster into four risks:
+P1/P2 convenience, and self-attack each before moving on.** All **24 P0 criteria** are enumerated across
+R2–R4 below (R1 is the enabling seam, owning no P0 of its own): R2 = 12 (`AC-SUB-002,003,007,008,009,011,012,035`
+concurrency/fencing + `AC-SUB-025,026,027,028` cost/draft durability), R3 = 3 (`AC-HOST-013,014` + `AC-INV-009`),
+R4 = 9 (`AC-INV-004,005,006,008,011` + `AC-TEN-001,002,003,004`). 12+3+9 = 24, no P0 double-listed:
 
 | # | Risk cluster | Owning milestone | P0 boundary criteria | The exact boundary that must not slip |
 |---|---|---|---|---|
 | R1 | **Import-namespace seam** | M1→M2 | (enables all) | `import libs.contracts` **and** `import services.control_plane.webhooks` resolve **while** `services/`=5 dirs (AC-REPO-006) and every member is `src/<pkg>/` (AC-REPO-002). See §3. |
-| R2 | **Concurrency substrate** | M4 | AC-SUB-002,003,007,008,009,011,012,035 | one running row per (scope,type); interrupted/completed never blocks re-claim; fencing rowcount-0 ⇒ `is_owner=False` ⇒ **zero** emits on the wire (speak/send_chat/show_screen/apply/dispatch). |
+| R2 | **Concurrency + cost/draft durability substrate** | M4 | AC-SUB-002,003,007,008,009,011,012,035 (concurrency/fencing) · AC-SUB-025,026,027,028 (durability) | **Concurrency:** one running row per (scope,type); interrupted/completed never blocks re-claim; fencing rowcount-0 ⇒ `is_owner=False` ⇒ **zero** emits on the wire (speak/send_chat/show_screen/apply/dispatch). **Durability (money + irreversible write):** `meeting_cost` canonical columns + FK→`meetings(id)` (A-009); a recycled orchestrator **reloads** spent cost from `meeting_cost`, never resets to 0; `staged_drafts` persisted at creation (GCS Object-Versioned + `proposed` row, FK→`meetings(id)`); a human accept **after teardown** reads the persisted draft, not the dead sandbox. Build + self-attack these four before the P1 substrate mass. |
 | R3 | **Crypto-shred isolation** | M3 | AC-HOST-013,014 (+ AC-INV-009) | distinct per-tenant envelope key; destroying A's key leaves A unrecoverable **and** B fully readable; KMS PD floor; no LUKS; per-sandbox random JWT. |
-| R4 | **Lethal-trifecta + tenant isolation** | M14→M16 | AC-INV-004,005,006,008,011; AC-TEN-001,002,003 | no transcript-triggered path reaches an outward side-effect without a human click; transcript fenced as untrusted data; world-touching tools in `disallowed_tools`; secrets redacted; accept requires authenticated tenant member (CSRF+idempotent+audit); cross-tenant read refused, zero rows leak; Nango tokens per-operation, never cached/logged. |
+| R4 | **Lethal-trifecta + tenant isolation** | M14→M16 | AC-INV-004,005,006,008,011; AC-TEN-001,002,003,004 | no transcript-triggered path reaches an outward side-effect without a human click; transcript fenced as untrusted data; world-touching tools in `disallowed_tools`; secrets redacted; accept requires authenticated tenant member (CSRF+idempotent+audit); cross-tenant read refused, zero rows leak; Nango tokens per-operation, never cached/logged; **`/internal/notes` token-gated + `meeting_id→tenant`-scoped on the session-less internal path (AC-TEN-004, P0)**. *(Per-sandbox random JWT `AC-INV-009` lives in R3.)* |
 
 M17 (workflows) is the integration proof that R1–R4 hold **together** (W02/W03 concurrency, W07 draft-survives-teardown, W08 trifecta, W09 cross-tenant).
 
@@ -80,9 +98,14 @@ so that: (a) `import libs.contracts` / `import services.harness.emit` resolve to
 **inside the five allowed service packages** (orchestrator/webhook code is `harness`-hosted) yet is **exposed at
 the `services.control_plane.*` import path via package configuration**, never as a sixth `services/` directory;
 (c) each member still presents `src/<pkg>/` for the static check and one root `uv.lock` (AC-REPO-001/005).
-**M1 exit gate includes a walking-skeleton import proof**: `python -c "import libs.contracts, services.harness,
+**M1 exit gate includes a walking-skeleton import proof — run inside the actual `uv`-synced venv (`.venv/bin/python`,
+the same interpreter `verify.sh` uses), NOT bare repo-root**: `python -c "import libs.contracts, services.harness,
 services.control_plane"` succeeds, `mypy --strict services libs` passes, and `test_m01_repo` (AC-REPO-002/006/007)
-is green — proving the namespace and the layout constraints coexist **before** a single downstream import is written.
+is green. This matters because `conftest.py` puts repo-root on `sys.path` and repo-root `services/` has **no**
+`control_plane/` dir (AC-REPO-006) — so `import services.control_plane` can only resolve from the installed
+workspace mapping, never from the tree. The builder must **confirm the editable/force-included namespace install
+actually exposes `services.<pkg>`** (editable installs of package-dir-remapped namespaces are a known failure
+mode) — proving the namespace and the layout constraints coexist **before** a single downstream import is written.
 If they prove jointly unsatisfiable under uv, that is a bundle bug → stop and flag (not a hand-wave); current
 analysis says they are satisfiable via package-dir/force-include mapping.
 
@@ -142,21 +165,24 @@ class/defensive branch a criterion doesn't demand** (V0 has zero runtime flags �
   **GCE MIG, no bus/broker/volume**; `code_intel` stateful host + per-tenant encrypted volume); one PG15 private-IP
   via Auth-Proxy Unix socket; GCS Object-Versioning; no k8s/mesh/multi-region/GPU. **Build the per-tenant
   envelope-key crypto-shred (AC-HOST-013/014) first.** Direct-answer path touches no E2B/Workroom (AC-HOST-007).
-  *Criteria:* AC-HOST-001..014 (AC-HOST-005 re-asserted M9).
-- **M4 — Durable substrate (`test_m03_sub`, 37 + AC-OBS-007; R2).** `libs/ops` + `libs/db` + Alembic (build-ahead).
+  *Criteria:* AC-HOST-001..014 (AC-HOST-005 owned here; M9 only references it in an AC-CI-007 comment).
+- **M4 — Durable substrate (`test_m03_sub`, 37; R2).** `libs/ops` + `libs/db` + Alembic (build-ahead).
   `operation_runs` canonical columns + partial-unique index + status domain; `with_operation_run` heartbeat;
   fencing (rowcount-0 → `is_owner=False` → emit-frontier refuses all five verbs, AC-SUB-035); atomic `claim_meeting`
-  + `created_by` owner-id (feeds AC-OBS-007 affinity); lazy + boot sweep; `check_pause`; sandbox verbs (no FSM) +
+  + `created_by` owner-id (AC-SUB-036 — the enabler M12's AC-OBS-007 affinity later reads); lazy + boot sweep; `check_pause`; sandbox verbs (no FSM) +
   triple-bound + join-driven pre-provision; idempotent token-gated reconcile; `webhook_events` dedupe→200→drain,
   **no `meeting_events` bus**; `meeting_cost` persisted + reload-not-reset; `staged_drafts` persisted at creation
   (survives teardown); identity/tenancy schema `{tenants,users,repos,meetings,sessions}`; restart-not-resume.
-  **A-009 FK edges here.** *Criteria:* AC-SUB-001..037, AC-OBS-007.
+  **A-009 FK edges here.** *Criteria:* AC-SUB-001..037 (AC-SUB-036's `created_by` enables AC-OBS-007, which
+  goes green at M12 — not owned here).
 - **M5 — Server boot (`test_m04_boot`, 7).** Fail-fast settings (names missing key); ordered lifespan
   (tracing→pool→Database→`provisioner_ready`→reaper→routers); reaper before routers; EPIPE tolerated / unknown
   crashes; parallel graceful shutdown; three Claude SDK auth modes. *Criteria:* AC-BOOT-001..007.
 - **M6 — Config & secrets (`test_m05_cfg`, 11).** `.env.example` = boot-gate manifest; `routing.py` 8-seat real
   ids; `PROXY_MAX_INFLIGHT_LLM`; per-domain AES-256-GCM keys; `config/defaults.toml` tunables (env overrides
-  secrets/seats only); Terraform `random_id` + `ignore_changes=[secret_data]`; `check-secret-bindings`; Nango vs
+  secrets/seats only); Terraform `random_id` + `ignore_changes=[secret_data]`; `check-secret-bindings` — home
+  **`libs.ops.check_secret_bindings`** (the test accepts `services.ops` too, but that is not one of the 5 allowed
+  `services/` dirs per AC-REPO-006, so pick the lib to avoid a needless remap); Nango vs
   Secret Manager split; Authlib+Google OIDC `/auth/{login,callback,logout}`; `[latency_slo]`; zero runtime flags.
   *Criteria:* AC-CFG-001..011.
 - **M7 — Terraform layout (`test_m06_iac`, 6).** `modules/{bootstrap,platform}` + `envs/{dev,prod}`; dev
@@ -164,9 +190,10 @@ class/defensive branch a criterion doesn't demand** (V0 has zero runtime flags �
   SA-per-role; `customer-platform` module recorded-builds-nothing. *Criteria:* AC-IAC-001..006.
 - **M8 — Dockerfile (`test_m07_dock`, 4).** Multi-stage uv `--frozen --no-dev --package`; non-root uid 1001 + HOME;
   advisory-lock migrate + 30×5s retry then exec; `SANDBOX_IMAGE_HASH` LABEL. *Criteria:* AC-DOCK-001..004.
-- **M9 — CI/CD (`test_m08_ci`, 7 + AC-HOST-005).** Fast ruff/mypy/unit/security block merges; `check-migration-order`;
+- **M9 — CI/CD (`test_m08_ci`, 7).** Fast ruff/mypy/unit/security block merges; `check-migration-order`;
   `check-sdk-isolation-triad`; Cloud Build build→AR→deploy + separate migrations; every guard in pre-commit **and**
-  CI; fast/nightly split; banned-strings (**A-007**). *Criteria:* AC-CI-001..007, AC-HOST-005 (re-assert).
+  CI; fast/nightly split; banned-strings (**A-007** — its rationale comment references AC-HOST-005's GCE topology,
+  but does not re-assert it). *Criteria:* AC-CI-001..007.
 - **M10 — DB layer (`test_m09_db`, 4).** Pool `min2/max20/lifetime30/timeout10`; `Database` facade + repos, no
   ORM; `meeting_id` uuid everywhere except `operation_runs.scope_id` text; Alembic env.py advisory lock + retry.
   *Criteria:* AC-DB-001..004.
@@ -176,7 +203,8 @@ class/defensive branch a criterion doesn't demand** (V0 has zero runtime flags �
   signal-surface excluded (AC-CMP-011). *Criteria:* AC-REG-001..006.
 - **M12 — Observability (`test_m11_obs`, 10).** structlog JSON; Sentry once; cost telemetry cache-read/creation
   split; Langfuse inert; `/health` + Healthchecks; hardening script (both firewall layers); live-WS affinity
-  (re-assert AC-OBS-007); skip-list clean; **no raw source in logs/Sentry/artifacts**; volume snapshots.
+  routes reconnects to the `operation_runs` claim owner (**AC-OBS-007 goes green here**, reading M4's `created_by`);
+  skip-list clean; **no raw source in logs/Sentry/artifacts**; volume snapshots.
   *Criteria:* AC-OBS-001..010.
 - **M13 — Constitution (`test_m12_con`, 4).** Root `CLAUDE.md`: every hard rule names its guard; no internal names
   in user strings (product=Proxy); tool handlers return errors never throw; external calls wrapped retry+telemetry.
@@ -190,9 +218,13 @@ class/defensive branch a criterion doesn't demand** (V0 has zero runtime flags �
   `who_writes`/`get_dependents`); deterministic fallback per branch, never a silent patch; step-1 completion proof
   (CI-green + self-migrate/`/health` + deploy-lands + registry-closed + harness heartbeat/self-reap).
   *Criteria:* AC-BLD-001..003.
-- **M16 — Tenant/creds cross-cutting (`test_m15_ten`, 3; R4).** `tenant_id` in **every** durable schema (A-009 FK
-  chain); cross-tenant read refused, zero rows leak; Nango GitHub tokens minted per-operation, never cached/logged.
-  *Criteria:* AC-TEN-001..003.
+- **M16 — Tenant/creds cross-cutting (`test_m15_ten`, 4; R4).** `tenant_id` in **every** durable schema (A-009 FK
+  chain); cross-tenant read refused, zero rows leak; Nango GitHub tokens minted per-operation, never cached/logged;
+  **`/internal/notes` (P0, AC-TEN-004)** token-gated *outside* the auth wall on the session-less internal path,
+  resolving `meeting_id → owning tenant` server-side — untokened/invalid-token refused (returns no notes) and no
+  cross-tenant notes ever returned (the internal-notes exposure frontier that AC-TEN-002's session-based `/m/`
+  oracle structurally cannot exercise). Handler home: `services.harness.internal` / `libs.http.internal`
+  (test accepts either). *Criteria:* AC-TEN-001..004.
 - **M17 — End-to-end workflows (`test_w_workflows`, 12 chains, 0 new criteria).** W01 connect→bind; W02 duplicate-join
   →single-owner→reap→reclaim; W03 reclaimed-zombie-emits-nothing; W04 webhook land→200→dedupe→drain; W05
   direct-answer-no-E2B; W06 cost-survives-recycle + resume-guard; W07 draft-survives-teardown→accept; W08 trifecta;
@@ -206,5 +238,38 @@ Kubernetes/mesh/multi-region · GPU/local inference · `meeting_events` bus/brok
 · YAML behavior registry · embeddings/vector DB/SCIP/Zoekt · self-hosted Langfuse · per-customer-GCP-project
 machinery · `resume_with_fallback` arity (Doc 04/05) · any runtime feature flag.
 
-### Review deltas
-*(folded from `planner-reviewer`; see below)*
+### Review deltas — folded from the `planner-reviewer` (skeptical staff-engineer pass)
+
+Reviewer verdict: **plan sound — no CRITICAL, no `SPEC_BLOCKED`.** Per-rule: rule 1 (order) PASS · rule 2
+(coverage) PASS after fixes · rule 3 (seams) PASS · rule 4 (adopt-vs-build) PASS · rule 5 (risky-first) PASS
+after fixes · must-not (no sealed edits / no weakening / no over-build) PASS. Independent re-derivation confirmed
+**155 criteria, 24 P0s, per-prefix counts exact, manifest `counts.criteria:154` stale-by-one (AC-TEN-004)**.
+The following change requests were folded into the plan above:
+
+- **[author, pre-review] AC-TEN-004 coverage gap (P0).** The draft mapped only `AC-TEN-001..003` and claimed
+  "154 criteria". Sealed `criteria.yaml` holds **155**; the P0 `/internal/notes` criterion `AC-TEN-004` (tested
+  by `test_m15_ten.py::test_ten_004`) was unmapped. → Fixed §0 count (155/155 + manifest-drift note), M16
+  (`AC-TEN-001..004`, count 4, description added), R4 risk row (AC-TEN-004 added).
+- **[IMPORTANT #1] R2 omitted 4 P0 durability criteria.** `AC-SUB-025/026/027/028` (cost-survives-recycle,
+  draft-survives-teardown — money + irreversible-write P0s) were buried in M4's P1 mass, violating rule #5. →
+  §2 R2 row expanded to name all 12 SUB P0s as build-first/self-attack-first; intro line now enumerates all 24
+  P0s across R2–R4 (12+3+9) with no double-listing.
+- **[IMPORTANT #2] AC-OBS-007 ownership inverted.** Draft said "green at M4, re-asserted M12"; the real
+  `route_to_owner` assertion lives only in `test_m11_obs.py` (**M12 owns it**); M4 supplies only the `created_by`
+  enabler (owned by `AC-SUB-036`). → Fixed §0, M4 *Criteria* line, and M12 wording.
+- **[MINOR #3] AC-HOST-005 "re-asserted M9" overstated.** M9's `test_m08_ci.py` only *comments* on the GCE
+  topology inside the AC-CI-007 test — not a second assertion. **M3 is sole owner.** → Fixed §0, M3, M9 lines.
+- **[MINOR #4] §3 import-proof environment.** The walking-skeleton proof must run in the `uv`-synced venv
+  (`.venv/bin/python`), because `conftest` puts repo-root on `sys.path` where `services/control_plane/` does not
+  exist — `import services.control_plane` resolves only from the workspace mapping. Builder must confirm the
+  editable/force-included namespace install exposes `services.<pkg>` (a known editable-remap failure mode). →
+  §3 M1 exit gate reworded. Reviewer confirmed the layout/namespace resolution is **jointly satisfiable, not
+  hand-waving** (`test_m01_repo` forbids only a flat `services/<pkg>/<pkg>/`; a force-included `src/control_plane/`
+  is permitted; AC-CMP-001 counts deployables from infra text, not dirs).
+- **[MINOR #5] Under-specified seam homes.** → `check-secret-bindings` pinned to `libs.ops.check_secret_bindings`
+  (M6); §1 now enumerates the concrete `services.harness.*` / `services.workroom.*` / `services.scribe.*` and
+  extra `libs.ops.*` homes that `test_m03_sub` hard-imports.
+
+Reviewer confirmed all resolved-ambiguity encodings (**A-006/A-007/A-009/A-010/A-011**) faithful to
+`requirements/ambiguities.yaml`, and no milestone builds a skip-list item, a runtime flag (AC-CFG-009), or an
+abstraction no criterion demands. **Plan LOCKED — hand off to `subagent-driven-build`.**
