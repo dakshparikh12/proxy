@@ -2441,3 +2441,17 @@ unchanged — untouched this pass; reg_002 is the first `-x --maxfail=1` halt.) 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — Implement the registry-closure check as the member-iteration, compared-by-value equality the spec makes authoritative at `09-VERIFICATION.md:16` ("`assert_registry_closed()` — `set(MessageType) == set(CHANNEL_REGISTRY)`") under `CANONICAL-DECISIONS.md:18`'s Enum lock, i.e. `{m.value for m in MessageType} == set(CHANNEL_REGISTRY)`; the `set(get_args(MessageType))` fragment at `00-FOUNDATION.md:303` is a pre-Enum illustrative sketch that the CANONICAL Enum decision and the Doc-09 contract-check predicate supersede, so no founder spec change is required and the shipped `assert_registry_closed()` already satisfies AC-REG-002 (verified: `tests/doc00/test_m10_reg.py` → 6 passed, closure passes with no exception).
 
+
+### Builder session 60 (2026-07-18) — doc00 scope fully green; verify.sh red is 100% out-of-scope (doc01+)
+Fresh session, ground truth re-derived not trusted. Clean tree; `pytest -q tests/doc00/` → **167 passed**
+(the 4 formerly-SPEC_BLOCKED criteria reg_002/obs_006/inv_010/ten_001 now green — adjudication landed;
+no longer blocked). `harness/verify.sh` gates all clean (ruff / mypy --strict 113 files / bandit) and halts
+at `-x --maxfail=1` on `tests/test_canonical_contracts.py::test_ac_canon_002` → `ModuleNotFoundError:
+services.code_intel.verifier`. Full-suite sweep: **73 failed, 168 passed**; EVERY one of the 73 failures is
+under `tests/test_*.py` (0 under `tests/doc00/`) — the doc01+ sibling suites (canonical_contracts / gv_graph_versions
+/ invariants / m1_connection…m*), all requiring `services.code_intel.*` (Code Intelligence). AC-CANON/GV/INV/M*
+are NOT in the doc00 bundle (doc00 = BLD/BOOT/CFG/CI/CMP/CON/DB/DOCK/HOST/IAC/INV/OBS/REG/REPO/SUB/TEN).
+Building `services.code_intel.*` here would violate the build order (00→01, each doc one loop against its own
+sealed bundle) and is out of doc00 scope. **doc00 is complete for its scope; nothing buildable remains in doc00.**
+verify.sh cannot reach exit 0 until the doc01 build loop delivers `services.code_intel.*` — a next-doc deliverable,
+not a doc00 gap. No product edit made, no test weakened, no route-around. Session ends.
