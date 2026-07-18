@@ -1,22 +1,34 @@
-"""WebSocket affinity — route a client to the owning instance (AC-OBS-007).
+"""WebSocket / retry affinity — route a request to the owning instance (AC-OBS-007).
 
-The owner instance-id is persisted on the claimed operation_runs row
-(``created_by``); affinity reads it so a WS reconnect lands on the process that
-actually owns the meeting.
+The owner instance-id is persisted on the claimed ``operation_runs`` row
+(``created_by``). A tile-WS reconnect or a retried webhook that lands on a
+non-owner instance must be proxied/handed off to the claim owner — never served
+locally and never left to a random Cloud Run load-balancer pick. The owner
+serves locally (affinity, not a blind proxy loop).
 """
 from __future__ import annotations
 
-from libs.db import Database
+from collections.abc import Callable
+from typing import Any
 
-from .claim import MEETING_HARNESS_OP
 
+def route_to_owner(
+    *,
+    meeting_id: str,
+    this_instance: str,
+    lookup_owner: Callable[[str], str | None],
+    proxy: Callable[[str, Any], Any],
+    serve_local: Callable[[Any], Any],
+    request: Any = None,
+) -> None:
+    """Route ``request`` for ``meeting_id`` to the operation_runs claim owner.
 
-async def route_to_owner(
-    db: Database, scope_id: str, operation_type: str = MEETING_HARNESS_OP
-) -> str | None:
-    """Return the owning instance-id for a scope, or None if unclaimed."""
-    row = await db.get_operation_run(scope_id, operation_type)
-    if row is None or row.get("status") != "running":
-        return None
-    created_by = row.get("created_by")
-    return str(created_by) if created_by is not None else None
+    If this instance is not the owner, hand the request off to the owner via
+    ``proxy``; otherwise serve it locally. An unknown owner (no live claim) is
+    served locally by the receiving instance rather than dropped.
+    """
+    owner = lookup_owner(meeting_id)
+    if owner is not None and owner != this_instance:
+        proxy(owner, request)
+        return
+    serve_local(request)

@@ -40,6 +40,26 @@ def _wire_control_plane() -> None:
         services.__path__ = current + [harness_src]  # type: ignore[attr-defined]
 
 
+def _wire_libs_lint() -> None:
+    """Expose ``libs.lint`` (the naming lint) without adding a ``libs/`` subdir.
+
+    The lint's real code lives under ``libs/ops/src/lint`` (single-concern, inside
+    an existing lib). Extending the ``libs`` namespace ``__path__`` to include
+    ``libs/ops/src`` makes ``libs.lint`` importable while keeping the fixed
+    six-package ``libs`` set (AC-REPO-007) and an empty ``libs/`` top level (no
+    ``libs/__pycache__``). Mirrors the ``services.control_plane`` exposure above.
+    """
+    root = os.path.dirname(os.path.abspath(__file__))
+    ops_src = os.path.join(root, "libs", "ops", "src")
+    if not os.path.isdir(os.path.join(ops_src, "lint")):
+        return
+    import libs  # namespace package (no __init__.py)
+
+    current = list(getattr(libs, "__path__", []))
+    if ops_src not in current:
+        libs.__path__ = current + [ops_src]  # type: ignore[attr-defined]
+
+
 # Throwaway local test-Postgres coordinates (build host only).
 _PG_DATA = "/tmp/proxy_pgtest/data"  # noqa: S108 - ephemeral test fixture dir
 _PG_SOCK = "/tmp/proxy_pgtest/sock"  # noqa: S108
@@ -120,6 +140,7 @@ def _ensure_local_postgres() -> None:
 
 
 _wire_control_plane()
+_wire_libs_lint()
 try:
     _ensure_local_postgres()
 except Exception:
