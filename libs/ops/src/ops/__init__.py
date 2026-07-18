@@ -17,6 +17,9 @@ from .claim import (
     claim_meeting as claim_meeting,
 )
 from .claim import (
+    sweep_stale_on_read as sweep_stale_on_read,
+)
+from .claim import (
     with_meeting_lock as with_meeting_lock,
 )
 from .cost import (
@@ -40,6 +43,7 @@ from .logging import (
 from .logging import (
     get_logger as get_logger,
 )
+from .nango import RepoProvider as RepoProvider
 from .operation_run import (
     OperationHandle as OperationHandle,
 )
@@ -62,9 +66,11 @@ __all__ = [
     "get_logger",
     "record_micro_call_cost",
     "record_model_cost",
+    "RepoProvider",
     "route_to_owner",
     "run_reconcile_sweep",
     "sandbox_provider",
+    "sweep_stale_on_read",
     "with_meeting_lock",
     "with_operation_run",
 ]

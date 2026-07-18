@@ -19,6 +19,9 @@ from .src.ops import (
     OperationHandle as OperationHandle,
 )
 from .src.ops import (
+    RepoProvider as RepoProvider,
+)
+from .src.ops import (
     before_send as before_send,
 )
 from .src.ops import (
@@ -53,6 +56,9 @@ from .src.ops import (
 )
 from .src.ops import sandbox_provider as sandbox_provider
 from .src.ops import (
+    sweep_stale_on_read as sweep_stale_on_read,
+)
+from .src.ops import (
     with_meeting_lock as with_meeting_lock,
 )
 from .src.ops import (
@@ -72,9 +78,11 @@ __all__ = [
     "get_logger",
     "record_micro_call_cost",
     "record_model_cost",
+    "RepoProvider",
     "route_to_owner",
     "run_reconcile_sweep",
     "sandbox_provider",
+    "sweep_stale_on_read",
     "with_meeting_lock",
     "with_operation_run",
 ]

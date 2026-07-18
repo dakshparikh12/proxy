@@ -163,6 +163,7 @@ _TELEMETRY_DDL = """
 CREATE TABLE IF NOT EXISTS meeting_cost_telemetry (
     id BIGSERIAL PRIMARY KEY,
     meeting_id TEXT NOT NULL,
+    tenant_id uuid REFERENCES tenants(id),
     total_cost_usd NUMERIC NOT NULL,
     cache_read_usd NUMERIC NOT NULL DEFAULT 0,
     cache_creation_usd NUMERIC NOT NULL DEFAULT 0,
