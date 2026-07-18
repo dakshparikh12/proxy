@@ -58,3 +58,11 @@ or m in MessageType}`, or reconciling §12 with CANONICAL) can advance it — th
 
 ADJUDICATION: DEFER tests/doc00/test_m10_reg.py::test_reg_002_assert_registry_closed_passes_when_set_equal — CANONICAL-DECISIONS §1 (line 18) locks `MessageType` as an `Enum`, enforced green by sealed reg_005 (`issubclass(MessageType, enum.Enum)`), yet 00-FOUNDATION §12 (line 303) and this test require `set(get_args(MessageType)) == set(CHANNEL_REGISTRY)`; `typing.get_args()` returns `()` for every Enum class as a language invariant, so the union is permanently empty while the registry is non-empty by contract — the two authoritative spec passages are mutually unsatisfiable for one object, an impossibility no product code can bridge and only a spec/sealed-test change can fix.
 
+
+DEFERRED (genuinely spec-blocked, needs founder spec fix): touched; no route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
+ the resolver; my adjudication touched no files.
+
+The ruling stands:
+
+**ADJUDICATION: DEFER tests/doc00/test_m10_reg.py::test_reg_002_assert_registry_closed_passes_when_set_equal** — `CANONICAL-DECISIONS.md:18` locks `MessageType` as an `Enum` (for which `get_args()` is always `()`), while `00-FOUNDATION.md:303`'s closure predicate `set(get_args(MessageType)) == set(CHANNEL_REGISTRY)` — encoded verbatim by this sealed test at line 77 — can only hold when `MessageType` is a non-empty `Literal`/`Union` alias. No single Python object is both an `Enum` subclass and a subscripted generic; both encoding tests are sealed; the live registry is already consistent and passes `assert_registry_closed()`. Genuine impossibility, resolvable only by a one-line spec edit to CANONICAL §1 or FOUNDATION §12.
+
