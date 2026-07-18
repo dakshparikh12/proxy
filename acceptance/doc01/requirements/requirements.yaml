@@ -688,3 +688,106 @@
   criticality: P1
   testability: executable
   status: qualified
+# ══════════════════════════════════════════════════════════════════
+# doc01 PATCH — sweep gap-closure requirements (evidence/doc01-sweep.md)
+# APPEND these blocks to acceptance/doc01/requirements/requirements.yaml.
+# Authored by the criteria-author lead; the guard (harness/guard.py) blocks an
+# agent from writing the protected acceptance/*/requirements path directly, so the
+# conductor must concatenate this file into the bundle before the coverage gate.
+# ids are unique (continue the R-DOC01-<section>-NN sequence). Nothing existing changed.
+# ══════════════════════════════════════════════════════════════════
+
+- requirement_id: R-DOC01-3.7-05
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.7 gate bullet 2"
+  source_quote: "100% parse on exact-supported files — every non-flagged file in an exact-supported (language, ORM) stack parses cleanly (excluding generated / vendor, which are legitimately flagged)"
+  normalized_statement: >
+    WHEN the readiness gate evaluates parse coverage
+    THE SYSTEM SHALL require every non-flagged file in an exact-supported (language, ORM) stack to parse cleanly,
+    excluding files flagged generated / vendor, and SHALL withhold 'ready' otherwise.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.7-06
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.7 gate bullet 3"
+  source_quote: "capability tiers recorded — each area/stack carries its who_writes tier (exact-supported / symbol-exact / search-only) so the honesty labels are pre-computed, not guessed at query time"
+  normalized_statement: >
+    WHEN the index build completes
+    THE SYSTEM SHALL record, per area/stack, its who_writes capability tier
+    (one of exact-supported | symbol-exact | search-only) into the persisted readiness/coverage record at index time (not computed at query time).
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.7-07
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.7 gate bullet 4"
+  source_quote: "graph smoke check — a sample of known symbols each resolve to the correct file:line through the live path; get_dependents and who_writes return the expected callers/writers for a sample of known symbols/tables"
+  normalized_statement: >
+    WHEN the readiness gate runs
+    THE SYSTEM SHALL execute a graph smoke check (sample known symbols resolve to correct file:line via the live path;
+    get_dependents/who_writes return expected callers/writers) and SHALL withhold 'ready' if any smoke-check sample fails.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.7-08
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.7 paragraph after gate"
+  source_quote: "coverage_pct is reported, not a gate ... the ratio itself no longer blocks a join (a repo that is 100% classified with its gaps honestly labeled is joinable)"
+  normalized_statement: >
+    WHILE a repo is 100% classified with gaps honestly labeled
+    THE SYSTEM SHALL emit 'ready' regardless of a low coverage_pct (coverage_pct is reported for honesty, never a gate).
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.5-13
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.5 find_references paragraph"
+  source_quote: "References into uninstalled third-party deps are labeled external-references-not-resolved, never dropped."
+  normalized_statement: >
+    WHEN find_references encounters a reference into an uninstalled third-party dependency
+    THE SYSTEM SHALL label it 'external-references-not-resolved' and SHALL NOT drop it silently.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-4-02
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§4 failure behavior"
+  source_quote: "unparseable/mid-edit file → valid spans index, broken span flagged, search covers it"
+  normalized_statement: >
+    WHEN a supported-language file is broken/mid-edit (partially unparseable)
+    THE SYSTEM SHALL index the valid spans (as graph nodes), flag the broken span, and keep the file covered by live search.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.4-08
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.4 ranked overview bullet"
+  source_quote: "The ranked overview — the compact, token-budgeted 'table of contents + neighborhoods' ... elided to [~a few thousand tokens]"
+  normalized_statement: >
+    WHEN the ranked overview is built
+    THE SYSTEM SHALL produce it as a token-budgeted artifact bounded to the configured overview budget (default ~a few thousand tokens).
+  requirement_type: performance
+  criticality: P2
+  testability: analyzable
+  status: qualified
+  # Threshold is a §4 tunable default (no config-defaults key yet); provisional cap 6000 tokens.
