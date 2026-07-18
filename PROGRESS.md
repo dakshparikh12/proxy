@@ -1,5 +1,30 @@
 # PROGRESS
 
+## doc00 — COMPLETE (builder status, 2026-07-18)
+
+**doc00 is DONE at its locked finish line.** In-scope arbiter (`tests/doc00/`) = **167/167 test
+functions green** (155/155 criteria), and `ruff` + `mypy --strict` (113 source files) + `bandit`
+are all clean. Nothing in doc00 is `SPEC_BLOCKED`; the former SB-1..SB-4 register was resolved by
+the v3 re-seal (§0) and re-verified green this session.
+
+**Why `bash harness/verify.sh` still exits non-zero (NOT a doc00 defect — for the conductor):**
+verify.sh runs *unscoped* pytest (`pyproject testpaths=["tests"]`), so after the 167 green doc00
+tests it also collects the **doc01 tier-1 suite** (`tests/test_canonical_contracts.py`,
+`test_gv_graph_versions.py`, `test_invariants.py`, `test_m1_connection.py … test_m8_lsp.py`,
+`test_sandbox_boundary.py`) committed deliberately-**red** at `61c9b0c` ("tests: doc01 tier-1 suite
+from sealed bundle (red)", 228 commits back, long before the doc00 re-seal). All **73** failures are
+`ModuleNotFoundError: services.code_intel.*` — doc01 modules that do not exist because **doc01 has
+not been built**. Zero of the 73 are doc00. Full-tree run (no `-x`): **73 failed / 168 passed**
+(168 = 167 doc00 + `test_ac_canon_001`, a pure glob check).
+
+No route-around taken: doc01 is a **separate build loop** with its own sealed bundle (out of the
+doc00 mandate); `tests/`, `fixtures/`, `acceptance/`, `harness/` are builder-forbidden; and I will
+**not** narrow `pyproject testpaths` to hide the doc01 suite (that would sabotage the doc01 loop).
+The doc00-scoped arbiter (`.venv/bin/python -m pytest tests/doc00/`) is the correct green signal
+for this doc, per the build harness's own scope rule ("doc01 = tests/test_m*.py; else tests/doc00/").
+**Recommended next action: launch the doc01 builder loop** — verify.sh goes green tree-wide once
+`services.code_intel.*` exists.
+
 ## doc00 plan
 
 *Planner (fresh context, 2026-07-18). Spec: `product/v0-spec/00-FOUNDATION.md` + `CANONICAL-DECISIONS.md`.
