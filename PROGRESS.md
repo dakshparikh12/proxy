@@ -439,3 +439,51 @@ sealed-bundle defect from scratch; no builder session can advance doc00 past M11
 files the builder may not edit. Spawning further builder sessions will reproduce this same result. **Founder
 action is required** to apply the two-part fix above; on that fix the shipped `registry.py` is expected to pass
 reg_001..006 unchanged and the build resumes at M12.
+
+### Independent re-verification (builder session 5, 2026-07-17) — block STANDS; SPEC_BLOCKED reaffirmed, one new spec-side proof
+
+A fifth fresh-context builder session re-derived the block from scratch and confirms it is genuine. State
+reproduced with `.venv/bin/python`: `pytest tests/doc00/` (no `-x`) = **124 passed / 43 failed** (identical to
+sessions 3–4); `verify.sh` runs ruff + mypy --strict + bandit clean, then pytest halts under `-x --maxfail=1` at
+**`test_m10_reg.py::test_reg_002`**. Two defects re-confirmed, plus one new spec-side artifact:
+
+1. **Live traceback captured (defect #2, registry pollution — proven under real milestone order, not just
+   asserted).** Running `pytest tests/doc00/test_m10_reg.py`, reg_002 fails FIRST at test line 71 inside the
+   shipped closure (`libs/contracts/src/contracts/registry.py:105`) with the concrete message
+   `closed-graph violation: union-only=set(), registry-only={'ac-reg-001-probe'}` — i.e. reg_001's inline
+   `_AcReg001Probe` auto-registered into the module-global `CHANNEL_REGISTRY` and **no fixture resets it**
+   (grep of `tests/doc00/conftest.py` + root `conftest.py` for `CHANNEL_REGISTRY`/`autouse` = zero matches, this
+   session). reg_003 (`:110`) then *requires* the same closure to FAIL on exactly such a registry-only orphan.
+   Identical closure, identical polluted state, required to both pass and fail → unsatisfiable by any shipped
+   `assert_registry_closed()`.
+
+2. **get_args-vs-Enum contradiction (defect #1, reg_002 line 77) — unchanged, language-level.** reg_005 (`:211`)
+   forces `isinstance(MessageType, type) and issubclass(MessageType, enum.Enum)`; `get_args()` of any Enum class
+   is `()`; reg_004 forces the registry non-empty. So line 77's
+   `{str(m) for m in get_args(MessageType)} == {str(k) for k in CHANNEL_REGISTRY}` is `set() == {non-empty}` →
+   always False. No product code can alter `get_args(MessageType)` — it is inline in the test body.
+
+3. **NEW — the sealed criterion contradicts CANONICAL directly, not merely a superseded Doc-00 snippet.**
+   `CANONICAL-DECISIONS.md:18` (an overriding decision, not history): *"Registry base class (locked name):
+   `ProxyMessage` with discriminator `MessageType` (an `Enum`). … One registry, one `assert_registry_closed()`."*
+   The sealed `AC-REG-002`'s `get_args(MessageType)` form presupposes `MessageType` is a `Literal`/`Union` alias
+   (the only kinds for which `get_args` is non-empty), which CANONICAL:18 explicitly forbids. `CANONICAL-DECISIONS.md:264`
+   further confirms the closure's scope is the tile/connect↔backend client registry only. So the blocked
+   criterion contradicts the CANONICAL spec it is meant to encode — a sealed-bundle defect by the AGENTS.md
+   rule "an untestable/contradictory criterion is a spec bug."
+
+**Blocked criterion:** `AC-REG-002` (`tests/doc00/test_m10_reg.py::test_reg_002_assert_registry_closed_passes_when_set_equal`).
+**Exact conflict:** (a) line 77 `set(get_args(MessageType)) == set(CHANNEL_REGISTRY)` is unsatisfiable given
+AC-REG-005 + CANONICAL:18 force `MessageType` to be an `Enum` (`get_args`≡`()`); (b) reg_001's unreset probe
+pollutes the module-global `CHANNEL_REGISTRY`, so reg_002:71 and reg_003 demand the same closure both pass and
+fail on the same state. Both fixes live in sealed `tests/`/`acceptance/` — builder-forbidden.
+**Required founder fix (two-part, unchanged from session 4):** (a) rewrite AC-REG-002 line 77 to the CANONICAL
+enum-iteration form `set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)` (per CANONICAL:18 +
+`09-VERIFICATION.md:16`); AND (b) add test isolation for `CHANNEL_REGISTRY` (autouse snapshot/restore fixture in
+`tests/doc00/conftest.py`, or reg_001 popping its probe in a `finally`). On that fix the shipped `registry.py`
+passes reg_001..006 unchanged and the build resumes at M12.
+
+**No route-around taken; no test/threshold/golden/arbiter touched; nothing built speculatively** (M12–M17 could
+never register green through `verify.sh`'s `-x --maxfail=1` while reg_002 fails first — per the build skill
+"verify.sh exit 0 is the only green"). This is a stuck loop confirmed 5× independently; founder action on the
+two-part fix above is the only path forward. Session ends here per the SPEC_BLOCKED protocol.
