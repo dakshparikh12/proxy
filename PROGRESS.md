@@ -320,8 +320,11 @@ flag/base class/defensive branch a criterion doesn't demand** (V0 has zero runti
   migrated base-table set (not just the named five), so **before escalating, enumerate the actual
   `information_schema` base tables and prove none other than `operation_runs` is unscoped** — the escalation
   set must be provably minimal (and this is what makes the M14 inv_010 tenant-only-insert probe safe on
-  whichever table it picks — see CR-5/CR-6). Build 002/003/004; stop at the ten_001 assertion and escalate
-  the `operation_runs` residual. *Criteria:* AC-TEN-001..004 (001 blocked).
+  whichever table it picks — see CR-5/CR-6). **Re-run this enumeration against the builder's *final* migration
+  set (session-5 CR-M-2): any durable table the builder adds must itself be tenant-scoped, or it silently
+  widens the residual beyond `operation_runs` and falsifies the "operation_runs alone" escalation.** Build
+  002/003/004; stop at the ten_001 assertion and escalate the `operation_runs` residual. *Criteria:*
+  AC-TEN-001..004 (001 blocked).
 - **M17 — End-to-end workflows (`test_w_workflows`, 12 chains, 0 new criteria).** W01 connect→bind; W02
   duplicate-join→single-owner→reap→reclaim; W03 reclaimed-zombie-emits-nothing; W04 webhook
   land→200→dedupe→drain; W05 direct-answer-no-E2B; W06 cost-survives-recycle + resume-guard; W07
@@ -462,6 +465,37 @@ and the §3 `control_plane` home pinned. **Hand-off unchanged:** M1–M10 + M13 
 `subagent-driven-build`; **M11/M12/M14/M16 build everything buildable in-file, then stop the pass and escalate
 their sealed defect to the conductor — never weaken or edit the sealed test; the four founder one-liners land
 together.**
+
+### Review deltas — session-5 fresh-context `planner-reviewer` re-pass (folded; APPROVED as locked — no BLOCKER, no IMPORTANT)
+
+Verdict: **APPROVE the plan as locked.** The reviewer independently re-derived coverage against the sealed
+bundle (155 criteria in `criteria.yaml`; per-prefix tally sums exactly to 155 — CMP 16 · REPO 9 · HOST 14 ·
+SUB 37 · BOOT 7 · CFG 11 · IAC 6 · DOCK 4 · CI 7 · DB 4 · REG 6 · OBS 10 · CON 4 · INV 13 · BLD 3 · TEN 4;
+`manifest.yaml counts.criteria:154` stale-by-one, bookkeeping drift routed to the conductor, not a coverage
+gap), re-confirmed the M1→M17 mapping matches the lexicographic test-file collection order exactly with each
+milestone = one test file (M17 `test_w_workflows` introduces 0 new criteria — harness-forced integration, not
+scope creep), and rated seams / adopt-vs-build / risky-first / the must-NOTs all PASS. **All FOUR SPEC_BLOCKED
+calls were independently re-confirmed genuine at the sealed-test source (zero could-not-confirm):** SB-1
+reg_002 (`get_args` on an Enum is `()`, `:214` tautology adds no escape), SB-2 ten_001 (`operation_runs`
+12-col pin + `text` scope_id ⇒ no legal FK), SB-3 obs_006 (`_support` absolute-glob re-root at `:243`), SB-4
+inv_010 (non-uuid `"tenant-OFF"` into a uuid tenant column). The plan proper (§0–§8) required **no change**.
+Folded:
+
+- **[MINOR CR-M-2] SB-2 minimality is an instruction, not a standing proof** — the M16 `information_schema`
+  enumeration must be re-run against the builder's *final* migration set, since any new durable table the
+  builder adds must itself be tenant-scoped or it silently widens the residual beyond `operation_runs` and
+  falsifies the "operation_runs alone" escalation. → folded into M16.
+- **[MINOR CR-M-3 — routed to conductor, not a builder action] Delete the stale `## ADJUDICATION RESOLVED`
+  block** (`PROGRESS.md:466+`). It is already marked `⛔ SUPERSEDED` in place (session-4), which the reviewer
+  judged adequate, but recommends the conductor delete it outright before hand-off so a builder reading
+  top-to-bottom cannot act on its factually-false "nothing blocked" premise. It sits outside `## doc00 plan`
+  and is not part of this locked plan; left in place (superseded), recommendation recorded for the conductor.
+
+**Plan RE-LOCKED (session-5).** No milestone reorder; no coverage change; no seam change; no SB-register
+change. The sole substantive edit is the M16 minimality clause (CR-M-2). **Hand-off unchanged:** M1–M10 +
+M13 + M15 + M17 → `subagent-driven-build`; **M11/M12/M14/M16 build everything buildable in-file, then stop the
+pass and escalate their sealed defect (reg_002 / obs_006 / inv_010 / ten_001) to the conductor — never weaken
+or edit the sealed test; the four founder one-liners land together.**
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
 > **⛔ SUPERSEDED (session-4 planner re-lock) — DO NOT ACT ON THIS NOTE.** Its premise ("no `SPEC_BLOCKED`
