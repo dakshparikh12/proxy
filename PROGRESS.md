@@ -2128,3 +2128,39 @@ Independently re-verified builder-forbidden status + two contradictions from pri
 later. No sealed/test/fixture/support/harness/CANONICAL file touched; no route-around; nothing built speculatively;
 no test weakened. **Confirmed stuck loop, 47× reproduced — halt builder re-invocation and route the four sealed
 one-liners to a founder.** Session ends per the SPEC_BLOCKED protocol.
+
+### Session 48 (2026-07-18) — 48th confirmation; 163/167; all four re-derived from primary source with fresh empirical artifacts; halt reaffirmed
+
+Fresh-context builder. Refused to rubber-stamp the 47-session prose chain — re-ran ground truth and
+independently re-derived each of the four from primary source, with two NEW live artifacts (not re-argued):
+
+- **Ground truth (live):** `.venv/bin/python -m pytest -q -p no:randomly tests/doc00/` → **163 passed / 4
+  failed** — identical set (`reg_002`, `obs_006`, `inv_010`, `ten_001`). Tree clean at HEAD 5f3dcb5.
+- **obs_006 — NEW live reproduction of the sealed read-path bug.** Imported `_support as S` and ran the exact
+  `:243` idiom: `S.glob('*harden*.sh', root_parts=('deploy',))` returns the **absolute** path
+  `/Users/pranav/Desktop/proxy/deploy/harden.sh`; `S.read_text(*scripts[0].split('/'))` → **None** → `""` →
+  `:244` fails. The correct idiom the sibling `test_m02_host.py:327` uses,
+  `S.read_text(*Path(scripts[0]).relative_to(S.ROOT).parts)`, reads the **real 3121-byte** `deploy/harden.sh`
+  fine. Product script exists and is correct; the sealed `:243` read (omits `.relative_to(S.ROOT)`) is the
+  defect. `_support.py` is under `tests/` → builder-forbidden.
+- **inv_010 + ten_001 — NEW primary-source pin.** `CANONICAL-DECISIONS.md:211-215` verbatim:
+  `tenants (id uuid PK …)`, `users/repos/meetings (… tenant_id uuid REFERENCES tenants …)`. So every tenant
+  column is `uuid` FK→`tenants(id)`; no text tenant column can exist. inv_010 `test_m13_inv.py:546`
+  `INSERT … VALUES ('tenant-OFF')` (non-uuid) into that uuid column must raise `invalid input syntax for type
+  uuid` before the sweep runs — unfixable by any correct product (founder: seed a real uuid). ten_001
+  `test_m15_ten.py:111` `NON_SCOPED` omits `operation_runs`, whose exact 12-col pin (`test_m03_sub.py:82`) +
+  polymorphic `text scope_id` forbid a tenant FK; live failure = `['operation_runs']` (founder: add it to
+  `NON_SCOPED`).
+- **reg_002 ↔ reg_005 (unchanged, re-read at source).** `test_m10_reg.py:75`
+  `union = {str(m) for m in get_args(MessageType)}` is `∅` for the CANONICAL Enum that `:211`
+  (`issubclass(MessageType, enum.Enum)`) forces; disjoint from the non-empty registry. Founder: iterate enum
+  members.
+- **Builder-forbidden confirmed at source:** `harness/guard.py:14-19` `PROTECTED` begins with `"tests/"` (and
+  covers `_support.py`); the `runner.py` integrity hash covers the sealed set. Any edit hard-exits the run.
+
+`verify.sh` runs `-x --maxfail=1`, so the four one-liners must land together or the loop re-stalls one milestone
+later. No sealed/test/fixture/support/harness/CANONICAL file touched; no route-around; nothing built
+speculatively; no test weakened; product complete (nothing buildable remains in `libs/`/`services/`).
+**Confirmed genuinely stuck loop, now 48× reproduced (this pass adds a live glob/read_text disproof for obs_006
+and the CANONICAL:211-215 uuid pin for inv_010/ten_001) — halt builder re-invocation and route the four sealed
+one-liners to a founder.** Session ends per the SPEC_BLOCKED protocol.
