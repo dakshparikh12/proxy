@@ -2454,3 +2454,44 @@ speculatively. **SPEC_BLOCKED verdict re-confirmed (55th reproduction). Founder 
 land together:** (1) `reg_002:77` → `set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)`; (2) `obs_006`
 read the absolute glob path directly (no `split("/")`+re-root); (3) `inv_010` seed a real uuid tenant id;
 (4) add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`. Route SB-1..SB-4 to a founder. Session ends.
+
+### DEBUGGER session (2026-07-18) — fresh-context, invoked after 4× identical `obs_006` failure; root-caused from primary source; SPEC_BLOCKED (sealed-test read bug); NO services/libs fix exists
+
+Invoked as the dedicated fresh-context debugger because the build loop failed the **identical** error 4×:
+`test_obs_006 … hardening script /Users/pranav/Desktop/proxy/deploy/harden.sh is empty`. I ignored the prose
+chain and re-derived everything myself: reproduced, traced the mechanism live, and empirically proved the product
+side is complete.
+
+**Reproduced (HEAD 20c026d):** `.venv/bin/python -m pytest -q -x tests/doc00/test_m11_obs.py::test_obs_006_one_idempotent_hardening_script_full_control_set`
+→ `1 failed in 0.15s` at `:244 assert text.strip()` — `AssertionError: hardening script …/deploy/harden.sh is empty`.
+
+**Root cause (named precisely — sealed test, product-unfixable):** the file is NOT empty. `wc -c deploy/harden.sh`
+= 3359 bytes; `git log` shows it committed (0ceae5b) and corrected (18e835a). The failure is a path-doubling bug
+entirely inside the read-only test/harness:
+- `tests/doc00/_support.py:83-87` `glob()` does `sorted(base.rglob(pattern))` on `base = rel(*root_parts) =
+  ROOT.joinpath(...)`, an **absolute** base → it returns **absolute** `pathlib.Path`s.
+- `tests/doc00/test_m11_obs.py:239` `scripts = sorted({str(p) for p in scripts})` → `scripts[0] =
+  "/Users/pranav/Desktop/proxy/deploy/harden.sh"` (absolute).
+- `:243` `text = S.read_text(*scripts[0].split("/")) or ""` splits that into
+  `['', 'Users', 'pranav', 'Desktop', 'proxy', 'deploy', 'harden.sh']`; `read_text → rel()` re-anchors onto ROOT →
+  `…/proxy/Users/pranav/Desktop/proxy/deploy/harden.sh` → does not exist → `None` → `""`. Traced live:
+  `S.rel(*scripts[0].split("/")).exists() == False`, `S.read_text(...) is None`. The `assert text.strip()` at
+  `:244` therefore fails **regardless of the script's real content** — content-independent, so no `deploy/`,
+  `services/`, or `libs/` placement can cure it. Every other `glob` consumer in `_support.py` (`:96`, `:131`,
+  `:147`) normalizes with `.relative_to(ROOT)`; `:243` omits it.
+
+**Product proven complete (replayed the ENTIRE obs_006 body against a corrected read this session).** Because the
+broken read returns `""`, every downstream assertion was never actually exercised — I replayed them against the
+real `deploy/harden.sh` (+`infra`/`deploy` text): exactly 1 script · non-empty (3120 stripped chars) · all 7
+required controls present (`PasswordAuthentication no`, `PermitRootLogin no`, fail2ban, unattended-upgrades,
+non-root, ufw/iptables/nftables, encrypt/luks) · host-firewall-in-script · infra security-group · E2B-scoped ·
+`host_code_exec_path == 0` (no `curl|sh`/eval/exec) · `set -e` · idempotent guards. **All pass.** So a corrected
+read would make obs_006 green with the product exactly as it stands; nothing buildable remains in `libs/`/`services/`.
+
+**Builder-forbidden:** both defect files live under `tests/` — `harness/guard.py` `PROTECTED[0] == "tests/"` +
+`runner.py` integrity hash ⇒ any edit hard-exits the run. Per the debugger protocol (root cause in the test ⇒ do
+NOT edit it; append SPEC_BLOCKED naming it), I made **no** code change. **Founder one-liner:** `test_m11_obs.py:243`
+→ `text = S.read_text(*scripts[0].relative_to(S.ROOT) ... )` or simply read the absolute glob path directly
+(`pathlib.Path(scripts[0]).read_text(...)`) with no `split("/")` re-root. No sealed/test/harness/support file
+touched; no route-around; no test weakened; nothing built speculatively. **SPEC_BLOCKED confirmed independently by
+fresh-context debugging — this is the same sealed-test defect the loop cannot fix; route to a founder.**
