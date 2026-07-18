@@ -273,3 +273,6 @@ The following change requests were folded into the plan above:
 Reviewer confirmed all resolved-ambiguity encodings (**A-006/A-007/A-009/A-010/A-011**) faithful to
 `requirements/ambiguities.yaml`, and no milestone builds a skip-list item, a runtime flag (AC-CFG-009), or an
 abstraction no criterion demands. **Plan LOCKED — hand off to `subagent-driven-build`.**
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — No `SPEC_BLOCKED` entry was ever recorded in `PROGRESS.md`; the doc00 plan asserts "0 `SPEC_BLOCKED`, 0 unresolved contradictions," `dispositions.yaml` agrees, and the build is green through M4, so there is nothing genuinely blocked — continue in the mandated milestone order to M5 (`test_m04_boot`, AC-BOOT-001..007). To preempt the one near-frontier ambiguity (the "(prod)"-qualified boot keys), implement the reading the spec and criterion already fix in lockstep — `00-FOUNDATION.md:203` and `AC-BOOT-001` (`criteria.yaml:1632`) both list "`DATABASE_URL`, `GCS_BUCKET`, `SESSION_SECRET` (prod), GCP project (prod), each AES credential key, `RECALL_API_KEY`, `ANTHROPIC_*`": treat `DATABASE_URL`, `GCS_BUCKET`, the AES credential keys, `RECALL_API_KEY`, and `ANTHROPIC_*` as unconditionally req
