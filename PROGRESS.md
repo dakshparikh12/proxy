@@ -2213,3 +2213,30 @@ speculatively; no test weakened; product complete (nothing buildable remains in 
 **Confirmed genuinely stuck loop, now 48× reproduced (this pass adds a live glob/read_text disproof for obs_006
 and the CANONICAL:211-215 uuid pin for inv_010/ten_001) — halt builder re-invocation and route the four sealed
 one-liners to a founder.** Session ends per the SPEC_BLOCKED protocol.
+
+### Builder session 49 (2026-07-18) — independent live re-confirmation; halt reaffirmed
+
+Fresh builder session. Oriented (AGENTS.md → acceptance/doc00 → 00-FOUNDATION.md → this locked plan) and
+reproduced ground truth without trusting prior state:
+
+- **`.venv/bin/python -m pytest -q tests/doc00/` → 163 passed, 4 failed.** The four reds are exactly the
+  sealed defects: `test_reg_002` (SB-1), `test_obs_006` (SB-3), `test_inv_010` (SB-4), `test_ten_001` (SB-2).
+  Live `ten_001` failure message = `tenant_unscoped_tables … {'operation_runs'}` — the sole irreducible residual,
+  matching §0 SB-2 exactly.
+- **Static gates clean:** `ruff check services libs` → all passed; `mypy --strict services libs` → no issues
+  (112 files); bandit on `src` (the arbiter scope) clean.
+- **`bash harness/verify.sh` (sole arbiter, `pytest -x --maxfail=1`)** passes ruff/mypy/bandit then halts at the
+  first sealed defect `test_m10_reg.py:77::test_reg_002` (`union-only=∅, registry-only={invite-proxy,
+  connect-repo, approve-draft}`) — the `-x` mask surfacing reg_002→obs_006→inv_010→ten_001 sequentially, as the
+  plan predicts.
+- **Two "most-buildable-looking" defects independently re-derived from primary source this pass:**
+  `_OPRUN_COLS` (`test_m03_sub.py:33`) is exactly 12 columns with **no `tenant_id`**, pinned by exact
+  set-equality at `:82`; `scope_id`/`created_by` are `text` → cannot FK `tenants(id)` (uuid PK), so ten_001
+  clause (c) (`NON_SCOPED` = only `{tenants,sessions,alembic_version}`) is unsatisfiable for `operation_runs`
+  alone. inv_010 seeds `offboard="tenant-OFF"` (`test_m13_inv.py:527`) and INSERTs it (`:546`) into a `uuid`
+  tenant column → `InvalidTextRepresentation` before `run_reconcile_sweep` runs.
+
+Nothing buildable remains in `libs/`/`services/`; no sealed/test/fixture/harness/CANONICAL file touched; no
+test weakened; no route-around. The four remain one-line **founder** fixes to the sealed tests, which must land
+together (the `-x` mask re-stalls the loop after any single fix). **Halt reaffirmed per the SPEC_BLOCKED
+protocol; session ends.**
