@@ -3303,3 +3303,6 @@ the working tree was already clean and complete.
 **Conclusion:** doc01 rung-1 is GREEN via the arbiter in its prescribed environment. No buildable
 `services/**`/`libs/**` work remains; nothing uncommitted. The AC-M2-001 local red is an
 environmental host limitation, not a build gap (matching every prior adjudication).
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — Implement the three criteria exactly as written; they are unambiguous and each quotes its spec sentence directly (AC-M6-008 ← "`coverage_pct` is reported, not a gate … a repo that is 100% classified with its gaps honestly labeled is joinable," line 299; AC-M6-005 ← "100% parse on exact-supported files … excluding `generated`/`vendor`," line 294; AC-M4-011 ← "unparseable/mid-edit file → valid spans index, broken span flagged, search covers it," line 379). The `ImportError` is a fixture-packaging regression from seal commit `1f2671d`, which reverted the fixture block `f03c98d` added — a protected-path re-seal that only the conductor can perform, and which the builder's own standalone harness confirms greens the unmodified HEAD product code; there is no spec ambiguity, contradiction, or im
