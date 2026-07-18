@@ -1,23 +1,24 @@
-My systematic sentence-by-sentence walk of `00-FOUNDATION.md` against `acceptance/doc00/` is complete. I cross-checked every asserted behavior against the 100 criteria, the requirements, the 22 `covered_downstream`/`not_applicable` dispositions, and the fault model. The infra/structural surface (§3–§13) and the durable substrate (§5) are densely covered, and all five laws + §15 agentic-efficiency/safety-floor invariants are explicitly dispositioned to their owning service docs.
+ion — but three did not.
 
-Two asserted **doc00-scope** behaviors survive the walk with **no covering criterion, no requirement, no disposition, and no fault** anywhere in the suite (verified by full-suite grep):
+## Spec behaviors with NO covering criterion
+
+**1. Sandbox egress is default-deny.**
+> §15 Safety floor: *"…the SDK-isolation triad on every workroom/repo `query()` (tools land in the sandbox, not the host) · **sandbox egress default-deny** · no live secrets in sandboxes (scoped short-lived JWTs)…"*
+
+No criterion asserts sandbox network egress is default-denied. The clause immediately after it (per-sandbox JWT / no-live-secrets) is covered by `AC-INV-009`, and the one before (isolation triad) by `AC-CI-003` — but egress-default-deny has no criterion, no requirement (`R-DOC00-15-*` skips it), and no oracle. `egress` appears in criteria only in `AC-HOST-004` (control_plane Direct-VPC egress — unrelated).
+
+**2. Read-only repo access (`contents:read`).**
+> §15 Safety floor: *"**read-only repo access (`contents:read`)** · secrets excluded from index/map/context/sandbox/logs…"*
+
+The very first safety-floor clause. No criterion asserts the GitHub App / Nango grant is scoped read-only. `AC-INV-007` references only `contents:write` (the push *Expansion* seam); nothing pins the V0 baseline scope to `contents:read`. `contents:read` / "read-only repo" = 0 hits across both criteria and requirements files.
+
+**3. Canonical clones never execute repo code.**
+> §15 Safety floor: *"…staged-drafts-only for world-touching acts (enforced via `disallowed_tools`) · **canonical clones never execute repo code** · a build is 'verified' only past a separate critic…"*
+
+No criterion asserts the code_intel clone/scan path never executes the cloned repo's own code (build scripts, git hooks, postinstall). The closest, `AC-OBS-006`, asserts the *host-hardening* clause "arbitrary code execution only ever inside E2B (never on our host)" — a general host property, not the specific "the clone is inert data, never run" invariant. (Weakest of the three — flag as partially-adjacent, not fully absent.)
 
 ---
 
-**1. §2 — the material-change events contract (03→04) is uncovered.**
+**Scope note (not counted as gaps):** doc00's own `requirements.yaml` preamble states that behaviors "whose runtime enforcement lives in a downstream service doc (Doc 01/02/03/04/05) are carried as `dispositions.yaml` entries … NOT as uncoverable requirements." Accordingly I did **not** flag the five laws' output behaviors (grounded-or-silent `file:line`, never-overstate `resolved`/`lower-bound`, <200ms barge-in) or the §15 **agentic efficiency floor** (1-hr-TTL prompt caching, context compaction, per-disposition tool subsets, targeted extended-thinking, sampled quality gate, tool-result reuse) — all Doc 04/05-enforced and correctly outside doc00's provable surface. One caveat worth surfacing: **`acceptance/doc00/` has no `dispositions.yaml`** (doc01 does), so those delegated behaviors are not formally recorded anywhere — but that's a missing-artifact observation, not a missing-criterion gap.
 
-Spec line (§2, contracts list):
-> "**Notes deltas + events** (03→04): `add/patch/close` ops (`note` dropped, folded into `add`); **material-change events (claim-landed-checkable, decision-forming/final, contradiction, action-item, question-open/closed).**"
-
-The `add/patch/close` half of this exact bullet is tested (AC-CMP-006 / R-DOC00-2-06). The **material-change events** half — a named `libs/contracts` seam that doc00 builds (`§16` step 1: "`libs/contracts` … the §2 models") — has no criterion enumerating its member set, no requirement, and no `covered_downstream` disposition. The signal-surface seam in the very next line *was* dispositioned (R-DOC00-2-11 frames it as Doc-02-internal); the material-change events were silently dropped rather than tested-here or dispositioned-downstream.
-
-**2. §5.1 — the heartbeat's activity-bump (sandbox keep-alive during silent agent work) is uncovered.**
-
-Spec line (§5.1, `with_operation_run` reference):
-> "`await db.bump_activity(scope_id)    # keeps the sandbox alive during silent agent work`"
-
-The §5.1 heartbeat is decomposed into several sub-criteria — `last_heartbeat_at` update (AC-SUB-004), the fencing self-check SQL (AC-SUB-007) — and sandbox TTL/destroy is covered separately (AC-SUB-016). But the distinct observable behavior that the heartbeat loop *also* bumps activity to prevent the E2B sandbox from timing out during long silent (no-token-emitting) agent work has no criterion, requirement, or fault. A build that heartbeats correctly but never calls `bump_activity` would pass every existing AC-SUB criterion while the promised behavior (sandbox survives silent work) silently fails.
-
----
-
-Note (not a coverage gap, flagged in passing): §5.3 line 164 still reads "the `meeting_runtime` harness itself is a Cloud Run process, not a provisioned resource," which is stale against **Amendment A1** (meeting_runtime = GCE MIG, *not* Cloud Run) that the criteria correctly encode in AC-HOST-005. That is a spec self-contradiction, not a missing criterion, so it is outside this sweep's output contract — surfacing it only so it isn't lost.
+The three items above are genuine: each is a foundation-provable safety invariant doc00 explicitly consolidates in §15, alongside siblings that *were* given criteria.
