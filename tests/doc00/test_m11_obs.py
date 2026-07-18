@@ -236,7 +236,10 @@ def test_obs_006_one_idempotent_hardening_script_full_control_set():
         + S.glob("*hardening*", root_parts=("infra",))
         + S.glob("*hardening*", root_parts=("deploy",))
     )
-    scripts = sorted({str(p) for p in scripts})
+    # S.glob returns ABSOLUTE paths; make them repo-root-relative so that
+    # ``S.read_text(*scripts[0].split("/"))`` below re-joins onto ROOT correctly
+    # (splitting an absolute path re-rooted a nonexistent file -> false "empty").
+    scripts = sorted({str(p.relative_to(S.ROOT)) for p in scripts})
     assert scripts, "no hardening script found under infra/ or deploy/ (product not built)"
     assert len(scripts) == 1, f"there must be exactly ONE hardening script (config-mgmt is skip-listed); found {scripts}"
 
