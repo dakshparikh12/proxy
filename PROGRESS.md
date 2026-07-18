@@ -2261,3 +2261,41 @@ weakened; no route-around; nothing built speculatively. The four remain one-line
 tests and must land together (`verify.sh` runs `-x --maxfail=1`, so the `-x` mask re-stalls the loop after any
 single fix: reg_002 → obs_006 → inv_010 → ten_001). **Halt reaffirmed per the SPEC_BLOCKED protocol (50th
 reproduction); route the four sealed one-liners to a founder. Session ends.**
+
+### DEBUGGER session (2026-07-18) — fresh-context systematic root-cause; all four confirmed SPEC_BLOCKED from primary source; NO services/libs fix exists
+
+Fresh-context DEBUGGER, invoked because the loop failed with the identical error ≥4×. Refused to trust the
+50-session prose chain — reproduced ground truth (`163 passed / 4 failed` at clean HEAD `5bb0dd2`) and
+independently re-derived each root cause from **primary source (product code + migration DDL + sibling sealed
+tests) with fresh live artifacts**, not argument. Verdict: the root cause of all four lies in **builder-forbidden
+sealed test/support files** (`tests/doc00/*.py`, `_support.py`; `harness/guard.py:14` `PROTECTED` begins with
+`"tests/"` + `runner.py` integrity hash), which are also read-only to the debugger. **The `services/`/`libs/`
+product is correct in every case — there is no product fix to make.** Evidence per defect:
+
+- **SB-1 · reg_002** (`test_m10_reg.py:75`). Live: `assert_registry_closed()` **PASSES**; `CHANNEL_REGISTRY`
+  keys `== {m.value for m in MessageType} == {approve-draft, connect-repo, invite-proxy}`. The test's inline
+  predicate `{str(m) for m in get_args(MessageType)}` is `∅` because `MessageType` is the CANONICAL `enum.Enum`
+  (`registry.py:39`) that `test_reg_005:211` (`issubclass(MessageType, enum.Enum)`) requires and reg_005 itself
+  concedes `get_args`-on-Enum is `()`. `∅ ≠ non-empty registry`. Product-unfixable (a `get_args`-able
+  `Literal`/`Union` would fail reg_005 + CANONICAL §1). Root cause = sealed test line 75.
+- **SB-3 · obs_006** (`test_m11_obs.py:243`). Live: `deploy/harden.sh` exists, executable, **3359 bytes**
+  (glob found exactly one). The failure is purely `S.read_text(*scripts[0].split("/"))` re-rooting an
+  **absolute** glob path (`_support.glob` returns `sorted(base.rglob(...))`, absolute) through `rel()` →
+  doubled `.../proxy/Users/pranav/.../harden.sh` → `None` → `""` → `:244` fails. Working sibling idiom
+  `test_m02_host.py:327` uses `.relative_to(S.ROOT).parts`. Product-independent; root cause = sealed read path.
+- **SB-4 · inv_010** (`test_m13_inv.py:546`). Live reproduction captured this pass:
+  `psycopg.errors.InvalidTextRepresentation: invalid input syntax for type uuid: "tenant-OFF"`. Migration DDL
+  (`0001_substrate.py:38,48,59`, `0003:*`) pins every `tenant_id` to `uuid REFERENCES tenants(id)`; the test
+  INSERTs the non-uuid literal `'tenant-OFF'` into it → raises before `run_reconcile_sweep` runs. No correct
+  (uuid-FK) product can accept a text tenant literal. Root cause = sealed test seed value.
+- **SB-2 · ten_001** (`test_m15_ten.py:177-182`). DDL (`0001_substrate.py:84-98`) pins `operation_runs` to the
+  exact 12 cols with `scope_id text NOT NULL` (no `tenant_id`); `test_m03_sub.py:82` enforces `set(cols) ==
+  _OPRUN_COLS` exactly; `0003_tenant_id_everywhere.py` documents that `operation_runs` therefore cannot carry a
+  `tenant_id` column nor a declared FK on its polymorphic text `scope_id`. Clause (c)'s `NON_SCOPED` omits
+  `operation_runs`, so it is enumerated and irreducibly fails; making it pass would violate AC-SUB-001. Live
+  residual = `tables with no tenant boundary: ['operation_runs']`. Root cause = sealed `NON_SCOPED` set.
+
+No sealed/test/fixture/support/harness/CANONICAL file touched; no product edit made (none is correct); no
+route-around; no test weakened. **The 50-session SPEC_BLOCKED verdict is CONFIRMED by independent debugging.**
+The four are one-line **founder** fixes to sealed tests and must land together (`-x --maxfail=1` re-stalls after
+any single fix). Halt builder/debugger re-invocation; route SB-1..SB-4 to a founder. Debugger session ends.
