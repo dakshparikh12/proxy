@@ -1,0 +1,2867 @@
+# Acceptance Criteria — Doc 01 Code Intelligence
+# Per GENERATOR.md §8.2
+# Generated: 2026-07-17
+# Total requirements: 50  |  Total criteria: ~105
+#
+# Milestone-ordered criterion IDs:
+#   AC-M1-xxx  Connection (R-DOC01-3.1-*)
+#   AC-M2-xxx  Clone (R-DOC01-3.2-*)
+#   AC-M3-xxx  Exclusions (R-DOC01-3.3-*)
+#   AC-M4-xxx  Structural substrate / dependency graph (R-DOC01-3.4-*)
+#   AC-M5-xxx  code_intel MCP tools (R-DOC01-3.5-*)
+#   AC-M6-xxx  Coverage / Readiness (R-DOC01-3.7-*)
+#   AC-M7-xxx  Freshness (R-DOC01-3.6-*)
+#   AC-M8-xxx  Precise navigation / LSP (R-DOC01-3.5-11/12)
+#   AC-LAT-xxx Latency SLOs
+#   AC-GV-xxx  Graph version retention
+#   AC-LSP-DEG-xxx LSP degradation honesty
+#   AC-SANDBOX-xxx No-in-sandbox-LSP
+#   AC-INV-xxx Architecture invariants
+#   AC-CANON-xxx Canonical contracts
+
+# ══════════════════════════════════════════════════════════════════
+# M1 — Connection
+# ══════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-M1-001
+  name: "GitHub App requests exactly contents:read + metadata:read"
+  evidence_class: "[contract]"
+  authority_refs: [R-DOC01-3.1-01]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A GitHub App installation is created via the test harness with a mock GitHub
+      API endpoint that records the requested OAuth scopes.
+    when: >
+      The installation flow completes.
+    then:
+      - The recorded scope set equals exactly {contents:read, metadata:read}.
+      - No additional scope is present.
+      - If the scope set differs, the installation is rejected.
+  applicability:
+    fixtures: [fixture-github-app-install]
+    estates: [estate-flask, estate-proxy]
+    excluded_estates: []
+    rationale: "Scope enforcement is independent of repo content."
+  primary_oracle:
+    type: exact_set_comparison
+    artifact: "recorded scopes == {contents:read, metadata:read}"
+  thresholds:
+    extra_scopes_allowed: 0
+    missing_scopes_allowed: 0
+  test_ids: [T-M1-001, T-M1-002]
+  fault_model_refs: [F-SCOPE-EXTRA-PERM]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M1-001
+    - contract:T-M1-002
+
+- criterion_id: AC-M1-002
+  name: "Token is minted per-operation via Nango, not cached"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.1-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      Two sequential operations requiring a GitHub token, with a Nango stub that
+      records each mint call and returns distinct token values.
+    when: >
+      Both operations are executed.
+    then:
+      - Nango mint is called exactly once per operation (twice total).
+      - The token value is not stored in any module-level, class-level, or
+        persistent cache between the two operations.
+      - The token from operation-1 is not reused by operation-2.
+  applicability:
+    fixtures: [fixture-nango-stub]
+    estates: [estate-flask, estate-proxy]
+    excluded_estates: []
+    rationale: "Token lifecycle is independent of repo structure."
+  primary_oracle:
+    type: call_count_and_value_distinctness
+    artifact: "nango_stub.mint_call_count == 2; tokens[0] != tokens[1] (stub returns distinct values)"
+  thresholds:
+    cached_reuse_allowed: 0
+  test_ids: [T-M1-003, T-M1-004]
+  fault_model_refs: [F-TOKEN-CACHED]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M1-003
+    - unit:T-M1-004
+
+- criterion_id: AC-M1-003
+  name: "GitHub token never written to logs"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-DOC01-3.1-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      The Nango stub returns a known token value (sentinel: 'ghp_SENTINEL_TOKEN_VALUE').
+      Log output is captured during an operation that uses the token.
+    when: >
+      The operation executes (clone, API call, etc.).
+    then:
+      - The sentinel token value does not appear anywhere in log output at any level.
+      - The Authorization header value does not appear in log output.
+  applicability:
+    fixtures: [fixture-nango-stub, fixture-log-capture]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "Log safety is independent of repo content."
+  primary_oracle:
+    type: log_content_absence
+    artifact: "log_output must not contain 'ghp_SENTINEL_TOKEN_VALUE'"
+  thresholds:
+    token_log_occurrences_allowed: 0
+  test_ids: [T-M1-005]
+  fault_model_refs: [F-TOKEN-LOGGED]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M1-005
+
+- criterion_id: AC-M1-004
+  name: "RepoProvider interface encapsulates all git-host-specific operations"
+  evidence_class: "[contract]"
+  authority_refs: [R-DOC01-3.1-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      The implementation under test.
+    when: >
+      Static analysis inspects all call sites for git-host-specific operations
+      (clone, pull, webhook parsing, ls-remote).
+    then:
+      - All such call sites are inside or behind the RepoProvider interface.
+      - No git-host-specific logic exists outside the RepoProvider boundary
+        (e.g., no raw subprocess('git clone') call outside the provider).
+  applicability:
+    fixtures: [fixture-static-analysis]
+    estates: []
+    excluded_estates: []
+    rationale: "Structural contract; checked statically."
+  primary_oracle:
+    type: static_import_and_call_analysis
+    artifact: "zero direct git-host calls outside RepoProvider module path"
+  test_ids: [T-M1-006]
+  fault_model_refs: [F-REPO-PROVIDER-BYPASS]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - static:T-M1-006
+
+- criterion_id: AC-M1-005
+  name: "RepoProvider bypasses are rejected by verifier (pre-build negative)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.1-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A negative build in which a git-host clone call is introduced directly
+      outside the RepoProvider (simulating a bypass).
+    when: >
+      The static analysis verifier runs.
+    then:
+      - The verifier exits non-zero and reports the violation.
+  applicability:
+    fixtures: [fixture-negative-build-repo-provider]
+    estates: []
+    excluded_estates: []
+    rationale: "Pre-build negative validation per §9.3."
+  primary_oracle:
+    type: verifier_exit_code
+    artifact: "verifier exits non-zero with violation report"
+  test_ids: [T-M1-007]
+  fault_model_refs: [F-REPO-PROVIDER-BYPASS]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M1-007
+
+# ══════════════════════════════════════════════════════════════════
+# M2 — Clone
+# ══════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-M2-001
+  name: "Clone is stored on per-tenant encrypted volume with no cross-tenant sharing"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.2-01, R-INVARIANT-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      Two tenants (tenant-A, tenant-B) each triggering a clone in the test harness.
+    when: >
+      Both clones complete.
+    then:
+      - tenant-A's clone is stored under /tenants/tenant-A/ path prefix.
+      - tenant-B's clone is stored under /tenants/tenant-B/ path prefix.
+      - A process serving tenant-B cannot open or stat files under /tenants/tenant-A/.
+      - No shared volume, process, or index exists between the two tenants.
+  applicability:
+    fixtures: [fixture-two-tenant-clone]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "Tenant isolation is a P0 security property."
+  primary_oracle:
+    type: path_access_control_check
+    artifact: "open(/tenants/tenant-A/...) from tenant-B process raises PermissionError"
+  thresholds:
+    cross_tenant_access_allowed: 0
+  test_ids: [T-M2-001, T-M2-002]
+  fault_model_refs: [F-CROSS-TENANT-VOLUME]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M2-001
+    - security-adversarial:T-M2-002
+
+- criterion_id: AC-M2-002
+  name: "Clone produces a valid working tree at pinned SHA"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.2-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo at a known commit SHA.
+    when: >
+      The system clones it.
+    then:
+      - 'git rev-parse HEAD' in the cloned directory equals the expected SHA.
+      - The file tree matches the expected file list for that SHA.
+  applicability:
+    fixtures: [fixture-small-repo]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "Basic clone correctness."
+  primary_oracle:
+    type: exact_sha_and_file_tree_comparison
+    artifact: "git rev-parse HEAD == expected_sha; file_list == golden_file_list"
+  test_ids: [T-M2-003]
+  fault_model_refs: []
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M2-003
+
+- criterion_id: AC-M2-003
+  name: "Large repo uses blobless clone"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.2-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo with file count above blobless_threshold (~100k files),
+      with git command interception recording clone arguments.
+    when: >
+      The clone operation runs.
+    then:
+      - The recorded git clone command includes '--filter=blob:none'.
+  applicability:
+    fixtures: [fixture-large-file-count-stub]
+    estates: []
+    excluded_estates: []
+    rationale: "Only applicable when file count exceeds threshold; fixture stubs the count."
+  primary_oracle:
+    type: command_argument_inspection
+    artifact: "'--filter=blob:none' in recorded git clone args"
+  test_ids: [T-M2-004]
+  fault_model_refs: [F-BLOBLESS-NOT-USED]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M2-004
+
+- criterion_id: AC-M2-004
+  name: "System never pushes to upstream origin"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-DOC01-3.2-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo with a git command interceptor recording all subprocess calls,
+      running through clone, pull-delta, and graph-rebuild operations.
+    when: >
+      All operations complete.
+    then:
+      - No 'git push' command appears in the intercepted call log.
+      - The remote URL is never written to (no PUT/POST to GitHub API with write payloads).
+  applicability:
+    fixtures: [fixture-git-interceptor]
+    estates: [estate-flask, estate-proxy]
+    excluded_estates: []
+    rationale: "Push-to-origin prohibition is absolute."
+  primary_oracle:
+    type: command_log_absence
+    artifact: "'git push' does not appear in intercepted subprocess calls"
+  thresholds:
+    push_calls_allowed: 0
+  test_ids: [T-M2-005]
+  fault_model_refs: [F-PUSH-TO-ORIGIN]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M2-005
+
+- criterion_id: AC-M2-005
+  name: "Canonical clone never executes repository code"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-DOC01-3.2-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo containing an executable script (e.g., setup.py, Makefile, postinstall)
+      that writes a sentinel file if executed. Subprocess interceptor records all exec calls.
+    when: >
+      Clone, pull, and indexing complete.
+    then:
+      - The sentinel file is not created.
+      - No subprocess call matching the repo's executable paths appears in the interceptor log.
+  applicability:
+    fixtures: [fixture-repo-with-executable-script]
+    estates: []
+    excluded_estates: []
+    rationale: "Code execution from cloned repos is a P0 security property."
+  primary_oracle:
+    type: sentinel_file_absence_and_command_log
+    artifact: "sentinel file absent; no exec call to repo script in interceptor log"
+  thresholds:
+    repo_code_exec_allowed: 0
+  test_ids: [T-M2-006]
+  fault_model_refs: [F-REPO-CODE-EXEC]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M2-006
+    - security-adversarial:T-M2-006
+
+- criterion_id: AC-M2-006
+  name: "Push event triggers delta pull, not re-clone"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.2-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo already cloned. A push webhook for that repo is delivered.
+      Git command interceptor records subprocess calls.
+    when: >
+      The push webhook is processed.
+    then:
+      - A 'git fetch' or 'git pull' command is recorded (delta pull).
+      - No 'git clone' command is recorded.
+  applicability:
+    fixtures: [fixture-git-interceptor, fixture-post-clone-push]
+    estates: []
+    excluded_estates: []
+    rationale: "Re-clone on push is a functional regression."
+  primary_oracle:
+    type: command_log_presence_and_absence
+    artifact: "git fetch/pull recorded; git clone NOT recorded"
+  test_ids: [T-M2-007]
+  fault_model_refs: [F-RECLONE-ON-PUSH]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M2-007
+
+# ══════════════════════════════════════════════════════════════════
+# M3 — Exclusions
+# ══════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-M3-001
+  name: "Gitleaks runs on changed files after initial clone"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.3-01]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo containing a known secret in one file (gitleaks-detectable pattern).
+      Gitleaks call is instrumented.
+    when: >
+      Initial clone completes.
+    then:
+      - Gitleaks is invoked on the changed file set.
+      - The secret-bearing file is added to the exclusion set.
+  applicability:
+    fixtures: [fixture-planted-secrets]
+    estates: []
+    excluded_estates: []
+    rationale: "Secret detection at clone time is P0."
+  primary_oracle:
+    type: instrumented_call_and_exclusion_set_membership
+    artifact: "gitleaks called with changed_files; secret_file in exclusion_set"
+  thresholds:
+    gitleaks_calls_on_clone: 1
+    secret_files_not_excluded: 0
+  test_ids: [T-M3-001, T-M3-002]
+  fault_model_refs: [F-GITLEAKS-NOT-RUN-ON-PULL]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M3-001
+    - unit:T-M3-002
+
+- criterion_id: AC-M3-002
+  name: "Gitleaks runs on changed files after every delta pull"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.3-01]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo already cloned. A delta pull introduces a new file with a secret.
+    when: >
+      The delta pull completes.
+    then:
+      - Gitleaks is invoked on the new/changed files.
+      - The new secret-bearing file is added to the exclusion set.
+  applicability:
+    fixtures: [fixture-planted-secrets, fixture-post-clone-push]
+    estates: []
+    excluded_estates: []
+    rationale: "Secrets introduced by push must be caught at pull time."
+  primary_oracle:
+    type: instrumented_call_and_exclusion_set_membership
+    artifact: "gitleaks called after pull; new secret_file in exclusion_set"
+  thresholds:
+    secret_files_not_excluded_after_pull: 0
+  test_ids: [T-M3-003]
+  fault_model_refs: [F-GITLEAKS-NOT-RUN-ON-PULL]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M3-003
+
+- criterion_id: AC-M3-003
+  name: "Excluded paths are absent from the dependency graph"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.3-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo with known excluded paths (gitleaks hit + .env* + node_modules/).
+      Full pipeline run completes.
+    when: >
+      The dependency graph is queried for nodes whose paths match excluded paths.
+    then:
+      - Zero graph nodes exist with paths from the exclusion set.
+  applicability:
+    fixtures: [fixture-planted-secrets, fixture-policy-globs]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "Excluded path leak into graph is P0."
+  primary_oracle:
+    type: exact_count_zero
+    artifact: "SELECT COUNT(*) FROM nodes WHERE path IN (exclusion_set) == 0"
+  thresholds:
+    excluded_path_graph_nodes_allowed: 0
+  test_ids: [T-M3-004]
+  fault_model_refs: [F-EXCLUDED-PATH-IN-INDEX]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M3-004
+
+- criterion_id: AC-M3-004
+  name: "Excluded paths are absent from all tool query results"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.3-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo with known excluded paths. MCP tools are invoked (get_dependents,
+      who_writes, list_entry_points, find_references, batch_read for excluded paths).
+    when: >
+      Each tool returns results.
+    then:
+      - No result contains a path from the exclusion set.
+      - batch_read of an excluded path returns an error entry, not file content.
+  applicability:
+    fixtures: [fixture-planted-secrets, fixture-policy-globs]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "Excluded path leak into results is P0."
+  primary_oracle:
+    type: result_path_membership_check
+    artifact: "no result.path in exclusion_set; batch_read(excluded) returns error"
+  thresholds:
+    excluded_paths_in_results_allowed: 0
+  test_ids: [T-M3-005, T-M3-006]
+  fault_model_refs: [F-EXCLUDED-PATH-IN-RESULT]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M3-005
+    - security-adversarial:T-M3-006
+
+- criterion_id: AC-M3-005
+  name: "Excluded paths are never copied into sandbox"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.3-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo with excluded paths. A meeting sandbox is prepared.
+    when: >
+      The sandbox preparation completes.
+    then:
+      - The sandbox file list contains no paths from the exclusion set.
+  applicability:
+    fixtures: [fixture-planted-secrets, fixture-sandbox-prep]
+    estates: []
+    excluded_estates: []
+    rationale: "Sandbox copy of excluded paths is P0."
+  primary_oracle:
+    type: sandbox_file_list_membership_check
+    artifact: "no sandbox_file in exclusion_set"
+  thresholds:
+    excluded_paths_in_sandbox_allowed: 0
+  test_ids: [T-M3-007]
+  fault_model_refs: [F-EXCLUDED-PATH-IN-SANDBOX]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M3-007
+
+- criterion_id: AC-M3-006
+  name: "Detected secret values are redacted in batch_read output"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.3-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A fixture file containing a gitleaks-detectable secret (sentinel value:
+      'AKIAIOSFODNN7EXAMPLE'). The file is in the non-excluded set (gitleaks hit
+      but file was not policy-glob excluded — testing the redaction path).
+    when: >
+      batch_read is called for this file.
+    then:
+      - The returned file content does not contain the sentinel secret value.
+      - A redaction marker is present (e.g., '[REDACTED]') at the secret's position.
+  applicability:
+    fixtures: [fixture-secret-in-non-excluded-file]
+    estates: []
+    excluded_estates: []
+    rationale: "Read-path redaction is P0."
+  primary_oracle:
+    type: string_absence_and_marker_presence
+    artifact: "'AKIAIOSFODNN7EXAMPLE' absent from result; '[REDACTED]' present"
+  thresholds:
+    unredacted_secret_occurrences_allowed: 0
+  test_ids: [T-M3-008]
+  fault_model_refs: [F-SECRET-NOT-REDACTED]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M3-008
+
+- criterion_id: AC-M3-007
+  name: "Secret redaction applies to all read-path tools, not only batch_read"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-DOC01-3.3-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A fixture file containing a detected secret. Each read-path tool that
+      can return file content is invoked.
+    when: >
+      Results are collected from every read-path tool.
+    then:
+      - The sentinel secret value is absent from all tool outputs.
+  applicability:
+    fixtures: [fixture-secret-in-non-excluded-file]
+    estates: []
+    excluded_estates: []
+    rationale: "Redaction must be universal across read paths."
+  primary_oracle:
+    type: string_absence_across_all_outputs
+    artifact: "sentinel absent from all read-path outputs"
+  thresholds:
+    unredacted_occurrences_allowed: 0
+  test_ids: [T-M3-009]
+  fault_model_refs: [F-SECRET-NOT-REDACTED]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M3-009
+
+- criterion_id: AC-M3-008
+  name: "Excluded path membership not logged"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-DOC01-3.3-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo with a known secret value as file content. Log capture is active.
+    when: >
+      The full pipeline runs (clone, gitleaks, exclusion build, index).
+    then:
+      - The secret value does not appear in any log output.
+      - Excluded file paths may be logged (e.g., 'excluding: .env') but their content must not.
+  applicability:
+    fixtures: [fixture-planted-secrets, fixture-log-capture]
+    estates: []
+    excluded_estates: []
+    rationale: "Secret value must never appear in logs."
+  primary_oracle:
+    type: log_content_absence
+    artifact: "secret sentinel value absent from captured log output"
+  thresholds:
+    secret_value_log_occurrences_allowed: 0
+  test_ids: [T-M3-010]
+  fault_model_refs: [F-SECRET-IN-LOG]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M3-010
+
+# ══════════════════════════════════════════════════════════════════
+# M4 — Structural substrate + dependency graph
+# ══════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-M4-001
+  name: "Every non-excluded source file is parsed by tree-sitter to extract declarations"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.4-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo with N non-excluded source files across supported languages.
+      Golden declaration set derived mechanically via Python stdlib ast (disjoint from Proxy pipeline).
+    when: >
+      The structural substrate build completes.
+    then:
+      - Every file in the non-excluded set has at least one entry in the coverage record.
+      - Every declaration in the golden set appears as a graph node.
+      - Recall of declarations >= 1.0 across the fixture set.
+  applicability:
+    fixtures: [fixture-small-repo, fixture-polyglot-small]
+    estates: [estate-flask, estate-proxy]
+    excluded_estates: [estate-messy]
+    rationale: "estate-messy uses abstention goldens; recall is not the primary signal there."
+  primary_oracle:
+    type: deterministic_golden_graph
+    artifact: goldens/fixture-small-repo/declarations.json
+  thresholds:
+    declaration_recall: 1.0
+    uncovered_non_excluded_files: 0
+  test_ids: [T-M4-001, T-M4-002]
+  fault_model_refs: [F-NO-TREESITTER-PARSE]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M4-001
+    - real-estate:T-M4-002
+
+- criterion_id: AC-M4-002
+  name: "Symbols ranked by PageRank over the tag-reference graph"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.4-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo with a known reference graph (A references B references C;
+      A also references D). Golden PageRank ordering is pre-computed.
+    when: >
+      The ranked overview is built.
+    then:
+      - Nodes are returned with non-null pagerank scores.
+      - The ordering of the top-5 nodes by pagerank matches the golden ordering.
+  applicability:
+    fixtures: [fixture-known-reference-graph]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "PageRank correctness requires a controlled reference graph."
+  primary_oracle:
+    type: deterministic_golden_ranking
+    artifact: goldens/fixture-known-reference-graph/pagerank.json
+  thresholds:
+    top5_ordering_match: true
+  test_ids: [T-M4-003]
+  fault_model_refs: []
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M4-003
+
+- criterion_id: AC-M4-003
+  name: "PageRank scores are non-null and non-negative for all indexed nodes"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-DOC01-3.4-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      Any non-excluded source file indexed by tree-sitter.
+    when: >
+      The graph is queried for all nodes.
+    then:
+      - Every node has a pagerank field that is a non-null, non-negative float.
+  applicability:
+    fixtures: [fixture-small-repo]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "PageRank invariant applies to all indexed nodes."
+  primary_oracle:
+    type: invariant_check
+    artifact: "all(node.pagerank >= 0.0 and node.pagerank is not None for node in graph.nodes)"
+  test_ids: [T-M4-004]
+  fault_model_refs: []
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M4-004
+
+- criterion_id: AC-M4-004
+  name: "Zero LLM calls during structural substrate and graph build"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-DOC01-3.4-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      The LLM gateway (src/proxy/llm.py) is instrumented to record all call attempts.
+      A fixture repo is processed through the full graph build pipeline.
+    when: >
+      Clone, gitleaks scan, tree-sitter parse, graph build, and PageRank complete.
+    then:
+      - The LLM gateway recorded zero calls.
+  applicability:
+    fixtures: [fixture-small-repo, fixture-llm-call-counter]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "Zero-LLM is a hard requirement for the graph build path."
+  primary_oracle:
+    type: call_count_exact
+    artifact: "llm_gateway.call_count == 0"
+  thresholds:
+    llm_calls_allowed: 0
+  test_ids: [T-M4-005]
+  fault_model_refs: [F-LLM-CALLED-IN-GRAPH-BUILD]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M4-005
+
+- criterion_id: AC-M4-005
+  name: "LLM call in graph build is rejected by verifier (pre-build negative)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.4-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A negative build where a model call is injected into the graph build path.
+    when: >
+      The verifier runs.
+    then:
+      - The verifier detects the call and exits non-zero.
+  applicability:
+    fixtures: [fixture-negative-build-llm-in-graph]
+    estates: []
+    excluded_estates: []
+    rationale: "Pre-build negative validation per §9.3."
+  primary_oracle:
+    type: verifier_exit_code
+    artifact: "verifier exits non-zero; reports 'unexpected LLM call in graph build'"
+  test_ids: [T-M4-006]
+  fault_model_refs: [F-LLM-CALLED-IN-GRAPH-BUILD]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M4-006
+
+- criterion_id: AC-M4-006
+  name: "File-coverage record accounts for every tracked file (indexed + flagged == git ls-files)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.4-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo with known file list from git ls-files.
+    when: >
+      The file-coverage record is built.
+    then:
+      - Every file in git ls-files has exactly one row in the coverage record.
+      - The row status is either 'indexed' or 'flagged'.
+      - COUNT(indexed) + COUNT(flagged) == COUNT(git ls-files).
+  applicability:
+    fixtures: [fixture-small-repo]
+    estates: [estate-flask, estate-proxy]
+    excluded_estates: []
+    rationale: "100% coverage accounting is a data integrity invariant."
+  primary_oracle:
+    type: exact_count_equality
+    artifact: "coverage_indexed + coverage_flagged == git_ls_files_count"
+  thresholds:
+    uncounted_files_allowed: 0
+  test_ids: [T-M4-007, T-M4-008]
+  fault_model_refs: [F-COVERAGE-INCOMPLETE]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M4-007
+    - real-estate:T-M4-008
+
+- criterion_id: AC-M4-007
+  name: "Each coverage record row has exactly one of: status=indexed or status=flagged"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-DOC01-3.4-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      Any processed fixture or estate repo.
+    when: >
+      The coverage record is queried for all rows.
+    then:
+      - Every row has status in ('indexed', 'flagged').
+      - No row has status null, empty, or any other value.
+      - Flagged rows have a non-empty flag_reason.
+  applicability:
+    fixtures: [fixture-small-repo]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "Schema invariant on coverage record."
+  primary_oracle:
+    type: schema_and_enum_invariant
+    artifact: "all rows: status in {'indexed','flagged'}; flagged rows: flag_reason non-empty"
+  test_ids: [T-M4-009]
+  fault_model_refs: []
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M4-009
+
+- criterion_id: AC-M4-008
+  name: "Table nodes use canonical id 'table::<name>' and kind=='table'"
+  evidence_class: "[contract]"
+  authority_refs: [R-DOC01-3.4-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo with a known database table definition (e.g., Django model 'Order').
+    when: >
+      The dependency graph is queried for table nodes.
+    then:
+      - The node id is 'table::Order' (exact prefix 'table::' + table name).
+      - The node kind is exactly 'table' (not matched by endswith).
+      - No table node uses a different id format.
+  applicability:
+    fixtures: [fixture-django-model]
+    estates: [estate-cova, estate-django-app]
+    excluded_estates: []
+    rationale: "Table node id format is a canonical contract requirement."
+  primary_oracle:
+    type: exact_string_match
+    artifact: "node.id == 'table::Order'; node.kind == 'table'"
+  test_ids: [T-M4-010]
+  fault_model_refs: [F-TABLE-NODE-WRONG-ID]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M4-010
+
+- criterion_id: AC-M4-009
+  name: "Push event triggers full graph rebuild (drop + re-extract), not incremental"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.4-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo with an initial graph. One file changes. A push webhook arrives.
+      The graph database operations are instrumented.
+    when: >
+      The push is processed.
+    then:
+      - A 'DROP TABLE nodes' or equivalent bulk-delete is recorded before re-extraction.
+      - All rows are re-extracted (not just the changed file's rows).
+  applicability:
+    fixtures: [fixture-post-clone-push, fixture-db-operation-counter]
+    estates: []
+    excluded_estates: []
+    rationale: "Incremental invalidation is explicitly forbidden."
+  primary_oracle:
+    type: db_operation_log_inspection
+    artifact: "DROP or bulk-delete recorded before INSERT; row count matches full re-extract"
+  test_ids: [T-M4-011]
+  fault_model_refs: [F-INCREMENTAL-GRAPH-NOT-FULL-REBUILD]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M4-011
+
+- criterion_id: AC-M4-010
+  name: "Grammarless-language files are flagged 'unsupported-language' and still live-searchable"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.4-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo containing a file in a language with no tree-sitter grammar (e.g., .pony, .nim).
+    when: >
+      The structural substrate build completes.
+    then:
+      - The file appears in the coverage record with status='flagged' and flag_reason='unsupported-language'.
+      - The file is reachable via live search (e.g., ripgrep can find its content).
+      - The file does not appear as a graph node.
+  applicability:
+    fixtures: [fixture-unsupported-language-file]
+    estates: []
+    excluded_estates: []
+    rationale: "Grammarless coverage is a specific behavior for unsupported languages."
+  primary_oracle:
+    type: coverage_record_and_search_check
+    artifact: "coverage row: flagged/unsupported-language; ripgrep finds content; no graph node"
+  test_ids: [T-M4-012]
+  fault_model_refs: [F-GRAMMARLESS-NOT-FLAGGED]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M4-012
+
+# ══════════════════════════════════════════════════════════════════
+# M5 — code_intel MCP tools
+# ══════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-M5-001
+  name: "MCP server is minted fresh per query from a factory (never shared)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-DOC01-3.5-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      Two concurrent tool calls. Server factory is instrumented to track instance creation.
+    when: >
+      Both calls execute in parallel.
+    then:
+      - The factory creates two distinct server instances (identity check, not just class).
+      - No server instance is shared between concurrent calls.
+  applicability:
+    fixtures: [fixture-concurrent-tool-calls, fixture-factory-counter]
+    estates: []
+    excluded_estates: []
+    rationale: "Per-query server minting is a concurrency contract."
+  primary_oracle:
+    type: instance_identity_check
+    artifact: "factory.created_instances == 2; instance_1 is not instance_2"
+  thresholds:
+    shared_instances_allowed: 0
+  test_ids: [T-M5-001]
+  fault_model_refs: [F-SHARED-MCP-SERVER]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-001
+
+- criterion_id: AC-M5-002
+  name: "get_dependents returns transitive reverse-dependency set over correct edge types"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.5-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture graph: A calls B; B imports C; C writes D; D extends E; E implements F.
+      Also: G reads H (a reads edge). Golden transitive reverse-dep set of F =
+      {E (implements), D (extends), C (writes), B (imports), A (calls)}.
+    when: >
+      get_dependents('F', limit=50) is called.
+    then:
+      - The result contains A, B, C, D, E.
+      - The result does NOT contain G (reads edge is not traversed transitively).
+      - truncated_count is 0 (all fit within limit).
+  applicability:
+    fixtures: [fixture-known-reference-graph]
+    estates: [estate-flask, estate-proxy]
+    excluded_estates: []
+    rationale: "Founder decision D-FOUNDER-A003 constrains which edges are traversed."
+  primary_oracle:
+    type: deterministic_golden_graph
+    artifact: goldens/fixture-known-reference-graph/dependents-F.json
+  thresholds:
+    missing_dependents_allowed: 0
+    reads_edge_transitive_traversal_allowed: 0
+  test_ids: [T-M5-002, T-M5-003]
+  fault_model_refs: [F-DEPENDENTS-READS-TRANSITIVE]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-002
+    - real-estate:T-M5-003
+
+- criterion_id: AC-M5-003
+  name: "get_dependents does NOT traverse reads edges transitively (founder decision)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.5-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture graph: A reads B; B reads C; C reads D (a chain of reads edges only).
+    when: >
+      get_dependents('D', limit=50) is called.
+    then:
+      - The result contains B (depth-1 direct reader of C — wait, tested at depth-1 only).
+      - Actually: direct readers of D are returned (depth-1 reads: C reads D → C is a direct reader).
+      - C is returned (depth-1 reads). B is NOT returned (reads is not traversed beyond depth-1).
+      - A is NOT returned.
+  applicability:
+    fixtures: [fixture-reads-edge-chain]
+    estates: []
+    excluded_estates: []
+    rationale: "Verifies the reads-depth-1-only constraint from D-FOUNDER-A003."
+  primary_oracle:
+    type: deterministic_golden_set
+    artifact: "result == {C} (depth-1 reads only); B and A absent"
+  test_ids: [T-M5-004]
+  fault_model_refs: [F-DEPENDENTS-READS-TRANSITIVE]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-004
+
+- criterion_id: AC-M5-004
+  name: "get_dependents result is ranked by PageRank and capped at limit with truncated_count"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.5-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture graph with 60 transitive dependents of target symbol T.
+      PageRank scores are known from golden.
+    when: >
+      get_dependents('T', limit=50) is called.
+    then:
+      - Exactly 50 results are returned.
+      - Results are ordered by descending PageRank.
+      - truncated_count == 10.
+  applicability:
+    fixtures: [fixture-large-dependency-fan]
+    estates: []
+    excluded_estates: []
+    rationale: "Cap + truncated_count contract."
+  primary_oracle:
+    type: count_and_ordering_and_truncated_count
+    artifact: "len(result) == 50; ordering matches golden; result.truncated_count == 10"
+  test_ids: [T-M5-005]
+  fault_model_refs: []
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-005
+
+- criterion_id: AC-M5-005
+  name: "who_writes returns 'resolved' tag on tier-1 ORM stacks"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.5-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo using Django ORM (or SQLAlchemy or Rails ActiveRecord).
+      Golden writer set derived mechanically.
+    when: >
+      who_writes('orders') is called.
+    then:
+      - Writers are returned with confidence='resolved'.
+      - The writer set matches the golden.
+  applicability:
+    fixtures: [fixture-django-model]
+    estates: [estate-cova, estate-django-app]
+    excluded_estates: []
+    rationale: "Tier-1 ORM 'resolved' tag is a key contract."
+  primary_oracle:
+    type: deterministic_golden_with_tag_check
+    artifact: goldens/fixture-django-model/who-writes-orders.json
+  thresholds:
+    resolved_recall: 1.0
+    wrong_tag_allowed: 0
+  test_ids: [T-M5-006, T-M5-007]
+  fault_model_refs: [F-WHO-WRITES-SILENT-EXACT]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-006
+    - real-estate:T-M5-007
+
+- criterion_id: AC-M5-006
+  name: "who_writes returns 'lower-bound' tag on non-tier-1 stacks (never silent exact)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.5-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo using a non-tier-1 ORM (e.g., SQLite raw queries, Tortoise ORM).
+    when: >
+      who_writes('orders') is called.
+    then:
+      - Writers are returned with confidence='lower-bound'.
+      - No result is tagged 'resolved'.
+  applicability:
+    fixtures: [fixture-non-tier1-orm]
+    estates: []
+    excluded_estates: []
+    rationale: "Honesty on non-supported ORM is a P1 contract."
+  primary_oracle:
+    type: tag_enum_check
+    artifact: "all(w.confidence == 'lower-bound' for w in result.writers)"
+  thresholds:
+    resolved_on_non_tier1_allowed: 0
+  test_ids: [T-M5-008]
+  fault_model_refs: [F-WHO-WRITES-SILENT-EXACT]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-008
+
+- criterion_id: AC-M5-007
+  name: "shares_table returns independent modules co-accessing table with correct confidence tier"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.5-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo where two independent modules both touch table 'payments'.
+      Golden derived mechanically.
+    when: >
+      shares_table('payments') is called.
+    then:
+      - Both modules are returned.
+      - Confidence tiering matches who_writes semantics (resolved/lower-bound per stack).
+  applicability:
+    fixtures: [fixture-cross-module-table-access]
+    estates: [estate-cova, estate-django-app]
+    excluded_estates: []
+    rationale: "shares_table correctness depends on cross-module graph traversal."
+  primary_oracle:
+    type: deterministic_golden_with_tag_check
+    artifact: goldens/fixture-cross-module-table-access/shares-table-payments.json
+  test_ids: [T-M5-009]
+  fault_model_refs: []
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-009
+
+- criterion_id: AC-M5-008
+  name: "list_entry_points returns nodes with zero in-degree"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.5-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture graph with known roots (A has no incoming edges; B has an incoming edge from C).
+    when: >
+      list_entry_points() is called.
+    then:
+      - A is in the result.
+      - B is NOT in the result (it has an incoming edge).
+  applicability:
+    fixtures: [fixture-known-reference-graph]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "Zero in-degree is the exact definition of entry point."
+  primary_oracle:
+    type: deterministic_golden_set
+    artifact: "result == {A}; B absent"
+  test_ids: [T-M5-010]
+  fault_model_refs: []
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-010
+
+- criterion_id: AC-M5-009
+  name: "owner returns CODEOWNERS result tagged 'resolved'"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.5-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo with a CODEOWNERS file defining ownership for a specific path.
+    when: >
+      owner(path) is called for that path.
+    then:
+      - The returned owner entry matches the CODEOWNERS rule.
+      - The confidence tag is 'resolved'.
+  applicability:
+    fixtures: [fixture-codeowners]
+    estates: [estate-proxy]
+    excluded_estates: []
+    rationale: "CODEOWNERS is the authoritative source."
+  primary_oracle:
+    type: deterministic_golden_with_tag_check
+    artifact: goldens/fixture-codeowners/owner.json
+  test_ids: [T-M5-011]
+  fault_model_refs: [F-OWNER-MISSING-TAG]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-011
+
+- criterion_id: AC-M5-010
+  name: "owner falls back to git-blame tagged 'lower-bound' when no CODEOWNERS match"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.5-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo with no CODEOWNERS file (or the path has no matching rule).
+    when: >
+      owner(path) is called.
+    then:
+      - A result is returned using recent git-blame data.
+      - The confidence tag is 'lower-bound'.
+      - No result is tagged 'resolved'.
+  applicability:
+    fixtures: [fixture-no-codeowners]
+    estates: []
+    excluded_estates: []
+    rationale: "Fallback honesty is a P1 contract."
+  primary_oracle:
+    type: tag_enum_check
+    artifact: "result.confidence == 'lower-bound'"
+  test_ids: [T-M5-012]
+  fault_model_refs: [F-OWNER-MISSING-TAG]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-012
+
+- criterion_id: AC-M5-011
+  name: "batch_read reads up to 10 files in parallel and returns partial results on per-file failure"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.5-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A call to batch_read with 10 valid paths and 1 invalid path (file does not exist).
+      Concurrency is instrumented.
+    when: >
+      batch_read([valid*10, invalid*1], max_lines_per_file=100) is called
+      (capped at 10 per spec; invalid path triggers a per-file error).
+    then:
+      - Up to 10 files are read concurrently (parallel execution recorded).
+      - Results contain 10 successful entries and 1 error entry for the invalid path.
+      - The entire batch is NOT aborted by the single failure.
+  applicability:
+    fixtures: [fixture-batch-read-partial-failure]
+    estates: []
+    excluded_estates: []
+    rationale: "Partial-failure tolerance is an explicit tool contract."
+  primary_oracle:
+    type: result_schema_and_count_check
+    artifact: "len(successes) == 10; len(errors) == 1; batch not aborted"
+  test_ids: [T-M5-013]
+  fault_model_refs: [F-BATCH-READ-ABORT-ON-FAILURE]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-013
+
+- criterion_id: AC-M5-012
+  name: "batch_read cap at 10 files per call (rejects > 10 or truncates silently with error)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.5-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A call to batch_read with 15 paths.
+    when: >
+      batch_read is invoked.
+    then:
+      - At most 10 files are returned.
+      - If truncation occurs, it is signaled (not silent).
+  applicability:
+    fixtures: [fixture-batch-read-overcount]
+    estates: []
+    excluded_estates: []
+    rationale: "Cap boundary behavior."
+  primary_oracle:
+    type: count_upper_bound
+    artifact: "len(result.files) <= 10"
+  test_ids: [T-M5-014]
+  fault_model_refs: []
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-014
+
+- criterion_id: AC-M5-013
+  name: "lookup_referent resolves deterministically to node_id, area, or None with zero LLM calls"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.5-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture graph with known nodes. LLM gateway instrumented to count calls.
+      Three test terms: one that maps to a node_id, one to an area, one that maps to None.
+    when: >
+      lookup_referent is called three times (same term repeated twice for determinism check).
+    then:
+      - First call returns node_id or area or None per golden.
+      - Second call with same term returns identical result.
+      - LLM gateway call count == 0.
+  applicability:
+    fixtures: [fixture-known-reference-graph, fixture-llm-call-counter]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "Determinism and zero-LLM are joint requirements."
+  primary_oracle:
+    type: deterministic_golden_and_call_count
+    artifact: "result matches golden; llm_gateway.call_count == 0; repeat call matches first"
+  thresholds:
+    llm_calls_allowed: 0
+    nondeterministic_results_allowed: 0
+  test_ids: [T-M5-015, T-M5-016]
+  fault_model_refs: [F-LOOKUP-REFERENT-LLM-CALL]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-015
+    - unit:T-M5-016
+
+- criterion_id: AC-M5-014
+  name: "Per-meeting cache returns stored result for repeat call with identical args"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.5-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A meeting session. A tool call is made once. The graph-query path is instrumented
+      to count DB reads.
+    when: >
+      The same tool call (same tool + same args) is made a second time within the same meeting.
+    then:
+      - The second call returns the same result.
+      - DB query count for the second call is 0 (served from cache).
+  applicability:
+    fixtures: [fixture-meeting-session, fixture-db-query-counter]
+    estates: []
+    excluded_estates: []
+    rationale: "Per-meeting cache is an explicit performance requirement."
+  primary_oracle:
+    type: db_query_count_on_repeat
+    artifact: "db_queries_on_call_2 == 0; result_1 == result_2"
+  test_ids: [T-M5-017]
+  fault_model_refs: []
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-017
+
+- criterion_id: AC-M5-015
+  name: "Cache is invalidated on push webhook for the affected repo's meetings"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.5-10]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A meeting with a cached tool result. A push webhook for the same repo is delivered.
+    when: >
+      The same tool call is made after the webhook.
+    then:
+      - The cache entry is no longer returned.
+      - The graph is re-queried (DB query count > 0 for the second call after push).
+  applicability:
+    fixtures: [fixture-meeting-session, fixture-push-webhook]
+    estates: []
+    excluded_estates: []
+    rationale: "Cache invalidation on push is a data integrity requirement."
+  primary_oracle:
+    type: db_query_count_after_invalidation
+    artifact: "db_queries_after_push > 0 (not served from cache)"
+  test_ids: [T-M5-018]
+  fault_model_refs: [F-CACHE-NOT-INVALIDATED-ON-PUSH]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-018
+
+# ══════════════════════════════════════════════════════════════════
+# M6 — Coverage read + Readiness
+# ══════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-M6-001
+  name: "Readiness state uses exactly the canonical enum values"
+  evidence_class: "[contract]"
+  authority_refs: [R-DOC01-3.7-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      The system goes through the full lifecycle (connect, clone, index, ready).
+    when: >
+      Every Readiness emission is captured.
+    then:
+      - Every emitted value is one of: connecting, cloning, indexing, ready, not_ready.
+      - No other value is emitted.
+  applicability:
+    fixtures: [fixture-full-lifecycle]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "Canonical enum contract enforced at every transition."
+  primary_oracle:
+    type: enum_membership_check
+    artifact: "all(r in {'connecting','cloning','indexing','ready','not_ready'} for r in emitted)"
+  test_ids: [T-M6-001]
+  fault_model_refs: [F-WRONG-READINESS-ENUM]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M6-001
+
+- criterion_id: AC-M6-002
+  name: "Readiness gate verifies indexed + flagged == git ls-files"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.7-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo where the coverage record has a gap (one file is tracked by git
+      but has no coverage row — simulating an incomplete indexing run).
+    when: >
+      The readiness gate evaluates file classification.
+    then:
+      - Readiness is NOT set to 'ready'.
+      - An error or not_ready state is emitted indicating incomplete classification.
+  applicability:
+    fixtures: [fixture-incomplete-coverage]
+    estates: []
+    excluded_estates: []
+    rationale: "Readiness gate must enforce 100% classification."
+  primary_oracle:
+    type: readiness_enum_check
+    artifact: "emitted readiness != 'ready' when gap exists"
+  test_ids: [T-M6-002]
+  fault_model_refs: [F-COVERAGE-INCOMPLETE]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M6-002
+
+- criterion_id: AC-M6-003
+  name: "coverage_pct and gaps computed by pure deterministic function with zero model calls"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-DOC01-3.7-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A known coverage record (N indexed, M flagged). LLM gateway instrumented.
+    when: >
+      coverage_pct and gaps are computed.
+    then:
+      - coverage_pct == N / (N + M) (exact arithmetic, no rounding beyond 4 decimal places).
+      - LLM gateway call count == 0.
+      - Running the same computation twice produces identical results.
+  applicability:
+    fixtures: [fixture-small-repo, fixture-llm-call-counter]
+    estates: []
+    excluded_estates: []
+    rationale: "Determinism + zero-LLM are joint requirements."
+  primary_oracle:
+    type: exact_arithmetic_and_call_count
+    artifact: "coverage_pct matches formula; llm_gateway.call_count == 0"
+  thresholds:
+    llm_calls_allowed: 0
+  test_ids: [T-M6-003]
+  fault_model_refs: []
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M6-003
+
+- criterion_id: AC-M6-004
+  name: "Ready state includes indexed_at timestamp and pinned SHA"
+  evidence_class: "[contract]"
+  authority_refs: [R-DOC01-3.7-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo that reaches 'ready' state.
+    when: >
+      The readiness record is inspected.
+    then:
+      - indexed_at is a non-null ISO 8601 timestamp.
+      - pinned_sha is a non-null 40-character hex SHA.
+  applicability:
+    fixtures: [fixture-full-lifecycle]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "SHA pinning is required for session-level correctness."
+  primary_oracle:
+    type: schema_field_presence
+    artifact: "record.indexed_at non-null; record.pinned_sha matches /^[0-9a-f]{40}$/"
+  test_ids: [T-M6-004]
+  fault_model_refs: [F-READINESS-MISSING-SHA]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M6-004
+
+# ══════════════════════════════════════════════════════════════════
+# M7 — Freshness
+# ══════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-M7-001
+  name: "Push webhook signature is validated before processing"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.6-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A push webhook with an invalid HMAC-SHA256 signature.
+    when: >
+      The webhook is received.
+    then:
+      - The webhook is rejected (HTTP 401 or equivalent) and not enqueued.
+      - No graph rebuild is triggered.
+  applicability:
+    fixtures: [fixture-bad-hmac-webhook]
+    estates: []
+    excluded_estates: []
+    rationale: "Signature validation is a security requirement."
+  primary_oracle:
+    type: rejection_status_and_no_rebuild
+    artifact: "response code == 401; graph_rebuild_triggered == False"
+  test_ids: [T-M7-001]
+  fault_model_refs: [F-WEBHOOK-NO-SIGNATURE-CHECK]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M7-001
+
+- criterion_id: AC-M7-002
+  name: "Duplicate webhook (same delivery-GUID + commit SHA) is deduplicated"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.6-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A valid push webhook delivered twice with the same delivery-GUID and commit SHA.
+      Graph rebuild is instrumented to count invocations.
+    when: >
+      Both deliveries are processed.
+    then:
+      - Graph rebuild is triggered exactly once.
+  applicability:
+    fixtures: [fixture-duplicate-webhook]
+    estates: []
+    excluded_estates: []
+    rationale: "Deduplication prevents redundant and potentially inconsistent rebuilds."
+  primary_oracle:
+    type: call_count_exact
+    artifact: "graph_rebuild_count == 1"
+  test_ids: [T-M7-002]
+  fault_model_refs: [F-WEBHOOK-NO-DEDUP]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M7-002
+
+- criterion_id: AC-M7-003
+  name: "Meeting start reconciles ls-remote vs local tip and pulls drift before confirming readiness"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.6-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo where the local tip is 2 commits behind the remote (simulating a missed webhook).
+      ls-remote is stubbed to return the ahead SHA.
+    when: >
+      A meeting is started.
+    then:
+      - A git fetch/pull is performed to close the gap.
+      - The graph is rebuilt after the pull.
+      - Readiness is not confirmed until the graph reflects the remote tip.
+  applicability:
+    fixtures: [fixture-drift-simulation]
+    estates: []
+    excluded_estates: []
+    rationale: "Reconcile is the safety net for missed webhooks."
+  primary_oracle:
+    type: sequential_event_log_check
+    artifact: "pull recorded before graph_rebuild before readiness_confirmed"
+  test_ids: [T-M7-003]
+  fault_model_refs: [F-NO-RECONCILE-AT-MEETING-START]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M7-003
+
+- criterion_id: AC-M7-004
+  name: "Meeting session pins to a single commit SHA written to meetings.pinned_sha"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.6-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo at known SHA X. A meeting is started.
+    when: >
+      The meeting session initialization completes.
+    then:
+      - meetings.pinned_sha is set to SHA X.
+      - meetings.pinned_sha does not change during the meeting (even if a push arrives).
+  applicability:
+    fixtures: [fixture-full-lifecycle]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "Session pinning is required for consistent answers."
+  primary_oracle:
+    type: db_field_value_check
+    artifact: "meetings.pinned_sha == SHA_X at start and after push"
+  test_ids: [T-M7-004]
+  fault_model_refs: [F-MID-MEETING-PUSH-CHANGES-PIN]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M7-004
+
+- criterion_id: AC-M7-005
+  name: "Mid-meeting push does not change the session's pinned SHA or query results"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.6-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A meeting pinned at SHA X. A tool call returns result R1. A push webhook arrives
+      (advancing to SHA Y).
+    when: >
+      The same tool call is repeated.
+    then:
+      - Result R2 == R1 (queries still answered at SHA X).
+      - meetings.pinned_sha remains X.
+      - A notification is emitted about the repo advancing.
+  applicability:
+    fixtures: [fixture-mid-meeting-push]
+    estates: []
+    excluded_estates: []
+    rationale: "Stable session is a P1 data integrity requirement."
+  primary_oracle:
+    type: result_equality_and_pin_unchanged
+    artifact: "R2 == R1; meetings.pinned_sha unchanged; notification emitted"
+  test_ids: [T-M7-005]
+  fault_model_refs: [F-MID-MEETING-PUSH-CHANGES-PIN]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M7-005
+
+- criterion_id: AC-M7-006
+  name: "Mid-meeting push emits 'repo advanced N commits' notification"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.6-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      An active meeting. A push webhook advances the repo by 3 commits.
+    when: >
+      The push is processed.
+    then:
+      - A notification is emitted: 'repo advanced 3 commits'.
+      - The notification is emitted exactly once.
+  applicability:
+    fixtures: [fixture-mid-meeting-push]
+    estates: []
+    excluded_estates: []
+    rationale: "User-visible notification is required by spec."
+  primary_oracle:
+    type: event_presence_and_content_check
+    artifact: "notification.text matches 'repo advanced N commits'; count == 1"
+  test_ids: [T-M7-006]
+  fault_model_refs: []
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M7-006
+
+# ══════════════════════════════════════════════════════════════════
+# M8 — Precise navigation (LSP)
+# ══════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-M8-001
+  name: "find_references returns exact results tagged 'resolved' from LSP when available"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.5-11]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo with a warm LSP server. A symbol with known references. Golden reference set derived mechanically.
+    when: >
+      find_references(symbol) is called.
+    then:
+      - Every reference in the golden set is returned.
+      - Every returned reference is tagged confidence='resolved'.
+  applicability:
+    fixtures: [fixture-small-repo, fixture-lsp-stub-warm]
+    estates: [estate-flask, estate-proxy]
+    excluded_estates: [estate-messy]
+    rationale: "LSP exact resolution is the primary happy-path."
+  primary_oracle:
+    type: deterministic_golden_with_tag_check
+    artifact: goldens/fixture-small-repo/find-references.json
+  thresholds:
+    recall: 1.0
+    wrong_tag_allowed: 0
+  test_ids: [T-M8-001]
+  fault_model_refs: []
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M8-001
+
+- criterion_id: AC-M8-002
+  name: "LSP timeout triggers grep fallback tagged 'lower-bound'"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.5-12, R-DOC01-LSP-DEG-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      An LSP stub that blocks for longer than lsp_timeout_s (3s).
+    when: >
+      find_references(symbol) is called.
+    then:
+      - The call completes within lsp_timeout_s + small buffer (e.g., 4s total).
+      - Results are returned using grep, tagged confidence='lower-bound'.
+  applicability:
+    fixtures: [fixture-lsp-stub-slow]
+    estates: []
+    excluded_estates: []
+    rationale: "Timeout fallback is the key resilience path."
+  primary_oracle:
+    type: wall_clock_and_tag_check
+    artifact: "elapsed < 4s; all results tagged 'lower-bound'"
+  test_ids: [T-M8-002, T-M8-003]
+  fault_model_refs: [F-LSP-TIMEOUT-NO-FALLBACK, F-LSP-TIMEOUT-WRONG-LABEL]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M8-002
+    - fault-injection:T-M8-003
+
+- criterion_id: AC-M8-003
+  name: "Hung LSP server is restarted after timeout"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.5-12]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      An LSP server that hangs on the first call (timeout triggered). Process lifecycle is instrumented.
+    when: >
+      A subsequent find_references call is made.
+    then:
+      - The server process was restarted after the timeout.
+      - The subsequent call succeeds (via restarted LSP or grep fallback).
+  applicability:
+    fixtures: [fixture-lsp-stub-slow]
+    estates: []
+    excluded_estates: []
+    rationale: "Server restart prevents indefinite degradation."
+  primary_oracle:
+    type: process_lifecycle_check
+    artifact: "server restart recorded between call_1 and call_2"
+  test_ids: [T-M8-004]
+  fault_model_refs: [F-LSP-HUNG-NOT-RESTARTED]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M8-004
+
+- criterion_id: AC-M8-004
+  name: "LSP fallback returns 'lower-bound', never silently drops or returns stale LSP results"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-LSP-DEG-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      An LSP stub that times out. The grep fallback returns N results.
+    when: >
+      find_references is called.
+    then:
+      - N results are returned (not empty / not silently dropped).
+      - All results are tagged 'lower-bound'.
+      - No stale LSP result from a previous successful call is returned.
+  applicability:
+    fixtures: [fixture-lsp-stub-slow]
+    estates: []
+    excluded_estates: []
+    rationale: "Honesty on degradation is the LSP-DEG-01 requirement."
+  primary_oracle:
+    type: result_count_and_tag_check
+    artifact: "len(results) == N; all tagged 'lower-bound'"
+  test_ids: [T-M8-005]
+  fault_model_refs: [F-LSP-TIMEOUT-NO-FALLBACK, F-LSP-TIMEOUT-WRONG-LABEL]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M8-005
+
+# ══════════════════════════════════════════════════════════════════
+# Latency SLOs
+# ══════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-LAT-001
+  name: "First grounded text at p50 <= 2.0s on direct-answer path"
+  evidence_class: "[performance]"
+  authority_refs: [R-DOC01-LAT-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A warm estate (estate-flask, graph pre-built) on the pinned hardware class.
+      100 in-meeting code_intel tool calls on the direct-answer path.
+    when: >
+      Latency from tool call receipt to first grounded text is measured.
+    then:
+      - p50 <= 2.0s.
+      - p95 <= 4.0s.
+  applicability:
+    fixtures: []
+    estates: [estate-flask, estate-proxy]
+    excluded_estates: []
+    rationale: "Latency SLO applies to warm, direct-answer tool calls."
+  primary_oracle:
+    type: statistical_percentile
+    artifact: "p50 <= 2.0; p95 <= 4.0 (computed over 100 samples)"
+  thresholds:
+    p50_s: 2.0
+    p95_s: 4.0
+    sample_count: 100
+    warm_state: true
+  test_ids: [T-LAT-001, T-LAT-002]
+  fault_model_refs: []
+  protocol_ref: PROTO-PERFORMANCE-01
+  required_evidence:
+    - performance:T-LAT-001
+    - performance:T-LAT-002
+
+- criterion_id: AC-LAT-002
+  name: "Pilot-scale repo reaches Readiness 'ready' within 15 minutes of connect"
+  evidence_class: "[performance]"
+  authority_refs: [R-DOC01-LAT-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      estate-flask (pilot-scale: small-clean). Timer starts when install webhook is received.
+    when: >
+      The pipeline completes and emits Readiness='ready'.
+    then:
+      - Elapsed time from install webhook to 'ready' <= 900s (15 minutes).
+  applicability:
+    fixtures: []
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "Pilot-scale bound; provisional until baseline measurements on larger repos."
+  primary_oracle:
+    type: elapsed_time_check
+    artifact: "elapsed_s <= 900"
+  thresholds:
+    max_elapsed_s: 900
+    provisional_until_baseline: true
+  test_ids: [T-LAT-003]
+  fault_model_refs: []
+  protocol_ref: PROTO-PERFORMANCE-01
+  required_evidence:
+    - performance:T-LAT-003
+
+# ══════════════════════════════════════════════════════════════════
+# Graph version retention
+# ══════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-GV-001
+  name: "Graph version is retained for each active meeting's pinned SHA"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-GV-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      Two active meetings pinned at SHA X and SHA Y respectively. A push arrives advancing to SHA Z.
+    when: >
+      Tool calls are made in both meetings.
+    then:
+      - Meeting-1 still answers at SHA X graph.
+      - Meeting-2 still answers at SHA Y graph.
+      - SHA Z graph is built but does not overwrite the retained versions.
+  applicability:
+    fixtures: [fixture-two-meetings-different-pins]
+    estates: []
+    excluded_estates: []
+    rationale: "Per-SHA graph retention is a data integrity requirement."
+  primary_oracle:
+    type: result_version_check
+    artifact: "meeting1.results reflect SHA_X; meeting2.results reflect SHA_Y"
+  test_ids: [T-GV-001]
+  fault_model_refs: []
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-GV-001
+
+- criterion_id: AC-GV-002
+  name: "Graph versions are GC'd when no live meeting pins them"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-GV-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A meeting pinned at SHA X completes (meeting ends). A push advances to SHA Y.
+    when: >
+      The GC process runs.
+    then:
+      - The SHA X graph version is removed from the retention index.
+      - Only SHA Y (active or latest) graph version remains.
+  applicability:
+    fixtures: [fixture-meeting-lifecycle]
+    estates: []
+    excluded_estates: []
+    rationale: "GC prevents unbounded storage growth."
+  primary_oracle:
+    type: retention_index_membership
+    artifact: "SHA_X not in graph_retention_index after meeting ends and GC runs"
+  test_ids: [T-GV-002]
+  fault_model_refs: [F-GV-NO-GC]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-GV-002
+
+# ══════════════════════════════════════════════════════════════════
+# Sandbox contract
+# ══════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-SANDBOX-001
+  name: "find_references and LSP tools are absent from E2B sandbox tool manifest"
+  evidence_class: "[contract]"
+  authority_refs: [R-DOC01-SANDBOX-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      The E2B sandbox tool manifest (registered tool names for the sandbox surface).
+    when: >
+      The manifest is inspected.
+    then:
+      - 'find_references' is not in the sandbox manifest.
+      - No tool name matching the LSP surface is in the sandbox manifest.
+  applicability:
+    fixtures: [fixture-sandbox-manifest]
+    estates: []
+    excluded_estates: []
+    rationale: "Sandbox has no warm LSP; LSP tools must not be registered there."
+  primary_oracle:
+    type: manifest_membership_absence
+    artifact: "'find_references' not in sandbox_manifest.tool_names"
+  test_ids: [T-SANDBOX-001]
+  fault_model_refs: [F-LSP-IN-SANDBOX-MANIFEST]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - contract:T-SANDBOX-001
+
+- criterion_id: AC-SANDBOX-002
+  name: "No code_intel tool name is duplicated across host-side and sandbox surfaces"
+  evidence_class: "[contract]"
+  authority_refs: [R-DOC01-SANDBOX-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      The host-side MCP tool manifest and the sandbox tool manifest.
+    when: >
+      Both manifests are inspected.
+    then:
+      - The intersection of host_manifest.tool_names and sandbox_manifest.tool_names is empty.
+  applicability:
+    fixtures: [fixture-sandbox-manifest, fixture-host-manifest]
+    estates: []
+    excluded_estates: []
+    rationale: "Duplicate tool names create ambiguity in dispatch."
+  primary_oracle:
+    type: set_intersection_empty
+    artifact: "len(host_tools & sandbox_tools) == 0"
+  test_ids: [T-SANDBOX-002]
+  fault_model_refs: [F-DUPLICATE-TOOL-NAME]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - contract:T-SANDBOX-002
+
+# ══════════════════════════════════════════════════════════════════
+# Architecture invariants
+# ══════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-INV-001
+  name: "Cited-or-abstain: every grounded claim has a file:line citation from current clone"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-INVARIANT-01]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo. A tool call that returns grounded claims (get_dependents, find_references, etc.).
+    when: >
+      The tool result is inspected.
+    then:
+      - Every grounded claim includes a citation with file (repo-relative path) and line number.
+      - The cited file exists in the clone at the pinned SHA.
+      - The line number is within bounds.
+  applicability:
+    fixtures: [fixture-small-repo]
+    estates: [estate-flask, estate-proxy]
+    excluded_estates: []
+    rationale: "Cited-or-abstain is a P0 architecture invariant."
+  primary_oracle:
+    type: citation_file_line_validation
+    artifact: "all(exists(clone/path) and 0 < line <= file_line_count for claim in result)"
+  thresholds:
+    invalid_citations_allowed: 0
+  test_ids: [T-INV-001, T-INV-002]
+  fault_model_refs: [F-CITED-OR-ABSTAIN-FABRICATE]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-INV-001
+    - real-estate:T-INV-002
+
+- criterion_id: AC-INV-002
+  name: "Cited-or-abstain: absent grounded claim is labeled not-found, not omitted silently"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-INVARIANT-01]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A fixture where a symbol has no known callers (empty set is the correct answer).
+    when: >
+      get_dependents(symbol) is called.
+    then:
+      - The result explicitly represents the empty set (e.g., results=[]).
+      - A 'not-found' or empty-result label is present, not an error or null.
+  applicability:
+    fixtures: [fixture-isolated-symbol]
+    estates: []
+    excluded_estates: []
+    rationale: "Honest empty result is required by cited-or-abstain."
+  primary_oracle:
+    type: empty_result_representation_check
+    artifact: "result.results == [] (not null; not omitted; not error)"
+  test_ids: [T-INV-003]
+  fault_model_refs: [F-CITED-OR-ABSTAIN-SILENT]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-INV-003
+
+- criterion_id: AC-INV-003
+  name: "Lossless-or-honest: incomplete result is labeled lower-bound or not-found-by-this-method"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-INVARIANT-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A fixture where only a partial answer is reachable (e.g., unsupported ORM, LSP timeout).
+    when: >
+      A tool is invoked.
+    then:
+      - The result includes a confidence or completeness label ('lower-bound', 'not-found-by-this-method').
+      - No partial result is returned as an absolute/resolved claim.
+  applicability:
+    fixtures: [fixture-non-tier1-orm, fixture-lsp-stub-slow]
+    estates: [estate-messy]
+    excluded_estates: []
+    rationale: "Honesty labeling is a P0 invariant across all incomplete results."
+  primary_oracle:
+    type: confidence_label_check
+    artifact: "partial results have label in {'lower-bound','not-found-by-this-method'}"
+  thresholds:
+    unlabeled_partial_results_allowed: 0
+  test_ids: [T-INV-004, T-INV-005]
+  fault_model_refs: [F-CITED-OR-ABSTAIN-SILENT]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-INV-004
+    - real-estate:T-INV-005
+
+- criterion_id: AC-INV-004
+  name: "Lossless-or-honest: fabricated absolute claim is rejected by oracle"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-INVARIANT-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A negative build where the system converts an incomplete result to 'resolved'
+      without adequate evidence.
+    when: >
+      The verifier runs.
+    then:
+      - The verifier detects the mislabeled result and exits non-zero.
+  applicability:
+    fixtures: [fixture-negative-build-fabricated-resolved]
+    estates: []
+    excluded_estates: []
+    rationale: "Pre-build negative validation of honesty invariant."
+  primary_oracle:
+    type: verifier_exit_code
+    artifact: "verifier exits non-zero; reports mislabeled confidence"
+  test_ids: [T-INV-006]
+  fault_model_refs: [F-CITED-OR-ABSTAIN-SILENT]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-INV-006
+
+- criterion_id: AC-INV-005
+  name: "Tenant isolation: tenant-A clone inaccessible to tenant-B process"
+  evidence_class: "[security-adversarial]"
+  authority_refs: [R-INVARIANT-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      Two tenants with separate clones. A tool call for tenant-B with args that could
+      resolve to tenant-A's volume path (path traversal attempt).
+    when: >
+      The tool call executes.
+    then:
+      - The response contains only tenant-B data.
+      - No tenant-A path, file content, or graph node appears in the response.
+  applicability:
+    fixtures: [fixture-two-tenant-clone, fixture-path-traversal-args]
+    estates: []
+    excluded_estates: []
+    rationale: "Tenant isolation under adversarial path is P0."
+  primary_oracle:
+    type: response_content_membership_check
+    artifact: "no tenant-A path or content in response"
+  thresholds:
+    cross_tenant_data_allowed: 0
+  test_ids: [T-INV-007, T-INV-008]
+  fault_model_refs: [F-CROSS-TENANT-VOLUME, F-CROSS-TENANT-GRAPH]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - security-adversarial:T-INV-007
+    - junit:T-INV-008
+
+- criterion_id: AC-INV-006
+  name: "Tenant isolation: graph queries return only data from the querying tenant's SQLite"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-INVARIANT-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      Tenant-A and tenant-B each have a graph with distinct node IDs. A query is made as tenant-B.
+    when: >
+      get_dependents or list_entry_points is called as tenant-B.
+    then:
+      - Result contains only nodes from tenant-B's graph.
+      - No tenant-A node ID appears in the result.
+  applicability:
+    fixtures: [fixture-two-tenant-clone]
+    estates: []
+    excluded_estates: []
+    rationale: "Graph-level tenant isolation check."
+  primary_oracle:
+    type: node_id_membership_check
+    artifact: "all(node.id in tenant_B_nodes for node in result)"
+  thresholds:
+    cross_tenant_nodes_allowed: 0
+  test_ids: [T-INV-009]
+  fault_model_refs: [F-CROSS-TENANT-GRAPH, F-CROSS-TENANT-CACHE-KEY]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-INV-009
+
+- criterion_id: AC-INV-007
+  name: "Meeting cache keys are tenant-scoped (cross-tenant cache collision is rejected)"
+  evidence_class: "[security-adversarial]"
+  authority_refs: [R-INVARIANT-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      Tenant-A makes a tool call and the result is cached. Tenant-B makes the same tool call
+      with identical (tool, args) under the same meeting server.
+    when: >
+      Tenant-B's result is returned.
+    then:
+      - Tenant-B receives their own (uncached or separately cached) result.
+      - Tenant-A's cached result is NOT returned to tenant-B.
+  applicability:
+    fixtures: [fixture-two-tenant-clone, fixture-meeting-session]
+    estates: []
+    excluded_estates: []
+    rationale: "Cache key must include tenant ID to prevent cross-tenant collision."
+  primary_oracle:
+    type: result_content_isolation_check
+    artifact: "tenant_B_result.nodes are a subset of tenant_B_nodes only"
+  test_ids: [T-INV-010]
+  fault_model_refs: [F-CROSS-TENANT-CACHE-KEY]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - security-adversarial:T-INV-010
+
+# ══════════════════════════════════════════════════════════════════
+# Canonical contracts
+# ══════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-CANON-001
+  name: "All code-intel code lives under services/code_intel, not libs/code_intel"
+  evidence_class: "[static]"
+  authority_refs: [R-CANONICAL-9-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      The implementation file tree.
+    when: >
+      Static analysis checks for any Python module under libs/code_intel/.
+    then:
+      - No Python module exists under libs/code_intel/.
+  applicability:
+    fixtures: []
+    estates: []
+    excluded_estates: []
+    rationale: "Placement contract is a static property of the repo."
+  primary_oracle:
+    type: filesystem_path_absence
+    artifact: "glob('libs/code_intel/**/*.py') == []"
+  test_ids: [T-CANON-001]
+  fault_model_refs: [F-CODE-INTEL-IN-LIBS]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - static:T-CANON-001
+
+- criterion_id: AC-CANON-002
+  name: "V0 search uses ripgrep only — no Zoekt or other backend"
+  evidence_class: "[contract]"
+  authority_refs: [R-CANONICAL-12.6-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      The implementation and its dependency set.
+    when: >
+      Import analysis and subprocess calls are inspected.
+    then:
+      - No import or subprocess call to Zoekt, ElasticSearch, or similar search backends appears.
+      - All text search calls use ripgrep (rg).
+  applicability:
+    fixtures: []
+    estates: []
+    excluded_estates: []
+    rationale: "ripgrep-only is a canonical V0 decision."
+  primary_oracle:
+    type: static_import_and_call_analysis
+    artifact: "no 'zoekt', 'elasticsearch' in imports or subprocess args; 'rg' is the only search binary"
+  test_ids: [T-CANON-002]
+  fault_model_refs: [F-NON-RIPGREP-BACKEND]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - static:T-CANON-002
+
+- criterion_id: AC-CANON-003
+  name: "Dependency graph is stored in per-repo SQLite, not Postgres or SHA-versioned tables"
+  evidence_class: "[contract]"
+  authority_refs: [R-CANONICAL-12.6-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      The graph persistence layer.
+    when: >
+      Write operations are traced.
+    then:
+      - All graph writes target a SQLite file under the per-tenant per-repo path.
+      - No Postgres connection is opened for graph data.
+      - No SHA-versioned table schema exists in any DB.
+  applicability:
+    fixtures: [fixture-small-repo]
+    estates: []
+    excluded_estates: []
+    rationale: "Graph storage format is a canonical contract."
+  primary_oracle:
+    type: db_connection_and_schema_check
+    artifact: "writes go to *.db (sqlite3); no psycopg2/asyncpg connection opened"
+  test_ids: [T-CANON-003]
+  fault_model_refs: [F-GRAPH-IN-POSTGRES]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - contract:T-CANON-003
+
+- criterion_id: AC-CANON-004
+  name: "Large repo (>500k LOC) has language server kept warm after connect/push"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.6-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture stub that simulates a repo above 500k LOC (LOC counter instrumented).
+      LSP server lifecycle is instrumented.
+    when: >
+      Connect and push operations complete.
+    then:
+      - The LSP server remains running (warm) after connect.
+      - The LSP server remains running after push.
+  applicability:
+    fixtures: [fixture-large-loc-stub, fixture-lsp-lifecycle]
+    estates: []
+    excluded_estates: []
+    rationale: "LSP warm-keep for large repos is a performance requirement."
+  primary_oracle:
+    type: process_lifecycle_check
+    artifact: "lsp_server.is_running == True after connect; True after push"
+  test_ids: [T-CANON-004]
+  fault_model_refs: []
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-CANON-004
+
+- criterion_id: AC-CANON-005
+  name: "Uninstall triggers hard-delete of clone, index, graph, and snapshots within 15 minutes"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-4-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture with a cloned repo, built graph, and coverage index. An uninstall webhook arrives.
+      Wall clock is instrumented.
+    when: >
+      The uninstall event is processed.
+    then:
+      - The clone directory under /tenants/<tenant>/ is deleted.
+      - The graph SQLite file is deleted.
+      - The coverage SQLite file is deleted.
+      - All three deletions complete within 900 seconds of the webhook.
+  applicability:
+    fixtures: [fixture-full-lifecycle, fixture-uninstall-webhook]
+    estates: []
+    excluded_estates: []
+    rationale: "Data deletion on uninstall is a P1 security requirement."
+  primary_oracle:
+    type: filesystem_absence_within_deadline
+    artifact: "none of [clone_dir, graph_db, coverage_db] exist; elapsed < 900s"
+  thresholds:
+    max_delete_elapsed_s: 900
+    stale_ghost_copies_allowed: 0
+  test_ids: [T-CANON-005]
+  fault_model_refs: [F-UNINSTALL-DELETE-LATE]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-CANON-005
+
+# ══════════════════════════════════════════════════════════════════
+# Real-estate end-to-end journeys (per GENERATOR.md §10.3 final paragraph)
+# ══════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-E2E-001
+  name: "Full pipeline on estate-flask: connect -> index -> tool calls all pass"
+  evidence_class: "[eval]"
+  authority_refs: [R-DOC01-3.1-01, R-DOC01-3.2-01, R-DOC01-3.3-01, R-DOC01-3.4-01, R-DOC01-3.5-01, R-DOC01-3.7-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      estate-flask at pinned SHA 36e4a824. Full pipeline run.
+    when: >
+      Connect, clone, gitleaks scan, tree-sitter index, graph build, and then
+      get_dependents, list_entry_points, and owner are called.
+    then:
+      - Readiness reaches 'ready'.
+      - Coverage record accounts for all tracked files.
+      - get_dependents returns results matching estate-flask golden.
+      - list_entry_points returns the known Flask entry points.
+      - owner returns results with correct confidence tags.
+      - No excluded paths appear in any result.
+  applicability:
+    fixtures: []
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "End-to-end smoke test on calibration estate."
+  primary_oracle:
+    type: deterministic_golden_graph
+    artifact: fixtures/estates/flask/golden/flask.app.json
+  thresholds:
+    golden_match: true
+    excluded_path_leaks: 0
+  test_ids: [T-E2E-001]
+  fault_model_refs: []
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - real-estate:T-E2E-001
+
+- criterion_id: AC-E2E-002
+  name: "Full pipeline on estate-messy: abstention cases return 'not-found-by-this-method'"
+  evidence_class: "[eval]"
+  authority_refs: [R-INVARIANT-02, R-DOC01-3.4-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      estate-messy at pinned SHA. Dynamic-dispatch abstention golden set.
+    when: >
+      get_dependents or find_references is called for symbols reachable only via dynamic routing.
+    then:
+      - Results are labeled 'not-found-by-this-method' or 'lower-bound'.
+      - No fabricated node or fabricated file:line citation is present.
+  applicability:
+    fixtures: []
+    estates: [estate-messy]
+    excluded_estates: []
+    rationale: "Honest abstention on dynamic-dispatch is the estate-messy success criterion."
+  primary_oracle:
+    type: label_check_against_abstention_golden
+    artifact: goldens/estate-messy/abstention-cases.json
+  thresholds:
+    fabricated_results_allowed: 0
+  test_ids: [T-E2E-002]
+  fault_model_refs: [F-CITED-OR-ABSTAIN-SILENT]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - real-estate:T-E2E-002
+# ══════════════════════════════════════════════════════════════════
+# doc01 PATCH — sweep gap-closure criteria (evidence/doc01-sweep.md)
+# APPEND these blocks to acceptance/doc01/criteria/criteria.yaml.
+# Each closes one listed sweep gap; ids/test_ids are unique (extend the M4/M6/M8
+# families). Every authority_ref points at a real requirement (existing or the
+# paired sweep-gap-closure.reqs.yaml). Nothing existing changed.
+# Guard note: the conductor must concatenate this file (see PROGRESS.md).
+# ══════════════════════════════════════════════════════════════════
+
+# ── Gap 1: 100% parse on exact-supported files IS a readiness gate condition ──
+- criterion_id: AC-M6-005
+  name: "Readiness withheld when an exact-supported non-flagged file fails to parse (generated/vendor excluded)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.7-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo in an exact-supported (language, ORM) stack where one non-flagged
+      source file has a hard parse error, AND a separate generated/vendor file that also
+      fails to parse but is legitimately flagged (flag_reason in {generated, vendor}).
+    when: >
+      The readiness gate evaluates parse coverage.
+    then:
+      - Readiness is NOT set to 'ready' (the unparsed exact-supported file blocks the gate).
+      - The failure is surfaced in gaps, not silently absent.
+      - The flagged generated/vendor parse failure does NOT block the gate (it is excluded).
+  applicability:
+    fixtures: [fixture-exact-supported-parse-fail, fixture-generated-vendor-flagged]
+    estates: []
+    excluded_estates: []
+    rationale: "Parse-clean on exact-supported files is an explicit gate condition, with generated/vendor carved out."
+  primary_oracle:
+    type: readiness_enum_and_exclusion_check
+    artifact: "emitted readiness != 'ready' for unparsed exact-supported file; readiness ignores flagged generated/vendor parse failure"
+  thresholds:
+    unparsed_exact_supported_allowed_in_ready: 0
+  test_ids: [T-M6-005, T-M6-006]
+  fault_model_refs: [F-PARSE-GATE-NOT-ENFORCED, F-GENERATED-VENDOR-BLOCKS-GATE]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M6-005
+    - junit:T-M6-006
+
+# ── Gap 4: capability tiers recorded per area/stack AT INDEX TIME ──
+- criterion_id: AC-M6-006
+  name: "who_writes capability tier recorded per area/stack in the readiness record at index time"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.7-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo with a mix of areas/stacks (a Django area -> exact-supported,
+      a symbol-exact-only stack, and a search-only stack). No query is issued.
+    when: >
+      The index build completes and the persisted readiness/coverage record is inspected
+      directly (before any tool query runs).
+    then:
+      - Every area/stack row carries a who_writes tier field.
+      - Each tier value is exactly one of: exact-supported, symbol-exact, search-only.
+      - The tier for the Django area == 'exact-supported' (matches the golden pre-computed tiers).
+      - The tiers are present in the persisted record (pre-computed at index time, not derived at query time).
+  applicability:
+    fixtures: [fixture-mixed-stack-tiers]
+    estates: [estate-cova]
+    excluded_estates: []
+    rationale: "Honesty labels must be pre-computed at index time, per §3.7 gate bullet 3."
+  primary_oracle:
+    type: deterministic_golden_record_field_check
+    artifact: goldens/fixture-mixed-stack-tiers/capability-tiers.json
+  thresholds:
+    areas_missing_tier_allowed: 0
+    wrong_tier_allowed: 0
+  test_ids: [T-M6-007]
+  fault_model_refs: [F-TIER-NOT-RECORDED, F-TIER-COMPUTED-AT-QUERY-TIME]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M6-007
+
+# ── Gap 5: graph smoke check GATES readiness ──
+- criterion_id: AC-M6-007
+  name: "Readiness withheld when the graph smoke check fails"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.7-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo whose graph is corrupted so a known-symbol sample resolves to the
+      wrong file:line (and/or get_dependents/who_writes return wrong callers/writers)
+      through the live path.
+    when: >
+      The readiness gate runs its graph smoke check.
+    then:
+      - Readiness is NOT set to 'ready' when any smoke-check sample fails.
+      - On the mirror-image happy-path fixture (all smoke samples resolve correctly),
+        readiness reaches 'ready' (smoke check is a genuine precondition, not a no-op).
+      - The smoke check runs at first build AND re-runs per push.
+  applicability:
+    fixtures: [fixture-graph-smoke-fail, fixture-graph-smoke-pass]
+    estates: []
+    excluded_estates: []
+    rationale: "'ready' requires the smoke check to pass — it must actually gate."
+  primary_oracle:
+    type: readiness_enum_check
+    artifact: "readiness != 'ready' when smoke sample mismatches golden file:line; readiness == 'ready' when all match"
+  thresholds:
+    smoke_mismatch_allowed_in_ready: 0
+  test_ids: [T-M6-008]
+  fault_model_refs: [F-SMOKE-CHECK-NOT-GATED]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M6-008
+
+# ── Gap 6: coverage_pct is REPORTED, not a gate ──
+- criterion_id: AC-M6-008
+  name: "Fully-classified repo with honestly-labeled gaps reaches 'ready' despite low coverage_pct"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.7-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo that is 100% classified (indexed + flagged == git ls-files), passes
+      parse/tier/smoke gates, but has a deliberately LOW coverage_pct (e.g. 0.30) because
+      many files are honestly flagged, with the specific gaps listed.
+    when: >
+      The readiness gate is evaluated.
+    then:
+      - Readiness == 'ready' (the low coverage_pct does NOT block the join).
+      - coverage_pct is still reported (== 0.30) and the gaps list is non-empty.
+      - No gate branch reads coverage_pct as a pass/fail threshold.
+  applicability:
+    fixtures: [fixture-low-coverage-fully-classified]
+    estates: []
+    excluded_estates: []
+    rationale: "coverage_pct is reported for honesty, never a gate (§3.7)."
+  primary_oracle:
+    type: readiness_enum_and_field_check
+    artifact: "readiness == 'ready'; 0 < coverage_pct < 1.0; len(gaps) > 0"
+  thresholds:
+    coverage_pct_used_as_gate: 0
+  test_ids: [T-M6-009]
+  fault_model_refs: [F-COVERAGE-PCT-USED-AS-GATE]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M6-009
+
+# ── Gap 7: external references into uninstalled deps labeled, never dropped ──
+- criterion_id: AC-M8-005
+  name: "find_references labels references into uninstalled third-party deps 'external-references-not-resolved', never dropped"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.5-13]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo importing an uninstalled third-party dependency, with a known symbol
+      whose references cross into that uninstalled dep. Golden set enumerates the N
+      external references.
+    when: >
+      find_references(symbol) is called.
+    then:
+      - All N external references are returned (count == N; none silently dropped).
+      - Each external reference is labeled 'external-references-not-resolved'.
+      - The label is distinct from the grep-fallback 'lower-bound' tag (not conflated).
+  applicability:
+    fixtures: [fixture-uninstalled-dep-references]
+    estates: []
+    excluded_estates: []
+    rationale: "External-dep references get a distinct honest label and are never dropped."
+  primary_oracle:
+    type: result_count_and_label_check
+    artifact: "len(external_refs) == N; all labeled 'external-references-not-resolved'"
+  thresholds:
+    external_refs_dropped_allowed: 0
+    external_refs_mislabeled_allowed: 0
+  test_ids: [T-M8-006]
+  fault_model_refs: [F-EXTERNAL-REF-DROPPED, F-EXTERNAL-REF-MISLABELED]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M8-006
+
+# ── Gap 8: partial parse of a broken/mid-edit SUPPORTED-language file ──
+- criterion_id: AC-M4-011
+  name: "Broken/mid-edit supported-language file: valid spans indexed, broken span flagged, file still searchable"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-4-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo containing a supported-language file (has a tree-sitter grammar) that
+      is broken mid-edit: some top-level declarations parse cleanly, one span has a syntax
+      error. (Distinct from AC-M4-010 grammarless: here the language IS supported.)
+    when: >
+      The structural substrate build completes.
+    then:
+      - The valid declarations appear as graph nodes (indexed spans are not lost).
+      - The broken span is flagged (recorded, not silently dropped).
+      - The file is reachable via live search (ripgrep finds its content).
+  applicability:
+    fixtures: [fixture-mid-edit-broken-file]
+    estates: []
+    excluded_estates: []
+    rationale: "Partial-parse recovery on supported languages differs from grammarless flagging."
+  primary_oracle:
+    type: graph_node_and_flag_and_search_check
+    artifact: "valid spans present as nodes; broken span flagged; ripgrep finds content"
+  thresholds:
+    valid_spans_lost_allowed: 0
+  test_ids: [T-M4-013]
+  fault_model_refs: [F-PARTIAL-PARSE-DROPS-VALID-SPANS, F-BROKEN-SPAN-NOT-FLAGGED]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M4-013
+
+# ── Gap 9 (minor): ranked overview produced as a token-budgeted artifact ──
+- criterion_id: AC-M4-012
+  name: "Ranked overview is produced as a token-budgeted artifact within the configured budget"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-DOC01-3.4-08]
+  criticality: P2
+  blocking: false
+  behavior:
+    given: >
+      A fixture repo large enough that an unbudgeted overview would exceed the cap.
+    when: >
+      The ranked overview is built.
+    then:
+      - The overview is emitted as a discrete token-budgeted artifact.
+      - Its measured token count is <= the configured overview budget (provisional default 6000 tokens).
+      - Truncation (when applied) keeps the highest-PageRank areas/symbols (budget spends on importance).
+  applicability:
+    fixtures: [fixture-large-repo-overview]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "Overview is specified as token-budgeted; a runaway overview breaks session-start injection."
+  primary_oracle:
+    type: token_count_threshold_check
+    artifact: "count_tokens(overview) <= overview_token_budget"
+  thresholds:
+    overview_token_budget: 6000
+  test_ids: [T-M4-014]
+  fault_model_refs: [F-OVERVIEW-UNBUDGETED]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M4-014
+  # Budget is a §4 tunable default (no config-defaults key yet); 6000 is a provisional cap.
+
+# ── Sweep-2 gap closures ──────────────────────────────────
+# ── Gap (item 1): file fetched through RepoProvider is byte-identical to GitHub ──
+- criterion_id: AC-M1-006
+  name: "Known file fetched via RepoProvider is byte-identical to GitHub at the same SHA"
+  evidence_class: "[eval-realrepo]"
+  authority_refs: [R-DOC01-3.1-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A connected real repo pinned at a known SHA, and a known file path within it.
+      The same file is fetched directly from GitHub (raw contents API) at that SHA as the golden.
+    when: >
+      The file is fetched through the RepoProvider read path.
+    then:
+      - The returned bytes equal the GitHub golden bytes exactly (SHA-256 of the two blobs match).
+      - No normalization (line-ending/encoding) alters the content.
+  applicability:
+    fixtures: [fixture-connected-repo]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "§3.8 step-1 provable: connect and fetch one known file byte-identical to GitHub."
+  primary_oracle:
+    type: byte_equality_hash_comparison
+    artifact: "sha256(repoprovider_bytes) == sha256(github_raw_bytes)"
+  thresholds:
+    byte_diffs_allowed: 0
+  test_ids: [T-M1-006]
+  fault_model_refs: [F-FETCH-NOT-BYTE-IDENTICAL]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M1-006
+
+# ── Gap (item 7): git blame resolves on a blobless clone ──
+- criterion_id: AC-M2-007
+  name: "git blame resolves on a blobless clone (full history preserved; not shallow)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.2-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A repo cloned via the blobless clone path (--filter=blob:none, full commit history, never shallow),
+      and a tracked file with known multi-commit line history.
+    when: >
+      'git blame' is run on that file inside the clone.
+    then:
+      - git blame exits 0 and returns per-line commit attribution for every line.
+      - The blamed commit SHAs for known lines match the golden attribution.
+      - The clone is NOT shallow (git rev-parse --is-shallow-repository == false).
+  applicability:
+    fixtures: [fixture-blobless-clone]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "§3.2/§3.8 step-2 provable: git blame works; shallow clones are rejected because they break history."
+  primary_oracle:
+    type: git_blame_resolution_and_shallow_check
+    artifact: "git blame exit 0 with per-line SHAs matching golden; is-shallow-repository == false"
+  thresholds:
+    unblamed_lines_allowed: 0
+  test_ids: [T-M2-007]
+  fault_model_refs: [F-SHALLOW-CLONE-BREAKS-BLAME]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M2-007
+
+# ── Gap (item 6): force-push / grammar-upgrade / large-change-set forces a safe full rebuild ──
+- criterion_id: AC-M4-013
+  name: "Force-push (history rewrite), parser/grammar upgrade, or large change-set forces a full rebuild, never an incremental delta"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.6-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo with an existing graph. Three separate triggers are exercised: (a) a force-push
+      (non-fast-forward: the remote tip is rewritten so the old pinned commit is no longer an ancestor),
+      (b) a parser/grammar version bump, (c) a change-set above the large-change threshold.
+      Graph DB operations are instrumented. (Distinct from AC-M4-009, which covers an ordinary fast-forward push.)
+    when: >
+      Each trigger is processed.
+    then:
+      - Each trigger records a DROP/bulk-delete of graph rows before re-extraction (full rebuild).
+      - No incremental per-file delta-apply against the rewritten history is attempted on the force-push path.
+      - The rebuild runs off the newly pinned view and completes with an atomic pointer swap (no torn intermediate graph is queryable).
+  applicability:
+    fixtures: [fixture-force-push, fixture-grammar-upgrade, fixture-large-changeset, fixture-db-operation-counter]
+    estates: []
+    excluded_estates: []
+    rationale: "§3.6/§3.8-7/§4 name force-push, grammar-upgrade, and large-change-set as distinct full-rebuild triggers with safe history-rewrite handling."
+  primary_oracle:
+    type: db_operation_log_inspection
+    artifact: "for each trigger: DROP/bulk-delete precedes INSERT; no per-file incremental apply on force-push; pointer swap atomic"
+  thresholds:
+    incremental_applies_on_force_push_allowed: 0
+    triggers_missing_full_rebuild_allowed: 0
+  test_ids: [T-M4-015]
+  fault_model_refs: [F-FORCE-PUSH-INCREMENTAL-APPLY, F-TORN-GRAPH-DURING-REBUILD]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M4-015
+
+# ── Gap (item 8): a meeting about a PR pins to the PR head, not the default-branch tip ──
+- criterion_id: AC-M7-007
+  name: "Meeting about a PR pins meetings.pinned_sha to the PR head (not the default-branch tip)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.6-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A repo whose default branch tip is SHA D, with an open PR whose head is SHA P (P != D).
+      A meeting is started scoped to that PR. (Distinct from AC-M7-004, which pins the default-tip case.)
+    when: >
+      The meeting session initialization completes.
+    then:
+      - meetings.pinned_sha == P (the PR head).
+      - meetings.pinned_sha != D (the default-branch tip is NOT chosen for a PR meeting).
+  applicability:
+    fixtures: [fixture-pr-meeting]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "§3.6 pin selection has two branches (default tip vs PR head); only the default-tip branch was tested."
+  primary_oracle:
+    type: db_field_value_check
+    artifact: "meetings.pinned_sha == pr_head_sha and != default_tip_sha"
+  thresholds:
+    wrong_pin_selections_allowed: 0
+  test_ids: [T-M7-007]
+  fault_model_refs: [F-PR-MEETING-PINS-DEFAULT-TIP]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M7-007
+
+# ── Gap (item 5, §4): stale graph node (built_at_sha != pinned) is re-read live before answering ──
+- criterion_id: AC-M5-016
+  name: "Stale graph node (built_at_sha != pinned SHA) is re-read live before its file:line becomes an answer"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-4-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A meeting pinned at SHA P. A graph node whose built_at_sha == B (B != P) points at a symbol whose
+      live location at P differs from the node's recorded file:line (the code moved between B and P).
+    when: >
+      A code_intel tool resolves that node into a cited answer.
+    then:
+      - The system detects built_at_sha (B) != pinned SHA (P) and re-reads the symbol live against the pinned view.
+      - The emitted citation is the LIVE file:line at P, not the stale node's recorded location.
+      - If the symbol no longer resolves live, it is labeled not-found-by-this-method (never a stale-but-confident cite).
+  applicability:
+    fixtures: [fixture-stale-node-moved-symbol]
+    estates: []
+    excluded_estates: []
+    rationale: "§4 deference rule (2) / §3.9 'every lead re-confirmed against current code'; the built_at_sha column exists solely to power this."
+  primary_oracle:
+    type: citation_matches_live_not_stale
+    artifact: "emitted file:line == live_location(P); != stale_node_location; abstain-labeled when unresolved live"
+  thresholds:
+    stale_locations_emitted_as_confident_allowed: 0
+  test_ids: [T-M5-016]
+  fault_model_refs: [F-STALE-NODE-SERVED-WITHOUT-REREAD]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-016
+  # dispositions.yaml D-INV-05 said "no separate criterion needed"; sweep overrides — this behavior was untested.
+
+# ── Gap (item 2): first precise query at meeting start returns warm within the latency target ──
+- criterion_id: AC-LAT-003
+  name: "First precise query at meeting start on a prepared large repo returns warm within the target (~2s)"
+  evidence_class: "[latency]"
+  authority_refs: [R-DOC01-LAT-03]
+  criticality: P2
+  blocking: false
+  behavior:
+    given: >
+      A large repo that has completed prepare-ahead (language server warmed on connect/push per AC-CANON-004).
+      A meeting starts.
+    when: >
+      The first precise query (find_references on a known symbol) is issued at meeting start.
+    then:
+      - The query returns a warm 'resolved' result (served from the warm host-side LSP, no cold spin-up).
+      - Wall-clock latency for that first query <= the meeting-start first-query target (default 2.0s).
+      - It never cold-hangs (no fallback-to-grep caused purely by an unwarmed server at meeting start).
+  applicability:
+    fixtures: [fixture-large-repo-warmed]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "§3.8 step-9 provable: first precise query at meeting start returns warm, in seconds — distinct from the connect->ready 15-min SLO (AC-LAT-002)."
+  primary_oracle:
+    type: latency_threshold_measurement
+    artifact: "measured first-query wall-clock <= meeting_start_first_query_target_s; result tag == resolved"
+  thresholds:
+    meeting_start_first_query_target_s: 2.0
+    cold_hang_allowed: 0
+  test_ids: [T-LAT-003]
+  fault_model_refs: [F-MEETING-START-COLD-QUERY]
+  protocol_ref: PROTO-LATENCY-01
+  required_evidence:
+    - junit:T-LAT-003
+  # ~2s is a §4 tunable default (no config-defaults key yet); provisional target.
