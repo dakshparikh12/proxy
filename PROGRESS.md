@@ -2430,3 +2430,27 @@ no test weakened; nothing built speculatively. Nothing buildable remains in `lib
 verdict re-confirmed (54th reproduction); the four are one-line founder fixes to sealed tests and must land
 together (`verify.sh` runs `-x --maxfail=1`, so any single fix re-stalls the loop). Route SB-1..SB-4 to a
 founder. Session ends.**
+
+### Session 55 (2026-07-18) — 55th confirmation; 163/167; four sealed one-liners re-read verbatim, none landed
+
+Ground truth first (`.venv/bin/python -m pytest -q tests/doc00/`): **163 passed / 4 failed**
+(`reg_002`, `obs_006`, `inv_010`, `ten_001` — identical set to sessions 7–54); `git status` clean; nothing
+buildable remains in `libs/`/`services/`. Did not trust prior prose — opened the four sealed lines directly and
+confirmed each defective predicate is still present **verbatim** (no founder fix has landed):
+
+- `test_m10_reg.py:75` still `union = {str(m) for m in get_args(MessageType)}` → `∅` for the CANONICAL Enum;
+  `:77` asserts `∅ == {3 keys}` (non-empty per reg_004). Language-level unsatisfiable.
+- `test_m11_obs.py:243` still `S.read_text(*scripts[0].split("/"))` — splits an ABSOLUTE glob path (`_support.glob`
+  `rglob` on an absolute base) and re-roots it onto `ROOT` → doubled nonexistent path → `""` → `:244` fails for any
+  correct `deploy/harden.sh`.
+- `test_m13_inv.py:527` still `offboard = "tenant-OFF"`, INSERTed at `:546` into the `uuid REFERENCES tenants`
+  column (`CANONICAL-DECISIONS.md:212`) → `InvalidTextRepresentation` before `run_reconcile_sweep` runs.
+- `test_m15_ten.py:111` `NON_SCOPED = {"tenants", "sessions", "alembic_version"}` still omits `operation_runs`,
+  which `test_m03_sub.py:82` pins to exactly 12 tenant-less columns (adding `tenant_id` reds `sub_001`).
+
+All four fixes live inside `tests/doc00/` (builder-forbidden — `harness/guard.py` `PROTECTED[0]=="tests/"` +
+`runner.py` integrity hash). No product edit is correct; no route-around; no test weakened; nothing built
+speculatively. **SPEC_BLOCKED verdict re-confirmed (55th reproduction). Founder one-liners unchanged and must
+land together:** (1) `reg_002:77` → `set(m.value for m in MessageType) == set(CHANNEL_REGISTRY)`; (2) `obs_006`
+read the absolute glob path directly (no `split("/")`+re-root); (3) `inv_010` seed a real uuid tenant id;
+(4) add `operation_runs` to `test_m15_ten.py:111` `NON_SCOPED`. Route SB-1..SB-4 to a founder. Session ends.
