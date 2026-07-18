@@ -244,3 +244,52 @@ def test_ac_m4_010_grammarless_language_files_flagged_unsupported():
     assert rg_result.returncode == 0, (
         f"ripgrep could not find content in unsupported-language file (should be live-searchable)"
     )
+
+
+def test_ac_m4_011_broken_supported_file_flagged_and_searchable():
+    """AC-M4-011: A broken/mid-edit supported-language file is flagged in coverage
+    and still reachable via live search (ripgrep finds its content)."""
+    import subprocess
+    from services.code_intel.pipeline import run_full_pipeline
+    from tests.fixtures.repos import parse_error_fixture
+
+    fixture = parse_error_fixture()
+    pipeline = run_full_pipeline(tenant_id="tenant-test", repo_url=fixture.url)
+
+    coverage = pipeline.coverage_record
+    broken_row = coverage.get(fixture.broken_file)
+    assert broken_row is not None, (
+        f"No coverage entry for broken file {fixture.broken_file}"
+    )
+    assert broken_row.status == "flagged", (
+        f"Expected broken file to be flagged, got: {broken_row.status!r}"
+    )
+
+    rg_result = subprocess.run(
+        ["rg", fixture.unique_content, str(pipeline.clone_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert rg_result.returncode == 0, (
+        "ripgrep could not find content in broken file (should be live-searchable)"
+    )
+
+
+def test_ac_m4_012_ranked_overview_bounded_by_limit():
+    """AC-M4-012: The ranked overview (get_nodes_by_pagerank) respects a limit parameter,
+    serving as the token-budgeting mechanism for overview output."""
+    from services.code_intel.pipeline import run_full_pipeline
+    from tests.fixtures.repos import small_repo_fixture
+
+    fixture = small_repo_fixture()
+    pipeline = run_full_pipeline(tenant_id="tenant-test", repo_url=fixture.url)
+
+    all_nodes = pipeline.graph.get_nodes_by_pagerank()
+    limited = pipeline.graph.get_nodes_by_pagerank(limit=3)
+
+    assert len(limited) <= 3, (
+        f"get_nodes_by_pagerank(limit=3) returned {len(limited)} nodes, expected <= 3"
+    )
+    assert len(limited) <= len(all_nodes), (
+        "Limited query returned more nodes than unlimited query"
+    )

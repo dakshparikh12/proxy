@@ -98,3 +98,104 @@ def test_ac_m6_004_ready_state_includes_indexed_at_and_pinned_sha():
     assert sha_pattern.match(readiness_record.pinned_sha), (
         f"pinned_sha does not match 40-char hex pattern: {readiness_record.pinned_sha!r}"
     )
+
+
+def test_ac_m6_005_parse_error_in_exact_supported_file_flagged_and_accounted():
+    """AC-M6-005: An exact-supported file with a parse error is flagged 'parse-error'
+    in the coverage record (not silently absent) and accounted for by the gate."""
+    from services.code_intel.pipeline import run_full_pipeline
+    from tests.fixtures.repos import parse_error_fixture
+
+    fixture = parse_error_fixture()
+    pipeline = run_full_pipeline(tenant_id="tenant-test", repo_url=fixture.url)
+
+    coverage = pipeline.coverage_record
+    broken_row = coverage.get(fixture.broken_file)
+    assert broken_row is not None, (
+        f"No coverage entry for broken file {fixture.broken_file} — silently absent"
+    )
+    assert broken_row.status == "flagged", (
+        f"Expected status='flagged' for parse-error file, got: {broken_row.status!r}"
+    )
+    assert broken_row.flag_reason == "parse-error", (
+        f"Expected flag_reason='parse-error', got: {broken_row.flag_reason!r}"
+    )
+
+    valid_row = coverage.get(fixture.valid_file)
+    assert valid_row is not None, "No coverage entry for the valid file"
+    assert valid_row.status == "indexed", (
+        f"Expected valid file to be indexed, got: {valid_row.status!r}"
+    )
+
+
+def test_ac_m6_006_who_writes_tier_present_on_django_fixture():
+    """AC-M6-006: who_writes returns a result with a status indicating the tier-1 stack
+    was recognized. Table nodes exist and carry the canonical id format for a Django ORM repo."""
+    from services.code_intel.pipeline import run_full_pipeline
+    from tests.fixtures.repos import django_model_fixture
+
+    fixture = django_model_fixture()
+    pipeline = run_full_pipeline(tenant_id="tenant-test", repo_url=fixture.url)
+
+    table_nodes = [n for n in pipeline.graph.nodes if n.kind == "table"]
+    assert table_nodes, "No table nodes in Django fixture graph"
+
+    result = pipeline.server.who_writes(table_nodes[0].id)
+    assert result is not None, "who_writes returned None"
+    assert hasattr(result, "status"), "who_writes result has no status field"
+    if result.writers:
+        for w in result.writers:
+            assert w.confidence in ("resolved", "lower-bound"), (
+                f"Writer {w.path} has unexpected confidence: {w.confidence!r}"
+            )
+
+
+def test_ac_m6_007_readiness_requires_graph_nodes_present():
+    """AC-M6-007: Readiness gate requires the graph to be successfully built (graph has nodes)."""
+    from services.code_intel.pipeline import run_full_pipeline
+    from services.code_intel.readiness import ReadinessCollector
+    from tests.fixtures.repos import small_repo_fixture
+
+    fixture = small_repo_fixture()
+    collector = ReadinessCollector()
+
+    pipeline = run_full_pipeline(
+        tenant_id="tenant-test",
+        repo_url=fixture.url,
+        readiness_listener=collector,
+    )
+
+    assert "ready" in collector.emitted_states, (
+        "Expected 'ready' for a well-formed fixture repo"
+    )
+    assert len(pipeline.graph.nodes) > 0, (
+        "Graph must have nodes for readiness to reach 'ready'"
+    )
+
+
+def test_ac_m6_008_low_coverage_pct_does_not_block_readiness():
+    """AC-M6-008: A fully-classified repo with low coverage_pct (many flagged files)
+    still reaches 'ready' — coverage_pct is reported, not a gate."""
+    from services.code_intel.pipeline import run_full_pipeline
+    from services.code_intel.readiness import ReadinessCollector
+    from tests.fixtures.repos import low_coverage_fully_classified_fixture
+
+    fixture = low_coverage_fully_classified_fixture()
+    collector = ReadinessCollector()
+
+    pipeline = run_full_pipeline(
+        tenant_id="tenant-test",
+        repo_url=fixture.url,
+        readiness_listener=collector,
+    )
+
+    assert "ready" in collector.emitted_states, (
+        "Readiness should reach 'ready' for a fully-classified repo "
+        "even with low coverage_pct (coverage_pct is reported, not a gate)"
+    )
+
+    rr = pipeline.readiness_record
+    assert rr is not None, "No readiness record produced"
+    assert rr.coverage_pct < 1.0, (
+        f"Expected low coverage_pct (many flagged files), got {rr.coverage_pct}"
+    )

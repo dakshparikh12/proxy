@@ -103,3 +103,23 @@ def test_ac_m8_004_lsp_fallback_tagged_lower_bound_not_silent_or_stale():
     assert not getattr(result, "_from_stale_lsp_cache", False), (
         "Returned stale LSP results from a previous successful call — must use grep fallback"
     )
+
+
+def test_ac_m8_005_find_references_labels_unresolved_refs_not_dropped():
+    """AC-M8-005: find_references on a symbol with references into uninstalled deps
+    returns results with confidence labels — references are never silently dropped."""
+    from services.code_intel.mcp_server import CodeIntelMCPServer
+    from tests.fixtures.repos import small_repo_fixture
+
+    fixture = small_repo_fixture()
+    server = CodeIntelMCPServer.from_fixture(fixture)
+
+    result = server.find_references(fixture.known_symbol)
+
+    assert result.results, (
+        "find_references returned empty results — references must not be silently dropped"
+    )
+    for ref in result.results:
+        assert ref.confidence in ("resolved", "lower-bound", "external-references-not-resolved"), (
+            f"Reference {ref.file}:{ref.line} has unlabeled confidence: {ref.confidence!r}"
+        )
