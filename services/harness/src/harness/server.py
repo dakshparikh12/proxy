@@ -129,9 +129,6 @@ def asyncio_exception_handler(loop: Any, context: dict[str, Any]) -> None:
 # graceful shutdown -- parallel gather + hard-exit backstop (AC-BOOT-006)
 # ---------------------------------------------------------------------------
 
-async def flush_tracing() -> None:
-    """Flush the tracing scaffold (Langfuse is inert while its keys are unset)."""
-    return None
 
 
 def _flush_tracing_sync() -> None:

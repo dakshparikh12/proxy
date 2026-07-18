@@ -22,6 +22,7 @@ class ProposedDraft:
     meeting_id: Any
     artifact_ref: str
     status: str
+    review_session_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -88,7 +89,17 @@ def accept_code_change_draft(
     )
 
 
-async def propose_change(
+def teardown_review_session(review_session_id: Any) -> None:
+    """Tear down the in-memory sandbox review session (it dies with the sandbox).
+
+    The persisted draft outlives this — a human accepting later reads it from
+    durable storage, never from this dead session. A no-op stand-in for the MVP:
+    there is no in-process state to release beyond letting the id fall out of scope.
+    """
+    return None
+
+
+async def _propose_change_async(
     db: Database,
     *,
     meeting_id: Any,
@@ -96,7 +107,7 @@ async def propose_change(
     summary: str,
     content: str,
 ) -> ProposedDraft:
-    """Persist a draft at creation: body → object store, 'proposed' row → DB."""
+    """Persist a draft at creation (async pool path): body → store, row → DB."""
     artifact_ref = f"gs://proxy-drafts/{meeting_id}/{uuid.uuid4().hex}"
     objectstore.put(artifact_ref, content)
     async with db.acquire() as conn:
@@ -113,6 +124,60 @@ async def propose_change(
         meeting_id=row["meeting_id"],
         artifact_ref=row["artifact_ref"],
         status=row["status"],
+        review_session_id=uuid.uuid4().hex,
+    )
+
+
+def _propose_change_sync(
+    conn: Any,
+    *,
+    meeting_id: Any,
+    kind: str,
+    summary: str,
+    content: str | bytes,
+) -> ProposedDraft:
+    """Persist a draft at creation (sync psycopg path) — durable BEFORE teardown."""
+    artifact_ref = f"gs://proxy-drafts/{meeting_id}/{uuid.uuid4().hex}"
+    body = content.decode("utf-8", "replace") if isinstance(content, bytes) else content
+    objectstore.put(artifact_ref, body)
+    row = conn.execute(
+        """
+        INSERT INTO staged_drafts (meeting_id, kind, summary, artifact_ref, status)
+        VALUES (%s, %s, %s, %s, 'proposed')
+        RETURNING draft_id, meeting_id, artifact_ref, status
+        """,
+        (meeting_id, kind, summary, artifact_ref),
+    ).fetchone()
+    return ProposedDraft(
+        draft_id=row[0],
+        meeting_id=row[1],
+        artifact_ref=row[2],
+        status=row[3],
+        review_session_id=uuid.uuid4().hex,
+    )
+
+
+def propose_change(
+    db: Any = None,
+    *,
+    meeting_id: Any,
+    kind: str,
+    summary: str,
+    content: str | bytes,
+) -> Any:
+    """Stage a change draft, durable at creation.
+
+    ``Database`` first arg → the async pool path (returns a coroutine); a raw
+    psycopg connection → the synchronous path (returns a ``ProposedDraft``). The
+    draft persists (GCS Object-Versioned body + a 'proposed' row) the moment it is
+    proposed, so it survives the Workroom sandbox teardown.
+    """
+    if isinstance(db, Database):
+        return _propose_change_async(
+            db, meeting_id=meeting_id, kind=kind, summary=summary, content=str(content)
+        )
+    return _propose_change_sync(
+        db, meeting_id=meeting_id, kind=kind, summary=summary, content=content
     )
 
 

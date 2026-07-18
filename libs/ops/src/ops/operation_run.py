@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+import uuid
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from typing import Any
 
 from libs.db import Database
@@ -126,7 +127,7 @@ async def _cancel(task: asyncio.Task[None]) -> None:
 
 
 @asynccontextmanager
-async def with_operation_run(
+async def _with_operation_run_async(
     db: Database,
     scope_id: str,
     operation_type: str,
@@ -157,3 +158,102 @@ async def with_operation_run(
     else:
         await _cancel(task)
         await _finish(db, run_id, "completed")
+
+
+# ---------------------------------------------------------------------------
+# Synchronous mirror — one raw psycopg3 connection, the broker-free workflow path
+# ---------------------------------------------------------------------------
+
+
+class _SyncOperationHandle:
+    """Sync fence handle over one raw psycopg3 connection (mirror of ``OperationHandle``)."""
+
+    def __init__(
+        self, conn: Any, run_id: Any, scope_id: str, operation_type: str
+    ) -> None:
+        self._conn = conn
+        self._run_id = run_id
+        self._scope_id = scope_id
+        self._operation_type = operation_type
+        self._is_owner = True
+
+    @property
+    def run_id(self) -> Any:
+        return self._run_id
+
+    @property
+    def is_owner(self) -> bool:
+        return self._is_owner
+
+    def heartbeat(self) -> bool:
+        """Fencing heartbeat (sync): rowcount-0 UPDATE clears ownership."""
+        cur = self._conn.execute(
+            "UPDATE operation_runs SET last_heartbeat_at = now() "
+            "WHERE id = %s AND status = 'running'",
+            (self._run_id,),
+        )
+        self._is_owner = (int(getattr(cur, "rowcount", 0) or 0)) == 1
+        return self._is_owner
+
+    def check_pause(self) -> bool:
+        value = self._conn.execute(
+            "SELECT pause_requested FROM operation_runs "
+            "WHERE id = %s AND status = 'running'",
+            (self._run_id,),
+        ).fetchone()
+        return bool(value[0]) if value is not None else False
+
+
+@contextmanager
+def _with_operation_run_sync(
+    conn: Any, scope_id: str, operation_type: str
+) -> Iterator[_SyncOperationHandle]:
+    """Claim a running row on a raw psycopg3 connection; finalize on exit."""
+    cur = conn.execute(
+        "INSERT INTO operation_runs (scope_id, operation_type, status, created_by) "
+        "VALUES (%s, %s, 'running', %s) "
+        "ON CONFLICT (scope_id, operation_type) WHERE status = 'running' "
+        "DO NOTHING "
+        "RETURNING id",
+        (str(scope_id), operation_type, f"proc-{uuid.uuid4().hex}"),
+    )
+    row = cur.fetchone()
+    if row is None:
+        raise RuntimeError(
+            f"operation already owned: {scope_id!r}/{operation_type!r}"
+        )
+    run_id = row[0]
+    handle = _SyncOperationHandle(conn, run_id, scope_id, operation_type)
+    try:
+        yield handle
+    finally:
+        # Only finalize if this handle still owns the row (never clobber a
+        # reclaimed/interrupted row a replacement now owns).
+        conn.execute(
+            "UPDATE operation_runs "
+            "SET status = 'completed', completed_at = now() "
+            "WHERE id = %s AND status = 'running'",
+            (run_id,),
+        )
+
+
+def with_operation_run(
+    db: Any = None,
+    scope_id: str = "",
+    operation_type: str = "",
+    *,
+    op_type: str | None = None,
+    heartbeat_s: float | None = None,
+) -> Any:
+    """Own a durable operation_runs row for the duration of a ``with`` block.
+
+    ``Database`` first arg → the async context manager (heartbeat task + pool);
+    a raw psycopg connection → the synchronous mirror (broker-free workflow path).
+    ``op_type`` is accepted as an alias for ``operation_type``.
+    """
+    optype = op_type if op_type is not None else operation_type
+    if isinstance(db, Database):
+        return _with_operation_run_async(
+            db, scope_id, optype, heartbeat_s=heartbeat_s
+        )
+    return _with_operation_run_sync(db, scope_id, optype)

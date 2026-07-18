@@ -34,6 +34,19 @@ def _has_deliverable(result_ref: Any) -> bool:
     return isinstance(value, dict) and bool(value.get("deliverable"))
 
 
+def should_restart(conn: Any, operation_id: Any) -> bool:
+    """Restart-unless-deliverable-exists (sync): False iff the deliverable exists.
+
+    A recycled orchestrator re-runs the coarse Workroom unit unless the persisted
+    ``result_ref`` already points at the deliverable — an idempotent completion
+    check over the SAME operation_runs row, never a bespoke task table.
+    """
+    row = conn.execute(
+        "SELECT result_ref FROM operation_runs WHERE id = %s", (operation_id,)
+    ).fetchone()
+    return not _has_deliverable(row[0] if row is not None else None)
+
+
 async def recover_task(
     db: Database, scope_id: str, operation_type: str
 ) -> RecoverResult:

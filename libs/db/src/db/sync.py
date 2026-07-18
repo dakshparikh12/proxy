@@ -15,6 +15,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from psycopg.types.json import Json
+
 
 @dataclass(frozen=True)
 class SignInResult:
@@ -136,6 +138,48 @@ class _SyncMeetings:
             recall_bot_id=row[4],
         )
 
+    def create_bare(self, *, pinned_sha: str) -> MeetingRow:
+        """A meeting bound to a fresh tenant (no repo) — the workflow entry point.
+
+        Every meeting reaches a tenant (invariant 9), so a bare meeting still
+        mints its own tenant row rather than leaving ``tenant_id`` null.
+        """
+        tenant_id = self._conn.execute(
+            "INSERT INTO tenants (name) VALUES (%s) RETURNING id", ("bare-meeting",)
+        ).fetchone()[0]
+        row = self._conn.execute(
+            """
+            INSERT INTO meetings (tenant_id, pinned_sha, status)
+            VALUES (%s, %s, 'live')
+            RETURNING id, tenant_id, repo_id, pinned_sha, recall_bot_id
+            """,
+            (tenant_id, pinned_sha),
+        ).fetchone()
+        return MeetingRow(
+            id=row[0],
+            tenant_id=row[1],
+            repo_id=row[2],
+            pinned_sha=row[3],
+            recall_bot_id=row[4],
+        )
+
+    def visible_to(self, tenant_id: Any) -> list[MeetingRow]:
+        """Every meeting a tenant principal may see (its own rows only)."""
+        rows = self._conn.execute(
+            """
+            SELECT id, tenant_id, repo_id, pinned_sha, recall_bot_id
+              FROM meetings
+             WHERE tenant_id = %s
+            """,
+            (tenant_id,),
+        ).fetchall()
+        return [
+            MeetingRow(
+                id=r[0], tenant_id=r[1], repo_id=r[2], pinned_sha=r[3], recall_bot_id=r[4]
+            )
+            for r in rows
+        ]
+
     def resolve_bot(self, recall_bot_id: str) -> MeetingRow:
         row = self._conn.execute(
             """
@@ -156,6 +200,84 @@ class _SyncMeetings:
         )
 
 
+@dataclass(frozen=True)
+class TenantRow:
+    """A tenants row (the isolation root)."""
+
+    id: Any
+    name: str | None
+
+
+@dataclass(frozen=True)
+class OperationRow:
+    """An operation_runs row — a coarse durable unit (a Workroom task, etc.)."""
+
+    id: Any
+    scope_id: str
+    operation_type: str
+    status: str
+
+
+class _SyncTenants:
+    """Tenant provisioning (the isolation root)."""
+
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+
+    def create(self, *, name: str) -> TenantRow:
+        row = self._conn.execute(
+            "INSERT INTO tenants (name) VALUES (%s) RETURNING id, name", (name,)
+        ).fetchone()
+        return TenantRow(id=row[0], name=row[1])
+
+
+class _SyncOperations:
+    """operation_runs as the ONE coarse durable unit (no bespoke task table)."""
+
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+
+    def create(self, *, scope_id: str, op_type: str) -> OperationRow:
+        row = self._conn.execute(
+            """
+            INSERT INTO operation_runs (scope_id, operation_type, status)
+            VALUES (%s, %s, 'running')
+            RETURNING id, scope_id, operation_type, status
+            """,
+            (str(scope_id), op_type),
+        ).fetchone()
+        return OperationRow(
+            id=row[0], scope_id=row[1], operation_type=row[2], status=row[3]
+        )
+
+    def set_result_ref(self, op_id: Any, result_ref: dict[str, Any]) -> None:
+        """Persist the deliverable pointer (drives restart-unless-deliverable)."""
+        self._conn.execute(
+            "UPDATE operation_runs SET result_ref = %s WHERE id = %s",
+            (Json(result_ref), op_id),
+        )
+
+
+class _SyncCost:
+    """Persisted per-meeting spend — the seam meter writes through to meeting_cost."""
+
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+
+    def add_model_spend(self, *, meeting_id: Any, usd: float) -> None:
+        """Accrue model spend to meeting_cost.model_usd (never reset; reload-safe)."""
+        self._conn.execute(
+            """
+            INSERT INTO meeting_cost (meeting_id, model_usd)
+            VALUES (%s, %s)
+            ON CONFLICT (meeting_id) DO UPDATE
+                SET model_usd = meeting_cost.model_usd + EXCLUDED.model_usd,
+                    updated_at = now()
+            """,
+            (meeting_id, float(usd)),
+        )
+
+
 class _SyncRepos:
     """The connection-scoped ``repos`` namespace of the sync facade."""
 
@@ -163,6 +285,9 @@ class _SyncRepos:
         self.sessions = _SyncSessions(conn)
         self.repos = _SyncRepositories(conn)
         self.meetings = _SyncMeetings(conn)
+        self.tenants = _SyncTenants(conn)
+        self.operations = _SyncOperations(conn)
+        self.cost = _SyncCost(conn)
 
 
 class _SyncDatabase:

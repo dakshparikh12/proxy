@@ -3,10 +3,10 @@
 User auth is Authlib's OAuth registry against Google's OpenID Connect discovery
 document, configured by ``GOOGLE_CLIENT_ID`` / ``GOOGLE_CLIENT_SECRET``. The three
 routes ``/auth/login``, ``/auth/callback``, ``/auth/logout`` are mounted here on
-control_plane. Both Authlib and the signed-session middleware are imported
-lazily/guarded so the app object constructs even when those optional deps are
-absent (the OIDC wire is confirmed at build); in a real deployment the session
-cookie is signed with ``SESSION_SECRET``.
+control_plane, plus a liveness ``/health`` probe. Both Authlib and the signed-
+session middleware are imported lazily/guarded so the app object constructs even
+when those optional deps are absent (the OIDC wire is confirmed at build); in a
+real deployment the session cookie is signed with ``SESSION_SECRET``.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import os
 from typing import Any
 
 from fastapi import FastAPI, Request
-from starlette.responses import RedirectResponse
+from starlette.responses import JSONResponse, RedirectResponse
 
 # Google OpenID Connect discovery document (accounts.google.com well-known).
 GOOGLE_OIDC_DISCOVERY = "https://accounts.google.com/.well-known/openid-configuration"
@@ -48,9 +48,14 @@ def _install_signed_session(app: FastAPI) -> None:
 
 
 def create_app() -> FastAPI:
-    """Construct the control_plane ASGI app with the three /auth routes."""
+    """Construct the control_plane ASGI app with the /auth routes + /health."""
     app = FastAPI(title="proxy-control-plane")
     _install_signed_session(app)
+
+    @app.get("/health")
+    async def health() -> Any:
+        """Liveness probe — healthy while the process serves requests."""
+        return JSONResponse({"status": "healthy"}, status_code=200)
 
     @app.get("/auth/login")
     async def auth_login(request: Request) -> Any:
