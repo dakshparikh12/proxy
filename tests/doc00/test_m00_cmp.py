@@ -1,4 +1,4 @@
-"""Doc 00 · §2 System composition & contracts (AC-CMP-001..016).
+"""Doc 00 · §2 System composition & contracts (AC-CMP-001..017).
 
 Milestone m00. Every test maps to exactly one blocking criterion (id in the
 docstring). Product imports live INSIDE the test bodies, so this module COLLECTS
@@ -323,3 +323,50 @@ def test_cmp_016_progress_event_shape_minus_finality():
         assert not (terminal <= set(get_args(status_ann) or ())), (
             "progress event must not carry a finalized terminal EnvelopeStatus value"
         )
+
+
+# ── AC-CMP-017 ────────────────────────────────────────────────────────────
+@pytest.mark.contract
+def test_cmp_017_material_change_events_exact_seven():
+    """AC-CMP-017: material-change events contract enumerates exactly the 7 kinds; nothing extra."""
+    from typing import get_args
+    from libs import contracts
+
+    sym = (
+        getattr(contracts, "MaterialChangeKind", None)
+        or getattr(contracts, "MaterialChange", None)
+        or getattr(contracts, "MaterialChangeEvent", None)
+        or getattr(contracts, "MaterialChangeType", None)
+        or getattr(contracts, "MATERIAL_CHANGE_EVENTS", None)
+    )
+    assert sym is not None, "material-change events (03->04) type/enum not found in libs.contracts"
+
+    members = set(get_args(sym))
+    if not members:
+        # enum class or explicit container fallback
+        try:
+            members = {getattr(m, "value", m) for m in sym}
+        except TypeError:
+            members = set(sym)
+
+    expected = {
+        "claim-landed-checkable",
+        "decision-forming",
+        "decision-final",
+        "contradiction",
+        "action-item",
+        "question-open",
+        "question-closed",
+    }
+    assert members == expected, (
+        f"material-change events must be EXACTLY the 7 kinds: "
+        f"extra={members - expected}, missing={expected - members}"
+    )
+    # The dropped 'note'-style shorthand is not present as a distinct member.
+    assert "note" not in members, "'note'-style shorthand must not be a distinct material-change member"
+    # decision-forming/final and question-open/closed are the expanded variants,
+    # not single combined members.
+    assert "decision" not in members and "question" not in members, (
+        "decision/question must be the expanded forming/final and open/closed variants, "
+        "not single combined members"
+    )

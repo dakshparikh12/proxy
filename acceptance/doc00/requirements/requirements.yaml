@@ -1909,3 +1909,36 @@
   criticality: P1
   testability: executable
   status: qualified
+
+# ── PATCH (doc00-sweep close): two doc00-scope behaviors surviving the walk uncovered ──
+
+- requirement_id: R-DOC00-2-17
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§2 contracts list (Notes deltas + events, 03->04)"
+  source_quote: "material-change events (claim-landed-checkable, decision-forming/final, contradiction, action-item, question-open/closed)."
+  normalized_statement: >
+    WHEN the 03->04 material-change events contract is defined in libs/contracts (the §2 models built at §16 step 1)
+    THE SYSTEM SHALL enumerate exactly the member set
+    {claim-landed-checkable, decision-forming, decision-final, contradiction, action-item, question-open, question-closed}
+    (the spec's "decision-forming/final" and "question-open/closed" slash-shorthand expanding to the two variants each)
+    and SHALL NOT admit any event kind outside this set.
+    NOTE: the slash-shorthand expansion is the plain reading of the source line; CANONICAL-DECISIONS carries no override, so it is fixed here rather than guessed.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC00-5-27
+  authority_type: specification
+  authority_document: DOC-00
+  source_location: "§5.1 with_operation_run heartbeat body"
+  source_quote: "await db.bump_activity(scope_id)    # keeps the sandbox alive during silent agent work"
+  normalized_statement: >
+    WHILE a long-lived operation runs under with_operation_run
+    THE SYSTEM SHALL call db.bump_activity(scope_id) on each heartbeat tick so the E2B sandbox is kept alive during silent (no-token-emitting) agent work —
+    a heartbeat loop that advances last_heartbeat_at but never bumps activity is non-conformant.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified

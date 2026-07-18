@@ -3301,3 +3301,49 @@
   protocol_ref: PROTO-DETERMINISTIC-01
   source_quote: "control_plane ... /internal/{reconcile,notes}. The auth wall."
   required_evidence: [security-adversarial:T-TEN-004]
+
+# ── PATCH (doc00-sweep close): criteria closing the two uncovered doc00-scope behaviors ──
+
+- criterion_id: AC-CMP-017
+  name: "Material-change events contract enumerates exactly the 7 kinds; nothing extra"
+  evidence_class: "[contract]"
+  authority_refs: [R-DOC00-2-17]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The 03->04 material-change events type/enum in libs/contracts."
+    when: "Its member set is enumerated."
+    then:
+      - "Members include ALL of {claim-landed-checkable, decision-forming, decision-final, contradiction, action-item, question-open, question-closed}."
+      - "Members equal EXACTLY that set — no event kind outside the 7 is admitted."
+      - "The dropped 'note'-style shorthand is not present as a distinct member; decision-forming/decision-final and question-open/question-closed are the expanded variants, not a single combined member."
+  applicability: {fixtures: [fixture-contracts-import], estates: [], excluded_estates: [], rationale: "Literal enumeration of a contract member set."}
+  primary_oracle: {type: literal_member_set_comparison, artifact: "member_set == {claim-landed-checkable, decision-forming, decision-final, contradiction, action-item, question-open, question-closed}"}
+  thresholds: {missing_members: 0, extra_members: 0}
+  test_ids: [T-CMP-017]
+  fault_model_refs: [F-MATERIAL-CHANGE-EVENTS-INCOMPLETE, F-MATERIAL-CHANGE-EVENTS-EXTRA]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  source_quote: "material-change events (claim-landed-checkable, decision-forming/final, contradiction, action-item, question-open/closed)."
+  required_evidence: [contract:T-CMP-017]
+
+- criterion_id: AC-SUB-038
+  name: "Heartbeat loop bumps sandbox activity every tick (survives silent agent work)"
+  evidence_class: "[integration]"
+  authority_refs: [R-DOC00-5-27]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A long-lived operation entered via with_operation_run whose agent emits no tokens for longer than one heartbeat interval (silent work)."
+    when: "The heartbeat loop runs across at least two intervals."
+    then:
+      - "db.bump_activity(scope_id) is invoked on each heartbeat tick, keyed to the run's scope_id."
+      - "A run that advances last_heartbeat_at but never calls bump_activity is non-conformant (FAIL)."
+      - "The E2B sandbox for that scope is not destroyed/timed-out while the operation_run remains status='running'."
+  applicability: {fixtures: [fixture-operation-run, fixture-sandbox-ttl], estates: [], excluded_estates: [], rationale: "Heartbeat side-effect on a stubbed sandbox/db seam; silent-work window forced."}
+  primary_oracle: {type: call_trace_spy, artifact: "spy(db.bump_activity) called with scope_id on each heartbeat tick; call_count == heartbeat_tick_count"}
+  thresholds: {bump_activity_never_called: 0, ticks_without_bump: 0, sandbox_destroyed_while_running: 0}
+  test_ids: [T-SUB-038]
+  fault_model_refs: [F-HEARTBEAT-NO-ACTIVITY-BUMP]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  source_quote: "await db.bump_activity(scope_id)    # keeps the sandbox alive during silent agent work"
+  required_evidence: [integration:T-SUB-038]

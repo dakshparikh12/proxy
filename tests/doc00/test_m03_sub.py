@@ -1,4 +1,4 @@
-"""Doc 00 · §5 The durable-ops substrate — broker-free (AC-SUB-001..037).
+"""Doc 00 · §5 The durable-ops substrate — broker-free (AC-SUB-001..038).
 
 Milestone m03. Every test maps to exactly one blocking criterion (id in the
 docstring). Product imports live INSIDE the test bodies, so this module COLLECTS
@@ -1390,3 +1390,73 @@ def test_sub_037_operation_runs_status_domain_pinned():
             )
         else:
             conn.execute("DELETE FROM operation_runs WHERE scope_id='s-bad'")
+
+
+# ── AC-SUB-038 ────────────────────────────────────────────────────────────
+@pytest.mark.integration
+def test_sub_038_heartbeat_bumps_sandbox_activity_every_tick():
+    """AC-SUB-038: heartbeat loop bumps sandbox activity every tick (survives silent agent work)."""
+    import asyncio
+    from libs.ops import with_operation_run
+    from libs.db import Database
+
+    with S.pg_conn() as conn:
+        r = S.apply_migrations(S._local_dsn() or "")
+        assert r.returncode == 0, f"alembic upgrade head failed: {r.stderr}"
+        conn.execute("DELETE FROM operation_runs")
+
+    scope_id = "scope-silent-work"
+    bump_calls: list[object] = []
+
+    async def _run():
+        db = await Database.connect(S._local_dsn())
+        # The heartbeat side-effect under test: db.bump_activity(scope_id) must
+        # fire on every heartbeat tick to keep the E2B sandbox alive during
+        # silent (token-less) agent work. Wrap it with a delegating spy.
+        assert hasattr(db, "bump_activity"), (
+            "Database must expose bump_activity(scope_id) — the sandbox-keepalive seam"
+        )
+        orig_bump = db.bump_activity
+
+        async def _spy(scope, *a, **k):
+            bump_calls.append(scope)
+            return await orig_bump(scope, *a, **k)
+
+        db.bump_activity = _spy  # type: ignore[method-assign]
+        try:
+            # Silent work: the agent emits no tokens for longer than one
+            # heartbeat interval, spanning at least two intervals.
+            async with with_operation_run(
+                db, scope_id, "meeting-harness", heartbeat_s=0.05
+            ):
+                await asyncio.sleep(0.22)  # > 2 heartbeat intervals, no token emission
+        finally:
+            await db.close()
+
+    asyncio.run(_run())
+
+    # Primary oracle (call_trace_spy): bump_activity fired on each heartbeat
+    # tick, keyed to this run's scope_id — a run that advances last_heartbeat_at
+    # but never bumps activity is non-conformant.
+    assert len(bump_calls) >= 2, (
+        f"db.bump_activity must be called on each heartbeat tick across the silent "
+        f"window (>=2 intervals); got {len(bump_calls)} call(s)"
+    )
+    assert all(s == scope_id for s in bump_calls), (
+        f"every bump_activity call must be keyed to the run's scope_id; got {bump_calls!r}"
+    )
+
+    # The heartbeat genuinely ran (last_heartbeat_at advanced) AND was coupled to
+    # a bump — advancing the heartbeat without bumping activity is the fault.
+    with S.pg_conn() as conn:
+        row = conn.execute(
+            "SELECT started_at, last_heartbeat_at FROM operation_runs "
+            "WHERE scope_id=%s ORDER BY started_at DESC LIMIT 1",
+            (scope_id,),
+        ).fetchone()
+        assert row is not None, "with_operation_run created no operation_runs row"
+        assert row[1] > row[0], "last_heartbeat_at must advance during silent work"
+        assert bump_calls, (
+            "the heartbeat advanced but bump_activity was never called — the sandbox "
+            "would time out during silent agent work (F-HEARTBEAT-NO-ACTIVITY-BUMP)"
+        )
