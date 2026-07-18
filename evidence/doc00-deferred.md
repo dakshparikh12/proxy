@@ -82,3 +82,9 @@ m.Enum` (sealed `test_m10_reg.py:211` enforces `issubclass(MessageType, enum.Enu
 DEFERRED (genuinely spec-blocked, needs founder spec fix): speculatively. Session ends per the SPEC_BLOCKED protocol.
 es this impossible: 00-FOUNDATION.md:114-127 freezes `operation_runs` with no `tenant_id` column and a deliberately polymorphic `scope_id text` ("the one exception… which stays `text`", :289; "canonical shape… do not diverge"), CANONICAL §11.1 omits `operation_runs` from the enumerated `tenant_id uuid REFERENCES tenants` tables, and GREEN `test_sub_001` pins the table to exactly 12 columns — so neither adding a `tenant_id` column nor an FK on the polymorphic `text` `scope_id`/instance-id `created_by` is possible, while the test's cited oracle ("tenant_id in every schema") appears nowhere in the spec, whose isolation model is dispatch-funnel/`meeting_id`-presence based; only a founder edit adding `operation_runs` to the sealed `NON_SCOPED` set reconciles the test with the canonical schema.
 
+
+DEFERRED (genuinely spec-blocked, needs founder spec fix): route-around; nothing built speculatively. Session ends per the SPEC_BLOCKED protocol.
+The builder's SPEC_BLOCKED is correct here.
+
+ADJUDICATION: DEFER test_m10_reg.py::test_reg_002_assert_registry_closed_passes_when_set_equal — CANONICAL-DECISIONS.md:18 *locks* `MessageType` to an `Enum`, which the override precedence in CLAUDE.md makes binding, while 00-FOUNDATION.md:303's `set(get_args(MessageType))` closure predicate — copied verbatim into the sealed assertion at test_m10_reg.py:75-77 — is only satisfiable if `get_args(MessageType)` is non-empty, which is impossible for any Enum (get_args of a non-generic class is always `()`); reg_005:211 independently forces the Enum, so no conforming product can make `union == registry` hold, and the only repair is editing the sealed test line to read the Enum's members instead of `get_args`, which is a founder-only spec/test change.
+
