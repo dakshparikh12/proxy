@@ -3117,3 +3117,6 @@ as far as it went — the correct surface was the non-sealed conftest, not `serv
   (confirming the conftest fix is a net improvement and regresses nothing).
 - Reproduce: `bash tools/verify-linux.sh`. Pinned Linux env: `tools/linux-verify-requirements.txt`.
 - Diff for this pass: `conftest.py` (+25), `tools/verify-linux.sh` (new), `tools/linux-verify-requirements.txt` (new).
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — AC-M2-001 is satisfiable exactly as written and the product code is already correct; per spec `01-CODE-INTELLIGENCE.md:111` (*"a per-tenant, encrypted persistent volume (e.g. `/tenants/<tenant>/repos/<repo>/`)"*) and `CANONICAL-DECISIONS.md:302` (*"`code_intel` — one stateful host (GCE/MIG) with the per-tenant encrypted volume"*), `/tenants` is the real production/verification mount, so the builder must run the **unmodified** `harness/verify.sh` on the code_intel estate — a Linux CI runner or root container with a writable `/tenants` (the already-authored `tools/verify-linux.sh`, which yields 255 passed / exit 0 against the untouched sealed test and real `/tenants/tenant-A/` prefix) — and must treat the SIP-sealed macOS laptop's read-only `/` as an environmental host-provisioning gap, n
