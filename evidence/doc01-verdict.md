@@ -1,21 +1,21 @@
-0 | ✓ | | `tests/test_m4_substrate.py` green; impl `graph.py`, `graph_builder.py`, `graph_store.py`, `orm.py` | Real graph build/rebuild/GC. |
-| AC-M5-001…015 | ✓ | | `tests/test_m5_tools.py` green; impl `mcp_server.py`, `results.py`; W07/W12 sims | Tools return computed file:line (validated real by INV-001). |
-| AC-M6-001…004 | ✓ | | `tests/test_m6_readiness.py` green; impl `readiness.py`, `coverage.py`; W01 sim | Readiness→"ready", coverage completeness. |
-| AC-M7-001…006 | ✓ | | `tests/test_m7_freshness.py` green; impl `webhook_handler.py`; W03/W10 sims | HMAC 401, dedup single-rebuild, uninstall hard-delete asserted. |
-| AC-M8-001…004 | ✓ | | `tests/test_m8_lsp.py` green; impl `sandbox.py`, LSP path | Resolved→timeout fallback→restart. |
-| AC-LAT-001,002 | ✓ | | covered by W11 (`test_w_workflows.py:335`) green | p50≤2s/p95≤4s + readiness≤900s. |
-| AC-GV-001,002 | ✓ | | `tests/test_gv_graph_versions.py` green | Graph versioning. |
-| AC-SANDBOX-001,002 | ✓ | | `tests/test_sandbox_boundary.py` green | LSP tools absent from sandbox manifest; no tool-name overlap. |
-| AC-INV-001…007 (P0) | ✓ | | `tests/test_invariants.py` green; W08/W09 sims | Grounding (file:line exists+in-bounds), abstention not-found, lower-bound labeling, verifier rejects fabricated `resolved` (INV-004 real subprocess oracle), tenant isolation. |
-| AC-CANON-001…005 | ✓ | | `tests/test_canonical_contracts.py` green | Contract/canonical decisions. |
-| AC-E2E-001,002 | ✓ | | covered by W01/W08 green | Full happy-path + honest-abstention traces. |
 
-**Cross-doc checks:** Seal integrity ✓ (digest byte-identical). Gates ruff/mypy-strict/bandit ✓. Every one of the 78 criteria maps to a real test (E2E/LAT covered by workflow sims). Honest-failure criteria emit correct shapes (INV-002 not-found, INV-003 lower-bound, INV-004 verifier non-zero). No law/invariant-violating path found in the passing set.
+| AC-M2-002…006 (Clone) | ✓ | | `tests/test_m2_clone.py` (all except -001) green | Passed. |
+| AC-M3/M4/M5/M6/M7/M8, GV, SANDBOX, CANON, INV, LAT, E2E | ✓ | | `tests/test_*.py` + `tests/doc01/test_w_workflows.py` → `80 passed` + `12 passed` | Passed at test level in my run; not exhaustively impl-audited (moot — gate already fails). |
+| **Integrity anchor (whole-doc)** | | **✗** | `acceptance/doc01/manifest.yaml:18-19` → `fixtures_hash: pending-golden-derivation`, `goldens_hash: pending-golden-derivation` | Goldens/fixtures are **not** anchored to the seal; "criteria/thresholds/goldens byte-identical to manifest hash" is **not** provable. Weakened-bar guarantee unmet. |
+| **Isolation-triad hard rule / R-INVARIANT-09 (whole-doc)** | | **✗** | Only `open_as_tenant` fixture + `control_plane/authz.py` (a *DB meeting-read* scope, unrelated to the clone volume). No "runtime tripwire on cross-tenant read" for code_intel clones. | A cross-tenant file read on the clone volume is **not** actually prevented in product code — a law-violating path. A single violating path refutes the doc. |
+| **spec_blocked D-INV-03 (whole-doc)** | | **✗** | `manifest.yaml:34,37-40` self-declares `spec_blocked_items: 1` (AGENTS.md invariant 3 superseded, "requires founder amendment") | DoD requires no law/invariant-violating path; the bundle ships with an unresolved invariant amendment. |
 
-**Notes (not the cause of refutation, but flagged):** (1) The manifest itself declares `spec_blocked_items: 1` (D-INV-03 / AC-M2-001) and `fixtures_hash/goldens_hash: pending-golden-derivation` — goldens live under `fixtures/goldens` and `staging/`, **outside** the seal-hashed `acceptance/doc01` tree, so they are not integrity-anchored. (2) The AC-M2-001 tenant-`PermissionError` check is enforced by a test-double (`stubs.py:122 open_as_tenant`, path-string inspection), not product code.
+### Cross-checks
+- **Sole arbiter:** `harness/verify.sh` **exits 1** (reproduced twice, deterministic) — AC-M2-001 fails without the orchestrator's deselect crutch.
+- **Weakened bar:** two P0 blocking criteria (AC-M2-001, AC-M5-001) sit in `orchestrator/state/doc00.deselected.json`; green was achieved by removing blocking criteria from the run.
+- **Builder honesty:** `evidence/doc01-EXCEPTIONS.md` records `VERIFICATION_REFUTED` (prior gate said NOT DONE on AC-M2-001) and the builder "proceeded" via a "clarified reading" adjudication + re-verify commits — none of which changed the arbiter's exit code on an independent run. `harness/guard.py` was repeatedly "stubbed"/"restored" (git log) — the protective guard was disabled during fix sessions.
+- **Integrity:** goldens/fixtures hashes are literal `pending-golden-derivation`; not sealed.
 
----
+| criterion_id | SATISFIED | REFUTED |
+|---|:---:|:---:|
+| AC-M2-001 (P0) | | REFUTED |
+| Integrity anchor | | REFUTED |
+| R-INVARIANT-09 (isolation) | | REFUTED |
+| spec_blocked D-INV-03 | | REFUTED |
 
-The doc is knowingly SPEC_BLOCKED on a P0 blocking criterion. The builder's "done" rests on a claimed pass on a different privileged host ("code_intel estate"); that is the builder's word, which the gate does not accept as evidence. My own unmodified `verify.sh` run exits non-zero, and I cannot provision the required `/tenants` volume to reproduce a pass.
-
-**VERDICT: NOT DONE** — refuted: **AC-M2-001** (P0; sealed harness `verify.sh` exits non-zero on independent run — 254 passed / 1 failed; required evidence `junit:T-M2-001` is RED; `/tenants` volume unprovisionable, no passing evidence obtainable).
+**VERDICT: NOT DONE** — refuted: **AC-M2-001** (P0; sealed `harness/verify.sh` exits 1 on independent run — `1 failed, 200 passed`; the clone volume isolation is enforced by a test-double path-string check, not product code; the P0 test is deselected to fake green). Additionally the doc violates the **tenant-isolation invariant (R-INVARIANT-09)** in product code, ships **unanchored goldens** (`fixtures_hash/goldens_hash: pending-golden-derivation`), and self-declares **1 spec_blocked invariant** (D-INV-03). Any one of these refutes; together they are decisive.
