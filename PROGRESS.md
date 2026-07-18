@@ -2058,3 +2058,47 @@ one-liners must land together or the loop re-stalls one milestone later.
 No sealed/test/fixture/harness/CANONICAL file touched; no route-around; nothing built speculatively; no test
 weakened. Confirmed stuck loop, 45× reproduced — halt builder re-invocation and route the four sealed one-liners
 to a founder. Session ends per the SPEC_BLOCKED protocol.
+
+### Session 46 (2026-07-18) — 46th confirmation; 163/167; reg_002 contradiction proven by empirical product-fix attempt; halt reaffirmed
+
+Fresh-context builder. Refused to trust the 45-session prose chain — re-derived every one of the four
+from primary source (sealed tests + CANONICAL-DECISIONS §2 + 00-FOUNDATION), and for reg_002 went further
+than any prior session by **actually attempting the product-side fix and proving it fails**:
+
+- **reg_002 ↔ reg_005 (mutually exclusive sealed tests — proven live, not argued).** I converted the product's
+  `MessageType` (libs/contracts/registry.py) from an `enum.Enum` to `Literal["connect-repo","approve-draft",
+  "invite-proxy"]` — the only shape on which `get_args(MessageType)` yields the discriminator strings that
+  `test_m10_reg.py:75` demands. Result: reg_002 went GREEN, but `test_m10_reg.py:211`
+  (`assert issubclass(MessageType, enum.Enum)`) went RED. No single object can satisfy both: `typing.get_args`
+  reads `__args__` only on `_GenericAlias`, and an `enum.Enum` subclass is a plain `type`, never a `_GenericAlias`
+  — so `get_args(EnumClass) == ()` always. reg_002 requires a Literal; reg_005 requires an Enum; disjoint.
+  reg_006:251 and reg_003:116-119 are Enum-tolerant (they fall back to `.value`), so the product's Enum is the
+  shape 5-of-6 sealed reg tests demand; reg_002:75 is the lone defect (founder: iterate enum members, or make
+  the closure `set(get_args(MessageType)) == set(CHANNEL_REGISTRY)` and drop reg_005's Enum assertion). Reverted
+  the experiment; `git diff` clean.
+- **ten_001 (CANONICAL §2 lock ↔ sub_001 exact-column pin).** operation_runs is a **locked** 12-column table
+  (CANONICAL-DECISIONS §2:70-83) whose `scope_id` is polymorphic `text` (meeting_id OR workroom task_id), so it
+  can carry neither a `tenant_id` column nor a declared FK. `test_m15_ten.py:111` omits operation_runs from
+  `NON_SCOPED`, so :178 requires it to reach tenant_id; but `test_m03_sub.py:82` asserts its columns are EXACTLY
+  the 12 canonical (adding tenant_id → sub_001 RED). No schema satisfies both (founder: add `operation_runs` to
+  ten_001 `NON_SCOPED`).
+- **inv_010 (uuid tenant column ↔ non-uuid seed literal).** ten_001 + CANONICAL force every tenant column to be
+  a `uuid` FK to tenants(id); `test_m13_inv.py:546` does `INSERT ... VALUES ('tenant-OFF')` — a non-uuid string —
+  which errors `invalid input syntax for type uuid` before the sweep runs. No product schema both satisfies
+  ten_001 (uuid FK) and accepts the string literal (founder: seed a real uuid).
+- **obs_006 (absolute-path re-root in the sealed read).** `_support.py:83-87 glob` rglobs an **absolute** base →
+  absolute paths; `test_m11_obs.py:243` `S.read_text(*scripts[0].split("/"))` splits that absolute path and
+  re-roots it onto ROOT → doubled non-existent path → `None` → `""` → `:244` fails regardless of the real
+  3359-byte deploy/harden.sh. The only "product placement" that survives is a machine-specific
+  `Users/pranav/Desktop/proxy/...` dir committed into the repo — non-portable, breaks on CI → no product fix.
+  Sibling `test_m02_host.py:327` uses the correct `p.relative_to(S.ROOT).parts` idiom; :243 omits it (founder:
+  read the absolute path directly).
+
+Ground truth re-run live: `.venv/bin/python -m pytest -q -p no:randomly tests/doc00/` → **163 passed / 4 failed**
+— identical set to sessions 7–45 (`reg_002`, `obs_006`, `inv_010`, `ten_001`). All four failing assertions live
+in `tests/doc00/` (harness/guard.py:14 `PROTECTED` + runner.py integrity hash ⇒ any edit hard-exits) and each is
+a one-line **founder** fix to a sealed test/support file. `verify.sh` runs `-x --maxfail=1`, so all four must land
+together. No sealed/test/fixture/support/harness/CANONICAL file touched; product Enum experiment reverted to a
+byte-clean tree; no route-around; nothing built speculatively; no test weakened. **Confirmed stuck loop, 46×
+reproduced (this time with an executed-and-reverted product-fix disproof for reg_002) — halt builder re-invocation
+and route the four sealed one-liners to a founder.** Session ends per the SPEC_BLOCKED protocol.
