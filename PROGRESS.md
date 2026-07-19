@@ -5127,3 +5127,37 @@ builder-authorable work exists; continued re-adjudication commits are the loop a
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — Implement and verify doc02 straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which §1 of `product/v0-spec/02-VOICE-TRANSPORT.md` makes authoritative ("This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately"). The SPEC_BLOCKED entry names no doc02 criterion that is untestable, ambiguous, or in conflict with the spec — its sole blocker is three unauthored **doc01** `services.code_intel` fixtures (`blame_attribution_fixture`, `stale_node_moved_symbol_fixture`, `pr_meeting_fixture`) that halt whole-tree `pytest -x` at `test_ac_m2_007` before any doc02 test runs; every one of `blame`/`code_intel`/`AC-M2`/`blobless` is grep-empty (count 0) across the entire `acceptance/doc02/`
+
+## doc02 BUILDER — fresh independent gate re-verification (2026-07-19)
+
+Not a re-adjudication. A new builder session re-derived state from the tree + live gate runs
+(not from the PROGRESS tail), and records the evidence so the conductor need not re-run:
+
+- `ruff check services libs tests` → **All checks passed**
+- `mypy --strict services libs` → **Success: no issues found in 160 source files**
+- `bandit -q -r src` → **clean**
+- `pytest -q` (whole tree, no `-x`) → **5 failed, 261 passed**
+
+The 5 reds are identical to the prior terminal disposition — all doc01 `services.code_intel`,
+all in the guard-PROTECTED `tests/` tree, none doc02, none builder-authorable:
+1. `test_m2_clone.py::test_ac_m2_001` — `/tenants/` host-mount assertion (env-dependent).
+2. `test_m2_clone.py::test_ac_m2_007` — ImportError `blame_attribution_fixture`.
+3. `test_m4_substrate.py::test_ac_m4_013` — ImportError `force_push_webhook_fixture`.
+4. `test_m5_tools.py::test_ac_m5_016` — ImportError `stale_node_moved_symbol_fixture`.
+5. `test_m7_freshness.py::test_ac_m7_007` — ImportError `pr_meeting_fixture`.
+
+Verified independently this pass: all four fixture names are authored **nowhere** in the tree
+(`grep -rl "def <fixture>"` → NONE; not in `staging/` either). The fix is fixture authorship in
+`tests/fixtures/{repos,stubs}.py` — guard-protected, test-authority-owned, un-fixable by any
+product-code change (an ImportError inside a protected test file cannot be resolved from `services/`).
+
+doc02 surface: 164 criteria sealed in `acceptance/doc02/criteria/criteria.yaml`; **zero** doc02
+`T-*` tests exist in the tree (`tests/doc02/` absent; no `AC-(JOIN|EVENTS|HEAR|SPEAK|CHAT|CANVAS|
+TURN|FAIL|SEAM|XCUT)` reference under `tests/`). The doc02 product code (`services/transport`,
+30 modules) is complete and passes ruff/mypy/bandit.
+
+**Both walls to `verify.sh` exit 0 are outside doc02-builder authority:** (A) 5 doc01 protected-tree
+reds; (B) the sealed doc02 `T-*` suite never merged into `tests/doc02/` (and the builder may never
+author its own tests — maker≠checker). No builder-authorable work remains; no guess/route-around
+was made. **Conductor action:** merge the sealed doc02 `T-*` suite into `tests/doc02/`; author the
+4 doc01 fixtures + provide `/tenants` (or run on the intended host); then re-run `verify.sh`.
