@@ -36,17 +36,35 @@ def parse_requirements(path: pathlib.Path) -> dict[str, str]:
 def parse_criteria(path: pathlib.Path) -> list[dict]:
     """list of {id, refs:[...], criticality, blocking}."""
     crits, cur = [], None
+    in_refs = False  # True while reading multi-line authority_refs list items
     for line in path.read_text().splitlines():
         m = re.match(r"\s*-?\s*criterion_id:\s*(\S+)", line)
         if m:
+            in_refs = False
             cur = {"id": m.group(1).strip().strip('"'), "refs": [], "criticality": "?", "blocking": None}
             crits.append(cur)
             continue
         if cur is None:
             continue
+        # Inline format: authority_refs: [R-X, R-Y]
         r = re.match(r"\s*authority_refs:\s*\[(.*)\]", line)
         if r:
+            in_refs = False
             cur["refs"] = [x.strip().strip('"') for x in r.group(1).split(",") if x.strip()]
+            continue
+        # Multi-line start: authority_refs:  (value on next lines)
+        r2 = re.match(r"\s*authority_refs:\s*$", line)
+        if r2:
+            in_refs = True
+            continue
+        # Multi-line list item: - R-doc02-JOIN-01
+        if in_refs:
+            item = re.match(r"\s*-\s+(\S+)", line)
+            if item:
+                cur["refs"].append(item.group(1).strip().strip('"'))
+                continue
+            else:
+                in_refs = False  # non-list line ends the refs block
         c = re.match(r"\s*criticality:\s*(\S+)", line)
         if c:
             cur["criticality"] = c.group(1).strip()
