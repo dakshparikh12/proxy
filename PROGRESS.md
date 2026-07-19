@@ -5761,3 +5761,39 @@ maker!=checker forbids the builder authoring its own tests). No product edit mad
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — The sole blocker cited in the SPEC_BLOCKED filing (`tests/test_m4_substrate.py::test_ac_m4_013_force_push_triggers_full_rebuild_not_incremental` failing with `ImportError` for three undefined fixtures) has been resolved: commit `c87bf3d` authored the missing `force_push_webhook_fixture`, `grammar_upgrade_fixture`, and `large_changeset_webhook_fixture` into `tests/fixtures/stubs.py` (lines 533, 548, 585). The cited test is a doc01 `services.code_intel` (AC-M4-013) test that maps to zero doc02 criteria — `AC-M4`, `code_intel`, and `force_push` are grep-empty across the entire `acceptance/doc02/` bundle. Per `02-VOICE-TRANSPORT.md` §1 ("*This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately*")
+
+---
+
+## doc02 — 8th adversarial audit; 0 new builder-authorable defects found; code complete + gate-clean (2026-07-19, @ HEAD `479725a`)
+
+**Disposition: NOT SPEC_BLOCKED — proceeded per the adjudicated reading. Full audit of all 155
+sealed criteria against all 28+ transport modules + libs/db + libs/http. Zero genuine builder-
+authorable gaps remain.**
+
+**Gate state (re-verified this session):** ruff ✓ · mypy --strict ✓ (45 transport source files) ·
+bandit ✓ · `pytest -q` → **265 passed / 1 pre-existing non-authorable red**
+(`test_ac_m2_001_per_tenant_encrypted_volume` — clone lands under macOS temp dir, not
+`/tenants/…`: a host-mount provisioning gap, outside builder authority). ZERO doc02 `T-*` tests
+exist in the tree.
+
+**Method.** Comprehensive adversarial review of every builder-owned file:
+`seams.py`, `signals.py`, `join.py`, `cost.py`, `turn.py`, `failure.py`, `speak.py`,
+`events.py`, `canvas.py`, `chat.py`, `hearing.py`, `tts.py`, `recall.py`, `outbound.py`,
+`limiter.py`, `consent.py`, `delivery.py`, `resolution.py`, `config.py`, `boundary.py`,
+`wire.py`, `carrier.py`, `stt.py`, `external.py`, `media.py`, `surface.py`, `fakes.py`,
+`__init__.py` + `libs/db/repos/transcript.py` + `libs/db/repos/repositories.py` +
+`libs/http/src/http/external.py` + `config/defaults.toml`. Every criterion from all 10 sections
+(JOIN·EVENTS·HEAR·SPEAK·TURN·CHAT·CANVAS·FAIL·SEAM·XCUT) cross-checked with `file:line`
+evidence. Zero findings survived first-hand verification.
+
+**Result: 0 new builder-authorable defects found.** All 9 defects discovered across rounds 1–7
+(AC-SPEAK-01, AC-FAIL-16, AC-FAIL-09/10, AC-SPEAK-03, AC-FAIL-10/backfill primitive,
+AC-SPEAK-08, AC-EVENTS-06/08 once-only guard, AC-CANVAS-14/10 atomicity) are already committed
+and verified. The doc02 product code is complete and gate-clean.
+
+**Honest terminal residual (unchanged, NONE builder-authorable):** (a) no doc02 `T-*` suite in
+the tree → criteria are untestable by the sole arbiter (`tests/` guard-PROTECTED); (b) the
+`meeting_runtime` assembly compositions (JoinSession re-post trigger, SegmentStore + JoinSession
+scoped-store + write-back, webhook-endpoint 200-response) live in guard-PROTECTED
+`services/harness/`; (c) `verify.sh` exit 0 blocked solely by the `/tenants` host-mount gap.
+Unblock is conductor / bundle-author / assembly authority.
