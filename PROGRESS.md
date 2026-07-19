@@ -5797,3 +5797,6 @@ the tree → criteria are untestable by the sole arbiter (`tests/` guard-PROTECT
 scoped-store + write-back, webhook-endpoint 200-response) live in guard-PROTECTED
 `services/harness/`; (c) `verify.sh` exit 0 blocked solely by the `/tenants` host-mount gap.
 Unblock is conductor / bundle-author / assembly authority.
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — The builder must implement and verify doc02 product code straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which `02-VOICE-TRANSPORT.md` §1 designates as authoritative ("*acceptance criteria and tests are generated from it separately*"). The 5 cited test failures are all doc01 `services.code_intel` tests mapping to zero doc02 criteria; 4 of the 5 fixture-import reds are now resolved in the tree; and the absence of a doc02 `T-*` pytest suite is a bundle-authoring gap to be filled by conductor authority, not a spec contradiction that blocks product implementation. The builder should audit every sealed criterion's given/when/then against the built `services/transport` code and report coverage by first-hand file:line evidence, treating the criteria YAML as the contract.
