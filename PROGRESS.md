@@ -5227,3 +5227,6 @@ route-around of a read-only-arbiter defect. This is the same doc01 protected-fix
 gap, and localizes the fix precisely to `tests/fixtures/stubs.py`. Consistent with the recorded
 "5 reds all non-authorable doc01" terminal state; doc02 surface (`services/transport`) remains
 complete and gate-clean (ruff/mypy --strict/bandit).
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — The doc02 builder is not spec-blocked. Implement and verify doc02 straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which `product/v0-spec/02-VOICE-TRANSPORT.md` §1 makes authoritative in its own words ("*This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately*"). The SPEC_BLOCKED filing cites `tests/test_m4_substrate.py::test_ac_m4_013_force_push_triggers_full_rebuild_not_incremental` — a **doc01** `services.code_intel` (AC-M4-*) test that maps to no doc02 criterion — and its red is a collection-time `ImportError` for three fixtures (`force_push_webhook_fixture`, `grammar_upgrade_fixture`, `large_changeset_webhook_fixture`) that are defined nowhere in the tree; this is a
