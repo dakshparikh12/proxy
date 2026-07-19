@@ -1,0 +1,170 @@
+"""Recall webhook → live signal derivation (§3.1 / §3.9-2, AC-EVENTS-01..14).
+
+Recall webhooks (participant join/leave/update, bot-status, meeting-end) are the ONLY
+source of roster/meeting-end/bot-status signals — every emitted signal is traceable to a
+field in the source payload, never synthesized (AC-EVENTS-04). Each delivery lands
+**durably first**: an idempotent ``INSERT ... ON CONFLICT (delivery_guid) DO NOTHING``
+(doc00 ``libs/db`` ``webhook_events``), the endpoint returns 200, and only a *newly*
+inserted delivery is processed — a duplicate ``delivery_guid`` is a no-op, so downstream
+signals fire exactly once (AC-EVENTS-09/10). Meeting-end is emitted ONLY on the explicit
+webhook, never inferred from silence (AC-EVENTS-06/07); it triggers the close sequence
+*after* the meeting-end signal (AC-EVENTS-08). Roster/meeting-end/bot-status are internal
+over-transport events, outside the client ``ProxyMessage`` registry (AC-EVENTS-11).
+"""
+from __future__ import annotations
+
+import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from typing import Any, Protocol
+
+from contracts.registry import assert_registry_closed
+
+from .carrier import SignalCarrier
+from .signals import BotStatus, MeetingEnd, MeetingMetadata, RosterEvent, Signal
+
+# Confirmed Recall webhook event tags (pinned at build, §3.9-2).
+_EVT_JOIN = "participant.join"
+_EVT_LEAVE = "participant.leave"
+_EVT_UPDATE = "participant.update"
+_EVT_BOT_STATUS = "bot.status"
+_EVT_MEETING_END = "meeting.end"
+_VALID_BOT_STATUS = {"connected", "dropped", "rejoined"}
+
+
+class DurableStore(Protocol):
+    """Injected durability seam over doc00 ``webhook_events.insert_event``."""
+
+    async def insert_event(self, delivery_guid: str, payload: dict[str, Any]) -> bool:
+        """Durably record a delivery; return True if newly inserted (else a dedup no-op)."""
+        ...
+
+
+@dataclass
+class ProcessResult:
+    """Outcome of one webhook delivery — honest about persist/dedupe/emit."""
+
+    persisted: bool
+    duplicate: bool
+    emitted: list[Signal] = field(default_factory=list)
+
+
+def is_meeting_end(payload: dict[str, Any]) -> bool:
+    """True ONLY for the explicit meeting-end webhook — never silence (AC-EVENTS-06/07)."""
+    return payload.get("event") == _EVT_MEETING_END
+
+
+def meeting_metadata(payload: dict[str, Any]) -> MeetingMetadata:
+    """Title + participant list passed through verbatim from the source (AC-EVENTS-05)."""
+    data = payload.get("data", {})
+    parts = tuple(p.get("name", "") for p in data.get("participants", []))
+    return MeetingMetadata(title=str(data.get("title", "")), participants=parts)
+
+
+class WebhookProcessor:
+    """Derives + emits live signals from durable Recall webhooks for one meeting."""
+
+    def __init__(
+        self,
+        carrier: SignalCarrier,
+        *,
+        now: Callable[[], float] = time.monotonic,
+        on_meeting_end: Callable[[MeetingEnd], Awaitable[None]] | None = None,
+    ) -> None:
+        self._carrier = carrier
+        self._now = now
+        self._on_meeting_end = on_meeting_end
+        self._names: dict[str, str] = {}
+        self._snapshot_done = False
+
+    async def process(self, payload: dict[str, Any], delivery_guid: str, *, store: DurableStore) -> ProcessResult:
+        """Persist durably, return 200, then process exactly once (skip duplicates)."""
+        newly = await store.insert_event(delivery_guid, payload)
+        if not newly:  # duplicate delivery_guid → no-op; no double signal (AC-EVENTS-10)
+            return ProcessResult(persisted=True, duplicate=True)
+        emitted = await self._emit_for(payload)
+        return ProcessResult(persisted=True, duplicate=False, emitted=emitted)
+
+    async def _emit_for(self, payload: dict[str, Any]) -> list[Signal]:
+        emitted: list[Signal] = []
+
+        # Initial present-set snapshot precedes the live deltas (AC-EVENTS-14).
+        for ev in self._initial_present_set(payload):
+            await self._carrier.emit(ev)
+            emitted.append(ev)
+
+        # Name-change cache update so subsequent roster events carry current name (AC-EVENTS-13).
+        self._update_names(payload)
+
+        # Live roster join/leave deltas, traceable to the payload (AC-EVENTS-01..04).
+        for ev in self._roster_deltas(payload):
+            await self._carrier.emit(ev)
+            emitted.append(ev)
+
+        # bot-status routed to the harness after durable persist (AC-EVENTS-12).
+        bot_status = self._bot_status(payload)
+        if bot_status is not None:
+            await self._carrier.emit(bot_status)
+            emitted.append(bot_status)
+
+        # Meeting-end only on the explicit webhook; close sequence AFTER it (AC-EVENTS-06/08).
+        if is_meeting_end(payload):
+            end = MeetingEnd(reason=str(payload.get("data", {}).get("reason", "meeting_end")))
+            await self._carrier.emit(end)
+            emitted.append(end)
+            if self._on_meeting_end is not None:
+                await self._on_meeting_end(end)
+
+        return emitted
+
+    def _initial_present_set(self, payload: dict[str, Any]) -> list[RosterEvent]:
+        if self._snapshot_done or payload.get("event") != _EVT_JOIN:
+            return []
+        participants = payload.get("data", {}).get("participants")
+        if not participants:
+            return []
+        self._snapshot_done = True
+        snapshot: list[RosterEvent] = []
+        for p in participants:
+            pid, name = str(p.get("id", "")), str(p.get("name", ""))
+            self._names[pid] = name
+            snapshot.append(RosterEvent(kind="present", name=name, participant_id=pid))
+        return snapshot
+
+    def _update_names(self, payload: dict[str, Any]) -> None:
+        if payload.get("event") != _EVT_UPDATE:
+            return
+        p = payload.get("data", {}).get("participant", {})
+        pid, name = str(p.get("id", "")), p.get("name")
+        if pid and name:
+            self._names[pid] = str(name)
+
+    def _roster_deltas(self, payload: dict[str, Any]) -> list[RosterEvent]:
+        event = payload.get("event")
+        if event not in (_EVT_JOIN, _EVT_LEAVE):
+            return []
+        p = payload.get("data", {}).get("participant")
+        if not p:
+            return []
+        pid = str(p.get("id", ""))
+        name = self._names.get(pid) or str(p.get("name", ""))
+        if not name:  # a join/leave with no resolvable name is not a complete signal
+            return []
+        self._names[pid] = name
+        if event == _EVT_JOIN:
+            return [RosterEvent(kind="join", name=name, participant_id=pid)]
+        return [RosterEvent(kind="leave", name=name, participant_id=pid)]
+
+    def _bot_status(self, payload: dict[str, Any]) -> BotStatus | None:
+        if payload.get("event") != _EVT_BOT_STATUS:
+            return None
+        status = payload.get("data", {}).get("status")
+        if status not in _VALID_BOT_STATUS:
+            return None
+        return BotStatus(status=status, t=self._now())
+
+
+def registry_excludes_signal_surface() -> bool:
+    """Self-check: the client registry closes WITHOUT the transport signal surface (AC-EVENTS-11)."""
+    assert_registry_closed()  # raises if a signal leaked into the client registry
+    return True

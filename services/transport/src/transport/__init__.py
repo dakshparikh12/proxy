@@ -8,6 +8,14 @@ from __future__ import annotations
 from .boundary import BoundaryDecision, BoundarySource, resolve_boundary_source
 from .carrier import SignalCarrier
 from .consent import consent_notice, notice_is_valid
+from .events import (
+    DurableStore,
+    ProcessResult,
+    WebhookProcessor,
+    is_meeting_end,
+    meeting_metadata,
+    registry_excludes_signal_surface,
+)
 from .external import CallExternal
 from .fakes import FakeOutputMediaSink, FakeTTS
 from .join import Action, JoinResult, JoinSession, JoinSource, JoinState
@@ -23,6 +31,7 @@ from .signals import (
     ChannelReportSignal,
     ChatMessage,
     MeetingEnd,
+    MeetingMetadata,
     RosterEvent,
     Signal,
     Speaking,
@@ -37,6 +46,13 @@ __all__ = [
     "Action",
     "AudioChunk",
     "BargeIn",
+    "DurableStore",
+    "MeetingMetadata",
+    "ProcessResult",
+    "WebhookProcessor",
+    "is_meeting_end",
+    "meeting_metadata",
+    "registry_excludes_signal_surface",
     "BotStatus",
     "Boundary",
     "BoundaryDecision",

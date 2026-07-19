@@ -42,11 +42,24 @@ class ChatMessage:
 
 @dataclass(frozen=True)
 class RosterEvent:
-    """A participant join/leave with name (§3.1) — powers name-aware responses."""
+    """A participant present/join/leave with name (§3.1) — powers name-aware responses.
 
-    kind: Literal["join", "leave"]
+    ``present`` is the initial snapshot leg (each participant already in the room at
+    join); ``join``/``leave`` are the live deltas — together the who-is-present triad
+    (AC-EVENTS-14/02/03).
+    """
+
+    kind: Literal["present", "join", "leave"]
     name: str
     participant_id: str
+
+
+@dataclass(frozen=True)
+class MeetingMetadata:
+    """Meeting title + participant list, passed through to the Orchestrator (§3.1)."""
+
+    title: str
+    participants: tuple[str, ...]
 
 
 @dataclass(frozen=True)
