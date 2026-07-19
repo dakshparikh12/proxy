@@ -30,6 +30,12 @@ ALLOW_PULL = ORCH / "state" / "ALLOW_PULL"   # present ONLY between docs: the su
 #   fast-forward monitoring-side fixes then. Absent while a doc builds => the run is pinned to
 #   its launch SHA and no founder push can mutate it mid-doc.
 
+# Model tiering: SONNET for routine builder passes; OPUS for all judgment-critical paths
+# (adjudicator, verifier, sweep, criteria review) and for builder sessions that have stalled.
+SONNET_MODEL = "claude-sonnet-4-6"
+OPUS_MODEL = "claude-opus-4-6"
+OPUS_ESCALATION_STALL_COUNT = 2   # build sessions stalled >= this many times → escalate to Opus
+
 DOCS = {
     "doc00": {"spec": "00-FOUNDATION.md",
               "deps": ["pydantic", "pydantic-settings", "fastapi", "uvicorn", "asyncpg",
@@ -66,14 +72,16 @@ def sh(cmd: list[str], **kw) -> subprocess.CompletedProcess:
 
 
 def agent(prompt_file: str, subs: dict, capture: bool = False, timeout: int = 60 * 120,
-          max_turns: int = 200) -> str:
+          max_turns: int = 200, model: str | None = None) -> str:
     """One fresh Claude Code session (guard hooks apply to it). Returns stdout if captured."""
     text = (ORCH / "prompts" / prompt_file).read_text()
     for k, v in subs.items():
         text = text.replace(k, v)
-    r = subprocess.run(["claude", "-p", text, "--permission-mode", "bypassPermissions",
-                        "--max-turns", str(max_turns)],
-                       cwd=ROOT, timeout=timeout,
+    cmd = ["claude", "-p", text, "--permission-mode", "bypassPermissions",
+           "--max-turns", str(max_turns)]
+    if model:
+        cmd += ["--model", model]
+    r = subprocess.run(cmd, cwd=ROOT, timeout=timeout,
                        capture_output=capture, text=capture)
     return (r.stdout or "") if capture else ""
 
@@ -325,6 +333,33 @@ DESELECTED: list[str] = _load_deselected()   # deferred criteria — persisted a
 _seen_blocked = 0
 
 
+# ── Decision cache (TASK 1) ──────────────────────────────────────────────────
+# Keyed by sha256(entry_text) so the exact same SPEC_BLOCKED claim never
+# triggers a second LLM adjudication; the cached ruling is re-applied instead.
+# Cache lives at orchestrator/state/<doc>.decisions.json.
+
+def _decisions_path(doc: str) -> pathlib.Path:
+    return ORCH / "state" / f"{doc}.decisions.json"
+
+
+def _load_decisions(doc: str) -> dict:
+    try:
+        return json.loads(_decisions_path(doc).read_text())
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def _save_decisions(doc: str, cache: dict) -> None:
+    _decisions_path(doc).parent.mkdir(parents=True, exist_ok=True)
+    _decisions_path(doc).write_text(json.dumps(cache, indent=1))
+
+
+def _entry_sig(entry: str) -> str:
+    """Stable fingerprint for a SPEC_BLOCKED entry (first 300 chars captures the criterion ID
+    and conflict statement without being sensitive to trailing whitespace edits)."""
+    return hashlib.sha256(entry.strip()[:300].encode()).hexdigest()[:24]
+
+
 def new_spec_blocked() -> str | None:
     """Only NEW SPEC_BLOCKED entries since last check (resolved ones don't re-trigger)."""
     global _seen_blocked
@@ -339,9 +374,19 @@ def new_spec_blocked() -> str | None:
 
 
 def adjudicate(doc: str, entry: str) -> bool:
-    """Fresh-context ruling on a claimed blocker. True = proceed; False = deferred (recorded)."""
+    """Fresh-context ruling on a claimed blocker. True = proceed; False = deferred (recorded).
+    Cache hit: same entry fingerprint → re-apply prior ruling without spawning an LLM session."""
+    sig = _entry_sig(entry)
+    cache = _load_decisions(doc)
+    if sig in cache:
+        prior = cache[sig]
+        log(f"[{doc}] cached ruling re-applied ({prior['ruling']}) for: {entry[:80]}")
+        return prior["ruling"] == "PROCEED"
     log(f"[{doc}] adjudicating SPEC_BLOCKED: {entry[:120]}")
     ok, out = independent_check(doc, "adjudicate.md", "ADJUDICATION: PROCEED")
+    cache[sig] = {"ruling": "PROCEED" if ok else "DEFER", "entry_prefix": entry.strip()[:120],
+                  "decided_at": time.strftime("%F %T")}
+    _save_decisions(doc, cache)
     if ok:
         clar = out.split("ADJUDICATION: PROCEED", 1)[-1][:800]
         (ROOT / "PROGRESS.md").open("a").write(
@@ -392,10 +437,11 @@ def build_loop(doc: str) -> str:
         if time.time() - start + 1800 > 9 * 3600:
             return "WALL_CLOCK"
         before = commit_count()
-        log(f"[{doc}] build session {s} (persistent; iterates internally)")
+        build_model = OPUS_MODEL if stalls >= OPUS_ESCALATION_STALL_COUNT else SONNET_MODEL
+        log(f"[{doc}] build session {s} (persistent; iterates internally) [{build_model.split('-')[1]}]")
         try:
             agent("build_pass.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
-                  timeout=BUILD_TIMEOUT, max_turns=BUILD_TURNS)
+                  timeout=BUILD_TIMEOUT, max_turns=BUILD_TURNS, model=build_model)
         except subprocess.TimeoutExpired:
             log(f"[{doc}] build session {s} hit the {BUILD_TIMEOUT//60}m cap; checking progress")
         if tree_hash() != baseline:
@@ -435,10 +481,10 @@ def build_loop(doc: str) -> str:
         # No new commits AND not green => the builder is stuck.
         stalls += 1
         if stalls == 1:
-            log(f"[{doc}] no progress this session — fresh-context debugger")
+            log(f"[{doc}] no progress this session — fresh-context debugger (opus)")
             try:
                 agent("unstall.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
-                      timeout=BUILD_TIMEOUT, max_turns=200)
+                      timeout=BUILD_TIMEOUT, max_turns=200, model=OPUS_MODEL)
             except subprocess.TimeoutExpired:
                 pass
             if tree_hash() != baseline:
@@ -463,10 +509,14 @@ def build_loop(doc: str) -> str:
     return "MAX_BUILD_SESSIONS"
 
 
-def independent_check(doc: str, prompt: str, expect: str) -> tuple[bool, str]:
-    """Verifier / sweep: fresh session, tamper-checked (services+libs hash must not change)."""
+def independent_check(doc: str, prompt: str, expect: str,
+                      model: str = OPUS_MODEL) -> tuple[bool, str]:
+    """Verifier / sweep: fresh session, tamper-checked (services+libs hash must not change).
+    Defaults to OPUS_MODEL — all judgment-critical checks (adjudicator, verifier, sweep,
+    criteria review) warrant the strongest available model."""
     before = tree_hash(("services/", "libs/")) if (ROOT / "services").exists() else ""
-    out = agent(prompt, {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]}, capture=True, max_turns=120)
+    out = agent(prompt, {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]}, capture=True, max_turns=120,
+                model=model)
     after = tree_hash(("services/", "libs/")) if (ROOT / "services").exists() else ""
     if before != after:
         return False, "TAMPER: check session modified the build"
@@ -510,7 +560,7 @@ def run_doc(doc: str) -> str:
     if not (bundle_dir(doc) / "criteria").exists():
         for cycle in range(1, REVIEW_CYCLES + 1):
             log(f"[{doc}] P1 generate criteria (cycle {cycle})")
-            agent("gen_criteria.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]})
+            agent("gen_criteria.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]}, model=SONNET_MODEL)
             log(f"[{doc}] P2 adversarial criteria review")
             ok, out = independent_check(doc, "review_criteria.md", "REVIEW: APPROVED")
             if ok and coverage_gate(doc, sdir / "acceptance" / doc):
@@ -536,7 +586,7 @@ def run_doc(doc: str) -> str:
         log(f"[{doc}] P3 skipped — evidence already promoted + collecting clean (resume)")
     else:
         log(f"[{doc}] P3 generate evidence layer (tests/fixtures/sims/goldens -> staging)")
-        agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]})
+        agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]}, model=SONNET_MODEL)
     # P4: gate + promote + seal (THIS process, deterministic)
     # Prefer the staging bundle only if it has actual content (requirements file); otherwise
     # fall back to the already-sealed bundle_dir (handles idempotent reruns where staging is
@@ -558,7 +608,7 @@ def run_doc(doc: str) -> str:
         return "EVIDENCE_COLLECTION_ERROR:\n" + (col.stdout + col.stderr)[-800:]
     # P5: plan
     log(f"[{doc}] P5 plan + planner-review")
-    agent("plan.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]}, max_turns=60)
+    agent("plan.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]}, max_turns=60, model=SONNET_MODEL)
     # P6: build
     result = build_loop(doc)
     if result != "GREEN":
@@ -605,8 +655,8 @@ def run_doc(doc: str) -> str:
         if done:
             break
         log(f"[{doc}] sweep found gaps — extending criteria + evidence, rebuilding")
-        agent("gen_criteria.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]})
-        agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]})
+        agent("gen_criteria.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]}, model=SONNET_MODEL)
+        agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]}, model=SONNET_MODEL)
         # Merge sweep-gap-closure addenda (staging parts/) into the existing sealed bundle
         # instead of expecting a complete fresh bundle at staging/acceptance/.
         merge_sweep_parts(doc)
