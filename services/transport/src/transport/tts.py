@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+from . import config
 from .external import CallExternal
 from .media import AudioChunk
 
@@ -31,14 +32,17 @@ class CartesiaTTS:
         call_external: CallExternal,
         *,
         api_key: str,
-        chunk_ms: int = 250,
+        chunk_ms: int | None = None,
         voice_id: str = _DEFAULT_VOICE_ID,
         register: str = _DEFAULT_REGISTER,
     ) -> None:
         # ``api_key`` from Secret Manager, never logged (AC-XCUT-02).
         self._call_external = call_external
         self._api_key = api_key
-        self._chunk_ms = chunk_ms
+        # Small-chunk size from config — kept below the barge-in stop budget so a surviving
+        # in-flight chunk can't defeat barge-in (AC-TURN-10 / AC-SPEAK-08). Single source of
+        # truth in config/defaults.toml (Law 4).
+        self._chunk_ms = chunk_ms if chunk_ms is not None else config.get_int("tts_chunk_ms")
         self._voice_id = voice_id
         self._register = register
 

@@ -17,8 +17,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 _CONFIG_PATH = _REPO_ROOT / "config" / "defaults.toml"
 
 _DEFAULTS: dict[str, Any] = {
-    "tts_chunk_ms": 250,
-    "max_buffered_audio_ms": 250,
+    # Chunk + buffer stay BELOW barge_in_budget_ms so a surviving in-flight chunk's
+    # residual playout can't exceed the 200ms stop budget (AC-TURN-10); ≤ AC-SPEAK-08's
+    # 250 ceiling. Mirrors config/defaults.toml.
+    "tts_chunk_ms": 120,
+    "max_buffered_audio_ms": 120,
     "barge_in_budget_ms": 200,
     "headline_char_soft_cap": 240,
     "max_spoken_chars_per_hour": 4000,
