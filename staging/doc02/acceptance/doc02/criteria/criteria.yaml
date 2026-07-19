@@ -3718,3 +3718,101 @@
   - F-SPEAK-TEXT-COPY-PARAPHRASED
   test_ids:
   - T-FAIL-20
+# Sweep-3 gap closure (patch) — closes review-gaps.md (3) ack/boundary reconciliation,
+# (4) ack vs barge-in ordering, (5) never-throw delivery-verb hard rule.
+- criterion_id: AC-SPEAK-19
+  name: Audible ack is boundary-gated, NOT exempt — no ack audio before a boundary
+  evidence_class: '[simulation]'
+  authority_refs: [R-doc02-SPEAK-21, R-doc02-TURN-06, R-doc02-SPEAK-07]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: A direct-answer pickup that elects to fire the audible "on it" ack, over a stream of boundary / non-boundary conditions
+    when: The ack's first-audio release edge is evaluated against boundary(now)
+    then:
+    - The audible ack's first Output-Media write occurs only on/after boundary(now) is asserted — identical gate to AC-TURN-05/AC-SPEAK-07; the ack has NO carve-out
+    - No ack audio is emitted while boundary(now) is false (a pickup during continuing/overlapping speech does not force audible ack) — pre-boundary ack audio is a P0 violation
+    - When the ack IS audible, a boundary edge exists at/just-before pickup (pickup is boundary-coincident by construction — the triggering ask's end_of_turn)
+  primary_oracle:
+    type: state_machine_assertion
+    artifact: 'FSM guard over ack-release: assert ack.first_audio_ts >= boundary_ts for every audible ack; assert 0 ack Output-Media writes with boundary==false; inject a pickup while VAD=speaking/boundary=false and assert NO ack audio emitted'
+  thresholds:
+    ack_audio_before_boundary_allowed: 0
+    ack_ungated_during_continuing_speech_allowed: 0
+  fault_model_refs:
+  - F-SPEAK-ACK-UNGATED
+  - F-SPEAK-WITHOUT-BOUNDARY
+  test_ids:
+  - T-SPEAK-19
+- criterion_id: AC-SPEAK-20
+  name: '<=500ms reflex degrades to the tile ACK when no boundary opens in budget (no ungated audible ack)'
+  evidence_class: '[simulation]'
+  authority_refs: [R-doc02-SPEAK-21, R-doc02-SPEAK-09, R-doc02-CANVAS-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: A direct-answer pickup where no end_of_turn boundary opens within the 500ms ack budget (continuing/overlapping speech)
+    when: The <=500ms reflex is observed on both surfaces
+    then:
+    - The visual tile ACK ("checking..."/"on it" drawn state, §3.5) is presented within <=500ms — the boundary-independent latency surface still fires
+    - No audible ack is emitted in this window (the audio surface stays gated; the ≤500ms guarantee is met by the tile ACK, not by an ungated voice line)
+    - When a boundary DOES open, the audible ack may then fire (subject to AC-SPEAK-19); either-or-both surfaces satisfy §3.5
+  primary_oracle:
+    type: simulation_trace
+    artifact: 'inject pickup with boundary suppressed for >500ms; assert tile ACK drawn-state ts within 500ms of pickup; assert 0 audible-ack writes while boundary==false; on boundary release, assert audible ack allowed'
+  thresholds:
+    tile_ack_p95_ms_max: 500
+    audible_ack_while_no_boundary_allowed: 0
+    reflex_missing_on_both_surfaces_allowed: 0
+  fault_model_refs:
+  - F-SPEAK-ACK-UNGATED
+  - F-ACK-REFLEX-MISSING
+  test_ids:
+  - T-SPEAK-20
+- criterion_id: AC-TURN-17
+  name: In-flight audible ack is barge-able and never blocks the <200ms stop path
+  evidence_class: '[fault-injection]'
+  authority_refs: [R-doc02-SPEAK-22, R-doc02-TURN-08, R-doc02-TURN-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: An audible ack in flight as Output-Media audio when a human speech onset (Silero VAD) occurs
+    when: Barge-in fires against the in-flight ack
+    then:
+    - The ack's TTS is stopped mid-word and the queue flushed within the barge-in budget ([<200ms]) — identical to a normal in-flight line (AC-TURN-07/08); the ack gets NO latency-privilege exemption from barge-in
+    - Only at most one small in-flight Output-Media chunk survives the flush (small-chunk buffer), so the stop stays honest
+    - Firing the ack does not delay/extend the stop path: measured stop latency with an ack in flight <= barge_in_stop_ms_max, no worse than the non-ack line
+  primary_oracle:
+    type: fault_injection
+    artifact: 'release audible ack; inject VAD onset mid-ack; assert (ack_stop_ts - vad_onset_ts) <= barge_in_stop_ms_max AND residual audio after flush <= one small chunk; compare stop latency ack-in-flight vs normal-line-in-flight — delta must not exceed tolerance'
+  thresholds:
+    barge_in_stop_ms_max: 200
+    ack_stop_regression_ms_max: 0
+    residual_chunks_after_flush_max: 1
+  fault_model_refs:
+  - F-ACK-NOT-BARGEABLE
+  - F-ACK-BLOCKS-STOP-PATH
+  test_ids:
+  - T-TURN-17
+- criterion_id: AC-XCUT-11
+  name: Delivery verbs (speak/send_chat/show_screen) return typed errors, never throw
+  evidence_class: '[fault-injection]'
+  authority_refs: [R-doc02-XCUT-11, R-doc02-XCUT-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: The three Doc-02 delivery-verb handlers (speak, send_chat, show_screen) driven with failure-inducing inputs (provider error, transport drop, malformed payload)
+    when: Each handler is invoked across its failure surface
+    then:
+    - Each handler returns a typed error result (never raises/throws across the transport boundary) — the sixth hard rule, matching the never-throw boundary in libs.agentkit.tools (Doc 00-owned enforcement)
+    - No failure escapes as an uncaught exception past the delivery seam; every failure has an honest returned error (ties to AC-XCUT-07 never-silent path)
+  primary_oracle:
+    type: fault_injection
+    artifact: 'for each of {speak,send_chat,show_screen}: inject provider-error / transport-drop / malformed-payload; assert call returns an error-typed value and raises 0 uncaught exceptions across the boundary; AST/grep: 0 unguarded raise on the delivery-verb return path'
+  thresholds:
+    uncaught_throws_across_delivery_boundary_allowed: 0
+    delivery_failure_without_typed_error_allowed: 0
+  fault_model_refs:
+  - F-DELIVERY-HANDLER-THROWS
+  test_ids:
+  - T-XCUT-11

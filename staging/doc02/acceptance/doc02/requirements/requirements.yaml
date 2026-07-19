@@ -2041,3 +2041,41 @@
   criticality: P2
   testability: analyzable
   status: qualified
+# Sweep-3 gap closure (patch) — closes review-gaps.md items (3) ack/boundary-gate reconciliation,
+# (4) ack vs barge-in ordering, (5) never-throw delivery-verb hard rule (5-of-6 asymmetry).
+- requirement_id: R-doc02-SPEAK-21
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.3 (speak-gate + Ack-audible reflex) / §3.5 tile ACK / §3.6 / CANONICAL §12.8
+  source_quote: 'speaking only begins on a boundary signal (3.6) ... A direct answer can fire a <=500ms canned "on it" spoken line the instant it is picked up ... the audible counterpart to the tile "checking..." ACK (3.5) ... a behavior may use either or both.'
+  normalized_statement: 'IF the audible "on it" ack is emitted as VOICE THE SYSTEM SHALL subject it to the same boundary gate as all voice output (3.6 / R-doc02-TURN-06/07) — it is NOT exempt: no ack audio before boundary(now). The <=500ms bound is honored because a direct-answer PICKUP is boundary-coincident by construction (the triggering ask reaches AAI end_of_turn at/just-before pickup, and that boundary is what the ack fires into). WHILE no boundary is present within the 500ms budget (continuing/overlapping speech) THE SYSTEM SHALL NOT force an ungated audible ack; the <=500ms reflex degrades to the tile ACK (3.5, a drawn state, boundary-independent). RECONCILIATION (spec §3.3 asserted both the "instant it is picked up" ack and the boundary-only gate without stating precedence; CANONICAL §12.8 pins the <=500ms clock on the post-ask direct-answer path but does not carve the audible ack out of the gate): resolved to gate-wins (P0 no-voice-without-boundary, Law 3 human-control-absolute), with the visual tile ACK as the boundary-independent <=500ms surface.
+
+    '
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-22
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.3 (small-chunk buffer) / §3.6 / §3.9 step 7
+  source_quote: 'any human speech onset during Proxy speech = stop TTS mid-word + flush the queue ... TTS is streamed to Output Media in small chunks, deliberately, so barge-in is not defeated by a large already-buffered stretch of audio.'
+  normalized_statement: 'WHILE an audible ack is in flight as voice THE SYSTEM SHALL treat it as ordinary voice output: a human speech onset SHALL stop it mid-word and flush within the barge-in budget ([<200ms]); the latency-privileged ack gets NO barge-in exemption. IF firing the ack THE SYSTEM SHALL NOT block, delay, or extend the barge-in stop path — a flush drops at most one small in-flight chunk (small-chunk Output-Media buffer).
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-XCUT-11
+  authority_type: invariant
+  authority_document: CLAUDE.md hard rules / CANONICAL §12.3
+  source_location: CLAUDE.md "Tool handlers" hard rule; §3.3/§3.4/§3.5 delivery verbs; AC-XCUT-04
+  source_quote: 'every tool handler returns errors, never throws: enforced by the never-throw boundary in libs.agentkit.tools ... speak/send_chat/show_screen [are the] sole delivery authority.'
+  normalized_statement: 'WHEN a Doc-02 delivery-verb handler (speak / send_chat / show_screen) encounters a failure THE SYSTEM SHALL return a typed error value, never raise/throw across the transport boundary (the sixth hard rule, closing the 5-of-6 asymmetry vs Naming/Secrets/Contracts/Isolation/External-calls). NOTE (scope): the enforcing never-throw boundary itself lives in libs.agentkit.tools (Doc 00-owned); this requirement asserts the observable contract at Doc 02 delivery surface only — it does not re-implement the boundary.
+
+    '
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
