@@ -1,3 +1,245 @@
+## doc02 plan
+
+**Date:** 2026-07-19  **Status:** LOCKED (planner-reviewer critique folded in)
+
+---
+
+### Seams consumed (from `libs/contracts` + CANONICAL — imported, never re-defined)
+
+**Internal signals this layer emits (NOT ProxyMessages; CANONICAL §11.8 — out of `assert_registry_closed()` scope):**
+`transcript(words, speaker, t)` · `chat(message, sender, dm?)` · `roster(join/leave, name)` · `speaking(on/off)` · `boundary(now)` · `barge-in(now)` · `bot-status(connected/dropped/rejoined)` · `meeting-end` · `channel-report(dm_available: bool)`
+
+**DB tables written here (Alembic migrations; `webhook_events` DDL verbatim from CANONICAL §12.10):**
+```sql
+CREATE TABLE webhook_events (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider      text NOT NULL,
+  delivery_guid text NOT NULL UNIQUE,
+  sha           text,
+  payload       jsonb NOT NULL,
+  status        text NOT NULL DEFAULT 'pending',
+  received_at   timestamptz NOT NULL DEFAULT now()
+);
+```
+- `meetings.recall_bot_id text` (CANONICAL §11.1)
+- `transcript_segments (id uuid, meeting_id uuid, status text NOT NULL DEFAULT 'pending', …)` (CANONICAL §12.10)
+
+**Adapter seams (`services/transport/src/transport/seams.py`):**
+- `TransportProvider` Protocol: Recall carrier (join, Output Media, webhook, chat, roster)
+- `STTProvider` Protocol: AssemblyAI-via-Recall BYOK passthrough
+- `TTSProvider` Protocol: Cartesia Sonic 3
+
+**Adopted tools (adopt-not-build; zero hand-rolling):**
+- Recall.ai SDK (join, Output Media, chat, webhooks)
+- AssemblyAI Universal-Streaming via Recall BYOK (zero Proxy-side STT code)
+- Cartesia Sonic 3 streaming TTS
+- Silero VAD OSS (<1ms/chunk CPU)
+- `limits` library in-memory backend (rate limiter — AC-FAIL-16 forbids hand-rolled token bucket)
+
+**Package location:** `services/transport/src/transport/` (NOT `libs/transport` — CANONICAL §9/§12.1)
+
+---
+
+### RISKY-FIRST: The five correctness-critical paths (address before downstream depends on them)
+
+1. **Barge-in atomicity (M7)** — Silero VAD onset → `asyncio.cancel()` TTS streaming task + queue flush, all within 200ms p95. Small-chunk Output Media buffer (≤250ms max) ensures already-queued audio cannot defeat the budget. _Risk_: asyncio task cancel races; next chunk write slips through. _Mitigation_: cancel-and-flush in one awaitable, assert silence timestamp within 200ms in harness.
+
+2. **Consent gate as hard FSM precondition (M1)** — `JoinFSM.notice_posted: bool` is a guard on every observe/record transition. No path may enter any observing state before the notice post resolves. _Risk_: async race where `IN_MEETING` is reached before notice commit. _Mitigation_: `await notice_post()` before yielding observing capability; any exception aborts the join.
+
+3. **Webhook durability before downstream effects (M2)** — `INSERT INTO webhook_events … ON CONFLICT (delivery_guid) DO NOTHING` commits transactionally before any downstream signal emission. _Risk_: emit-before-commit. _Mitigation_: explicit commit before emitting; test injects pre-commit failure and asserts no downstream signal.
+
+4. **Rejoin-once FSM correctness (M8)** — `_rejoin_consumed: bool` per drop event, set atomically when rejoin is issued. Gap interval uses Recall carrier timestamps (`dropped_at`, `rejoined_at`), not local `time.time()`. _Risk_: double-emit of rejoin signal. _Mitigation_: flag set before the rejoin API call; second drop → honest-stop.
+
+5. **Confirm-at-build: AAI `end_of_turn` forwarding (M0 gate)** — Probe live Recall + AAI passthrough to confirm `end_of_turn` field is present on websocket messages. If absent: wire Smart Turn v3 as boundary source instead. This is a branch gate: wrong boundary source invalidates the entire TURN design.
+
+---
+
+### Milestones
+
+#### M0 — Wire-shape confirmation + seams + DB migrations *(gate: nothing else starts)*
+
+*No production feature code. Pure contracts, DB schema, and live-API confirmation.*
+
+1. Fetch live Recall.ai docs: bot-join webhook payloads, per-speaker audio format, Output Media protocol, chat in/out, roster/status webhook shapes. Record in `services/transport/WIRE_SHAPES.md`.
+2. Fetch live AssemblyAI Universal-Streaming docs: message fields (`words`, `speaker`, timestamps, `end_of_turn`). **Confirm `end_of_turn` is forwarded by Recall passthrough.** Record. If absent → note Smart Turn v3 fallback.
+3. Define `TransportProvider`, `STTProvider`, `TTSProvider` Protocols in `seams.py` (no concrete provider imports; callers depend only on these).
+4. Define internal signal dataclasses in `signals.py` (not ProxyMessages; not in `libs/contracts`). Field `dm_available: bool` LOCKED per CANONICAL §1.6.
+5. Alembic migrations: `webhook_events` (CANONICAL §12.10 DDL verbatim, including `sha text` and all `NOT NULL`), `meetings.recall_bot_id`, `transcript_segments.status DEFAULT 'pending'`.
+6. Verify `assert_registry_closed()` passes with all doc02 internal signals absent from client registry.
+7. Record no-buffer-through-STT-hiccup confirm-at-build note in module docstring (CANONICAL §12.12).
+
+**Criteria turned green (early-gate proofs; re-proven formally at section milestone):** AC-SEAM-01, AC-SEAM-02, AC-SEAM-03, AC-EVENTS-11, AC-CHAT-12, AC-CHAT-14, AC-HEAR-12, AC-TURN-16, AC-FAIL-11
+
+---
+
+#### M1 — Join: consent gate FSM, bot launch, cost accrual wiring, platform matrix *(risky: consent gate)*
+
+1. `JoinFSM(IDLE → JOINING → NOTICE_POSTING → IN_MEETING → ENDED)`: `notice_posted` guard on every observe/record transition. `await notice_post()` before yielding capability. Failure → report plainly, never false-joined/false-posted.
+2. Recall bot launch from meeting link only (no host install, no approval). Write `recall_bot_id` back to `meetings` row.
+3. Consent notice content: one line — AI participant, observes/records, anyone can address. No internal component names. Pinned where platform allows; posted where it does not.
+4. Late-join re-post: one re-post per new participant who joined after the notice.
+5. No inviter-equality guard on any interaction path.
+6. Hard-removal → `END_BOT` terminal (not mute/pause).
+7. Objection → audible defer-to-organizer (not continue).
+8. All three platforms (Meet, Zoom, Teams) reach `IN_MEETING` + notice-posted through the same Recall seam.
+9. **Transport cost accrual**: export rate constants (`BOT_RATE_USD_HR`, `STT_RATE_USD_HR`, `TTS_RATE_USD_HR`); wire `transport_usd = elapsed_hours(started_at, now()) × sum(rates)` updated on heartbeat; unit-test: drive elapsed clock → assert `transport_usd` tracks formula; simulate recycle → assert `transport_usd_after ≥ transport_usd_before` (monotonic, not reset to 0 per CANONICAL §3).
+10. Calendar-invite path (P2): same FSM, same gates.
+
+**Criteria**: AC-JOIN-01 through AC-JOIN-17 (17 criteria)
+
+---
+
+#### M2 — Events: roster snapshot + live deltas + webhook durability + meeting-end *(risky: dedupe ordering)*
+
+1. Webhook endpoint: `INSERT INTO webhook_events … ON CONFLICT (delivery_guid) DO NOTHING` → commit → 200 → drain. No downstream signal before commit.
+2. Duplicate `delivery_guid` → one row, one downstream signal.
+3. **Initial roster snapshot**: on bot-join, query Recall participant list and emit one `roster(present, name)` per already-present participant before first live join-delta. No pre-existing participant omitted for lack of a join-delta (AC-EVENTS-14).
+4. `roster(join, name)` from Recall participant-join payload (name from source field, not synthetic).
+5. `roster(leave, name)` from Recall participant-leave payload.
+6. Meeting metadata (title, participant list) → Orchestrator context.
+7. Explicit meeting-end or bot-removed webhook → exactly one `meeting-end` signal → close sequence trigger. NEVER inferred from silence.
+8. `bot-status` webhooks → harness signal (durably via `webhook_events` first).
+9. Name-change reflected on subsequent roster events (P3, non-blocking).
+
+**Criteria**: AC-EVENTS-01 through AC-EVENTS-14 (14 criteria)
+
+---
+
+#### M3 — Hear: transcript pipeline + self-loop guard *(risky: self-loop injection path)*
+
+1. Recall per-speaker audio streams → AssemblyAI BYOK passthrough. Zero Proxy-side STT client instantiation (static import audit enforces this).
+2. Parse transcript messages to `transcript(words, speaker, t)`. Parser raises loudly on wire-shape drift (confirmed schema vs drift fixture).
+3. Fan-out over one websocket: identical ordered sequence to both Orchestrator (Doc 04) and Notes (Doc 03). No record to only one consumer.
+4. Proxy self-line labelled `speaker="Proxy"`: emitted to record; blocked at ask-routing boundary. Zero self-asks, even if content says "ignore your rules." Human lines forwarded.
+5. STT word latency measured: p50 ~300ms, p50_max 450ms, p95 600ms (Recall→AAI external leg; we measure emit latency, not own).
+6. Two-speaker attribution: speaker-attribution recall ≥0.95, misattribution rate ≤0.05.
+7. Code-heavy accuracy: side-by-side passthrough vs alternative on pinned engineering audio. Passthrough not worse (delta ≤0.02 tolerance). Evidence recorded.
+8. BYOK boundary scoping: no buffer-through-STT-hiccup claim anywhere.
+
+**Criteria**: AC-HEAR-01 through AC-HEAR-12 (12 criteria)
+
+---
+
+#### M4 — Speak: TTS pipeline + chat-copy parity + ack-audible reflex *(SPEAK-06/07/19/20 proven in M7)*
+
+1. `speak(text)` → Cartesia Sonic 3 (exact input text, no auto-extracted headline) → Output Media audio. One voice, one calm register.
+2. Chat text copy posted verbatim with every decided line — even if TTS/Output-Media leg fails after line decided.
+3. Headlines-only budget: ≤4000 chars/hr, per-line soft cap 240 chars.
+4. Audible ack: canned string (e.g. "on it") fires ≤p95 500ms from pickup; distinct from resolved answer content.
+5. TTS time-to-first-audio: p50 ~40ms, p95 ≤120ms (Cartesia Sonic 3 pinned measurement).
+6. **First-grounded-text latency (CANONICAL §12.8)**: instrument pickup-to-first-grounded-answer-text-emitted on shallow direct-answer path (p50≤2s, p95≤4s). Record tool+turn count per sample; exclude LSP-bound and multi-pass samples.
+7. First-grounded-audio (shallow direct-answer population only): p50≤2.5s, p95≤5s.
+8. Speak-decision-to-audible: <1s p95 on Output Media leg (pinned measurement).
+9. Small-chunk Output Media buffer: max buffered audio ≤250ms (barge-in defeat prevention).
+10. _Stub wired in M4; proven in M7_: AC-SPEAK-06 (boundary gate; stub = always-True), AC-SPEAK-07 (barge-in abort; stub = no-op), AC-SPEAK-19 (ack suppressed when boundary False), AC-SPEAK-20 (tile ACK during boundary suppression).
+
+**Criteria** (proven in M4): AC-SPEAK-01, AC-SPEAK-02, AC-SPEAK-03, AC-SPEAK-04, AC-SPEAK-05, AC-SPEAK-08, AC-SPEAK-09, AC-SPEAK-10, AC-SPEAK-11, AC-SPEAK-12, AC-SPEAK-13, AC-SPEAK-14, AC-SPEAK-15, AC-SPEAK-16, AC-SPEAK-17, AC-SPEAK-18 (16 criteria; AC-SPEAK-06/07/19/20 deferred to M7)
+
+---
+
+#### M5 — Chat: inbound + outbound + channel report
+
+1. Inbound: platform chat via Recall → `@proxy` → first-class ask identical in shape to spoken ask (source socket differs only). Non-addressed chat NOT forwarded.
+2. `chat(message, sender, dm?)` signal shape validated.
+3. Broadcast delivery: detail, links, receipts, quiet notices. Spoken-line text copies to broadcast.
+4. DM: exactly one recipient, never leaks to broadcast channel.
+5. DM on broadcast-only platform: degrade to broadcast-or-hold (not silent drop); delegate broadcast-vs-hold judgment upstream.
+6. `channel-report(dm_available: bool)` from real platform capability (not a constant). Both true/false branches exercised.
+7. Chat and channel-report: internal events, absent from `assert_registry_closed()` scope.
+
+**Criteria**: AC-CHAT-01 through AC-CHAT-16 (16 criteria)
+
+---
+
+#### M6 — Canvas: tile + screenshare + signals
+
+1. One canvas webpage per meeting; streamed via Recall Output Media as camera tile (non-empty rendered frames).
+2. Social signals (listening/checking/has-something/raise-hand/reactions) drawn on canvas; zero native platform button API calls.
+3. Tile ACK "checking…": drawn ≤500ms from LSP-bound resolve-start; fires only on real in-flight resolve (not fabricated).
+4. Screenshare: same canvas promoted at higher resolution. V0 live-work view = structured progress + pinned source with cited lines + artifact preview. Zero pixel-accurate browser/terminal mirror or animated cursor (Expansion only).
+5. Camera ↔ screenshare mutually exclusive at every instant. Every swap announced.
+6. Present sequence enforced: speak-headline → swap-to-screen → work → swap-back (no overlap, no out-of-order).
+7. Tile outbound-only: no `TILE_ADDRESS`, no tile-originated `ChannelAction` type or handler.
+8. Tile render WS authenticates via meeting-scoped bearer token in Recall URL. Cross-meeting token rejected.
+9. Promote/demote cycle: stream stays live throughout (≥1 active surface at every instant; zero stream drops or black frames).
+10. Frame-rate/smoothness: pinned measurement recorded (not a hard gate).
+
+**Criteria**: AC-CANVAS-01 through AC-CANVAS-15 (15 criteria)
+
+---
+
+#### M7 — Turn-taking + barge-in + mute *(RISKY: barge-in atomicity + <200ms kill path)*
+
+1. Silero VAD on incoming audio → `speaking(on/off)` signal → barge-in trigger. Sourced from VAD onset, NOT AAI transcript (~300ms too slow).
+2. `boundary(now)` from AAI `end_of_turn` field on STT stream (confirmed M0; Smart Turn v3 fallback if not forwarded). Never from fixed timer or elapsed-silence clock.
+3. Both signals stream continuously to Orchestrator.
+4. Signal surface: exactly `speaking(on/off)`, `boundary(now)`, `barge-in(now)`. No internal component names in signal strings.
+5. Voice output gate: TTS start requires `boundary==True`. Mid-thought breath (no `end_of_turn`) does NOT open gate.
+6. **Barge-in path**: VAD onset → `asyncio.cancel()` TTS streaming coroutine + `queue.clear()` → silence within 200ms p95. Small-chunk buffer (≤250ms max) ensures residual playout cannot exceed budget. Barge-in does NOT fire on Proxy's own output audio or silence.
+7. Barge-in stops mid-word (not end-of-utterance); speech queue flushed atomically (stop → flush, then upstream decides re-queue/bank/drop).
+8. Hard-mute kill-switch (Doc 04 sends trigger): kills in-flight TTS → `MUTED` state (voice off, tile+chat on). Voice stays off until re-invite. Speaking and muted states mutually exclusive.
+9. Real-audio provability: scripted onset during Proxy speech stops within budget; "quiet" silences voice with chat live.
+10. Wire real boundary/barge-in signals into M4 SPEAK module, proving the four deferred SPEAK criteria now that real signals are connected: AC-SPEAK-06 (voice starts only on boundary), AC-SPEAK-07 (barge-in aborts speech mid-word), AC-SPEAK-19 (ack suppressed when boundary False), AC-SPEAK-20 (tile ACK during boundary suppression).
+
+**Criteria**: AC-TURN-01 through AC-TURN-17 (17 criteria) + AC-SPEAK-06, AC-SPEAK-07, AC-SPEAK-19, AC-SPEAK-20 (4 deferred from M4) = 21 criteria proven in M7
+
+---
+
+#### M8 — Failure + limits *(risky: rejoin-once FSM, mark-lost path)*
+
+1. Bot drop → `_rejoin_consumed: bool` flag (set before rejoin API call) → exactly one auto-rejoin → gap announcement `[dropped_at, rejoined_at]` from Recall carrier timestamps (not local clock).
+2. Second drop after consumed rejoin → honest-stop (not infinite retry, not silent give-up).
+3. `bot-status` signal enum exactly `{connected, dropped, rejoined}`.
+4. STT hiccup: `transcript_segments.status DEFAULT 'pending'`; un-transcribed segment stays pending; close backfills pending as gap/lost (never dropped). No buffer-through claim (BYOK).
+5. TTS outage → degrade voice to chat with "voice is down" notice. Dead engine: never both mute and silent.
+6. Per-bot outbound rate limiter via `limits` library (in-memory backend; zero hand-rolled token bucket).
+7. 5+ concurrent sends: all queued, all delivered, zero throttle-drops.
+8. Fault matrix: all four faults (drop, STT outage, TTS outage, rate-limit burst) produce their named honest-path observable; none broken-and-pretending.
+
+**Criteria**: AC-FAIL-01 through AC-FAIL-20 (20 criteria)
+
+---
+
+#### M9 — Seam conformance + cross-cutting (static analysis pass)
+
+1. Static: `TransportProvider`, `STTProvider`, `TTSProvider` Protocols exist. Concrete Recall/AAI/Cartesia imports confined to their impl modules; no raw client imports in callers.
+2. No Pipecat/LiveKit dependency in the package.
+3. V0 concrete impls only; migration paths documented (OSS swap seams named, not built).
+4. Naming law: zero internal component names (Orchestrator/Scribe/workroom) in any user-visible string, signal name, or consent notice text.
+5. Transport cost accrual (AC-SEAM-13/14/15): simulate elapsed clock with multiple values → assert `transport_usd` tracks `elapsed_hours × rate` formula; assert recycle does not reset to 0; assert managed rate card sums $0.75–$0.85/hr.
+6. XCUT criteria: signal surface completeness, signal-shape conformance at every boundary, law-traceability, lethal-trifecta safety (transcript content treated as untrusted data; self-authored lines never become asks).
+7. `assert_registry_closed()` green with all doc02 internal signals absent.
+
+**Criteria**: AC-SEAM-04 through AC-SEAM-22 (19 remaining SEAM criteria), AC-XCUT-01 through AC-XCUT-11 (11 criteria) = 30 criteria
+
+---
+
+### Coverage matrix (164 unique criteria)
+
+| Milestone | Criteria | Count |
+|-----------|----------|-------|
+| M0 (early-gate) | AC-SEAM-01..03, AC-EVENTS-11, AC-CHAT-12, AC-CHAT-14, AC-HEAR-12, AC-TURN-16, AC-FAIL-11 | 9 |
+| M1 | AC-JOIN-01..17 | 17 |
+| M2 | AC-EVENTS-01..14 | 14 |
+| M3 | AC-HEAR-01..12 | 12 |
+| M4 | AC-SPEAK-01..05, 08..18 | 16 |
+| M5 | AC-CHAT-01..16 | 16 |
+| M6 | AC-CANVAS-01..15 | 15 |
+| M7 | AC-TURN-01..17, AC-SPEAK-06..07, 19..20 | 21 |
+| M8 | AC-FAIL-01..20 | 20 |
+| M9 | AC-SEAM-04..22, AC-XCUT-01..11 | 30 |
+| **Raw total** | | **170** |
+
+6 criteria counted in M0 and again at their section milestone: AC-EVENTS-11 (M0+M2), AC-CHAT-12 (M0+M5), AC-CHAT-14 (M0+M5), AC-HEAR-12 (M0+M3), AC-TURN-16 (M0+M7), AC-FAIL-11 (M0+M8). M0 gives an early-gate proof; each is formally green at its section milestone. **Net unique: 164 ✓**
+
+---
+
+### SPEC_BLOCKED check
+
+No untestable or contradictory criteria identified. Confirm-at-build items (AAI `end_of_turn` forwarding, Recall output-media latency, STT hiccup buffering) are design forks resolved at M0 by live-doc probing, not guesses.
+
+
+
 # PROGRESS
 
 ## doc02 — fresh-BUILDER 7th adversarial round (4 parallel auditors); 2 genuine authorable defects found + FIXED (2026-07-19, @ HEAD `4348ab5`)
