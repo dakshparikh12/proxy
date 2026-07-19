@@ -17,7 +17,7 @@ OUT = os.path.join(PARTS, "..", "acceptance", "doc02")
 REQ_OUT = os.path.join(OUT, "requirements", "requirements.yaml")
 CRIT_OUT = os.path.join(OUT, "criteria", "criteria.yaml")
 
-SECTIONS = ["JOIN", "EVENTS", "HEAR", "SPEAK", "CHAT", "CANVAS", "TURN", "FAIL", "SEAM", "XCUT"]
+SECTIONS = ["JOIN", "EVENTS", "HEAR", "SPEAK", "CHAT", "CANVAS", "TURN", "FAIL", "SEAM", "XCUT", "PATCH"]
 
 
 def load(path):

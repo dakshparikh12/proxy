@@ -205,8 +205,8 @@ criteria:
       then:
         - "no buffer-during-outage→resume is asserted as ours; whether Recall buffers through an AAI hiccup is left as a confirm-at-build note"
         - "the only guaranteed honest fallback exercised is the mark-lost path (AC-FAIL-09)"
-    primary_oracle: {type: judge, artifact: "reviewer confirms no over-promised buffering claim and that mark-lost is the wired fallback; confirm-at-build note present"}
-    thresholds: {overpromised_buffering_claim_allowed: 0}
+    primary_oracle: {type: analysis_plus_assertion, artifact: "Statically decidable (tightened from judge per review directive #2; mirrors AC-HEAR-11): assert (a) no buffer-during-outage->resume code path exists on the Recall->AssemblyAI STT leg (grep/AST for a resume-after-gap handler returns empty), (b) the mark-lost fallback path IS wired (the un-transcribed-stretch handler emits a mark-lost record), (c) the confirm-at-build note is present in the module/docstring."}
+    thresholds: {overpromised_buffering_claim_allowed: 0, buffer_resume_code_paths_allowed: 0, marklost_path_present: 1, confirm_at_build_note_present: 1}
     fault_model_refs: [F-OVERPROMISE-BUFFER]
     test_ids: [T-FAIL-11]
 

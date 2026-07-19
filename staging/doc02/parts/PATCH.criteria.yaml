@@ -1,0 +1,117 @@
+# Doc 02 (Voice & Transport) — PATCH criteria slice (sweep-gap closure).
+# Closes review-gaps.md items 1-7 (deterministic-preferred oracles; zeros explicit; every criterion traces to a real requirement).
+
+# --- Item 1: the OMITTED §12.8 SLO — first-grounded-text p50<=2s / p95<=4s -----
+- criterion_id: AC-SPEAK-16
+  name: "first-grounded-text p50<=2s / p95<=4s (shallow direct-answer population)"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc02-SPEAK-18, R-doc02-SPEAK-19]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "a shallow grounded direct-answer request on the direct-answer path (index/graph/grep, one gather pass, no live-LSP, no Workroom)"
+    when:  "first-grounded-text latency (pickup -> first grounded-answer text emitted) is sampled over a pinned run"
+    then:
+      - "p50 first-grounded-text <= 2s"
+      - "p95 first-grounded-text <= 4s; a sample just over either threshold fails"
+      - "the third §12.8 clock is now present alongside ack-audible (AC-SPEAK-09) and first-grounded-audio (AC-SPEAK-13)"
+  primary_oracle: {type: latency_measurement, artifact: "pinned sample n>=100 drawn from the SHALLOW direct-answer population ONLY (per CANONICAL §12.8 + AC-SPEAK-17): every sample records tool+turn count; >1-pass or LSP-bound samples are reclassified and EXCLUDED before percentiles. Compute p50 and p95 of (first_grounded_text_ts - pickup_ts) over the included set; assert p50<=2000ms and p95<=4000ms"}
+  thresholds: {first_grounded_text_p50_ms_max: 2000, first_grounded_text_p95_ms_max: 4000, min_samples: 100, non_shallow_samples_in_population_allowed: 0}
+  fault_model_refs: [F-SPEAK-GROUNDED-TEXT-TOO-SLOW]
+  test_ids: [T-SPEAK-16]
+
+# --- Item 3: shallow-SLO POPULATION definition — the exclusion predicate is in the oracle ---
+- criterion_id: AC-SPEAK-17
+  name: "shallow-SLO population is well-defined: LSP-bound / multi-pass samples excluded"
+  evidence_class: "[analysis]"
+  authority_refs: [R-doc02-SPEAK-20]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "the sample set backing any shallow-path latency SLO (AC-SPEAK-09 ack-audible, AC-SPEAK-16 first-grounded-text, AC-SPEAK-13 first-grounded-audio)"
+    when:  "the population is assembled before percentiles are computed"
+    then:
+      - "every sample carries a recorded tool+turn count (an unlabelled sample is invalid, not silently included)"
+      - "any sample with >1 gather pass OR a live-LSP call is reclassified and EXCLUDED from the shallow-SLO population"
+      - "excluded LSP-bound answers are instead routed to the tile-ACK path (<=500ms, exempt from the audio gate per §12.8) — they are NOT counted toward or against the shallow audio SLO"
+      - "the shallow-SLO percentiles are NEVER computed over an undefined/unfiltered n>=100 population (a run that computes percentiles without applying the exclusion predicate fails)"
+  primary_oracle: {type: analysis_plus_assertion, artifact: "assert the SLO harness applies the exclusion predicate: feed a mixed sample stream (shallow + LSP-bound + multi-pass) and assert the computed population == {shallow, one-pass, no-LSP} exactly; assert every retained sample has a non-null tool+turn count; assert LSP-bound samples appear on the tile-ACK path, not the audio-SLO population"}
+  thresholds: {unlabelled_samples_retained_allowed: 0, lsp_or_multipass_samples_in_shallow_population_allowed: 0, percentiles_over_unfiltered_population_allowed: 0}
+  fault_model_refs: [F-SLO-POPULATION-UNDEFINED]
+  test_ids: [T-SPEAK-17]
+
+# --- Item 4: the OMITTED structural "never" — no Pipecat/LiveKit / voice framework ---
+- criterion_id: AC-SEAM-21
+  name: "no voice-agent framework (Pipecat/LiveKit-class) anywhere in the workspace"
+  evidence_class: "[static]"
+  authority_refs: [R-doc02-SEAM-21]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "the uv workspace dependency set (root + members pyproject.toml, uv.lock) and the transport package imports"
+    when:  "the dependency graph and import set are inspected"
+    then:
+      - "no Pipecat/LiveKit-class voice-agent framework is declared as a dependency or present in the lockfile"
+      - "no module under the transport package imports such a framework (the loop is a thin glue loop: websockets in, Output Media out)"
+      - "the absence is structural, matching the sibling never-rules (AC-SEAM-07 no bus/broker/wire, AC-SEAM-08 no libs/transport, AC-SEAM-17 zero per-platform code)"
+  primary_oracle: {type: static_analysis, artifact: "grep -iE 'pipecat|livekit' across pyproject.toml(s) + uv.lock + transport src imports returns empty; dependency-set scan asserts no voice-framework package name present"}
+  thresholds: {voice_framework_dependencies_allowed: 0, voice_framework_imports_allowed: 0}
+  fault_model_refs: [F-VOICE-FRAMEWORK-VENDORED]
+  test_ids: [T-SEAM-21]
+
+# --- Item 5: cost floor bound to the REAL accrual, not a rate-card tautology ---
+- criterion_id: AC-SEAM-22
+  name: "cost-floor rate constants ARE the accrual rate constants (not a passes-by-construction sum)"
+  evidence_class: "[contract]"
+  authority_refs: [R-doc02-SEAM-22]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "the per-component managed rate constants asserted by the cost-floor check (AC-SEAM-13) and the transport_rate consumed by the honest elapsed×rate accrual (AC-SEAM-14)"
+    when:  "the two rate sources are compared"
+    then:
+      - "the bot/STT/TTS rate constants summed by AC-SEAM-13 are the identical constants the accrual multiplies by elapsed time in AC-SEAM-14 (single source of truth for the rate card)"
+      - "the cost-floor check therefore binds the system's actual accrued spend, not an isolated constant-sum that a wrong build would satisfy trivially"
+      - "a build whose accrual uses a different rate card than the floor check asserts fails (the tautology is closed)"
+  primary_oracle: {type: contract_schema, artifact: "assert AC-SEAM-13's summed component rates and AC-SEAM-14's transport_rate resolve to the same named constants (same module symbol / config key); inject a divergent accrual rate and assert the equality check fails"}
+  thresholds: {rate_card_divergence_between_floor_and_accrual_allowed: 0}
+  fault_model_refs: [F-COST-FLOOR-TAUTOLOGY]
+  test_ids: [T-SEAM-22]
+
+# --- Item 7: the initial "who is present" roster snapshot (present/join/leave triad) ---
+- criterion_id: AC-EVENTS-14
+  name: "initial present-set emitted on join (the 'present' leg of present/join/leave)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-EVENTS-16]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a meeting already containing participants ['Sam','Maya'] at the moment Proxy's bot joins"
+    when:  "the transport initializes the roster on join"
+    then:
+      - "a roster presence signal is emitted for EACH participant already in the room at join (Sam and Maya), each carrying its name"
+      - "the initial present-set is emitted as its own snapshot, not reconstructed only from subsequent join deltas (a participant who never re-joins is still present in the snapshot)"
+      - "the snapshot precedes/accompanies live join/leave deltas (AC-EVENTS-02/03), completing the who-is-present triad"
+  primary_oracle: {type: state_machine_assertion, artifact: "join a meeting with a pre-populated participant list; assert the emitted initial roster == {Sam, Maya} with names, emitted as a present-set snapshot; assert no pre-existing participant is omitted for lack of a join delta"}
+  thresholds: {present_participants_missing_from_initial_snapshot_allowed: 0}
+  fault_model_refs: [F-INITIAL-PRESENT-SET-MISSING]
+  test_ids: [T-EVENTS-14]
+
+# --- Item 2 (reconstructed): §12.8 is the pinned source-of-truth; no threshold may diverge ---
+- criterion_id: AC-XCUT-09
+  name: "no latency threshold contradicts CANONICAL §12.8 (pinned source-of-truth guard)"
+  evidence_class: "[static]"
+  authority_refs: [R-doc02-XCUT-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "every latency/SLO criterion in this bundle that pins a threshold §12.8 also pins"
+    when:  "each such threshold is compared against its CANONICAL §12.8 value"
+    then:
+      - "ack-audible p95 == 500ms (AC-SPEAK-09), first-grounded-text p50==2000ms/p95==4000ms (AC-SPEAK-16), first-grounded-audio p50==2500ms/p95==5000ms (AC-SPEAK-13) — each equals its §12.8 pin exactly"
+      - "no criterion asserts a §12.8-governed bound tighter or looser than the pinned value (a divergent threshold — e.g. a 'sub-2s' grounded-audio bound contradicting the pinned p50<=2.5s — fails this guard)"
+      - "NOTE: review-gaps.md item 2 ('a threshold that contradicts the pinned source-of-truth') was truncated from the gaps file; this guard closes the class structurally by making §12.8 authoritative over any drifting threshold"
+  primary_oracle: {type: static_analysis, artifact: "table-check each §12.8-governed threshold in criteria.yaml against the §12.8 pin map {ack_p95:500, text_p50:2000, text_p95:4000, audio_p50:2500, audio_p95:5000}; assert equality for every present clock; assert no additional criterion pins a §12.8-class metric to a divergent number"}
+  thresholds: {thresholds_diverging_from_canonical_12_8_allowed: 0}
+  fault_model_refs: [F-THRESHOLD-CONTRADICTS-CANONICAL]
+  test_ids: [T-XCUT-09]

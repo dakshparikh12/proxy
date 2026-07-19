@@ -1,0 +1,87 @@
+# Doc 02 (Voice & Transport) — PATCH requirements slice (sweep-gap closure).
+# Closes review-gaps.md items 1-7. Ids keep their logical section prefix; the merge aggregates
+# requirements globally by id, so these live here rather than in the (guard-protected) *.requirements.yaml.
+- requirement_id: R-doc02-SPEAK-18
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: CANONICAL §12.8
+  source_quote: 'Three instrumented clocks on the DIRECT-ANSWER path only: ack-audible p95<=500ms · first-grounded-text p50<=2s/p95<=4s · first-grounded-audio p50<=2.5s/p95<=5s.'
+  normalized_statement: 'WHEN a shallow grounded direct answer is produced THE SYSTEM SHALL meet first-grounded-text p50 <= 2s (measured pickup -> first grounded-answer text emitted), on the shallow direct-answer population.
+
+    '
+  requirement_type: performance
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-19
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: CANONICAL §12.8
+  source_quote: 'first-grounded-text p50<=2s/p95<=4s'
+  normalized_statement: 'WHEN a shallow grounded direct answer is produced THE SYSTEM SHALL meet first-grounded-text p95 <= 4s on the shallow direct-answer population.
+
+    '
+  requirement_type: performance
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-20
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: CANONICAL §12.8
+  source_quote: 'Targets apply to SHALLOW answers (index/graph/grep, one gather pass, no live-LSP, no Workroom). LSP-bound direct answers are exempt from the audio gate — fire the "checking…" tile ACK (still <=500ms), speak when the LSP returns. Every sample records tool+turn count; a "direct" answer needing >1 pass or an LSP call is reclassified and excluded from the shallow SLO.'
+  normalized_statement: 'WHILE measuring any shallow-path latency SLO (ack-audible, first-grounded-text, first-grounded-audio) THE SYSTEM SHALL record tool+turn count on every sample and SHALL exclude from the shallow-SLO population any sample that used more than one gather pass or a live-LSP call (such LSP-bound answers are exempt from the audio gate and instead surface the tile ACK). THE SYSTEM SHALL NOT compute the shallow-SLO percentiles over an undefined/unfiltered population.
+
+    '
+  requirement_type: performance
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SEAM-21
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: §2 / stack line
+  source_quote: 'The big simplification: no voice framework. We deliberately skip Pipecat/LiveKit-class voice-agent frameworks ... explicitly no Pipecat/LiveKit (Recall owns transport).'
+  normalized_statement: 'WHILE the transport layer is built THE SYSTEM SHALL depend on NO voice-agent framework (Pipecat/LiveKit-class): no such package appears in the workspace dependency set, lockfile, or imports; the loop is a thin glue loop only.
+
+    '
+  requirement_type: architecture
+  criticality: P1
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-SEAM-22
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: §1 / §4 cost
+  source_quote: 'hold the cost floor (~$0.75–0.85/meeting-hour managed …)'
+  normalized_statement: 'WHEN the managed transport cost floor is asserted THE SYSTEM SHALL derive it from the SAME per-component rate constants that the honest elapsed×rate accrual (AC-SEAM-14) consumes — the rate card that binds the floor is the rate card the built system actually accrues against, not an independent constant-sum that passes by construction.
+
+    '
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-EVENTS-16
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.1 paragraph 2 / §3.9 step 2
+  source_quote: 'The transport streams participant events — who is present, joins, leaves, with names — to the Orchestrator, live.'
+  normalized_statement: 'WHEN Proxy joins a meeting THE SYSTEM SHALL emit the initial present-set — the participants already in the room at join — as roster presence signals with names, completing the present/join/leave triad; the initial roster snapshot SHALL NOT be inferred only from later join deltas.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-XCUT-09
+  authority_type: canonical_decision
+  authority_document: DOC-02
+  source_location: CANONICAL §12.8 (pinned source-of-truth)
+  source_quote: 'Three instrumented clocks on the DIRECT-ANSWER path only: ack-audible p95<=500ms · first-grounded-text p50<=2s/p95<=4s · first-grounded-audio p50<=2.5s/p95<=5s.'
+  normalized_statement: 'WHEN any latency/SLO criterion pins a numeric threshold that CANONICAL §12.8 also pins THE SYSTEM SHALL use exactly the §12.8 value (ack-audible p95<=500ms; first-grounded-text p50<=2s/p95<=4s; first-grounded-audio p50<=2.5s/p95<=5s) and SHALL NOT assert a bound that diverges from the pinned source-of-truth. (Guard added because review-gaps.md item 2 — a threshold contradicting the pinned source-of-truth — was truncated from the gaps file; this makes §12.8 authoritative and fails any drift.)
+
+    '
+  requirement_type: contract
+  criticality: P1
+  testability: analyzable
+  status: qualified

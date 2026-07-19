@@ -163,8 +163,8 @@
     then:
       - "p95 ack-audible latency <= 500ms"
       - "a sample at/just-over 500ms p95 fails"
-  primary_oracle: {type: latency_measurement, artifact: "pinned sample n>=100; compute p95 of (ack_audible_ts - pickup_ts); assert p95 <= 500ms"}
-  thresholds: {ack_audible_p95_ms_max: 500, min_samples: 100}
+  primary_oracle: {type: latency_measurement, artifact: "pinned sample n>=100 drawn from the SHALLOW direct-answer population ONLY (per CANONICAL §12.8 + AC-SPEAK-17): every sample records tool+turn count and is INCLUDED only if it used one gather pass and no live-LSP call; samples reclassified as >1-pass or LSP-bound are EXCLUDED before percentiles are computed. Compute p95 of (ack_audible_ts - pickup_ts) over the included set; assert p95 <= 500ms"}
+  thresholds: {ack_audible_p95_ms_max: 500, min_samples: 100, non_shallow_samples_in_population_allowed: 0}
   fault_model_refs: [F-SPEAK-ACK-TOO-SLOW]
   test_ids: [T-SPEAK-09]
 
@@ -235,8 +235,8 @@
     then:
       - "p50 first-grounded-audio <= 2.5s"
       - "p95 first-grounded-audio <= 5s; a sample just over either threshold fails"
-  primary_oracle: {type: latency_measurement, artifact: "pinned sample n>=100; compute p50 and p95 of first-grounded-audio latency; assert p50<=2500ms and p95<=5000ms"}
-  thresholds: {first_grounded_audio_p50_ms_max: 2500, first_grounded_audio_p95_ms_max: 5000, min_samples: 100}
+  primary_oracle: {type: latency_measurement, artifact: "pinned sample n>=100 drawn from the SHALLOW direct-answer population ONLY (per CANONICAL §12.8 + AC-SPEAK-17): every sample records tool+turn count; a 'direct' answer needing >1 gather pass or an LSP call is reclassified and EXCLUDED from this shallow-SLO population (LSP-bound answers are exempt from the audio gate and instead surface the tile ACK, AC-SPEAK-17). Compute p50 and p95 over the included set; assert p50<=2500ms and p95<=5000ms"}
+  thresholds: {first_grounded_audio_p50_ms_max: 2500, first_grounded_audio_p95_ms_max: 5000, min_samples: 100, non_shallow_samples_in_population_allowed: 0}
   fault_model_refs: [F-SPEAK-GROUNDED-AUDIO-TOO-SLOW]
   test_ids: [T-SPEAK-13]
 
