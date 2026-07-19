@@ -3551,3 +3551,55 @@ Partition (each id owned once): **M0** = `SEAM-01/02/03/04/06/07/08/21` + `HEAR-
 - Minor: the `AC-TURN-16` fallback is load-bearing — M4 explicitly owns building the Smart Turn v3 boundary source **iff** the M0 probe finds `end_of_turn` absent (§4 #5, M4).
 
 Reviewer confirmed-correct (not re-litigated): the 164/12/60 counts, the seam decision to leave `SIGNAL_SURFACE_EVENTS` untouched, the config additions as criterion-backed (not over-build), the adopt-vs-build split, and the risky-20% front-loading.
+
+---
+## BUILD-BLOCKED — doc02 Phase-3 EVIDENCE layer (sealed `tests/doc02/` red suite) is missing — 2026-07-19 (builder session)
+
+**Blocked scope:** ALL 164 doc02 criteria (`AC-JOIN-01 … AC-XCUT-11`). Not a criteria-quality
+defect, not a spec/law contradiction — a **missing upstream pipeline phase**. Requires a
+**conductor action**, NOT a criteria re-seal and NOT a builder fix.
+
+**Exact conflict (verified this session):**
+- `orchestrator/ORCHESTRATION.md:23` defines **Phase 3 EVIDENCE** = "author the tests + fixtures +
+  simulation workflows that make each criterion [provable] … else the bundle CANNOT seal", run by a
+  **separate authority before the build phase**. For doc01 this phase produced commit
+  `61c9b0c tests: doc01 tier-1 suite from sealed bundle (red)`. **No equivalent commit exists for
+  doc02.**
+- `tests/doc02/` **does not exist** (`git ls-files tests/doc02` → empty; `pytest tests/doc02/
+  --collect-only` → `ERROR: file or directory not found`, `no tests collected`). No `test_ids`
+  (`T-JOIN-*` … `T-XCUT-*`) are realized as executable tests anywhere in the tree
+  (`grep -rl 'T-JOIN\|AC-JOIN' --include=*.py` outside `acceptance/` → nothing).
+- The doc02 seal (`orchestrator/state/doc02.seal.json`,
+  `authority+bundle_sha256 = aebb24cf93b3…`, sealed 2026-07-19 00:49) covers **only**
+  `acceptance/doc02/criteria/` + `requirements/` — there is **no sealed evidence/tests layer**. The
+  bundle sealed without the Phase-3 evidence that ORCHESTRATION.md says is a seal precondition.
+- No dynamic generation closes the gap: `pyproject.toml` uses static `testpaths = ["tests"]`; no
+  `conftest.py`/plugin reads `criteria.yaml` (`pytest_generate_tests`/collector grep → nothing).
+- **The locked plan already flags this** (§0): *"No pre-authored doc02 test files exist yet
+  (`tests/doc02/` is absent — unlike doc01, whose `test_*.py` predated its plan) … once those files
+  are authored fresh-context from the sealed criteria. **The builder builds product to the sealed
+  `test_ids`; it never authors or edits `tests/`.**"*
+
+**Why no builder fix greens it:**
+- The builder is forbidden from authoring/editing `tests/` (build_pass rule; enforced by the live
+  guard hook `harness/guard.py` — `PROTECTED` contains `"tests/"` — plus the `runner.py` integrity
+  hash over protected trees). So the missing red suite cannot be created here.
+- With no failing doc02 test, there is nothing to turn green. Building `services/transport` +
+  `libs/*` product code to my own *guessed* interfaces (class/method/dataclass-field names, import
+  paths, signal payload shapes) would violate the explicit rule "the builder builds product to the
+  sealed `test_ids` … do not guess, weaken, or route around", and `verify.sh` would then emit a
+  **false green** by exercising only the doc00/doc01 suites — proving nothing about doc02 while
+  reporting "ALL GREEN". That is the Law-1/Law-2 "confident wrong" failure and Invariant-2
+  (lossless-or-honest) breach the method exists to prevent. I will not manufacture it.
+
+**Baseline unchanged:** no `services/**` or `libs/**` file was written this session; the tree is at
+`cce1788 doc02: locked plan` (clean) apart from this PROGRESS.md note.
+
+**CONDUCTOR ACTION required (parallel to the prior doc01 re-seal precedents above):** run the doc02
+**Phase-3 EVIDENCE** step — a fresh-context authority authors `tests/doc02/test_<section>.py`
+(`test_join.py … test_xcut.py`) + any fixtures/simulations from the sealed
+`acceptance/doc02/criteria/criteria.yaml` in an honest RED state, in the milestone/`test_ids` order
+the locked plan fixes (M0…M10), then re-seal bundle+evidence. Once the sealed red `tests/doc02/`
+suite exists, re-dispatch this builder — the locked plan (§§1–7 above) is ready to build straight
+against it. **Ending the pass here per the mandate: an untestable-by-this-loop scope, recorded, not
+guessed.**
