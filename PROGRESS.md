@@ -4617,3 +4617,6 @@ scope. No sealed test/threshold/golden/verifier/harness file touched; no route-a
 Remaining to full doc02 green — ALL conductor/test-authority, NONE builder-authorable: (1) author
 `tests/doc02/test_*.py`; (2) author the 3 absent doc01 fixtures; (3) provision `/tenants` (or run
 under `tools/verify-linux.sh`); (4) M11 rung-2 eval on `fixtures/estates/`.
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — There is no doc02 criterion-vs-spec conflict to resolve: the "stuck" test `tests/test_m2_clone.py::test_ac_m2_007_git_blame_resolves_on_blobless_clone` is a doc01 `services.code_intel` fixture-import failure (`blame_attribution_fixture` undefined in the guard-protected `tests/fixtures/repos.py`), and it appears in zero doc02 criteria (grep-empty for `code_intel`/`AC-M2`/`blame`/`blobless` across `acceptance/doc02/`). Per §1 of `product/v0-spec/02-VOICE-TRANSPORT.md` — "This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately" — the doc02 builder must implement straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which is coherent with the spec, and must stop re-filing this do
