@@ -1,0 +1,26 @@
+# Sweep-2 gap closure (patch) — appended to acceptance/doc02/requirements/requirements.yaml by the conductor.
+# Closes review-gaps.md items: (4) live-work liveness cadence, (5) swap-announcement channel + swap-back asymmetry.
+- requirement_id: R-doc02-CANVAS-16
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §2 channel 5 / §3.5
+  source_quote: 'showing work live — when the agent browses, runs a test, or builds an artifact in its sandbox, we render that live view onto the presented screen, so the room watches the work form instead of waiting on a spinner'
+  normalized_statement: 'WHILE the sandbox live-work view is presented AND underlying work is progressing THE SYSTEM SHALL advance the structured progress view — emitting a new content state on each upstream work-progress event and at least once per bounded liveness interval while work continues — so the room watches the work form; the view SHALL NOT be a single static frame/progress card held for the whole work interval (the "waiting on a spinner" experience). (This is a content-update cadence, distinct from and independent of Output-Media frame-rate/smoothness, which stays a non-gating pinned measurement per R-doc02-CANVAS-15; CANONICAL §12.11/§12.12 bound *what* renders, not the cadence. Exact minimum cadence is not spec-pinned — set conservatively and confirm-at-build.)
+
+    '
+  requirement_type: ux
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CANVAS-17
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.5 / §3.9 step 6
+  source_quote: 'sequence them: speak the headline, then swap to the screen; swap back when done.'
+  normalized_statement: 'WHEN the transport announces a camera<->screen swap (R-doc02-CANVAS-10) THE SYSTEM SHALL emit the announcement on a human-observable channel — the spoken headline (§3.5) or chat — and SHALL NOT treat a log-only/telemetry-only line as the announcement; WHEN the announcement is spoken it SHALL obey the speak-path invariants: boundary-gated onset (R-doc02-SPEAK-07), the single configured voice (R-doc02-SPEAK-03), and byte-equal text-copy parity (R-doc02-SPEAK-06). NOTE (swap-back asymmetry): §3.5 pins the spoken headline *before* swap-to-screen and states swap-back only as "when done" with no announcement, while §3.9 step 6 says "announced swaps" generally; unresolved by CANONICAL, this is resolved conservatively to R-doc02-CANVAS-10 (announce all swaps, swap-back included — the transparency-favoring superset), with whether swap-back may go unannounced flagged confirm-at-build.
+
+    '
+  requirement_type: ux
+  criticality: P1
+  testability: executable
+  status: qualified
