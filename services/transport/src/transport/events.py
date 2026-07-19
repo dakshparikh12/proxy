@@ -156,9 +156,12 @@ class WebhookProcessor:
         The title and the initial participant list can arrive on DIFFERENT payloads (the
         roster may ride on bot-join/connected while the title lands on a later
         meeting-init). Both fields are accumulated across payloads and delivered together
-        the moment both are known, so neither is ever silently dropped
-        (AC-EVENTS-05, metadata_fields_dropped_allowed=0; F-METADATA-NOT-PASSED). Delivered
-        once, never re-sent, and never on the §3.10 nine-signal carrier surface.
+        the moment both are known, so a split title/roster never loses a field — the exact
+        AC-EVENTS-05 case (given a KNOWN title; metadata_fields_dropped_allowed=0;
+        F-METADATA-NOT-PASSED). Delivered once, never re-sent, and never on the §3.10
+        nine-signal carrier surface. NOTE: a meeting that never carries a title (an untitled
+        ad-hoc call — outside the AC-EVENTS-05 given) defers this context until a title
+        arrives; that ordering is arbitrated by the sealed T-EVENTS-05, not asserted here.
         """
         if self._metadata_done or self._on_metadata is None:
             return

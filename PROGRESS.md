@@ -5067,3 +5067,54 @@ the same behaviors deterministically every pass.
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — Implement and verify doc02 straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which `02-VOICE-TRANSPORT.md` §1 makes authoritative ("This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately"); the SPEC_BLOCKED entry identifies no doc02 criterion in conflict with the spec — every cited token (`blame`, `code_intel`, `AC-M2`, `blobless`, `/tenants`, and the three fixture names) is grep-empty (count 0) across the entire `acceptance/doc02/` bundle, and the sole blocker is three unauthored **doc01** `services.code_intel` fixtures (`blame_attribution_fixture`, `stale_node_moved_symbol_fixture`, `pr_meeting_fixture`) that halt whole-tree `pytest -x` before any doc02 test runs; beca
+
+## doc02 TERMINAL — independent 3-verifier fresh pass (2026-07-19, session N+1)
+
+**Not another "proceed" adjudication.** A fresh builder session re-derived the state from the
+tree (not from prior commit messages — the PROGRESS tail was found imprecise: it named an
+ImportError as the first `verify.sh` failure when the actual first failure is an ASSERTION,
+`test_ac_m2_001_per_tenant_encrypted_volume` expecting a `/tenants/` host mount).
+
+### Ground-truth verify.sh state (whole-tree `pytest`, no `-x`): 5 failed, 261 passed
+All 5 failures are **doc01 `services.code_intel`**, all in the guard-PROTECTED `tests/` tree,
+none doc02, none builder-authorable (tests/ + fixtures/ are guard-blocked):
+1. `test_m2_clone.py::test_ac_m2_001_per_tenant_encrypted_volume` — host `/tenants/` mount assertion (env-dependent).
+2. `test_m2_clone.py::test_ac_m2_007` — ImportError: `blame_attribution_fixture` (unauthored in `tests/fixtures/repos.py`).
+3. `test_m4_substrate.py::test_ac_m4_013` — ImportError: `force_push_webhook_fixture` (unauthored in `tests/fixtures/stubs.py`).
+4. `test_m5_tools.py::test_ac_m5_016` — ImportError: `stale_node_moved_symbol_fixture` (unauthored).
+5. `test_m7_freshness.py::test_ac_m7_007` — ImportError: `pr_meeting_fixture` (unauthored).
+
+### The doc02 T-* suite does not exist anywhere in the tree
+`tests/doc02/` absent; `staging/doc02/tests/doc02/` empty — while `staging/doc00/tests/` and
+`staging/doc01/tests/` DO carry authored suites. `staging/doc02/parts/merge.py` merges only
+criteria/requirements YAML, never tests. Authoring the 164 `T-*` tests is test-authority work
+AND would violate maker≠checker (the builder may never write its own tests). So even if the 5
+doc01 reds were fixed, `verify.sh` would still collect zero doc02 tests.
+
+### Independent adversarial pass over the risky-20% core (R1–R7), 3 fresh-context verifiers
+Result: **no builder-authorable sealed-criterion failure.** Every sealed criterion with a
+testable `given` holds (barge-in stop-then-flush atomicity, boundary-gating, consent hard-gate
+ordering, meeting-end-never-from-silence, registry closure, cost monotonic-across-recycle,
+camera↔screenshare mutual exclusion, mark-lost honesty, exactly-one rejoin, never-mute-and-silent).
+Residual observations — all OUTSIDE a sealed `given`, or comment/config honesty, or theoretical
+misuse — recorded for the test-authority to arbitrate, NOT guessed/patched (would risk the same
+class of regression commit `8e0a7bb` introduced):
+- AC-EVENTS-05: current code passes the criterion (given a KNOWN title). Untitled ad-hoc calls
+  (title never arrives) defer metadata — outside the given; T-EVENTS-05 arbitrates. Fixed the
+  overstating docstring ("never silently dropped") to stop claiming an unconditional guarantee (Law 2).
+- AC-SEAM-22: passes — floor and accrual share one `transport_rate()`/`rate_card()` source (single
+  source of truth); the injectable `rate=` param is the affordance for the oracle's "inject a
+  divergent accrual rate and assert the equality check fails." Not a passes-by-construction sum.
+- `max_buffered_audio_ms` / `barge_in_budget_ms`: declared in config, consumed nowhere; comments
+  overstate enforcement. Does NOT break AC-TURN-10 (latency, satisfied by `flush()`+`tts_chunk_ms`).
+- `GapAnnouncer` zero-width gap on `on_rejoin`-without-`on_drop`, and `promote()` set-active-before-emit:
+  misuse/error-path-only, theoretical; no sealed criterion exercises them.
+
+### Terminal disposition (builder scope exhausted)
+doc02 product code (`services/transport`, 23 modules, ~3.4k LOC) is complete and satisfies every
+builder-authorable sealed criterion. `verify.sh` exit 0 is **unreachable by the builder** — the
+two blockers (5 doc01 protected-tree reds; the absent sealed doc02 `T-*` suite) are both outside
+doc02 scope AND outside builder edit permissions. **Conductor action required:** (a) merge the
+sealed doc02 `T-*` suite into `tests/doc02/`; (b) author the 4 doc01 fixtures + provide the
+`/tenants` mount (or run verify on the intended host env); then re-run `verify.sh`. No further
+builder-authorable work exists; continued re-adjudication commits are the loop and are stopped here.
