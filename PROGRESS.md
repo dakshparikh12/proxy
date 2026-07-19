@@ -4323,3 +4323,41 @@ builder-authorable:** (1) separate authority authors `tests/doc02/test_*.py` red
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — Implement doc02 straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, treating it as coherent with the spec, per §1 of `02-VOICE-TRANSPORT.md`: "This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately." The cited blocker `tests/test_m2_clone.py::test_ac_m2_001` is a **doc01** code_intel test asserting a literal `/tenants/tenant-A/` path that appears nowhere in the doc02 spec or doc02 criteria (both grep-empty for `/tenants`); it fails only because this macOS host SIP-blocks the `/tenants` mount, an environment gate the prescribed `tools/verify-linux.sh` Linux container already resolves, and the four `ImportError`s are missing protected-tree fixtures owned by a separate eviden
+
+## AUDIT PASS 7 — target-environment arbiter RUN (not inferred), HEAD `58c8ee9` (2026-07-19)
+
+Fresh persistent-builder session. Docker was available this pass, so instead of a 7th
+paper re-audit I **ran the prescribed target-environment arbiter** `tools/verify-linux.sh`
+(the UNMODIFIED `harness/verify.sh` inside the Linux root container). This converts the
+prior five/six passes' *inference* ("Linux would resolve `/tenants`") into a **proven fact**
+and definitively isolates the residual.
+
+**New, definitive evidence (Linux container, `tools/verify-linux.sh`):**
+- ruff ✓ · mypy --strict **161 files** ✓ · bandit ✓ (identical to macOS — same code).
+- pytest (milestone order, `-x`): **206 passed, then HALT** at the first missing-fixture
+  ImportError: `test_ac_m2_007` → `ImportError: cannot import name 'blame_attribution_fixture'
+  from 'tests.fixtures.repos'`.
+- **`test_ac_m2_001` (the `/tenants` per-tenant encrypted-volume test) PASSED on Linux** —
+  it is NO LONGER a blocker. The macOS full run's `test_ac_m2_001` red is now **proven** to be
+  purely the SIP read-only-`/` host gate, exactly as `tools/verify-linux.sh`'s header states.
+
+**Therefore the SOLE remaining rung-1 blocker is now provably narrowed to: four un-authored
+doc01 fixtures** (`blame_attribution_fixture`, `force_push_webhook_fixture`,
+`stale_node_moved_symbol_fixture`, `pr_meeting_fixture`) absent from `tests/fixtures/repos.py`
+(grep count 0 each) — a guard-PROTECTED tree (`harness/guard.py` PROTECTED ⊇ `tests/`,
+`fixtures/`), owned by the separate test-authoring authority (doc01 red-suite analog `61c9b0c`),
+**not builder-writable.** No environment explanation remains; no doc02 test suite exists to
+drive (also protected). `verify.sh` exit 0 is unreachable for reasons ENTIRELY outside doc02
+builder scope.
+
+**Independently re-confirmed this pass:** doc02 product fully built (29 transport modules,
+all 10 criteria families), static gates clean on BOTH macOS and Linux. **Zero product changes**
+(gate-clean tree, no red doc02 test to catch a regression). **NOT SPEC_BLOCKED** — the sealed
+`acceptance/doc02/criteria/criteria.yaml` stays coherent with `product/v0-spec/02-VOICE-TRANSPORT.md`
+§1. No sealed test/threshold/golden/verifier/harness file touched; no route-around; no weakening.
+
+**Remaining to full doc02 green — unchanged, ALL conductor/test-authority, NONE builder-authorable:**
+(1) author `tests/doc02/test_*.py` red suite; (2) author the 4 absent doc01 fixtures in
+`tests/fixtures/repos.py` — after which `tools/verify-linux.sh` is *proven* to reach them (206
+already pass before the halt); (3) provision `limits` estate (AC-FAIL-16); (4) M11 rung-2 eval.
+Session ends; a continuation resumes once a conductor step lands.
