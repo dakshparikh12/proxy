@@ -89,12 +89,18 @@ class WebhookProcessor:
         *,
         now: Callable[[], float] = time.monotonic,
         on_meeting_end: Callable[[MeetingEnd], Awaitable[None]] | None = None,
+        on_metadata: Callable[[MeetingMetadata], Awaitable[None]] | None = None,
     ) -> None:
         self._carrier = carrier
         self._now = now
         self._on_meeting_end = on_meeting_end
+        # Meeting title + participant-list context is delivered to the Orchestrator through
+        # a dedicated init hook (AC-EVENTS-05), NOT the §3.10 nine-signal carrier surface —
+        # metadata is not one of the nine emitted signals, so it must never widen that set.
+        self._on_metadata = on_metadata
         self._names: dict[str, str] = {}
         self._snapshot_done = False
+        self._metadata_done = False
 
     async def process(self, payload: dict[str, Any], delivery_guid: str, *, store: DurableStore) -> ProcessResult:
         """Persist durably, return 200, then process exactly once (skip duplicates)."""
@@ -106,6 +112,10 @@ class WebhookProcessor:
 
     async def _emit_for(self, payload: dict[str, Any]) -> list[Signal]:
         emitted: list[Signal] = []
+
+        # Meeting metadata (title + participant list) is initialized as Orchestrator
+        # context once, off the signal surface (AC-EVENTS-05).
+        await self._deliver_metadata(payload)
 
         # Initial present-set snapshot precedes the live deltas (AC-EVENTS-14).
         for ev in self._initial_present_set(payload):
@@ -136,8 +146,29 @@ class WebhookProcessor:
 
         return emitted
 
+    async def _deliver_metadata(self, payload: dict[str, Any]) -> None:
+        """Hand the title + participant-list context to the Orchestrator exactly once.
+
+        Fired on the first payload that carries a title or a participant roster, so the
+        context arrives whether the roster rides on bot-join, meeting-init, or the first
+        participant delta — never re-sent, never on the carrier (AC-EVENTS-05).
+        """
+        if self._metadata_done or self._on_metadata is None:
+            return
+        data = payload.get("data", {})
+        if not data.get("title") and not data.get("participants"):
+            return
+        self._metadata_done = True
+        await self._on_metadata(meeting_metadata(payload))
+
     def _initial_present_set(self, payload: dict[str, Any]) -> list[RosterEvent]:
-        if self._snapshot_done or payload.get("event") != _EVT_JOIN:
+        # The present-set snapshot fires on the FIRST payload carrying a full participant
+        # roster, regardless of the event tag — a meeting Proxy joins mid-session delivers
+        # its already-present roster on bot-join/connected (or a meeting-init), not only on
+        # a per-participant `participant.join` delta. Gating solely on participant.join
+        # would silently omit everyone already in the room (AC-EVENTS-14,
+        # present_participants_missing_from_initial_snapshot_allowed=0; F-INITIAL-PRESENT-SET-MISSING).
+        if self._snapshot_done:
             return []
         participants = payload.get("data", {}).get("participants")
         if not participants:

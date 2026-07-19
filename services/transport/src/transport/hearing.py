@@ -32,6 +32,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from .carrier import SignalCarrier
+from .chat import Ask
 from .media import AudioFrame
 from .seams import STTProvider
 from .signals import Transcript
@@ -112,14 +113,21 @@ class HearingStage:
         stt: STTProvider,
         carrier: SignalCarrier,
         *,
-        ask_sink: Callable[[Transcript], Awaitable[None]],
+        ask_sink: Callable[[Ask], Awaitable[None]],
         on_gap: Callable[[TranscriptGap], Awaitable[None]] | None = None,
+        can_observe: Callable[[], bool] | None = None,
         now: Callable[[], float] = time.monotonic,
     ) -> None:
         self._stt = stt
         self._carrier = carrier
         self._ask_sink = ask_sink
         self._on_gap = on_gap
+        # The consent hard gate (AC-JOIN-04, Law 3). When wired (harness injects
+        # ``JoinSession.can_observe``), NO record is observed/emitted/routed while it
+        # returns False — nothing is recorded before the consent notice posts
+        # (records_before_consent_allowed=0; F-RECORD-BEFORE-CONSENT). Left None only in
+        # contexts that gate observation upstream; then it defaults to always-allow.
+        self._can_observe = can_observe
         self._now = now
         self.emitted: list[EmittedRecord] = []
 
@@ -129,6 +137,11 @@ class HearingStage:
             await self._handle(record)
 
     async def _handle(self, record: Transcript) -> None:
+        # Consent hard gate: before the notice posts, nothing is observed or recorded —
+        # the pre-consent record is discarded, never emitted or routed (AC-JOIN-04).
+        if self._can_observe is not None and not self._can_observe():
+            return
+
         # Fan the record to every in-process subscriber over the ONE carrier
         # (Doc 03 Notes + Doc 04 Orchestrator), preserving order + speaker label.
         await self._carrier.emit(record)
@@ -138,7 +151,10 @@ class HearingStage:
         # but is inert data — never routed as an ask. Suppression keys on speaker only.
         routed_as_ask = record.speaker != PROXY_SPEAKER
         if routed_as_ask:
-            await self._ask_sink(record)
+            # Forward a first-class voice-socket ask — identical in shape to a chat ask,
+            # differing only in .socket (AC-CHAT-03 parity; Ask.from_voice is the spoken
+            # counterpart to Ask.from_chat).
+            await self._ask_sink(Ask.from_voice(content=record.words, sender=record.speaker))
 
         self.emitted.append(EmittedRecord(record=record, emit_t=emit_t, routed_as_ask=routed_as_ask))
 

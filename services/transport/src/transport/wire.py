@@ -47,6 +47,17 @@ def parse_transcript(message: dict[str, Any]) -> Transcript:
             f"provenance {WIRE_SCHEMA_PROVENANCE}"
         )
 
+    # Every emitted record must carry non-empty words AND a speaker label (AC-HEAR-03:
+    # records_missing_speaker_allowed=0, silent_shape_drift_allowed=0). An empty/blank
+    # words or speaker is an incomplete-shape drift (F-TRANSCRIPT-SHAPE-INCOMPLETE) —
+    # raise loudly rather than fan a speakerless/wordless record downstream (Law 2).
+    if not words.strip() or not speaker.strip():
+        raise WireDriftError(
+            f"transcript wire drift: empty words/speaker (words={words!r}, speaker={speaker!r}); "
+            f"a complete record needs non-empty words + a speaker label; "
+            f"provenance {WIRE_SCHEMA_PROVENANCE}"
+        )
+
     is_final = bool(message.get("end_of_turn", True))
     return Transcript(words=words, speaker=speaker, t=float(timestamp), is_final=is_final)
 
