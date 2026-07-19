@@ -1,5 +1,53 @@
 # PROGRESS
 
+## SPEC_BLOCKED — doc02 terminal — INDEPENDENTLY RE-REPRODUCED at current HEAD `4c4323a` (2026-07-19, fresh BUILDER)
+
+**Disposition: SPEC_BLOCKED, unchanged. No product code changed — none is needed, none can help.**
+A fresh builder session re-derived the block from scratch at HEAD `4c4323a` (the latest
+`doc02: adjudication — proceed with clarified reading` commit). The detailed entry below (dated
+`29d414c`) remains fully accurate; this note only records the independent re-confirmation and the two
+distinct block classes, each grounded in `orchestrator/skills/subagent-driven-build.md`'s own hard rules.
+
+**Gates clean this session:** `ruff` ✓ · `mypy --strict` ✓ (**160** source files — the doc02
+`services/transport` package, 30 modules, is fully built and type-clean) · `bandit` ✓.
+**Sole arbiter `harness/verify.sh` → EXIT=1** (measured directly, not through a pipe): it halts at the
+first red under `pytest -q -x` — `tests/test_m2_clone.py::test_ac_m2_001` — with `1 failed, 200 passed`.
+Whole-tree run (no `-x`): **261 passed / 5 failed; ZERO doc02 tests fail** (none exist to fail).
+
+**BLOCK A — no covering test exists for ANY doc02 criterion (skill rule: "If no test covers the next
+spec requirement → SPEC_BLOCKED, stop the pass").** Tests are *pre-authored and sealed* — the skill is
+explicit: "make the pre-authored test pass — you may not edit tests, fixtures, or anything under
+acceptance/". `tests/doc02/` does not exist anywhere in the tree; the sealed doc02 bundle ships
+`acceptance/doc02/criteria/criteria.yaml` (155 criteria: `AC-JOIN-01` … `AC-PATCH-*`, each naming
+`T-*` test_ids) + `requirements/requirements.yaml` only. The `T-JOIN-*`/`T-*` pytest functions those
+criteria name were never authored into the tree (verified: 0 hits for `T-JOIN`, `from services.transport`,
+`AC-JOIN`/`AC-SPEAK`/`AC-HEAR` across `tests/`). `tests/` is `harness/guard.py` PROTECTED + the runner is
+integrity-hashed, so the builder cannot author them. → Every one of the 155 doc02 criteria is untestable
+by the sole arbiter through no fault of the (complete, gate-clean) product code.
+
+**BLOCK B — the arbiter cannot reach green regardless (skill rule: "If a sub-task is impossible without
+changing the arbiter, that's a spec bug (SPEC_BLOCKED), not license to edit the arbiter").** `verify.sh`
+runs the whole tree with `-x`; the 5 blocking reds are all sealed doc01 `code_intel` tests in the
+guard-PROTECTED `tests/` + `tests/fixtures/` trees, none builder-fixable:
+| criterion / test | root cause | authority file (PROTECTED) |
+|---|---|---|
+| `AC-M2-001` `test_ac_m2_001_per_tenant_encrypted_volume` | host-infra gap — asserts literal `/tenants/tenant-A/` prefix; `/` is sealed read-only APFS on this host (`mkdir /tenants`→EROFS) | host provisioning, not code |
+| `AC-M2-007` `test_ac_m2_007_git_blame_resolves_on_blobless_clone` | `ImportError: blame_attribution_fixture` undefined | `tests/fixtures/repos.py` |
+| `AC-M4-013` `test_ac_m4_013_force_push_triggers_full_rebuild_not_incremental` | `ImportError: force_push_webhook_fixture` undefined | `tests/fixtures/stubs.py` |
+| `AC-M5-016` `test_ac_m5_016_stale_graph_node_reread_live_before_citation` | `ImportError: stale_node_moved_symbol_fixture` undefined | `tests/fixtures/repos.py` |
+| `AC-M7-007` `test_ac_m7_007_pr_meeting_pins_to_pr_head_not_default_branch` | `ImportError: pr_meeting_fixture` undefined | `tests/fixtures/repos.py` |
+
+Note the 4 `ImportError` reds are **OS-independent** (a fixture absent from a sealed module is absent on
+Linux too), so the prior `tools/verify-linux.sh` "262 passed" green is now stale — it predates the
+sweep-extended re-seal that added these 4 fixture-importing tests. The only OS-sensitive red is `AC-M2-001`.
+
+**Unblock (conductor / bundle-author authority — NOT a builder code task):** (a) author/seal a doc02
+pytest suite under `tests/doc02/` realizing the 155 `T-*` criteria; (b) author the 4 missing fixtures
+into their named PROTECTED files; (c) provide a writable `/tenants` on the verify host. Per the
+SPEC_BLOCKED mandate I do not weaken, guess, fabricate fixtures, or route around. Session ends here.
+
+---
+
 ## SPEC_BLOCKED — doc02 terminal — verify.sh blocked by 5 doc01 protected-tree reds (4 missing fixtures + 1 host gap) — CORRECTS the "3 fixtures" count in `29d414c` (2026-07-19, fresh BUILDER)
 
 **Disposition: SPEC_BLOCKED. doc02 is code-complete; the sole arbiter (`harness/verify.sh`)
