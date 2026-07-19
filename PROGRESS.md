@@ -1,5 +1,65 @@
 # PROGRESS
 
+## doc02 — fresh-BUILDER 7th adversarial round (4 parallel auditors); 2 genuine authorable defects found + FIXED (2026-07-19, @ HEAD `4348ab5`)
+
+**Disposition: NOT SPEC_BLOCKED — proceeded per the adjudicated reading (audit the built
+product against the sealed 155 criteria; fix genuine builder-authorable gaps toward the
+real-data DoD). No route-around, no weakening, no criterion claimed green that isn't.**
+
+**Independently re-derived the arbiter wall (unchanged).** `bash harness/verify.sh` passes
+all gates (ruff · mypy --strict 160 files · bandit on `src`) and halts at the first doc01 red
+under `pytest -q -x` — `test_ac_m2_001` (clone lands under a macOS temp dir, not `/tenants/…`).
+Confirmed first-hand this is a genuine, non-authorable ENV gap: the macOS root FS is read-only
+(SIP) and there is no sudo, so `/tenants` cannot be created, and the test hard-codes the
+`/tenants/` prefix, so no code change or env var can satisfy it here. Whole-tree `pytest`
+(no `-x`): **261 passed / 5 pre-existing doc01 protected-tree reds** — `test_ac_m2_001`
+(`/tenants` mount) + 4 `ImportError`s for fixtures absent from guard-PROTECTED `tests/fixtures/`
+(`blame_attribution_fixture`, `force_push_webhook_fixture`, `stale_node_moved_symbol_fixture`,
+`pr_meeting_fixture`). Verified the guard blocks Edit/Write to `tests/`/`fixtures/` first-hand
+(guard.py PROTECTED tuple). All 5 reds are doc01-scoped AND non-authorable. ZERO doc02 tests
+exist in the tree (`tests/doc02/` absent; the sealed bundle ships only `criteria/` +
+`requirements/`, no `T-*` suite).
+
+**Method.** 4 fresh-context adversarial auditors (maker≠checker) re-checked all 155 criteria,
+one per cluster (JOIN17·EVENTS15·HEAR13 / SPEAK36·TURN20 / CHAT19·CANVAS16 /
+FAIL21·SEAM33·XCUT12) against `services/transport/**` + `libs/**`, each told to BREAK the code
+with `file:line`. SPEAK/TURN and FAIL/SEAM/XCUT — clean. Each finding re-verified first-hand
+before any edit.
+
+**Two GENUINE builder-authorable defects found + FIXED (toward the real-data DoD; no sealed
+oracle flips — the imported paths are exercised by ZERO tree tests — but both are real
+correctness/honesty gaps the criteria describe):**
+1. **AC-EVENTS-06/08** (`services/transport/src/transport/events.py`): `_emit_for` emitted a
+   `MeetingEnd` and re-ran the Doc-04 close callback on EVERY meeting-end-classified webhook.
+   Real Recall teardown sends a SEQUENCE of terminal signals (bot-status `call_ended`→`done`,
+   plus a separate `meeting.end`/`bot.removed`), each with its own `delivery_guid`, so the
+   guid-dedupe cannot collapse them → the close sequence runs 2+ times (AC-EVENTS-06 caps
+   `meeting_end_signals_per_close` at 1; §3.1 close is singular). **Fixed:** added a once-only
+   `_ended` guard mirroring the existing `_metadata_done`/`_snapshot_done` pattern.
+2. **AC-CANVAS-14/AC-CANVAS-10** (`services/transport/src/transport/canvas.py`): `promote`/
+   `demote` flipped `_active` BEFORE awaiting `_emit`, so a sink-write failure left the surface
+   flipped with no frame produced on either surface → BOTH surfaces dark (AC-CANVAS-14 requires
+   ≥1 surface always producing frames). **Fixed:** roll back `_active` on emit failure so the
+   prior surface stays the one live surface, and count the swap only after a successful announce
+   so `swaps == announcements` always holds (AC-CANVAS-10, no silent swap). This also makes
+   `promote` atomic, dissolving the `delivery.py` promote-outside-try/finally stuck-promoted
+   concern the auditor flagged as compounding.
+
+**Verification:** ruff ✓ · mypy --strict ✓ (160 source files) · bandit (`src`) ✓ · full suite
+**261 passed / 5 pre-existing doc01 reds — ZERO regression** (identical baseline). No sealed
+test/threshold/golden/verifier/fixture touched.
+
+**Honest terminal residual (unchanged, NONE builder-authorable):** (a) no doc02 `T-*` suite in
+the tree → every doc02 criterion is untestable by the sole arbiter (bundle-authoring gap;
+`tests/` guard-PROTECTED + integrity-hashed); (b) the meeting_runtime assembly compositions
+(JoinSession re-post trigger, SegmentStore/JoinSession scoped-store + write-back, webhook 200-
+response) live in guard-PROTECTED `services/harness/`; (c) `verify.sh` exit 0 blocked solely by
+the 5 doc01 protected-tree reds (1 `/tenants` env mount + 4 protected-fixture ImportErrors).
+Unblock is conductor / bundle-author / assembly authority. The doc02 product code is complete +
+gate-clean with every builder-authorable defect found across seven audit rounds now fixed.
+
+---
+
 ## doc02 — fresh-BUILDER 5-cluster adversarial audit; 3 genuine authorable defects found + FIXED (2026-07-19, @ HEAD `6ba42f5`)
 
 **Disposition: NOT SPEC_BLOCKED — proceeded per the adjudicated reading (audit the built
