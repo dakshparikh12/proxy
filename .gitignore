@@ -52,3 +52,4 @@ orchestrator/console.log
 # or a pull would carry another run's pin/permission state)
 orchestrator/state/run.sha
 orchestrator/state/ALLOW_PULL
+orchestrator/STOP
