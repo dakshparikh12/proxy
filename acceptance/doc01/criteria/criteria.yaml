@@ -2662,3 +2662,206 @@
   required_evidence:
     - junit:T-M4-014
   # Budget is a §4 tunable default (no config-defaults key yet); 6000 is a provisional cap.
+
+# ── Sweep-2 gap closures ──────────────────────────────────
+# ── Gap (item 1): file fetched through RepoProvider is byte-identical to GitHub ──
+- criterion_id: AC-M1-006
+  name: "Known file fetched via RepoProvider is byte-identical to GitHub at the same SHA"
+  evidence_class: "[eval-realrepo]"
+  authority_refs: [R-DOC01-3.1-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A connected real repo pinned at a known SHA, and a known file path within it.
+      The same file is fetched directly from GitHub (raw contents API) at that SHA as the golden.
+    when: >
+      The file is fetched through the RepoProvider read path.
+    then:
+      - The returned bytes equal the GitHub golden bytes exactly (SHA-256 of the two blobs match).
+      - No normalization (line-ending/encoding) alters the content.
+  applicability:
+    fixtures: [fixture-connected-repo]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "§3.8 step-1 provable: connect and fetch one known file byte-identical to GitHub."
+  primary_oracle:
+    type: byte_equality_hash_comparison
+    artifact: "sha256(repoprovider_bytes) == sha256(github_raw_bytes)"
+  thresholds:
+    byte_diffs_allowed: 0
+  test_ids: [T-M1-006]
+  fault_model_refs: [F-FETCH-NOT-BYTE-IDENTICAL]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M1-006
+
+# ── Gap (item 7): git blame resolves on a blobless clone ──
+- criterion_id: AC-M2-007
+  name: "git blame resolves on a blobless clone (full history preserved; not shallow)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.2-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A repo cloned via the blobless clone path (--filter=blob:none, full commit history, never shallow),
+      and a tracked file with known multi-commit line history.
+    when: >
+      'git blame' is run on that file inside the clone.
+    then:
+      - git blame exits 0 and returns per-line commit attribution for every line.
+      - The blamed commit SHAs for known lines match the golden attribution.
+      - The clone is NOT shallow (git rev-parse --is-shallow-repository == false).
+  applicability:
+    fixtures: [fixture-blobless-clone]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "§3.2/§3.8 step-2 provable: git blame works; shallow clones are rejected because they break history."
+  primary_oracle:
+    type: git_blame_resolution_and_shallow_check
+    artifact: "git blame exit 0 with per-line SHAs matching golden; is-shallow-repository == false"
+  thresholds:
+    unblamed_lines_allowed: 0
+  test_ids: [T-M2-007]
+  fault_model_refs: [F-SHALLOW-CLONE-BREAKS-BLAME]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M2-007
+
+# ── Gap (item 6): force-push / grammar-upgrade / large-change-set forces a safe full rebuild ──
+- criterion_id: AC-M4-013
+  name: "Force-push (history rewrite), parser/grammar upgrade, or large change-set forces a full rebuild, never an incremental delta"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.6-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo with an existing graph. Three separate triggers are exercised: (a) a force-push
+      (non-fast-forward: the remote tip is rewritten so the old pinned commit is no longer an ancestor),
+      (b) a parser/grammar version bump, (c) a change-set above the large-change threshold.
+      Graph DB operations are instrumented. (Distinct from AC-M4-009, which covers an ordinary fast-forward push.)
+    when: >
+      Each trigger is processed.
+    then:
+      - Each trigger records a DROP/bulk-delete of graph rows before re-extraction (full rebuild).
+      - No incremental per-file delta-apply against the rewritten history is attempted on the force-push path.
+      - The rebuild runs off the newly pinned view and completes with an atomic pointer swap (no torn intermediate graph is queryable).
+  applicability:
+    fixtures: [fixture-force-push, fixture-grammar-upgrade, fixture-large-changeset, fixture-db-operation-counter]
+    estates: []
+    excluded_estates: []
+    rationale: "§3.6/§3.8-7/§4 name force-push, grammar-upgrade, and large-change-set as distinct full-rebuild triggers with safe history-rewrite handling."
+  primary_oracle:
+    type: db_operation_log_inspection
+    artifact: "for each trigger: DROP/bulk-delete precedes INSERT; no per-file incremental apply on force-push; pointer swap atomic"
+  thresholds:
+    incremental_applies_on_force_push_allowed: 0
+    triggers_missing_full_rebuild_allowed: 0
+  test_ids: [T-M4-015]
+  fault_model_refs: [F-FORCE-PUSH-INCREMENTAL-APPLY, F-TORN-GRAPH-DURING-REBUILD]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M4-015
+
+# ── Gap (item 8): a meeting about a PR pins to the PR head, not the default-branch tip ──
+- criterion_id: AC-M7-007
+  name: "Meeting about a PR pins meetings.pinned_sha to the PR head (not the default-branch tip)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.6-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A repo whose default branch tip is SHA D, with an open PR whose head is SHA P (P != D).
+      A meeting is started scoped to that PR. (Distinct from AC-M7-004, which pins the default-tip case.)
+    when: >
+      The meeting session initialization completes.
+    then:
+      - meetings.pinned_sha == P (the PR head).
+      - meetings.pinned_sha != D (the default-branch tip is NOT chosen for a PR meeting).
+  applicability:
+    fixtures: [fixture-pr-meeting]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "§3.6 pin selection has two branches (default tip vs PR head); only the default-tip branch was tested."
+  primary_oracle:
+    type: db_field_value_check
+    artifact: "meetings.pinned_sha == pr_head_sha and != default_tip_sha"
+  thresholds:
+    wrong_pin_selections_allowed: 0
+  test_ids: [T-M7-007]
+  fault_model_refs: [F-PR-MEETING-PINS-DEFAULT-TIP]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M7-007
+
+# ── Gap (item 5, §4): stale graph node (built_at_sha != pinned) is re-read live before answering ──
+- criterion_id: AC-M5-016
+  name: "Stale graph node (built_at_sha != pinned SHA) is re-read live before its file:line becomes an answer"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-4-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A meeting pinned at SHA P. A graph node whose built_at_sha == B (B != P) points at a symbol whose
+      live location at P differs from the node's recorded file:line (the code moved between B and P).
+    when: >
+      A code_intel tool resolves that node into a cited answer.
+    then:
+      - The system detects built_at_sha (B) != pinned SHA (P) and re-reads the symbol live against the pinned view.
+      - The emitted citation is the LIVE file:line at P, not the stale node's recorded location.
+      - If the symbol no longer resolves live, it is labeled not-found-by-this-method (never a stale-but-confident cite).
+  applicability:
+    fixtures: [fixture-stale-node-moved-symbol]
+    estates: []
+    excluded_estates: []
+    rationale: "§4 deference rule (2) / §3.9 'every lead re-confirmed against current code'; the built_at_sha column exists solely to power this."
+  primary_oracle:
+    type: citation_matches_live_not_stale
+    artifact: "emitted file:line == live_location(P); != stale_node_location; abstain-labeled when unresolved live"
+  thresholds:
+    stale_locations_emitted_as_confident_allowed: 0
+  test_ids: [T-M5-016]
+  fault_model_refs: [F-STALE-NODE-SERVED-WITHOUT-REREAD]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-016
+  # dispositions.yaml D-INV-05 said "no separate criterion needed"; sweep overrides — this behavior was untested.
+
+# ── Gap (item 2): first precise query at meeting start returns warm within the latency target ──
+- criterion_id: AC-LAT-003
+  name: "First precise query at meeting start on a prepared large repo returns warm within the target (~2s)"
+  evidence_class: "[latency]"
+  authority_refs: [R-DOC01-LAT-03]
+  criticality: P2
+  blocking: false
+  behavior:
+    given: >
+      A large repo that has completed prepare-ahead (language server warmed on connect/push per AC-CANON-004).
+      A meeting starts.
+    when: >
+      The first precise query (find_references on a known symbol) is issued at meeting start.
+    then:
+      - The query returns a warm 'resolved' result (served from the warm host-side LSP, no cold spin-up).
+      - Wall-clock latency for that first query <= the meeting-start first-query target (default 2.0s).
+      - It never cold-hangs (no fallback-to-grep caused purely by an unwarmed server at meeting start).
+  applicability:
+    fixtures: [fixture-large-repo-warmed]
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "§3.8 step-9 provable: first precise query at meeting start returns warm, in seconds — distinct from the connect->ready 15-min SLO (AC-LAT-002)."
+  primary_oracle:
+    type: latency_threshold_measurement
+    artifact: "measured first-query wall-clock <= meeting_start_first_query_target_s; result tag == resolved"
+  thresholds:
+    meeting_start_first_query_target_s: 2.0
+    cold_hang_allowed: 0
+  test_ids: [T-LAT-003]
+  fault_model_refs: [F-MEETING-START-COLD-QUERY]
+  protocol_ref: PROTO-LATENCY-01
+  required_evidence:
+    - junit:T-LAT-003
+  # ~2s is a §4 tunable default (no config-defaults key yet); provisional target.

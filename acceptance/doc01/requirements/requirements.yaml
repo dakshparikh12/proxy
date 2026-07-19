@@ -791,3 +791,85 @@
   testability: analyzable
   status: qualified
   # Threshold is a §4 tunable default (no config-defaults key yet); provisional cap 6000 tokens.
+
+# ── Sweep-2 gap closures (doc01-sweep.md items 1,2,6,7,8 + §4 stale-node) ──
+
+- requirement_id: R-DOC01-3.1-04
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.8 build step 1 (provable) / §3.1"
+  source_quote: "Provable: connect a real repo and fetch one known file byte-identical to GitHub."
+  normalized_statement: >
+    WHEN a known file is fetched from a connected repo through the RepoProvider
+    THE SYSTEM SHALL return byte-identical content to the same file fetched directly from GitHub at the same SHA.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.2-05
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.2 paragraph 2 / §3.8 build step 2 (provable)"
+  source_quote: "so huge repos clone in minutes and git blame still works (we never use shallow clones; they break history). ... Provable: file set == git ls-files; git blame resolves on a large repo."
+  normalized_statement: >
+    WHEN a repo is cloned blobless (never shallow)
+    THE SYSTEM SHALL preserve full history such that git blame resolves for a tracked file, returning per-line commit attribution.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.6-06
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.6 paragraph 3 / §3.8 build step 7 / §4 failure behavior"
+  source_quote: "A force-push, a parser/grammar upgrade, or a large change-set forces the full rebuild ... force-push → safe full rebuild"
+  normalized_statement: >
+    WHEN a force-push (non-fast-forward / history rewrite), a parser/grammar upgrade, or a large change-set is detected
+    THE SYSTEM SHALL perform a safe full per-repo graph rebuild (drop + re-extract off the newly pinned view, atomic pointer swap), never an incremental delta apply against the rewritten history.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-3.6-07
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.6 paragraph 2"
+  source_quote: "the session pins to one commit — the default branch's tip, or the PR head for a meeting about a PR"
+  normalized_statement: >
+    WHEN a meeting is about a specific pull request
+    THE SYSTEM SHALL pin meetings.pinned_sha to the PR head SHA (not the default-branch tip).
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-LAT-03
+  authority_type: operational_slo
+  authority_document: DOC-01
+  source_location: "§3.8 build step 9 (provable) / §4 latency targets"
+  source_quote: "Provable: on a large repo, the first precise query at meeting start returns warm, in seconds. ... first query at meeting start on a prepared large repo <= [~2s]"
+  normalized_statement: >
+    WHEN the first precise query is issued at meeting start on a prepared (warm-LSP) large repo
+    THE SYSTEM SHALL return a warm result within the meeting-start first-query latency target (default ~2s), not a cold-start hang.
+  requirement_type: performance
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-DOC01-4-03
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§4 failure behavior / §3.9"
+  source_quote: "graph node stale vs pinned commit → deference rule (2), re-read live ... every lead re-confirmed against current code before it becomes an answer"
+  normalized_statement: >
+    WHEN a graph node's built_at_sha differs from the meeting's pinned commit SHA
+    THE SYSTEM SHALL defer to the live code — re-read the cited file:line against the pinned view before emitting it as an answer — rather than serving the stale graph node's location directly.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+  # NOTE: dispositions.yaml D-INV-05 marked "no separate criterion needed"; doc01-sweep flags this as a real
+  # gap because the built_at_sha node column exists solely to power this re-read behavior, which was untested.
