@@ -4570,3 +4570,50 @@ warranted or made this pass (tree is ruff/mypy --strict/bandit clean; no doc02 r
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — Implement doc02 straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which §1 of `product/v0-spec/02-VOICE-TRANSPORT.md` makes authoritative ("This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately"); there is no criterion-vs-spec conflict to resolve — the doc02 bundle is grep-empty for `/tenants`, `code_intel`, and every `AC-M*`/doc01 id, so none of the blockers touch a doc02 criterion — and both cited blocks (the un-authored `T-*` suite under a nonexistent `tests/doc02/`, and the 5 guard-protected doc01 `code_intel` reds that halt whole-tree `pytest -x`) are fixable only by the test/conductor authority and host provisioning, never by any edit to the spec or CANONICAL, whi
+
+## AUDIT PASS 9 — fresh 5-verifier cross-check; fixed real AC-XCUT-01 lint-surface gap, HEAD pending (2026-07-19)
+
+Fresh persistent-builder session. Independently RE-REPRODUCED the terminal blocking state
+before trusting any prior narrative: (1) macOS `bash harness/verify.sh` halts at doc01
+`test_ac_m2_001` — cloner returns the SIP fallback `/var/folders/.../proxy-tenants/...` because
+`/tenants` is unprovisionable here (`mkdir /tenants` → `Read-only file system`, tried); (2) the
+prescribed `tools/verify-linux.sh` (unmodified verify.sh in a Linux root container where `/tenants`
+exists) proves `test_ac_m2_001` PASSES on Linux and the next halt is `ImportError:
+blame_attribution_fixture` — one of 3 doc01 fixtures (`blame_attribution_fixture`,
+`pr_meeting_fixture`, `stale_node_moved_symbol_fixture`) imported-but-undefined in the
+guard-PROTECTED `tests/fixtures/repos.py`. Both halt classes are doc01, in protected/host
+territory, referenced by ZERO doc02 criteria — not builder-authorable. Confirmed no test in the
+tree imports `transport` (doc02 has no test suite; that is the test-authority's job).
+
+**Behavioral cross-check (the one builder-authorable class of work).** Fanned out 5 fresh-context
+verifier subagents (maker≠checker) over ALL 164 doc02 criteria (10 families) hunting for
+code-does-not-satisfy-criterion gaps. Consensus: NO genuine code-logic defect in any family; the
+FSMs behave correctly under direct execution. Flagged items adjudicated:
+- AC-EVENTS-13 (P3): stale-name cache — satisfied under the intended `participant.update` path; non-blocking.
+- AC-CHAT-16 (P1): default recognizer `_never` — satisfied by design; `is_addressed = @proxy-token OR recognizer`, and the criterion's own NOTE assigns the recognizer DECISION to Doc 04 while this layer owns the (correct) forwarding contract + seam.
+- AC-CANVAS-09/14: `coactive()=False`/`live_surface_count()=1` are correct constants of the single-enum mutual-exclusion invariant (verified promote/demote builds frame before the atomic swap), not masked bugs.
+- AC-FAIL-09 (P0): NOT a gap — `SegmentReconciler.on_close` backfills every still-`pending` segment as a gap = the auto mark-lost path (the verifier missed it).
+- AC-SEAM-22 (P1): satisfied — `rate_card()`→`transport_rate()` is the single source of truth; both floor check and accrual default to it; `rate=` is a test-injection affordance.
+
+**AC-XCUT-01 (P1) — GENUINE builder-authorable gap, FIXED (first product change this pass).**
+`RejoinPolicy` emits TWO user-visible spoken disconnect-gap lines (`failure.py` second-drop /
+rejoin-failed honest-stop announcements), but `delivery.user_visible_strings()` — whose docstring
+claimed "Every user-visible transport string, for the naming lint (AC-XCUT-01)" — scanned only
+`Gap.line()`, omitting both. AC-XCUT-01's `given` explicitly enumerates "disconnect-gap line" as a
+scanned string, so the declared lint surface under-covered and the docstring over-claimed (a mild
+Law-2 over-report, same class as pass-8's AC-FAIL-16). FIX: hoisted the two announcements to
+module constants `HONEST_STOP_SECOND_DROP` / `HONEST_STOP_REJOIN_FAILED` in `failure.py` (single
+source shared with `RejoinPolicy`), and added both to `user_visible_strings()`. Proof:
+`lint.naming.check_user_visible_strings(user_visible_strings())` → exit_code 0, no violations, over
+the now-complete 8-string surface. Gates re-run clean: ruff ✓ · mypy --strict 160 files ✓ · full
+suite **1 failed / 200 passed UNCHANGED** (the sole red is the doc01 `/tenants` host gate; zero
+regression from this change).
+
+**Terminal state re-confirmed: NOT SPEC_BLOCKED.** No doc02 criterion is untestable/ambiguous or
+contradicts spec/law; `acceptance/doc02/criteria/criteria.yaml` stays coherent with
+`02-VOICE-TRANSPORT.md` §1. `verify.sh` exit 0 remains unreachable ONLY for the doc01 host/fixture
+reasons above (host-provisioning + protected test-authority work), entirely outside doc02 builder
+scope. No sealed test/threshold/golden/verifier/harness file touched; no route-around; no weakening.
+Remaining to full doc02 green — ALL conductor/test-authority, NONE builder-authorable: (1) author
+`tests/doc02/test_*.py`; (2) author the 3 absent doc01 fixtures; (3) provision `/tenants` (or run
+under `tools/verify-linux.sh`); (4) M11 rung-2 eval on `fixtures/estates/`.

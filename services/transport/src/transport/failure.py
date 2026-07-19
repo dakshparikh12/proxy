@@ -58,6 +58,13 @@ class RejoinOutcome:
     honest_announcement: str = ""
 
 
+# The honest terminal-stop spoken lines (user-visible → scanned by the naming lint,
+# AC-XCUT-01). Hoisted to module constants so the lint surface (``user_visible_strings``)
+# and ``RejoinPolicy`` share ONE source for each disconnect-gap line.
+HONEST_STOP_SECOND_DROP = "I dropped again and can't rejoin — I've stopped; the notes have a gap here."
+HONEST_STOP_REJOIN_FAILED = "I couldn't rejoin — I've stopped; the notes have a gap here."
+
+
 class RejoinPolicy:
     """Rejoin exactly once on a drop; every terminal state is announced, never silent.
 
@@ -99,7 +106,7 @@ class RejoinPolicy:
         return RejoinOutcome(
             state=self._state,
             rejoin_attempted=False,
-            honest_announcement="I dropped again and can't rejoin — I've stopped; the notes have a gap here.",
+            honest_announcement=HONEST_STOP_SECOND_DROP,
         )
 
     def rejoin_failed(self) -> RejoinOutcome:
@@ -108,7 +115,7 @@ class RejoinPolicy:
         return RejoinOutcome(
             state=self._state,
             rejoin_attempted=False,
-            honest_announcement="I couldn't rejoin — I've stopped; the notes have a gap here.",
+            honest_announcement=HONEST_STOP_REJOIN_FAILED,
         )
 
 

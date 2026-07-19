@@ -31,7 +31,12 @@ from .canvas import (
     WorkHook,
 )
 from .consent import consent_notice
-from .failure import _VOICE_DOWN_NOTICE, Gap
+from .failure import (
+    _VOICE_DOWN_NOTICE,
+    HONEST_STOP_REJOIN_FAILED,
+    HONEST_STOP_SECOND_DROP,
+    Gap,
+)
 from .speak import CANNED_ACKS
 
 #: The sole delivery verbs — the only emitters of any channel output (AC-XCUT-04).
@@ -121,12 +126,16 @@ async def present_on_screen(
 def user_visible_strings() -> dict[str, str]:
     """Every user-visible transport string, for the naming lint (AC-XCUT-01).
 
-    A representative gap line is included so the disconnect-gap wording is scanned too.
+    Covers the full disconnect-gap surface: the on-rejoin gap line AND both honest
+    terminal-stop announcements (second-drop / rejoin-failed), so no user-visible
+    disconnect-gap wording escapes the scan.
     """
     strings: dict[str, str] = {
         "consent_notice": consent_notice(),
         "voice_down_notice": _VOICE_DOWN_NOTICE,
         "gap_line": Gap(dropped_ts=843.0, rejoined_ts=884.0).line(),
+        "honest_stop_second_drop": HONEST_STOP_SECOND_DROP,
+        "honest_stop_rejoin_failed": HONEST_STOP_REJOIN_FAILED,
     }
     for i, ack in enumerate(CANNED_ACKS):
         strings[f"canned_ack_{i}"] = ack
