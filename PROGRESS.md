@@ -3603,3 +3603,6 @@ the locked plan fixes (M0…M10), then re-seal bundle+evidence. Once the sealed 
 suite exists, re-dispatch this builder — the locked plan (§§1–7 above) is ready to build straight
 against it. **Ending the pass here per the mandate: an untestable-by-this-loop scope, recorded, not
 guessed.**
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — This is not a spec contradiction: the sealed `acceptance/doc02/criteria.yaml` is coherent with `product/v0-spec/02-VOICE-TRANSPORT.md`, and the builder cites no criterion that conflicts with any spec passage (it cites `ORCHESTRATION.md:23`, the Phase-3 EVIDENCE step). Per `ORCHESTRATION.md:23-25`, "author the tests + fixtures + simulation workflows that make each criterion checkable … Simulations replace real-data cost" is a **separate-authority phase that precedes SEAL** — so the missing `tests/doc02/` red suite is a pipeline-sequencing gap, not a spec impossibility, and no spec edit could green it (DEFER, which only warrants a spec change, would be the wrong instrument). The builder's refusal to build against guessed interfaces was correct and must stand; the reading to implement is: 
