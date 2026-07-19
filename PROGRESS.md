@@ -4027,3 +4027,84 @@ weakening. The product is now audit-hardened and ready to turn the red suite gre
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — Implement doc02 straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which is coherent with `product/v0-spec/02-VOICE-TRANSPORT.md` (§1: "this document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately… This is pipes and manners only"). The sole cited blocker, `tests/test_m2_clone.py::test_ac_m2_001`, is a **doc01** `code_intel` Clone test — no doc02 criterion references `/tenants` (`grep -rn tenants acceptance/doc02` is empty of any volume-prefix criterion) — and it fails only because `harness/verify.sh` runs `pytest -q -x`, halting at the first failure while this macOS host SIP-blocks the `/tenants` mount that `services/code_intel/src/code_intel/paths.py` already documents a dev/C
+
+## HARDENING — doc02 audit pass 2 (HEAD after commits f258aed/a231e29/e475c60, 2026-07-19): 7 confirmed defects fixed across 3 commits, behavioral-smoke-proven
+
+Persistent builder session. `harness/verify.sh` exit 0 remains **genuinely unreachable this
+pass for reasons OUTSIDE doc02 scope** (re-confirmed live: gates ruff/mypy --strict/bandit pass
+tree-wide, then `pytest -q -x` halts at doc01 `test_ac_m2_001` — the `/tenants` volume-prefix
+assert that this macOS host SIP-blocks; full no-`-x` run = **5 failed / 261 passed**, the identical
+pre-existing doc01 rung-1 reds — `test_ac_m2_001` /tenants + `m2_007`/`m4_013`/`m5_016`/`m7_007`
+missing guard-protected `tests/fixtures/` fixtures — plus `tests/doc02/` still unauthored). No green
+was claimed or manufactured. Neither blocker is doc02-builder-authorable (protected trees +
+maker≠checker + separate Phase-3 authority). **NOT SPEC_BLOCKED** — the sealed
+`acceptance/doc02/criteria/criteria.yaml` stays coherent with the spec/laws; no criterion
+contradiction exists to record.
+
+Rather than re-declare that fixed point, this pass ran a **deeper fresh-context adversarial audit
+of the never-red-tested M0–M10 product** — 6 parallel section auditors (JOIN+EVENTS, HEAR+TURN,
+SPEAK+CHAT, CANVAS, FAIL, SEAM+XCUT+cost), each grounding every criterion's exact text/oracle
+against exact code, reporting only concrete-repro defects. FAIL and SEAM+XCUT audited **clean**
+(no P0/P1). **7 CONFIRMED defects found and fixed** (3 commits, each ruff + mypy --strict (28
+transport files) + bandit clean, every fix proven by a concrete input→correct-output behavioral
+smoke run from /tmp — 14/14 smoke checks pass — never committed under tests/):
+
+- **f258aed** — 5 roster/hearing/consent defects:
+  - **AC-HEAR-03/12** (`wire.py`): `parse_transcript` type-checked but **accepted empty
+    words/speaker**, fanning a wordless/speakerless "complete" record downstream
+    (`records_missing_speaker_allowed=0`, `silent_shape_drift_allowed=0`). Now raises
+    `WireDriftError` on blank words/speaker (F-TRANSCRIPT-SHAPE-INCOMPLETE, Law 2).
+  - **AC-EVENTS-14** (`events.py`): initial present-set snapshot fired **only on `participant.join`**,
+    so a meeting Proxy joins mid-session (roster arriving on bot-join/connected/meeting-init)
+    silently omitted everyone already present. Now fires on the first payload carrying a participant
+    roster, any event tag (`present_participants_missing_from_initial_snapshot_allowed=0`).
+  - **AC-EVENTS-05** (`events.py`): `meeting_metadata()` was built but had **no delivery path**
+    (MeetingMetadata is not one of the nine §3.10 signals, so it must NOT ride the carrier). Added an
+    `on_metadata` init hook (mirrors `on_meeting_end`) delivering title + participant list to the
+    Orchestrator once, off the signal surface — keeps the nine-signal completeness oracle intact.
+  - **AC-JOIN-04** (`hearing.py`): the P0 consent hard gate `can_observe()` was **never consulted by
+    the recording path**. `HearingStage` now takes an optional `can_observe` predicate; while it
+    returns False no record is emitted or routed (`records_before_consent_allowed=0`, Law 3).
+  - **AC-CHAT-03** (`hearing.py`): the voice path forwarded a **raw `Transcript`** while chat built a
+    first-class `Ask`, so the "only `.socket` differs" parity was false and `Ask.from_voice` was dead
+    code. Voice now forwards `Ask.from_voice(words, speaker)` — chat/voice hand the Orchestrator the
+    identical ask shape.
+- **a231e29** — **AC-TURN-16** (`boundary.py`,`turn.py`,`__init__.py`): `resolve_boundary_source()`
+  *decided* `SMART_TURN_V3` on the absence branch but **nothing consumed it** — the only boundary
+  emit was `on_stt_message` gated on AAI `end_of_turn`. So if the build probe found Recall does not
+  forward `end_of_turn`, the "resolved" fallback produced **zero boundaries at runtime → the turn
+  gate never opens → Proxy could never speak** (`boundary_source_unresolved_allowed=0`,
+  F-NO-BOUNDARY-FALLBACK). Added the `SmartTurnBoundary` Protocol seam; `TurnSignalPump` now takes the
+  resolved `boundary_source` (+ optional `smart_turn` producer): `on_stt_message` opens boundaries
+  from `end_of_turn` ONLY on the AAI branch, and `pump_boundaries()` drives them from the wired
+  fallback seam on the SMART_TURN branch (single `_emit_boundary` path, never a timer). Keeping it a
+  seam is why Smart Turn v3 stays OUT of core on the expected AAI branch (CANONICAL §12.11) — that
+  branch never constructs the seam.
+- **e475c60** — **AC-CANVAS-11** (`delivery.py`): `present_on_screen` sequenced
+  promote→work→demote with **no `try/finally`**; a raising `work()` left the screen stuck on the
+  promoted view forever, unbalanced against the tile (contradicting "swap-back follows the work" +
+  AC-CANVAS-09 mutual exclusion). The demote now runs in a `finally` so the human-control swap-back is
+  never contingent on the work succeeding; the work error still propagates after the return to tile.
+
+**Adversarial-audit residuals dispositioned (recorded, NOT routed-around or weakened):**
+- **AC-EVENTS-13** roster-name cache-first vs payload name on re-join — P3/non-blocking, ambiguous
+  (Recall renames via `participant.update` refresh the cache; preferring a possibly-lagging join/leave
+  payload name could REINTRODUCE staleness). Cache-first choice kept as defensible (unchanged from the
+  prior pass's disposition).
+- **AC-SPEAK-20 / AC-SPEAK-03** ack-at-boundary reconciliation and the tile-ACK cross-surface coordination
+  sit on the Doc-02/Doc-04 boundary — flagged for the section owner / M11 eval, not builder-resolvable.
+- **AC-SEAM-12 leak-guard** covers 8 of the "nine" names (`chat` excluded by the doc00-sealed
+  `SIGNAL_SURFACE_EVENTS` frozenset in protected `libs/contracts`); factually disjoint today, a latent
+  guard-completeness note in a protected tree, not a current defect.
+- CANVAS P2 measurement/exception refinements (latency sampled pre-emit; swap/announce balance on a
+  raising injected hook) — success-path oracles hold; left as-is (low value, risk of disturbing the
+  swap-then-announce trace).
+- `failure.py:223 is_marked_lost` tautology — confirmed unused dead code (zero call sites), behavior-
+  identical, zero criterion impact; left as-is.
+
+**Remaining to full doc02 green (unchanged, none builder-authorable):** (1) Phase-3 EVIDENCE — author
+the sealed `tests/doc02/test_*.py` red suite from the criteria (doc01 analog `61c9b0c`); (2) resolve the
+5 doc01 rung-1 reds (fixtures + `/tenants` on the Linux `code_intel` estate / `tools/verify-linux.sh`);
+(3) provision `limits` on the estate (AC-FAIL-16); (4) M11 rung-2 eval on `fixtures/estates/`. No sealed
+test/threshold/golden/verifier/harness file touched; no route-around; no weakening. The product is
+further audit-hardened and ready to turn the red suite green straight away.
