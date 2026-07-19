@@ -25,6 +25,14 @@ class MeetingRepository:
         async with self._db.acquire() as conn:
             return await meetings.insert_meeting(conn, **kwargs)
 
+    async def update_bot_id(
+        self, *, meeting_id: Any, recall_bot_id: str
+    ) -> dict[str, Any] | None:
+        async with self._db.acquire() as conn:
+            return await meetings.update_bot_id(
+                conn, meeting_id=meeting_id, recall_bot_id=recall_bot_id
+            )
+
     async def get_by_bot_id(self, recall_bot_id: str) -> dict[str, Any] | None:
         async with self._db.acquire() as conn:
             return await meetings.get_by_bot_id(conn, recall_bot_id)
