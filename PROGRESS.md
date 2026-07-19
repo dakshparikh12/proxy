@@ -1,5 +1,52 @@
 # PROGRESS
 
+## SPEC_BLOCKED — doc02 terminal — FRESH container evidence RETIRES the host-gap story; residual wall = 4 undefined DOC01 fixtures (2026-07-19, fresh BUILDER @ HEAD `1b5f013`)
+
+**Disposition: SPEC_BLOCKED. No product code changed — doc02 is code-complete and gate-clean; none is
+needed and none can help.** This entry supersedes the two stale framings below: (a) the "255 passed /
+exit 0" green — it predates the 4 fixture-importing doc01 tests and is no longer reproducible; and (b) the
+"AC-M2-001 read-only-`/` host gap" as the wall — a fresh run of the adjudicator's own prescribed
+`tools/verify-linux.sh` **clears AC-M2-001** and exposes a different, OS-independent wall.
+
+**Fresh evidence this session (both environments, measured directly):**
+- **Host (`.venv` on macOS), whole tree no `-x`:** `5 failed, 261 passed`. Zero doc02 tests fail (none exist).
+- **Adjudicator-prescribed Linux container (`bash tools/verify-linux.sh`, writable `/tenants`, Postgres 15,
+  ripgrep):** `ruff` ✓ · `mypy --strict` ✓ **161 source files** (incl. all **30** `services/transport` doc02
+  modules) · `bandit` ✓ · pytest → **`1 failed, 206 passed`**. **AC-M2-001 passed** (the `/tenants` prefix is
+  real in-container — host gap CLEARED, 206 tests ran past it). The sole halt is
+  `test_m2_clone.py::test_ac_m2_007_git_blame_resolves_on_blobless_clone` →
+  `ImportError: cannot import name 'blame_attribution_fixture' from 'tests.fixtures.repos'`.
+
+**BLOCK A — doc02's own sealed test suite was never authored (every doc02 criterion is untestable by the
+sole arbiter).** The sealed bundle ships `acceptance/doc02/criteria/criteria.yaml` (155 criteria
+`AC-JOIN-01 … AC-PATCH-*`, each naming `T-*` test_ids) + `requirements/requirements.yaml` **only**.
+`tests/doc02/` does not exist; **0** tree tests import `services.transport` or reference `AC-JOIN/…/AC-TURN/
+T-JOIN`. Those `T-*` pytest functions were never authored into the tree, and `tests/`+`acceptance/` are
+`harness/guard.py` PROTECTED (line 15/19) + integrity-hashed → the builder may not author them. This is a
+doc02-scoped **bundle-authoring** gap; it is distinct from — and not dissolved by — the adjudicator's
+correct observation that the doc01 fixtures are doc01's, not doc02's.
+
+**BLOCK B — the whole-tree arbiter cannot reach exit 0 regardless (4 undefined DOC01 fixtures).**
+`verify.sh` runs `pytest -q -x`; with the host gap cleared, the residual reds are exactly 4 fixtures
+imported by doc01 `test_m*.py` (added in commit `e63a891`) but never defined in the guard-PROTECTED
+fixture modules — verified absent this session (only import/call sites exist, no `def`), OS-independent:
+| test (doc01, `services.code_intel`) | undefined fixture | import site | authority file (PROTECTED) |
+|---|---|---|---|
+| `test_m2_clone.py::test_ac_m2_007` | `blame_attribution_fixture` | `test_m2_clone.py:153` | `tests/fixtures/repos.py` |
+| `test_m4_substrate.py::test_ac_m4_013` | `force_push_webhook_fixture` | `test_m4_substrate.py:305` | `tests/fixtures/stubs.py` |
+| `test_m5_tools.py::test_ac_m5_016` | `stale_node_moved_symbol_fixture` | `test_m5_tools.py:357` | `tests/fixtures/repos.py` |
+| `test_m7_freshness.py::test_ac_m7_007` | `pr_meeting_fixture` | `test_m7_freshness.py:170` | `tests/fixtures/repos.py` |
+
+**Why no builder action helps:** doc02 product is complete + gate-clean in both environments (nothing to
+build); no `services/**`/`libs/**` edit can author a name into a sealed doc01 fixture module or author the
+absent doc02 `T-*` suite; per the SPEC_BLOCKED mandate I do not weaken, guess, fabricate fixtures, or route
+around. **Unblock (conductor / bundle-author authority — NOT a builder code task):** (a) author + seal the
+doc02 `T-*` suite realizing the 155 criteria; (b) define the 4 doc01 fixtures in their named PROTECTED
+files. With (b) alone the `verify-linux` container reaches exit 0 for doc00+doc01; (a) is what makes doc02
+itself provable. Session ends here.
+
+---
+
 ## SPEC_BLOCKED — doc02 terminal — INDEPENDENTLY RE-REPRODUCED at current HEAD `4c4323a` (2026-07-19, fresh BUILDER)
 
 **Disposition: SPEC_BLOCKED, unchanged. No product code changed — none is needed, none can help.**
