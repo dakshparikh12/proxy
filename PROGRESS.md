@@ -5118,3 +5118,6 @@ doc02 scope AND outside builder edit permissions. **Conductor action required:**
 sealed doc02 `T-*` suite into `tests/doc02/`; (b) author the 4 doc01 fixtures + provide the
 `/tenants` mount (or run verify on the intended host env); then re-run `verify.sh`. No further
 builder-authorable work exists; continued re-adjudication commits are the loop and are stopped here.
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — Implement and verify doc02 straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which §1 of `product/v0-spec/02-VOICE-TRANSPORT.md` makes authoritative ("This document is the complete description of what to build and exactly how it must work; **acceptance criteria and tests are generated from it separately**"). The last SPEC_BLOCKED entry identifies no doc02 criterion that is untestable, ambiguous, or in conflict with the spec — its two walls are (A) the sealed doc02 `T-*` pytest suite never authored into the guard-PROTECTED `tests/` tree, and (B) four undefined **doc01** `services.code_intel` fixtures plus a `/tenants` host-mount gap that halt whole-tree `pytest -x` before any doc02 test would run; every one of `T-JOIN`/`AC-JOIN`/`blame`/`code_intel`/`blobless`/`/tena
