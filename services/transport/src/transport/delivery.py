@@ -104,11 +104,17 @@ async def present_on_screen(
     steps.append(STEP_HEADLINE)
     await surface.promote(view, trigger=trigger)
     steps.append(STEP_SWAP_TO_SCREEN)
-    if work is not None:
-        await work(surface)
-    steps.append(STEP_WORK)
-    await surface.demote(trigger=trigger)
-    steps.append(STEP_SWAP_BACK)
+    # The swap-back ALWAYS follows the promote — even if the work raises — so the screen
+    # never stays stuck on the promoted view and the tile/screen surfaces stay balanced
+    # (AC-CANVAS-11 / AC-CANVAS-09 mutual exclusion; the human-control swap-back is not
+    # contingent on the work succeeding). Any work error still propagates after the demote.
+    try:
+        if work is not None:
+            await work(surface)
+        steps.append(STEP_WORK)
+    finally:
+        await surface.demote(trigger=trigger)
+        steps.append(STEP_SWAP_BACK)
     return PresentTrace(steps=tuple(steps))
 
 
