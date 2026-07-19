@@ -14,12 +14,17 @@ from .results import Notification
 
 
 class MeetingSession:
-    def __init__(self, server: Any = None, pipeline: Any = None) -> None:
+    def __init__(
+        self,
+        server: Any = None,
+        pipeline: Any = None,
+        pinned_sha: str | None = None,
+    ) -> None:
         self._server = server if server is not None else (pipeline.server if pipeline is not None else None)
         self._pipeline = pipeline if pipeline is not None else (
             server.pipeline if server is not None else None
         )
-        self.pinned_sha: str = self._resolve_pin()
+        self.pinned_sha: str = pinned_sha if pinned_sha is not None else self._resolve_pin()
         self.notifications: list[Notification] = []
         self._cache: dict[tuple[Any, ...], Any] = {}
         self._cache_gen = self._server.cache_generation if self._server is not None else 0
@@ -34,8 +39,17 @@ class MeetingSession:
         return ""
 
     @classmethod
-    def start(cls, pipeline: Any = None, server: Any = None, event_log: Any = None) -> MeetingSession:
-        session = cls(server=server, pipeline=pipeline)
+    def start(
+        cls,
+        pipeline: Any = None,
+        server: Any = None,
+        event_log: Any = None,
+        pr_number: int | None = None,
+    ) -> MeetingSession:
+        pinned_sha: str | None = None
+        if pr_number is not None and pipeline is not None:
+            pinned_sha = _pr_head_sha(pipeline, pr_number)
+        session = cls(server=server, pipeline=pipeline, pinned_sha=pinned_sha)
         drift = getattr(pipeline, "_drift", None) if pipeline is not None else None
         if drift is not None and event_log is not None:
             event_log.record("pull")
@@ -94,3 +108,30 @@ class MeetingSession:
     def end(self) -> None:
         if self._pipeline is not None and hasattr(self._pipeline, "unregister_pin"):
             self._pipeline.unregister_pin(self)
+
+
+def _pr_head_sha(pipeline: Any, pr_number: int) -> str | None:
+    """Resolve the tip SHA for a PR branch from the clone's git metadata."""
+    from pathlib import Path
+
+    from .gitio import run_git
+
+    clone_path = getattr(pipeline, "clone_path", None)
+    if not isinstance(clone_path, Path) or not clone_path.exists():
+        return None
+    gitdir = clone_path.parent / ".git"
+    if not gitdir.exists():
+        return None
+    # Bare clone stores remote branches as refs/heads/<branch>; try common patterns.
+    for ref in (
+        f"refs/heads/feature/pr-{pr_number}",
+        f"refs/heads/pr/{pr_number}",
+        f"refs/remotes/origin/feature/pr-{pr_number}",
+        f"refs/remotes/origin/pr/{pr_number}",
+    ):
+        res = run_git(["--git-dir", str(gitdir), "rev-parse", ref], check=False)
+        if res.returncode == 0:
+            sha = res.stdout.strip()
+            if sha:
+                return sha
+    return None
