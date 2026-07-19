@@ -3739,3 +3739,12 @@ Fresh ground truth, re-derived (not trusted) at HEAD `5d243d8`, clean tree:
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — There is no spec contradiction to defer: `product/v0-spec/02-VOICE-TRANSPORT.md` §1 states "*this document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately*," and the sealed `acceptance/doc02/criteria/criteria.yaml` is coherent with spec §§2–3 (the Recall.ai transport, five channels, the two turn-taking signals Silero-VAD-barge-in + AAI-`end_of_turn`, and the §3 data-flow contract); the builder cites no criterion conflicting with any spec passage, only `ORCHESTRATION.md:23` — a pipeline phase, not a spec clause. The correct reading: treat the spec and sealed criteria as authoritative and sound as written, do not weaken, guess, or route around them, and never manufacture a green against a nonexistent
+
+## BUILD-BLOCKED — 7th builder dispatch (HEAD `9fa5d91`, 2026-07-19): STOP re-dispatching; run Phase-3 or the loop spins forever
+Ground truth re-derived, not trusted: `tests/doc02/` absent (`git ls-files`/`find` empty; `pytest --collect-only` = 266 tests, 0 doc02); no `T-JOIN-*…T-XCUT-*` realized as an executable test outside `acceptance/`; `criteria.yaml`'s 155 criteria each cite `test_ids` for an evidence layer that was never authored; doc01 has Phase-3 commit `61c9b0c`, doc02 has **no analog**. Tree clean; no `services/**`/`libs/**` written.
+
+Diagnosis is identical to the six prior notes and independently confirmed. This is a **pipeline gap (Phase-3 EVIDENCE skipped)**, NOT `SPEC_BLOCKED` and NOT builder-fixable. A criteria/spec re-seal is the WRONG instrument.
+
+**New, decision-relevant point:** `build→BUILD-BLOCKED→"ADJUDICATION RESOLVED, proceed"→re-dispatch` is now a **proven non-terminating fixed point** (7 passes, unchanged). Re-dispatching an 8th builder will reproduce this note verbatim. The builder is structurally the wrong actor — maker≠checker + the guard forbid it authoring its own arbiter.
+
+**SINGLE REQUIRED ACTION (human/conductor, mirroring doc01's `61c9b0c`):** run doc02 **Phase-3 EVIDENCE** — a fresh-context evidence authority authors `tests/doc02/test_join.py … test_xcut.py` (+ fixtures/simulations) in honest RED from the sealed `acceptance/doc02/criteria/criteria.yaml`, in the M0…M10 `test_ids` order the locked plan fixes; re-seal bundle+evidence. THEN re-dispatch this builder. Until then, **do not re-dispatch the builder.** Ending the pass per the mandate.
