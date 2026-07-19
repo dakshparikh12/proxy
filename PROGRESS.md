@@ -1,5 +1,69 @@
 # PROGRESS
 
+## doc02 — 4-cluster adversarial re-audit of all 164; disproved a claimed-authorable gap, fixed 2 more latent SPEAK defects (2026-07-19, fresh BUILDER @ HEAD `e682084` → `c9e611f`)
+
+**Disposition: NOT SPEC_BLOCKED — proceeded per the adjudicated reading (audit the built
+product against the sealed 164 criteria; fix genuine builder-authorable gaps toward the
+real-data DoD). No route-around, no weakening, no criterion claimed green that isn't.**
+
+**Independently re-derived the arbiter wall.** `bash harness/verify.sh` halts at the first
+doc01 red — `test_ac_m2_001_per_tenant_encrypted_volume` (the clone lands under a macOS temp
+dir, not `/tenants/…`: a host-mount gap). Whole-tree `pytest` (no `-x`): **261 passed / 5
+pre-existing doc01 protected-tree reds** — `test_ac_m2_001` (host `/tenants`) + 4 undefined
+`tests/fixtures/` fixtures (`blame_attribution_fixture`, `force_push_webhook_fixture`,
+`stale_node_moved_symbol_fixture`, `pr_meeting_fixture`). ZERO doc02 tests fail (none exist —
+`tests/doc02/` absent; the sealed bundle ships only `criteria/` + `requirements/`). All are
+outside doc02 scope and outside builder authority (fixtures live in guard-PROTECTED `tests/`).
+
+**Method.** 4 fresh-context adversarial auditors re-checked all 164 criteria
+(JOIN17·EVENTS14·HEAR12·SPEAK20·CHAT16·CANVAS15·TURN17·FAIL20·SEAM22·XCUT11) against
+`services/transport/**` + `libs/**`, each told to BREAK the prior 163/164 with `file:line`.
+
+**Results:**
+- **CHAT/CANVAS/TURN — clean.** Barge-in sourced only from Silero VAD (never the ~300ms
+  transcript), boundary only from real `end_of_turn`, hard-mute kills in-flight TTS,
+  camera↔screenshare structurally exclusive, DM guarded by `channel_report()`. No authorable defect.
+- **FAIL/SEAM/XCUT — clean.** Rejoin-once budget, announced (never inferred) gap, mark-lost via
+  the real `backfill_segment_as_lost` verb, shared queue-not-drop limiter, protocol seams leak no
+  SDK type, every external call through `call_external` with telemetry, never-throw delivery verbs.
+- **JOIN auditor claimed AC-JOIN-10/11 are AUTHORABLE via `services/harness/meetings.py`** —
+  **DISPROVED.** `harness/guard.py:75-76` is a pure substring block: any Edit/Write whose path
+  contains `harness/` is denied, and `services/harness/src/harness/meetings.py` contains it
+  twice → the invite→launch→write-back composition is genuinely NOT builder-authorable (matches
+  every prior session). The write-back verb `repos.meetings.update_bot_id` exists (`864b787`) but
+  its sole call site lives in that guard-PROTECTED file.
+- **JOIN auditor's Defect 3 (`libs/db/src/db/sync.py:123` fabricated `bot-{uuid}`)** — **misfire,
+  left untouched.** That is doc00's broker-free SYNC workflow facade (its own docstring: "simulate
+  the Recall bot launch"), exercised by the passing `tests/doc00/test_w_workflows.py`; it is not a
+  doc02 product path and editing it is out-of-scope and would risk a green doc00 test.
+
+**Two GENUINE authorable real-data defects found in SPEAK and FIXED (commit `c9e611f`)** — both
+in `services/transport` (imported by ZERO tree tests → zero suite impact):
+1. **AC-SPEAK-08 / AC-TURN-10** (`tts.py`): `CartesiaTTS._chunk_ms` was assigned but **never read**
+   (dead state); the small-chunk bound never rode the request the `call_external` seam issues.
+   Now carried as `chunk_ms` on the synth request so the real Cartesia leg streams chunks ≤
+   `tts_chunk_ms` and a surviving in-flight chunk can't defeat the mid-word barge-in cut. (The
+   ≤1-dropped-chunk / buffered-ms bounds were already architecturally enforced by `turn.py`'s
+   one-chunk-at-a-time write + cooperative abort + flush.)
+2. **AC-SPEAK-03** (`speak.py`): `audible_ack()` is budget-exempt (AC-SPEAK-09) but its chars count
+   toward the synthesized hourly sum the oracle reads — a reflex firing on a full headline window
+   could push that sum past the 4000 ceiling. The headline gate now reserves max-canned-ack
+   headroom (derived from `CANNED_ACKS`, no magic number) so the summed total stays ≤ 4000.
+
+**Verification:** ruff ✓ · mypy --strict ✓ (30 transport files) · full suite **261 passed / 5
+pre-existing doc01 reds — zero regression**. No sealed test/threshold/golden/verifier/fixture
+touched.
+
+**Honest terminal residual (unchanged, NONE builder-authorable):** (a) no doc02 `T-*` suite in the
+tree → every doc02 criterion is untestable by the sole arbiter (bundle-authoring gap; `tests/`
+guard-PROTECTED + integrity-hashed); (b) AC-JOIN-10/11's invite→launch→write-back composition lives
+in guard-PROTECTED `services/harness/meetings.py`; (c) `verify.sh` exit 0 blocked solely by the 5
+doc01 protected-tree reds. Unblock is conductor / bundle-author / assembly authority: author+seal the
+doc02 `T-*` suite; define the 4 doc01 fixtures; provide the `/tenants` mount; wire the harness
+composition. The doc02 product code is complete + gate-clean with every builder-authorable defect fixed.
+
+---
+
 ## doc02 — independent 5-agent re-audit CONFIRMS 163/164; 2 latent authorable defects fixed (2026-07-19, fresh BUILDER @ HEAD `0ca2c88`)
 
 **Disposition: NOT SPEC_BLOCKED — proceeded per the adjudicated reading (audit the built product
