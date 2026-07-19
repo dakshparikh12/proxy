@@ -4222,3 +4222,6 @@ sealed `tests/doc02/test_*.py` red suite from the criteria (doc01 analog `61c9b0
 doc01 rung-1 reds (fixtures + `/tenants` on the Linux `code_intel` estate); (3) provision `limits` on the
 estate (AC-FAIL-16); (4) M11 rung-2 eval on `fixtures/estates/`. No sealed test/threshold/golden/verifier/
 harness file touched; no route-around; no weakening.
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — The cited blocker `tests/test_m2_clone.py::test_ac_m2_001` is a doc01 `code_intel` Clone test (`AC-M2-001`, asserting a `/tenants/<tenant>/` prefix produced by `services.code_intel.cloner.Cloner`); no doc02 criterion references it (`grep -rn "/tenants\|m2_001\|AC-M2" acceptance/doc02` is empty), and it is red only because `harness/verify.sh` runs `pytest -q -x`, halting at the first failure while this macOS host SIP-blocks the `/tenants` mount — a pipeline/environment gate plus un-authored doc01 fixtures in the protected `tests/fixtures/` tree, all in doc01/Phase-3 scope, not a defect in the sealed `acceptance/doc02/criteria/criteria.yaml`, which `product/v0-spec/02-VOICE-TRANSPORT.md` §1 ("this document is the complete description of what to build and exactly how it must work; acceptan
