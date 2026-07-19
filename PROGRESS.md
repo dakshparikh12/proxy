@@ -1,5 +1,52 @@
 # PROGRESS
 
+## SPEC_BLOCKED — doc02 terminal — verify.sh blocked by 5 doc01 protected-tree reds (4 missing fixtures + 1 host gap) — CORRECTS the "3 fixtures" count in `29d414c` (2026-07-19, fresh BUILDER)
+
+**Disposition: SPEC_BLOCKED. doc02 is code-complete; the sole arbiter (`harness/verify.sh`)
+cannot reach exit 0 for reasons entirely outside doc02's scope and outside builder authority.**
+Independently reproduced at HEAD `29d414c`; no product code changed (none is needed, none can help).
+
+**Gates all clean this session:** `ruff` ✓ · `mypy --strict` (**161** source files, up from doc01's 134
+— the doc02 `services/transport` package, 28 modules / 3405 LOC, is fully built and type-clean) ·
+`bandit` ✓.
+
+**Full suite (whole tree, no `-x`): 261 passed / 5 failed — all 5 failures are doc01 `code_intel`
+tests in the guard-protected test tree; ZERO doc02 tests fail.** There are no doc02 pytest tests to
+build against: `tests/doc02/` does not exist (the sealed doc02 bundle ships `acceptance/doc02/criteria/`
++ `requirements/` only; the `T-JOIN-*`-style test functions the criteria name were never authored into
+the tree). `verify.sh` runs `pytest -q -x`, so the first doc01 red halts the pass before green — doc02's
+completeness cannot move the arbiter either way.
+
+**The 5 blocking reds — all in `tests/` + `tests/fixtures/` (both in `harness/guard.py` PROTECTED,
+and the runner is integrity-hashed → read-only to the builder):**
+| # | test | root cause | authority file |
+|---|------|-----------|----------------|
+| 1 | `test_m2_clone.py::test_ac_m2_001_per_tenant_encrypted_volume` | host-infra gap — asserts literal `/tenants/tenant-A/` prefix; `/` is sealed read-only APFS on this host (`mkdir /tenants` → EROFS), needs a privileged mount | (host provisioning, not code) |
+| 2 | `test_m2_clone.py::test_ac_m2_007_git_blame_resolves_on_blobless_clone` | imports undefined `blame_attribution_fixture` | `tests/fixtures/repos.py` |
+| 3 | `test_m4_substrate.py::test_ac_m4_013_force_push_triggers_full_rebuild_not_incremental` | imports undefined `force_push_webhook_fixture` | `tests/fixtures/stubs.py` |
+| 4 | `test_m5_tools.py::test_ac_m5_016_stale_graph_node_reread_live_before_citation` | imports undefined `stale_node_moved_symbol_fixture` | `tests/fixtures/repos.py` |
+| 5 | `test_m7_freshness.py::test_ac_m7_007_pr_meeting_pins_to_pr_head_not_default_branch` | imports undefined `pr_meeting_fixture` | `tests/fixtures/repos.py` |
+
+**Correction to `29d414c` ("3 doc01 fixtures"):** that commit dismissed `force_push_webhook_fixture`
+as a "stale claim (grep count 0)". The grep was scoped to `repos.py` only — the fixture is imported
+from `tests.fixtures.**stubs**.py` (`test_m4_substrate.py:303`, used at :323), and is genuinely
+undefined there. So the accurate inventory is **4 missing fixtures (2 in `repos.py`, 1 in `stubs.py`,
+1 in `repos.py`) + 1 host gap = 5 reds**, not 3. Verified this session: all 4 names appear only at
+call sites, never at a `def`, across `tests/` + `conftest.py`.
+
+**Why not builder-fixable:** `tests/` and `fixtures/` are both in `harness/guard.py` PROTECTED
+(line 15) and the harness is integrity-hashed; no `services/`/`libs/` seam can inject a top-level
+name into a protected fixture module, and no product edit can create a writable `/tenants` on a
+read-only root. Per the SPEC_BLOCKED mandate I do not weaken, guess, or route around.
+
+**The unblock (test/fixture authority + one host-provisioning step — not a builder code task):**
+(a) author the 4 fixtures into their named protected files, and (b) provide a writable `/tenants`
+on the verify host (`sudo mkdir -p /tenants && sudo chown "$USER" /tenants`, or run in a root
+container — `tools/verify-linux.sh` already does the latter and reaches 206+ passed on Linux).
+With both, the unmodified tree reaches `verify.sh` exit 0. Session ends here.
+
+---
+
 ## ⚠️ HARNESS-CONFLICT — doc02 SEAM slice: `*.requirements.yaml` path is guard-protected (2026-07-18, SEAM criteria author)
 Authored the SEAM / SIGNAL-SURFACE / COST / PLATFORM-MATRIX / RUNTIME-LOCUS cross-cutting slice of
 Doc 02 (Voice & Transport). The requested output `staging/doc02/parts/SEAM.requirements.yaml` **could
