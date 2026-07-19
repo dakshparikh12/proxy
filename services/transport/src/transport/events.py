@@ -101,6 +101,10 @@ class WebhookProcessor:
         self._names: dict[str, str] = {}
         self._snapshot_done = False
         self._metadata_done = False
+        # Title and the initial participant list can ride on SEPARATE payloads; both are
+        # accumulated here so neither is ever dropped before delivery (AC-EVENTS-05).
+        self._meta_title = ""
+        self._meta_participants: tuple[str, ...] = ()
 
     async def process(self, payload: dict[str, Any], delivery_guid: str, *, store: DurableStore) -> ProcessResult:
         """Persist durably, return 200, then process exactly once (skip duplicates)."""
@@ -149,17 +153,30 @@ class WebhookProcessor:
     async def _deliver_metadata(self, payload: dict[str, Any]) -> None:
         """Hand the title + participant-list context to the Orchestrator exactly once.
 
-        Fired on the first payload that carries a title or a participant roster, so the
-        context arrives whether the roster rides on bot-join, meeting-init, or the first
-        participant delta — never re-sent, never on the carrier (AC-EVENTS-05).
+        The title and the initial participant list can arrive on DIFFERENT payloads (the
+        roster may ride on bot-join/connected while the title lands on a later
+        meeting-init). Both fields are accumulated across payloads and delivered together
+        the moment both are known, so neither is ever silently dropped
+        (AC-EVENTS-05, metadata_fields_dropped_allowed=0; F-METADATA-NOT-PASSED). Delivered
+        once, never re-sent, and never on the §3.10 nine-signal carrier surface.
         """
         if self._metadata_done or self._on_metadata is None:
             return
         data = payload.get("data", {})
-        if not data.get("title") and not data.get("participants"):
-            return
-        self._metadata_done = True
-        await self._on_metadata(meeting_metadata(payload))
+        title = data.get("title")
+        if title and not self._meta_title:
+            self._meta_title = str(title)
+        participants = data.get("participants")
+        if participants and not self._meta_participants:
+            self._meta_participants = tuple(str(p.get("name", "")) for p in participants)
+        # Deliver only once BOTH fields are in hand — accumulating across payloads means a
+        # split title/roster never loses a field (the prior first-either-field gate dropped
+        # whichever field the first payload lacked).
+        if self._meta_title and self._meta_participants:
+            self._metadata_done = True
+            await self._on_metadata(
+                MeetingMetadata(title=self._meta_title, participants=self._meta_participants)
+            )
 
     def _initial_present_set(self, payload: dict[str, Any]) -> list[RosterEvent]:
         # The present-set snapshot fires on the FIRST payload carrying a full participant
