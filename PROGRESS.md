@@ -5370,3 +5370,46 @@ complete and gate-clean (ruff/mypy --strict/bandit).
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — Implement and verify doc02 straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which `product/v0-spec/02-VOICE-TRANSPORT.md` §1 makes authoritative in its own words ("*This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately*"). The SPEC_BLOCKED entry names no doc02 criterion that is untestable, ambiguous, or in conflict with the spec — its sole blocker is `tests/test_m4_substrate.py::test_ac_m4_013_force_push_triggers_full_rebuild_not_incremental`, a **doc01** `services.code_intel` (M4 substrate) test that maps to zero doc02 criteria (`AC-M4`/`code_intel`/`force_push` are grep-empty across the entire `acceptance/doc02/` bundle), failing with a collection-time `ImportError` 
+
+
+## doc02 BUILDER — FULL-COVERAGE audit of ALL 164 criteria (2026-07-19, fresh session)
+
+New evidence, not a re-adjudication. Prior terminal passes verified only the **risky-20% core
+(R1-R7)**; this session ran **5 parallel fresh-context auditors over all 11 families / 164
+criteria** (JOIN.EVENTS / HEAR.SPEAK / CHAT.CANVAS / TURN.FAIL / SEAM.XCUT), each tracing every
+sealed given/when/then + oracle + threshold against the real `services/transport` code and
+reporting only *builder-authorable* defects (fixable in `services/`/`libs/`, not protected
+trees/host).
+
+**Result: ZERO confirmed builder-authorable defects across all 164 criteria.** Every criterion
+with a testable `given` holds for the RIGHT reason (not vacuously). Passes-by-construction were
+scrutinized and cleared: SEAM-22 cost single-source (floor + accrual both resolve to one
+`rate_card()` over `config/defaults.toml`), CANVAS-09 camera<->screen mutual exclusion (single
+`_active` enum + guards, not convention), SPEAK-04/05/15 verbatim-copy-FIRST parity, SPEAK-06/19
+boundary-gated ack (no carve-out), HEAR-08 speaker-scoped self-loop guard, TURN-07/08
+stop-then-flush atomicity, XCUT-05 fail-closed bot_id, XCUT-11 never-throw delivery verbs, XCUT-03
+sole `call_external` seam, SEAM-21 no Pipecat/LiveKit anywhere in `pyproject.toml`/`uv.lock`.
+
+Two soft observations re-examined and confirmed NON-defects (no sealed criterion fails; left
+untouched -- a needless edit risks the regression class prior notes warned of):
+- `hearing.py:130` `can_observe` defaults to always-allow when unwired -- but the comment honestly
+  documents it, and AC-JOIN-04's hard gate is the injected `JoinSession.can_observe`, consulted at
+  `hearing.py:142`. Documented design, criterion satisfied via the wired path. Not a defect.
+- `config.py:24-25` `max_buffered_audio_ms`/`barge_in_budget_ms` are inert (grep-confirmed unread):
+  the real AC-TURN-10 bound is the *consumed* `tts_chunk_ms=120`, and AC-TURN-09 is an empirical
+  `latency_measurement`, not a config read. Mild Law-2 tidiness smell; fails no criterion.
+
+**Gate re-run this session (independent):** ruff OK / mypy --strict OK (160 files) / bandit OK /
+`pytest -q` -> **5 failed, 261 passed** -- the 5 identical doc01 protected-tree reds
+(`test_ac_m2_001` `/tenants` host-mount; `test_ac_m2_007`/`m4_013`/`m5_016`/`m7_007` `ImportError`
+for `blame_attribution`/`force_push_webhook`/`stale_node_moved_symbol`/`pr_meeting` fixtures --
+re-verified defined NOWHERE in the tree, only in this PROGRESS text). Zero doc02 `T-*` tests exist.
+
+**Terminal disposition unchanged, now on FULL coverage:** doc02 product code is complete and
+satisfies every builder-authorable sealed criterion. `verify.sh` exit 0 remains unreachable by any
+builder-authorable change -- both walls are outside doc02-builder authority: (A) 5 doc01
+protected-tree reds; (B) the sealed doc02 `T-*` suite never merged into `tests/doc02/` (and
+maker!=checker forbids the builder authoring its own tests). No product edit made (none warranted).
+**Conductor action (unchanged):** merge the sealed doc02 `T-*` suite into `tests/doc02/`; author the
+4 doc01 fixtures in `tests/fixtures/{repos,stubs}.py`; run on a host with `/tenants` (or
+`tools/verify-linux.sh`); then re-run `verify.sh`.
