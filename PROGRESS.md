@@ -1,5 +1,55 @@
 # PROGRESS
 
+## doc02 — independent 5-agent re-audit CONFIRMS 163/164; 2 latent authorable defects fixed (2026-07-19, fresh BUILDER @ HEAD `0ca2c88`)
+
+**Disposition: NOT SPEC_BLOCKED — proceeded per the adjudicated reading (audit the built product
+against the sealed 164 criteria, fix genuine builder-authorable gaps).** Independently re-derived the
+state at HEAD `0ca2c88`: doc02 product code is complete + gate-clean (ruff · mypy --strict 28 transport
++ 13 libs/db files · bandit); `verify.sh` exit 0 remains unreachable ONLY for the 5 pre-existing doc01
+protected-tree reds (`test_ac_m2_001` host `/tenants` gap + 4 undefined doc01 fixtures) — entirely
+outside doc02 scope, none builder-authorable. Confirmed the AC-JOIN-10 composition residual is truly
+not-authorable: guard.py:75-77 blocks any Edit/Write to a path containing `harness/`, so
+`services/harness/meetings.py` (the invite→launch→write-back site) cannot be edited by the builder.
+
+**Method.** 5 fresh-context adversarial auditors re-checked ALL 164 criteria (JOIN17·EVENTS14·HEAR12·
+SPEAK20·CHAT16·CANVAS15·TURN17·FAIL20·SEAM22·XCUT11) against `services/transport/**` + `libs/**`,
+each requiring `file:line` evidence and told to try to BREAK the prior 163/164 conclusion (Law 1).
+
+**Result: 0 criterion-flipping builder-authorable gaps** — every auditor independently re-confirmed the
+prior audit. The product is code-satisfied against every builder-authorable, testable criterion; the 4
+`[eval-realrepo]` + `[latency]` criteria are measurement/eval-proven (code paths present); AC-JOIN-10's
+sole residual is the not-authorable harness composition.
+
+**Two GENUINE latent defects found in AUTHORABLE paths (do NOT flip any criterion — the sealed oracles
+don't cover them — but are real correctness/completeness gaps toward the "proven on real data" DoD):**
+1. **Seam-contract violation** (`services/transport/recall.py:81`, `tts.py:63`). `join()`/`synthesize()`
+   read the external-call result as a raw dict (`outcome["id"]` / `outcome.get("chunks")`), but the real
+   `libs/http.call_external` seam returns an `ExternalCallOutcome` (payload under `.value`, per the
+   `CallExternal` protocol docstring in `external.py:20-21`). Under the real seam `isinstance(outcome,
+   dict)` is False → `join()` silently returns the `"bot"` placeholder, losing the launched Recall id
+   (compounds AC-JOIN-10). **Fixed** with a duck-typed `getattr(outcome, "value", outcome)` unwrap that
+   honors the seam contract without coupling transport to `libs.http` (works for both the real wrapper
+   and a raw-dict fake). `RecallTransport`/`CartesiaTTS` are exported-but-unexercised → the change is
+   inert in the passing suite.
+2. **Missing AC-FAIL-10 real-data backfill** (`libs/db/repos/transcript.py`). The `SegmentReconciler`
+   (transport) drove `SegmentStore.backfill_gap` but `libs/db` had no concrete SQL to mark a still-
+   `pending` segment `lost` at close — so the §3.7 mark-lost path had no real-data home. **Added**
+   `transcript.backfill_segment_as_lost(conn, segment_id)` (`UPDATE … SET status='lost' WHERE id=$1 AND
+   status='pending'` — idempotent; no CHECK constraint on `transcript_segments.status`, migration
+   0001:167) + `TranscriptRepository.backfill_segment_as_lost` parity — the concrete `SegmentStore`
+   impl for close-time assembly (same repo-helper pattern as the prior `update_bot_id` fix, `864b787`).
+
+**Verification:** ruff ✓ · mypy --strict ✓ (28 transport + 13 libs/db files) · bandit ✓ · full suite
+**261 passed / 5 pre-existing doc01 reds — ZERO regression**. No sealed test/threshold/golden/verifier/
+fixture touched; no route-around; no weakening; no criterion claimed green that isn't.
+
+**Honest residual (unchanged, NOT builder-authorable):** AC-JOIN-10's invite→launch→write-back
+composition in `services/harness/meetings.py` (guard-PROTECTED); `JoinSession` still has no live
+construction site (meeting_runtime assembly pending); `verify.sh` exit 0 blocked solely by the 5 doc01
+protected-tree reds. These are conductor/assembly-authority items, not builder code tasks.
+
+---
+
 ## doc02 — full 164-criterion code audit vs `services/transport`; 1 real gap found + its doc02-half fixed (2026-07-19, fresh BUILDER @ HEAD `864b787`)
 
 **Disposition: NOT SPEC_BLOCKED — proceeded per the adjudicated reading (verify doc02 straight

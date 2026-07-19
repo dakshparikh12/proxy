@@ -60,7 +60,11 @@ class CartesiaTTS:
             service="cartesia",
             unit_cost_usd=0.0,
         )
-        chunks = outcome.get("chunks", 0) if isinstance(outcome, dict) else 0
+        # The seam returns an ``ExternalCallOutcome`` (payload under ``.value``); a
+        # fake may hand back the raw payload directly. Duck-type both — honoring the
+        # seam contract (AC-XCUT-03) — without coupling transport to ``libs.http``.
+        result = getattr(outcome, "value", outcome)
+        chunks = result.get("chunks", 0) if isinstance(result, dict) else 0
         for seq in range(int(chunks)):
             yield AudioChunk(pcm=b"", seq=seq, is_final=(seq == int(chunks) - 1))
 

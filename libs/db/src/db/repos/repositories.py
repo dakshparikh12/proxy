@@ -49,6 +49,11 @@ class TranscriptRepository:
             async with conn.transaction():
                 await transcript.flip_and_append(conn, segment_id, delta)
 
+    async def backfill_segment_as_lost(self, segment_id: Any) -> None:
+        """Concrete ``SegmentStore.backfill_gap`` for the close reconciler (AC-FAIL-10)."""
+        async with self._db.acquire() as conn:
+            await transcript.backfill_segment_as_lost(conn, segment_id)
+
 
 class NotesRepository:
     """Note deltas — persisted atomically with the transcript comprehension flip."""

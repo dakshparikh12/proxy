@@ -25,3 +25,23 @@ async def flip_and_append(conn: Any, segment_id: Any, delta: str) -> None:
         segment_id,
         delta,
     )
+
+
+async def backfill_segment_as_lost(conn: Any, segment_id: Any) -> None:
+    """Mark a still-``pending`` segment as ``lost`` at meeting close (AC-FAIL-10, §3.7).
+
+    The honest gap path: any segment never transcribed (still ``pending`` when the
+    meeting closes) is recorded ``lost`` — never silently dropped, never faked as
+    comprehended. The ``AND status = 'pending'`` guard makes this idempotent and
+    keeps it from ever overwriting a segment that was already comprehended, so a
+    re-run of the close reconciler is a no-op.
+    """
+    await conn.execute(
+        """
+        UPDATE transcript_segments
+           SET status = 'lost'
+         WHERE id = $1
+           AND status = 'pending'
+        """,
+        segment_id,
+    )

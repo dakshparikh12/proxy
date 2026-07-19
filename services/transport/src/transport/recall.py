@@ -78,7 +78,11 @@ class RecallTransport:
             service="recall",
             unit_cost_usd=0.50,
         )
-        bot_id = str(outcome["id"]) if isinstance(outcome, dict) and "id" in outcome else "bot"
+        # The seam returns an ``ExternalCallOutcome`` (payload under ``.value``); a
+        # fake may hand back the raw payload directly. Duck-type both — honoring the
+        # seam contract (AC-XCUT-03) — without coupling transport to ``libs.http``.
+        result = getattr(outcome, "value", outcome)
+        bot_id = str(result["id"]) if isinstance(result, dict) and "id" in result else "bot"
         self._roster.setdefault(bot_id, asyncio.Queue())
         self._chat.setdefault(bot_id, asyncio.Queue())
         return bot_id
