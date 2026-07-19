@@ -4162,3 +4162,6 @@ doc01 rung-1 reds (fixtures + `/tenants` on the Linux `code_intel` estate / `too
 (3) provision `limits` on the estate (AC-FAIL-16); (4) M11 rung-2 eval on `fixtures/estates/`. No sealed
 test/threshold/golden/verifier/harness file touched; no route-around; no weakening. The product is further
 audit-hardened; the red suite, once authored, should turn green straight away.
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — Implement doc02 straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which is coherent with `product/v0-spec/02-VOICE-TRANSPORT.md` (§1: "this document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately… This is pipes and manners only"). The sole cited blocker, `tests/test_m2_clone.py::test_ac_m2_001`, is a **doc01** `code_intel` Clone test asserting a `/tenants/<tenant>/` volume prefix produced by `services.code_intel.cloner.Cloner` — no doc02 criterion references `/tenants` or that test (`grep -rn "tenants\|m2_001" acceptance/doc02` yields only an unrelated "two tenants… live meeting" scenario, never a volume-path criterion) — and it is red only because `harness/verify.sh` runs `py
