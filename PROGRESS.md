@@ -3912,3 +3912,6 @@ ignore_missing_imports` — transport is the first cross-member **runtime** impo
 the src-layout strict walk names the same source by its filesystem path, so the top-level import can't be
 tied back without a dual-name collection error; the module's own source stays fully strict-checked. Also
 `services/transport/pyproject.toml` gains a clarifying comment (no dep change).
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — The claimed conflict is not a spec contradiction: the sole cited blocker, `tests/test_m2_clone.py::test_ac_m2_001`, is a **doc01** code_intel Clone criterion (`AC-M2-*`, exercising `services.code_intel.cloner.Cloner` and a `/tenants/<tenant>/` volume prefix) that no doc02 acceptance criterion references (`grep /tenants acceptance/doc02` → empty), and it fails only because `harness/verify.sh` runs `pytest -q -x` which halts at the first failure while this macOS host SIP-blocks the `/tenants` mount — a pipeline/environment gate, not a defect in `acceptance/doc02/criteria/criteria.yaml`, which the builder itself concedes is coherent with `product/v0-spec/02-VOICE-TRANSPORT.md` (§1: "this document is the complete description of what to build... acceptance criteria and tests are generated fr
