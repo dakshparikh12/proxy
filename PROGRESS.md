@@ -3915,3 +3915,52 @@ tied back without a dual-name collection error; the module's own source stays fu
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — The claimed conflict is not a spec contradiction: the sole cited blocker, `tests/test_m2_clone.py::test_ac_m2_001`, is a **doc01** code_intel Clone criterion (`AC-M2-*`, exercising `services.code_intel.cloner.Cloner` and a `/tenants/<tenant>/` volume prefix) that no doc02 acceptance criterion references (`grep /tenants acceptance/doc02` → empty), and it fails only because `harness/verify.sh` runs `pytest -q -x` which halts at the first failure while this macOS host SIP-blocks the `/tenants` mount — a pipeline/environment gate, not a defect in `acceptance/doc02/criteria/criteria.yaml`, which the builder itself concedes is coherent with `product/v0-spec/02-VOICE-TRANSPORT.md` (§1: "this document is the complete description of what to build... acceptance criteria and tests are generated fr
+
+## BUILDING — doc02 M3->M10 built to spec; full transport surface complete (HEAD 7c12116, 2026-07-19)
+
+**Continued the standing adjudication** (proceed-and-build; the prior pass built M0+M1+M2 =
+45/164). This one persistent builder session built **M3 through M10** — the whole remaining
+transport product surface — one milestone per commit, each ruff + mypy --strict + bandit
+clean with a behavioral smoke against the sealed criteria. **All 164 criteria now have
+their functional shape built** (~164/164); M11 is the rung-2 real-data/latency measurement
+on fixtures/estates/, not a builder pytest.
+
+**Built this session (8 commits): 0468c93 M3 Hearing (hearing.py — per-speaker ingest, transcript
+fan-out to Doc03+Doc04, self-loop guard, BYOK-honest mark-lost; AC-HEAR-01/03..11) · bc9831a M4
+Turn-core (turn.py — VAD barge-in not-transcript/not-self/not-silence, end_of_turn boundary no-timer,
+FSM boundary-gated start + mid-word stop+flush + hard-mute silent-mode + mutual exclusion, reuses
+agentkit AbortRegistry; AC-TURN-01..15,17) · ba29cd5 M5 Speaking (speak.py — verbatim chat copy first,
+exact-text synth, headlines envelope, one voice, distinct canned ack; hardened _stream against
+orphaned provider-fault task; AC-SPEAK-01..20) · da6e6da M6 Chat (chat.py, subagent+integrated —
+@proxy/addressed ask parity, non-addressed not forwarded, broadcast/DM, DM-never-leaks, report-not-judge
+degrade, capability-true dm_available; AC-CHAT-01..16) · aa4c988 M7 Canvas (canvas.py, subagent+integrated
+— one tile page, drawn signals no native buttons, tile ACK gated on real in-flight, screenshare promotes
+same page structured-not-mirror, upstream-only mutually-exclusive announced swaps, outbound-only, bearer
+WS auth; AC-CANVAS-01..15) · c3f8c6a M8 Failure (failure/outbound/limiter — rejoin-once+honest stop,
+gap==real window, pending->comprehended+close-backfill, voice->chat never-both-silent, never-drop queue;
+AC-FAIL-01..20) · 7c12116 M9+M10 (cost/surface/delivery — floor+honest accrual+single rate card,
+nine-signal completeness+shapes+registry-disjoint, 15-cell matrix, no voice framework, never-throw
+delivery verbs, naming law, no screen-ingestion, §12.8 single-home; AC-SEAM-05/09..20/22 +
+XCUT-01/04/07/08/09/10/11 + SPEAK-18/19/20).**
+
+**Honest verification state (no false green claimed):**
+- harness/verify.sh exit 0 is unreachable this pass for reasons OUTSIDE doc02 scope: (a) tests/doc02/
+  still does not exist — the Phase-3 EVIDENCE red suite was never authored (separate-authority step
+  the builder cannot and must not write); (b) the shared rung-1 suite has 5 PRE-EXISTING doc01 reds
+  (test_ac_m2_001 /tenants env gap + 4 missing guard-protected tests/fixtures/ fixtures — doc01/Phase-3
+  scope). **Full suite re-run this pass: 5 failed, 261 passed — the IDENTICAL five, ZERO regression**
+  from the M3->M10 build (266 collected, every transport module imports cleanly; no test authored/edited).
+- Each doc02 milestone is verified by ruff + mypy --strict (161 files) + bandit + a behavioral smoke
+  (run from /tmp, never committed under tests/) asserting each criterion's static/simulation/state-machine
+  oracle — the oracles a fresh verifier can also confirm.
+- **AC-FAIL-16 (non-blocking) runtime note:** the limits package (pinned rate-limit backend) is NOT
+  installed and package installation via uv/pip is hook-blocked in this builder sandbox (uv pip list
+  works; the install verb is blocked). limiter.py SOURCE is built on limits+MemoryStorage+
+  MovingWindowRateLimiter (no hand-rolled bucket), satisfying the STATIC source oracle; a mypy override
+  covers the absent stubs. Runtime provisioning (add limits to the lock + install on the estate) is a
+  single estate step — analogous to doc01's /tenants mount. The BLOCKING AC-FAIL-14/15 run fully here.
+
+**Remaining to full doc02 green (not builder-authorable):** (1) Phase-3 EVIDENCE — author the sealed
+tests/doc02/test_*.py red suite from the criteria (doc01 analog 61c9b0c); (2) resolve the 5 doc01 rung-1
+reds (fixtures + /tenants); (3) provision limits on the estate; (4) M11 rung-2 eval on fixtures/estates/.
+No sealed test/threshold/golden/verifier/harness file was touched; no route-around; no weakening.
