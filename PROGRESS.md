@@ -5161,3 +5161,6 @@ reds; (B) the sealed doc02 `T-*` suite never merged into `tests/doc02/` (and the
 author its own tests — maker≠checker). No builder-authorable work remains; no guess/route-around
 was made. **Conductor action:** merge the sealed doc02 `T-*` suite into `tests/doc02/`; author the
 4 doc01 fixtures + provide `/tenants` (or run on the intended host); then re-run `verify.sh`.
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — Implement and verify doc02 straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which `product/v0-spec/02-VOICE-TRANSPORT.md` §1 makes authoritative in its own words: *"This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately."* The last SPEC_BLOCKED entry identifies no doc02 criterion that is untestable, ambiguous, or in conflict with the spec — it cites `test_m2_clone.py::test_ac_m2_007_git_blame_resolves_on_blobless_clone`, a **doc01** `services.code_intel` test whose `blame_attribution_fixture` (plus `stale_node_moved_symbol_fixture` and `pr_meeting_fixture`) is unauthored in the guard-protected `tests/fixtures/repos.py`, and every one of `blame`/`code_intel`/`blobless`/`
