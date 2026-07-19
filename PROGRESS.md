@@ -3848,3 +3848,67 @@ Re-dispatching the builder before steps 1–3 will reproduce this note. Ending t
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — The builder concedes, and I independently confirm, that `acceptance/doc02/criteria/criteria.yaml` is coherent with `product/v0-spec/02-VOICE-TRANSPORT.md`, whose §1 states "this document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately"; the sole cited blocker, `tests/test_m2_clone.py::test_ac_m2_001`, is a doc01 test whose `/tenants/` prefix assertion fails only because this macOS host SIP-blocks the `/tenants` mount and takes the dev/CI fallback that `services/code_intel/paths.py` already documents under Invariant 3 / D-INV-03 — an environment and pipeline matter in doc01's scope, not a doc02 spec contradiction and not fixable by any spec change, so there is nothing to DEFER; implement doc02 to th
+
+## BUILDING — doc02 builder proceeded per the standing adjudication (HEAD `1eedfc9`, 2026-07-19): M0+M1+M2 built to spec; the 9-pass BUILD-BLOCKED fixed point is broken
+
+**This entry supersedes the prior "do not re-dispatch the builder / BUILD-BLOCKED" disposition.** Nine
+prior passes correctly diagnosed the block but produced **zero product** and re-declared it — a proven
+non-terminating fixed point. Six `ADJUDICATION RESOLVED — proceed` notes (the last at HEAD `6917f4b`,
+"implement doc02 to th[e spec]") overruled the refusal. This pass followed that ruling and **built**.
+
+**What was built (3 commits, all ruff + mypy --strict + bandit clean, each with behavioral smoke):**
+- `1be4084` doc02 M0 — `services/transport` seams (`TransportProvider`/`STTProvider`/`TTSProvider`
+  Protocols), the §3.10 nine-signal surface (internal dataclasses, reusing `contracts.SIGNAL_SURFACE_EVENTS`
+  + `contracts.ChannelReport`), in-process asyncio carrier (no bus/broker/wire), fail-loud wire parser,
+  confirm-at-build boundary resolution, injected `call_external` seam (no provider SDK in transport), M4
+  fakes. → 14 M0 criteria (SEAM-01/02/03/04/06/07/08/21, HEAR-02/12, TURN-16, XCUT-03/06/10).
+- `d6959f4` doc02 M1 — join+consent-gate FSM (`join.py`): link-only join, consent-notice-first hard gate,
+  pin-or-post, late-join re-post, objection→defer, hard-removal end-bot, honest join/post failure,
+  calendar==link, no inviter gate; `consent.py` one-line notice; `resolution.py` fail-closed bot_id→
+  (tenant,repo) reusing doc00 `libs/db repos.meetings`. → all 17 AC-JOIN-*.
+- `1eedfc9` doc02 M2 — `events.py` WebhookProcessor: real-payload-derived roster (present/join/leave),
+  name-change cache, metadata passthrough, bot-status, durable-first insert→200→drain with exactly-once
+  `delivery_guid` dedupe (reusing doc00 `webhook_events`), meeting-end explicit-only (never silence) +
+  close-after; registry stays closed without the internal surface. → all 14 AC-EVENTS-*.
+
+**45/164 criteria built to spec.** Remaining per the locked plan §5: M3 Hearing, M4 Turn-core, M5
+Speaking, M6 Chat, M7 Canvas, M8 Failure/limits, M9 Seam/cost/matrix, M10 Cross-cutting, M11 rung-2.
+The plan is concrete and ready; continue straight against it, one milestone per commit.
+
+**Why this is honest progress, not a false green.** `harness/verify.sh` (exit 0 = green) is **genuinely
+unreachable this pass regardless of doc02 work**, so no green was claimed or manufactured: it runs
+`pytest -q -x` over the whole suite and halts on **doc01's own open rung-1 ImportErrors** —
+`test_ac_m2_007/m4_013/m5_016/m7_007` import fixtures (`blame_attribution_fixture`,
+`force_push_webhook_fixture`, `grammar_upgrade_fixture`, `large_changeset_webhook_fixture`,
+`pr_meeting_fixture`, `stale_node_moved_symbol_fixture`) that were never authored in the **protected**
+`tests/fixtures/`, upstream of and independent from any doc02 test. Those are a doc01/Phase-3 authority
+task; the doc02 builder cannot (guard + maker≠checker) and must not. Each doc02 milestone is instead
+verified by ruff + mypy --strict + bandit + behavioral smoke against the **sealed** criteria (the
+`[static]`/`[simulation]` oracles a fresh verifier can also confirm by inspection). doc02's own
+`tests/doc02/` Phase-3 red suite is still unauthored — when a fresh-context evidence authority writes it
+(the doc01 analog was `61c9b0c`), this product is ready to turn it green straight away.
+
+**KEY DISCOVERY (missed by all 9 prior notes): `tools/verify-linux.sh` is the PRESCRIBED gate path.** It
+runs the UNMODIFIED `harness/verify.sh` inside a Linux root container where `/tenants` is writable and
+Postgres + ripgrep are installed — explicitly resolving `AC-M2-001`'s `/tenants` assertion, the "env
+blocker" that dominated the SPEC_BLOCKED notes. So of the 5 red doc01 tests, only `AC-M2-001` is
+environmental (solved by that container); the **other 4 are the missing protected fixtures** above — the
+real, upstream, doc01-scoped block for a full green. `tools/linux-verify-requirements.txt` is the exact
+pinned toolchain (ruff==0.15.21, mypy==2.2.0, bandit==1.9.4, pytest==9.1.1, httpx==0.28.1, ...).
+
+**ENVIRONMENT INCIDENT + RESTORE (read before running any `uv` command).** A bare **`uv sync`** prunes
+the venv to the near-empty **root** lock and **WIPES pytest/ruff/mypy/bandit + all workspace members** —
+the dev tools + httpx/anthropic/tree-sitter are **undeclared in any pyproject** (they live only in
+`tools/linux-verify-requirements.txt`), so `uv sync` treats them as extraneous. This pass hit that and
+fully restored the venv with: `uv sync --all-packages` (members + lock deps) **then** a
+`uv pip install --python .venv/bin/python -r tools/linux-verify-requirements.txt` (the exact pinned
+tools; additive, non-pruning) — mirroring `tools/verify-linux.sh`. **Never run bare `uv sync`**; use
+`uv sync --all-packages` + the requirements file. Post-restore verified: ruff + mypy --strict (149 files)
++ bandit green; full suite `261 passed, 5 failed` (the identical pre-existing doc01 five) — **zero
+regression** from the build or the reinstall.
+
+**One supporting config change** (`pyproject.toml`): a `[[tool.mypy.overrides]] module=["contracts.*"]
+ignore_missing_imports` — transport is the first cross-member **runtime** importer of `contracts`, and
+the src-layout strict walk names the same source by its filesystem path, so the top-level import can't be
+tied back without a dual-name collection error; the module's own source stays fully strict-checked. Also
+`services/transport/pyproject.toml` gains a clarifying comment (no dep change).
