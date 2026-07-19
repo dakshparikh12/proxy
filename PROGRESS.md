@@ -4420,3 +4420,52 @@ committing the real AC-FAIL-16 fix; a continuation resumes once a conductor step
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — Implement doc02 straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which §1 of `product/v0-spec/02-VOICE-TRANSPORT.md` establishes as authoritative ("This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately"); the cited blocker `tests/test_m2_clone.py::test_ac_m2_001` is a **doc01** per-tenant-volume test that appears nowhere in doc02's criteria or spec (both grep-empty for `/tenants` and `ac_m2_001`), fails only because this macOS host SIP-blocks the `/tenants` mount and takes the fallback `services/code_intel/paths.py` already documents, and is proven to **pass** under the prescribed `tools/verify-linux.sh` Linux container — so it is an environment/pipeline matter in doc0
+
+## SPEC_BLOCKED — doc01 acceptance tests import 3 fixtures never authored in the protected `tests/fixtures/repos.py` (fresh-context DEBUGGER, HEAD `7160617`, 2026-07-19)
+
+**Mandate discharged as a debugger, not another "not-my-job" essay.** Reproduced the
+identical 4×-repeated halt, traced it to root cause with evidence, proved no services/libs
+fix exists, and — per the debugger mandate ("if the root cause genuinely lies in the test,
+do NOT edit it — append a SPEC_BLOCKED entry naming it precisely") — I name it precisely below.
+
+### Reproduced failure (verbatim)
+`harness/verify.sh` runs `pytest -q -x --maxfail=1` over the whole tree in milestone order and
+halts at the FIRST red:
+```
+tests/test_m2_clone.py::test_ac_m2_007_git_blame_resolves_on_blobless_clone
+>   from tests.fixtures.repos import blame_attribution_fixture
+E   ImportError: cannot import name 'blame_attribution_fixture' from 'tests.fixtures.repos'
+```
+
+### Root cause (evidence, not inference)
+Exactly **3** fixture factory functions are imported by doc01 `code_intel` acceptance tests but
+were **never authored** in `tests/fixtures/repos.py` (set-diff of every `from tests.fixtures.repos
+import …` across `tests/` against `dir(module)` — 33 defined, these 3 absent):
+
+| Missing fixture | Consuming test (halts here in sequence) |
+|---|---|
+| `blame_attribution_fixture` | `tests/test_m2_clone.py::test_ac_m2_007` (line 153) — needs `.url`, `.target_file`, golden per-line SHAs |
+| `stale_node_moved_symbol_fixture` | `tests/test_m5_tools.py::test_ac_m5_016` (line 357) |
+| `pr_meeting_fixture` | `tests/test_m7_freshness.py::test_ac_m7_007` (line 170) |
+
+(NB: prior notes claimed a 4th, `force_push_webhook_fixture` — **stale**; grep count 0 across
+current `tests/`. The precise current scope is these 3.)
+
+### Why this is NOT builder/debugger-fixable in services or libs
+1. `tests/fixtures/repos.py` **imports cleanly standalone** — no import cascade, no partial
+   module load. The names are simply not defined (`python -c "import tests.fixtures.repos"` → OK).
+2. The module's own docstring: *"None of this module imports product code — the fixtures are
+   pure test input."* No `services`/`libs` seam produces or can inject these top-level names into
+   another module's namespace at import time. There is **no product defect** to fix here.
+3. `tests/` and `fixtures/` are guard-PROTECTED (`harness/guard.py` PROTECTED tuple) and covered
+   by the `runner.py` sha256 integrity wall → read-only to the builder/debugger seat.
+4. All 3 are **doc01** (`AC-M2/M5/M7`, `services.code_intel`) tests — grep-confirmed absent from
+   doc02 criteria/spec. They block the whole-tree `pytest -x` **before any doc02 test executes**,
+   so `verify.sh` exit 0 is unreachable regardless of doc02 state.
+
+### Actionable resolution (test/fixture authority, NOT builder)
+Author the 3 factory functions in `tests/fixtures/repos.py` following the existing pattern
+(plain functions returning a fixture object with `.url` / `.target_file` etc., built via the
+module's deterministic `build_git_repo` helper). Once present, the import-time halt clears and
+these tests run against the already-built `services.code_intel` product. No product change is
+warranted or made this pass (tree is ruff/mypy --strict/bandit clean; no doc02 red exists to drive).
