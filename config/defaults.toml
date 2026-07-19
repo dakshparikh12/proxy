@@ -76,3 +76,9 @@ headline_char_soft_cap = 240
 # Aggregate spoken characters synthesized per meeting-hour (the ~2-4k design envelope,
 # the speak-short/detail-in-chat cost lever). unit: characters/hour. range: 2000..4000.
 max_spoken_chars_per_hour = 4000
+# Managed transport rate card (§4) — the SINGLE source of the per-component rates that
+# BOTH the cost-floor check (AC-SEAM-13) and the elapsed×rate accrual (AC-SEAM-14) use,
+# so the floor binds real accrued spend (AC-SEAM-22). unit: USD/meeting-hour.
+bot_usd_per_hr = 0.50    # Recall bot. range: 0.40..0.60
+stt_usd_per_hr = 0.15    # AssemblyAI via Recall BYOK passthrough. range: 0.10..0.20
+tts_usd_per_hr = 0.15    # Cartesia Sonic 3, within the $0.10-0.20 band. range: 0.10..0.20

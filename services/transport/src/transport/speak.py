@@ -89,9 +89,29 @@ class SpeakOrchestrator:
         return SpeakOutcome(text=text, spoken=True, chat_copy_posted=True)
 
     async def audible_ack(self) -> SpeakOutcome:
-        """Fire a canned audible ack (§3.3) — distinct from the answer (AC-SPEAK-10)."""
+        """Fire a canned audible ack (§3.3) — distinct from the answer (AC-SPEAK-10).
+
+        The ack rides the same boundary-gated path as any line, so no ack audio is ever
+        emitted before a boundary opens (AC-SPEAK-19); when no boundary opens in budget it
+        simply never plays — the tile ACK (Doc 08 / :mod:`transport.canvas`) is the visual
+        fallback, so there is no ungated audible ack (AC-SPEAK-20).
+        """
         ack = CANNED_ACKS[0]  # fixed canned string, never the resolved answer
         return await self.speak(ack)
+
+    async def deliver_detail(self, detail: str) -> None:
+        """Route upstream-marked detail to chat — never spoken, never dropped (AC-SPEAK-18).
+
+        The headline↔detail split is Doc 04's judgment; this layer's obligation is the
+        plumbing: any content marked detail is posted to the broadcast channel.
+        """
+        await self._post_copy(detail)
+
+    async def speak_headline_with_detail(self, headline: str, detail: str) -> SpeakOutcome:
+        """Speak the headline AND post its paired detail to chat — detail never dropped."""
+        outcome = await self.speak(headline)
+        await self.deliver_detail(detail)
+        return outcome
 
     def _within_envelope(self, text: str) -> bool:
         if len(text) > self._headline_cap:
