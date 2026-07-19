@@ -4417,3 +4417,6 @@ route-around; no weakening.
 (after which pass 7 proved `tools/verify-linux.sh` reaches 206+ pass before the halt); (3) provision the
 `limits` estate for AC-FAIL-16 rung-2; (4) M11 rung-2 eval on `fixtures/estates/`. Session ends after
 committing the real AC-FAIL-16 fix; a continuation resumes once a conductor step lands.
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — Implement doc02 straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which §1 of `product/v0-spec/02-VOICE-TRANSPORT.md` establishes as authoritative ("This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately"); the cited blocker `tests/test_m2_clone.py::test_ac_m2_001` is a **doc01** per-tenant-volume test that appears nowhere in doc02's criteria or spec (both grep-empty for `/tenants` and `ac_m2_001`), fails only because this macOS host SIP-blocks the `/tenants` mount and takes the fallback `services/code_intel/paths.py` already documents, and is proven to **pass** under the prescribed `tools/verify-linux.sh` Linux container — so it is an environment/pipeline matter in doc0
