@@ -43,6 +43,9 @@ module = [
     "asyncpg", "asyncpg.*", "psycopg", "psycopg.*", "psycopg_pool", "psycopg_pool.*",
     "alembic", "alembic.*", "testing", "testing.*", "uvicorn", "uvicorn.*",
     "authlib", "authlib.*",
+    # ``limits`` (+ optional ``slowapi``) back the doc02 outbound rate gate (AC-FAIL-16),
+    # provisioned on the meeting_runtime estate; ships no type stubs.
+    "limits", "limits.*", "slowapi", "slowapi.*",
 ]
 ignore_missing_imports = true
 
