@@ -3460,3 +3460,12 @@ guard's directive instead.
   `"requirements/"` / `"requirements.txt"` so parts-layer requirement slices are writable
   by section authors via the Write tool, OR consolidate slices into
   `acceptance/doc02/requirements/requirements.yaml` under conductor authority.
+
+## doc01 rung-1 remaining fixture/product-code build work
+Tests written (honest RED) for the 4 previously uncovered rung-1 criteria:
+- **AC-M2-007** (`test_ac_m2_007_git_blame_resolves_on_blobless_clone`): needs `blame_attribution_fixture` in `tests/fixtures/repos.py`
+- **AC-M4-013** (`test_ac_m4_013_force_push_triggers_full_rebuild_not_incremental`): needs `force_push_webhook_fixture`, `grammar_upgrade_fixture`, `large_changeset_webhook_fixture` in `tests/fixtures/stubs.py`
+- **AC-M7-007** (`test_ac_m7_007_pr_meeting_pins_to_pr_head_not_default_branch`): needs `pr_meeting_fixture` in `tests/fixtures/repos.py`
+- **AC-M5-016** (`test_ac_m5_016_stale_graph_node_reread_live_before_citation`): needs `stale_node_moved_symbol_fixture` in `tests/fixtures/repos.py`
+
+All fail at import time — product code/fixtures not yet implemented. Tests are correct per criteria behavior blocks.

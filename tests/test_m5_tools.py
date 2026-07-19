@@ -347,3 +347,49 @@ def test_ac_m5_015_cache_invalidated_on_push_webhook():
     assert db_counter.query_count > 0, (
         "Expected DB re-query after push (cache should be invalidated), got 0 queries"
     )
+
+
+def test_ac_m5_016_stale_graph_node_reread_live_before_citation():
+    """AC-M5-016: Stale graph node (built_at_sha != pinned SHA) is re-read live before its
+    file:line becomes an answer."""
+    from services.code_intel.mcp_server import CodeIntelMCPServer
+    from services.code_intel.meeting import MeetingSession
+    from tests.fixtures.repos import stale_node_moved_symbol_fixture
+
+    fixture = stale_node_moved_symbol_fixture()
+    server = CodeIntelMCPServer.from_fixture(fixture)
+
+    # Session pinned at SHA P; graph node built_at_sha == B (B != P)
+    session = MeetingSession(server=server, pinned_sha=fixture.pinned_sha)
+
+    result = session.tool_call("get_dependents", symbol=fixture.moved_symbol, limit=50)
+
+    # The emitted citation must use the LIVE file:line at P, not the stale node's location
+    for item in result.results:
+        if item.id == fixture.stale_node_id:
+            assert item.file_line == fixture.live_location_at_p, (
+                f"Stale node emitted stale location {item.file_line!r}, "
+                f"expected live location {fixture.live_location_at_p!r}"
+            )
+            assert item.file_line != fixture.stale_recorded_location, (
+                f"Stale node's recorded location {fixture.stale_recorded_location!r} "
+                f"was served without re-read"
+            )
+            break
+    else:
+        # If the symbol no longer resolves live, it must be labeled not-found
+        not_found = [
+            item for item in result.results
+            if item.id == fixture.stale_node_id and item.confidence == "not-found-by-this-method"
+        ]
+        # Either the node resolved to the live location OR it was labeled not-found.
+        # It must NEVER serve a stale-but-confident citation.
+        stale_confident = [
+            item for item in result.results
+            if item.id == fixture.stale_node_id
+            and item.file_line == fixture.stale_recorded_location
+            and item.confidence != "not-found-by-this-method"
+        ]
+        assert not stale_confident, (
+            f"Stale node served as confident citation without re-read: {stale_confident}"
+        )

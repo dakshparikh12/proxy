@@ -143,3 +143,55 @@ def test_ac_m2_006_push_event_triggers_delta_pull_not_reclone():
 
     assert clone_calls == [], f"Unexpected re-clone after push: {clone_calls}"
     assert fetch_or_pull_calls, "Expected a git fetch/pull after push webhook"
+
+
+def test_ac_m2_007_git_blame_resolves_on_blobless_clone():
+    """AC-M2-007: git blame resolves on a blobless clone (full history preserved; not shallow)."""
+    import subprocess
+    from services.code_intel.cloner import Cloner
+    from tests.fixtures.stubs import GitInterceptor, LargeFileCountStub
+    from tests.fixtures.repos import blame_attribution_fixture
+
+    fixture = blame_attribution_fixture()
+    stub = LargeFileCountStub(file_count=120_000)
+    interceptor = GitInterceptor()
+    cloner = Cloner(git_interceptor=interceptor, file_count_provider=stub)
+
+    clone_path = cloner.clone(tenant_id="tenant-test", repo_url=fixture.url)
+
+    # Verify NOT shallow
+    shallow_check = subprocess.run(
+        ["git", "rev-parse", "--is-shallow-repository"],
+        cwd=clone_path,
+        capture_output=True,
+        text=True,
+    )
+    assert shallow_check.stdout.strip() == "false", (
+        f"Clone is shallow — blobless clones must preserve full commit history"
+    )
+
+    # Verify git blame works on the target file
+    blame_result = subprocess.run(
+        ["git", "blame", "--porcelain", fixture.target_file],
+        cwd=clone_path,
+        capture_output=True,
+        text=True,
+    )
+    assert blame_result.returncode == 0, (
+        f"git blame failed (exit {blame_result.returncode}): {blame_result.stderr}"
+    )
+
+    # Verify per-line commit attribution matches golden
+    blamed_shas = []
+    for line in blame_result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and len(parts[0]) == 40:
+            blamed_shas.append(parts[0])
+
+    assert len(blamed_shas) > 0, "git blame returned no line attributions"
+
+    for line_num, expected_sha in fixture.golden_blame_shas.items():
+        actual_sha = blamed_shas[line_num - 1] if line_num <= len(blamed_shas) else None
+        assert actual_sha == expected_sha, (
+            f"Line {line_num}: expected SHA {expected_sha}, got {actual_sha}"
+        )

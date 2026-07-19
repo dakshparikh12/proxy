@@ -293,3 +293,84 @@ def test_ac_m4_012_ranked_overview_bounded_by_limit():
     assert len(limited) <= len(all_nodes), (
         "Limited query returned more nodes than unlimited query"
     )
+
+
+def test_ac_m4_013_force_push_triggers_full_rebuild_not_incremental():
+    """AC-M4-013: Force-push (history rewrite), parser/grammar upgrade, or large change-set
+    forces a full rebuild, never an incremental delta."""
+    from services.code_intel.pipeline import run_full_pipeline
+    from services.code_intel.webhook_handler import WebhookHandler
+    from tests.fixtures.stubs import (
+        DBOperationCounter,
+        force_push_webhook_fixture,
+        grammar_upgrade_fixture,
+        large_changeset_webhook_fixture,
+    )
+    from tests.fixtures.repos import small_repo_fixture
+
+    fixture = small_repo_fixture()
+
+    # --- Trigger (a): Force-push (non-fast-forward) ---
+    db_counter_a = DBOperationCounter()
+    pipeline_a = run_full_pipeline(
+        tenant_id="tenant-test",
+        repo_url=fixture.url,
+        db_operation_counter=db_counter_a,
+    )
+    db_counter_a.reset()
+
+    handler_a = WebhookHandler(pipeline=pipeline_a)
+    webhook_a = force_push_webhook_fixture(repo_url=fixture.url, new_sha="rewritten_sha")
+    handler_a.handle(webhook_a)
+
+    ops_a = db_counter_a.recorded_operations
+    drop_a = [op for op in ops_a if op.type in ("DROP", "DELETE_ALL", "TRUNCATE")]
+    incremental_a = [op for op in ops_a if op.type == "INCREMENTAL_APPLY"]
+
+    assert drop_a, "Force-push must trigger DROP/bulk-delete before re-extraction"
+    assert not incremental_a, (
+        f"Force-push must NOT use incremental per-file delta-apply: {incremental_a}"
+    )
+
+    # --- Trigger (b): Parser/grammar version bump ---
+    db_counter_b = DBOperationCounter()
+    pipeline_b = run_full_pipeline(
+        tenant_id="tenant-test",
+        repo_url=fixture.url,
+        db_operation_counter=db_counter_b,
+    )
+    db_counter_b.reset()
+
+    grammar_trigger = grammar_upgrade_fixture(pipeline=pipeline_b)
+    grammar_trigger.apply()
+
+    ops_b = db_counter_b.recorded_operations
+    drop_b = [op for op in ops_b if op.type in ("DROP", "DELETE_ALL", "TRUNCATE")]
+    assert drop_b, "Grammar upgrade must trigger full rebuild (DROP before re-extraction)"
+
+    # --- Trigger (c): Large change-set above threshold ---
+    db_counter_c = DBOperationCounter()
+    pipeline_c = run_full_pipeline(
+        tenant_id="tenant-test",
+        repo_url=fixture.url,
+        db_operation_counter=db_counter_c,
+    )
+    db_counter_c.reset()
+
+    handler_c = WebhookHandler(pipeline=pipeline_c)
+    webhook_c = large_changeset_webhook_fixture(repo_url=fixture.url, changed_files=500)
+    handler_c.handle(webhook_c)
+
+    ops_c = db_counter_c.recorded_operations
+    drop_c = [op for op in ops_c if op.type in ("DROP", "DELETE_ALL", "TRUNCATE")]
+    insert_c = [op for op in ops_c if op.type == "INSERT"]
+
+    assert drop_c, "Large change-set must trigger full rebuild (DROP before re-extraction)"
+    assert insert_c, "Full rebuild must INSERT after DROP"
+
+    # Verify atomic pointer swap (DROP before INSERT)
+    drop_idx = next(i for i, op in enumerate(ops_c) if op.type in ("DROP", "DELETE_ALL", "TRUNCATE"))
+    insert_idx = next(i for i, op in enumerate(ops_c) if op.type == "INSERT")
+    assert drop_idx < insert_idx, (
+        "Full rebuild must atomically swap: DROP before INSERT"
+    )
