@@ -110,7 +110,17 @@ class SpeakOrchestrator:
         past the 4000 ceiling.
         """
         ack = CANNED_ACKS[0]  # fixed canned string, never the resolved answer
-        await self._post_copy(ack)
+        await self._post_copy(ack)  # verbatim parity copy always posts (AC-SPEAK-04/05)
+        # The ack is exempt from the headline SOFT envelope, but the HARD 4000/hr
+        # synthesized-char ceiling (AC-SPEAK-03) binds every synthesize call — and a fixed
+        # headline reserve cannot bound an unbounded ack stream. If firing this ack would
+        # breach the ceiling, degrade to the tile ACK (the sanctioned visual fallback,
+        # AC-SPEAK-20) instead of overrunning the budget; the ≤500ms reflex still lands on
+        # the boundary-independent tile surface.
+        if self._spoken_chars_last_hour() + len(ack) > self._hourly_cap:
+            return SpeakOutcome(
+                text=ack, spoken=False, chat_copy_posted=True, reason="ack_degraded_to_tile_over_budget"
+            )
         self._account(ack)
         self._controller.enqueue(ack)  # boundary-gated + barge-able via the turn-core
         return SpeakOutcome(text=ack, spoken=True, chat_copy_posted=True)

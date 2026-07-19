@@ -1,5 +1,71 @@
 # PROGRESS
 
+## doc02 — fresh-BUILDER 4-cluster adversarial re-audit; 2 more genuine authorable defects found + fixed (2026-07-19, @ HEAD `9ff816a`)
+
+**Disposition: NOT SPEC_BLOCKED — proceeded per the adjudicated reading (audit the built
+product against the sealed 164 criteria; fix genuine builder-authorable gaps toward the
+real-data DoD). No route-around, no weakening, no criterion claimed green that isn't.**
+
+**Independently re-derived the arbiter wall (unchanged).** `bash harness/verify.sh` runs
+`pytest -q -x`, halting at the first doc01 red before doc02 is ever reached. Whole-tree
+`pytest` (no `-x`): **261 passed / 5 pre-existing doc01 protected-tree reds** —
+`test_ac_m2_001` (host `/tenants` mount gap) + 4 undefined `tests/fixtures/` fixtures
+(`blame_attribution_fixture`, `force_push_webhook_fixture`, `stale_node_moved_symbol_fixture`,
+`pr_meeting_fixture`). ZERO doc02 tests fail (none exist — `tests/doc02/` absent; the sealed
+bundle ships only `criteria/` + `requirements/`). All 5 reds live in guard-PROTECTED `tests/`
+(guard.py:75-76 blocks any Edit/Write to a path containing `tests/`/`fixtures/`/`harness/`),
+so none is builder-authorable. Confirmed guard blocks the fixtures and `services/harness/` first-hand.
+
+**Method.** 4 fresh-context adversarial auditors re-checked all 164 criteria
+(JOIN17·EVENTS15·HEAR13·SPEAK36·CHAT19·CANVAS16·TURN20·FAIL21·SEAM33·XCUT12) against
+`services/transport/**` + `libs/**`, each told to BREAK the prior 164/164 with `file:line`.
+SEAM/XCUT — clean. CHAT/CANVAS/HEAR — clean; AC-JOIN-11 (webhook resolve) independently
+confirmed AUTHORABLE + satisfied (`resolution.py:35-44`, fails closed on unknown bot_id);
+AC-JOIN-10 (launched-id write-back) independently re-confirmed NOT-authorable (the
+invite→launch→write-back composition lives in guard-PROTECTED `services/harness/meetings.py`,
+which fabricates `recall-bot-{uuid4}` and never invokes the existing authorable
+`on_bot_launched`→`update_bot_id` seam).
+
+**Two GENUINE authorable defects found + FIXED (both toward the real-data DoD; neither flips a
+sealed oracle — the imported paths are exercised by ZERO tree tests — but both are real
+correctness/honesty gaps the criteria describe):**
+1. **AC-SPEAK-03** (`services/transport/speak.py`): the ≤4000 chars/hr synthesized-char
+   invariant was **defeatable by repeated audible acks**. `audible_ack()` was ungated and
+   unbounded in count; the headline gate reserved headroom for only ONE ack (`_ack_reserve =
+   max(len(a) for a in CANNED_ACKS)` = 16), so 4+ acks in the window (one per direct-answer
+   pickup — realistic) pushed the summed synth total to 4004 > 4000. A fixed reserve
+   mathematically cannot bound an unbounded ack stream. **Fixed:** the audible ack now
+   respects the hard 4000/hr ceiling and, when firing it would breach the budget, degrades to
+   the tile ACK — the sanctioned visual fallback (AC-SPEAK-20) — instead of overrunning; no
+   ack that fires is slowed (AC-SPEAK-09 latency untouched). Summed total now provably ≤ 4000.
+2. **AC-FAIL-10** (`libs/db/repos/repositories.py` + `transcript.py`): `TranscriptRepository.
+   backfill_segment_as_lost`'s docstring claimed it was "Concrete `SegmentStore.backfill_gap`
+   for the close reconciler," but the class does **not** implement the `SegmentStore` Protocol
+   (`failure.py:151-158` requires `pending_ids`/`mark_comprehended`/`backfill_gap`; the repo is
+   also global/unscoped — the Protocol's arg-less `pending_ids()` implies a per-meeting-scoped
+   store, and a global sweep would breach tenant isolation, invariant 9). And `libs/db` had no
+   pending-ids query at all (only 2 of the 3 store primitives existed). **Fixed:** added the
+   third tenant-safe primitive `transcript.pending_segment_ids(conn, meeting_id)` (+
+   `TranscriptRepository.pending_segment_ids`) — meeting-scoped, stable order — and corrected the
+   overclaiming docstring (Law 2: never overstate) to accurately state the concrete
+   `SegmentStore` is a per-meeting adapter assembled in `meeting_runtime` (assembly-pending, same
+   honest status as AC-JOIN-10's write-back); this global repo owns only the primitives it drives.
+
+**Verification:** ruff ✓ · mypy --strict ✓ (160 source files) · bandit ✓ · full suite
+**261 passed / 5 pre-existing doc01 reds — ZERO regression**. No sealed
+test/threshold/golden/verifier/fixture touched.
+
+**Honest terminal residual (unchanged, NONE builder-authorable):** (a) no doc02 `T-*` suite in
+the tree → every doc02 criterion is untestable by the sole arbiter (bundle-authoring gap;
+`tests/` guard-PROTECTED + integrity-hashed); (b) AC-JOIN-10's invite→launch→write-back
+composition lives in guard-PROTECTED `services/harness/meetings.py`; the `SegmentStore` and
+`JoinSession` scoped-store/write-back compositions await meeting_runtime assembly; (c) `verify.sh`
+exit 0 blocked solely by the 5 doc01 protected-tree reds. Unblock is conductor / bundle-author /
+assembly authority. The doc02 product code is complete + gate-clean with every builder-authorable
+defect found across five audit rounds now fixed.
+
+---
+
 ## doc02 — 4-cluster adversarial re-audit of all 164; disproved a claimed-authorable gap, fixed 2 more latent SPEAK defects (2026-07-19, fresh BUILDER @ HEAD `e682084` → `c9e611f`)
 
 **Disposition: NOT SPEC_BLOCKED — proceeded per the adjudicated reading (audit the built

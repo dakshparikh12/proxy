@@ -27,6 +27,29 @@ async def flip_and_append(conn: Any, segment_id: Any, delta: str) -> None:
     )
 
 
+async def pending_segment_ids(conn: Any, meeting_id: Any) -> list[str]:
+    """Every still-``pending`` segment id for ONE meeting — the close reconciler's read.
+
+    Meeting-scoped by construction (tenant isolation, invariant 9): only this meeting's
+    un-transcribed segments are candidates for the mark-lost backfill at close — never a
+    cross-meeting sweep. Returned in stable creation order so the backfill is deterministic.
+    This is the third of the three tenant-safe primitives the close reconciler's scoped
+    segment-store adapter drives (with :func:`flip_and_append` and
+    :func:`backfill_segment_as_lost`).
+    """
+    rows = await conn.fetch(
+        """
+        SELECT id
+          FROM transcript_segments
+         WHERE meeting_id = $1
+           AND status = 'pending'
+         ORDER BY created_at
+        """,
+        meeting_id,
+    )
+    return [str(row["id"]) for row in rows]
+
+
 async def backfill_segment_as_lost(conn: Any, segment_id: Any) -> None:
     """Mark a still-``pending`` segment as ``lost`` at meeting close (AC-FAIL-10, §3.7).
 
