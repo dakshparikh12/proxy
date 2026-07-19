@@ -3591,3 +3591,130 @@
   - F-THRESHOLD-CONTRADICTS-CANONICAL
   test_ids:
   - T-XCUT-09
+- criterion_id: AC-CHAT-16
+  name: A message addressed to Proxy WITHOUT the @proxy token is still forwarded as a first-class ask
+  evidence_class: '[integration]'
+  authority_refs:
+  - R-doc02-CHAT-02
+  - R-doc02-CHAT-03
+  criticality: P1
+  blocking: true
+  behavior:
+    given: A running harness with an Orchestrator ask-sink recorder and an inbound chat message addressed to Proxy WITHOUT the literal '@proxy' token (e.g. 'Proxy, can you check the p95?').
+    when: The un-prefixed addressed message arrives on the chat socket.
+    then:
+    - The Orchestrator ask-sink receives exactly one ask carrying the message content and sender — the identical ask path as an '@proxy' message and as a spoken ask (differing only in socket).
+    - A build that keys strictly on the literal '@proxy' token and therefore drops this message FAILS (the spec contract is 'or any addressed message', not '@proxy'-token-only).
+    - The accept set is {'@proxy'-prefixed, any other addressed form}; the reject frontier of AC-CHAT-04 (a NEITHER-@proxy-NOR-addressed message) is unchanged — an unaddressed message is still NOT forwarded.
+    - 'NOTE (spec boundary, not guessed): the recognizer that decides whether a non-@ message counts as *addressed to Proxy* is Doc 04''s (§3.6 ''Recognition of the phrase is Doc 04''s''); this criterion asserts the *forwarding* contract this layer owns — WHEN a message is marked addressed (by the @proxy token OR the addressing recognizer) it is forwarded identically. A token-only implementation that cannot forward a non-@ addressed message violates §3.4''s ''any addressed message''.'
+  primary_oracle:
+    type: simulation_trace
+    artifact: trace(chat_post_id) for the un-prefixed addressed message terminates at orchestrator.ask_received with matching content and sender; assert a token-only gate (matches only literal '@proxy') would NOT satisfy this case
+  thresholds:
+    addressed_without_token_asks_dropped_allowed: 0
+  fault_model_refs:
+  - F-ADDRESSED-WITHOUT-TOKEN-DROPPED
+  test_ids:
+  - T-CHAT-16
+- criterion_id: AC-SPEAK-18
+  name: Un-spoken detail of a headlined answer is routed to chat, never dropped
+  evidence_class: '[integration]'
+  authority_refs:
+  - R-doc02-SPEAK-04
+  - R-doc02-CHAT-06
+  criticality: P1
+  blocking: true
+  behavior:
+    given: 'A direct answer whose content upstream splits into a spoken headline + a non-spoken detail remainder (the ''headlines only … detail goes to chat'' design lever, §2 channel 1 / §3.3).'
+    when: The headline is spoken and the detail is NOT spoken.
+    then:
+    - The un-spoken detail is delivered to the broadcast chat channel as an actual chat post (verified as a real post per AC-CHAT-06), not silently dropped.
+    - A build that speaks the headline and DROPS the detail — posting nothing to chat — FAILS. Staying under the AC-SPEAK-03 char/hr cap is NOT sufficient evidence that the detail was routed; the detail chat post must exist.
+    - 'NOTE (spec boundary, not guessed): the *judgment* of what is headline vs detail (the split itself) is Doc 04''s (§1 ''It decides nothing: what to say … is Docs 04/06''). This layer''s obligation is the plumbing — any content upstream marks as detail/non-spoken is routed to chat, never dropped. This closes the AC-SPEAK-03 hole where dropping detail (rather than posting it) would otherwise pass.'
+  primary_oracle:
+    type: state_machine_assertion
+    artifact: 'given upstream emits {headline: spoken, detail: to_chat}, assert transport.broadcast_posts contains the detail payload; assert detail is NOT absent whenever the paired headline was spoken'
+  thresholds:
+    un_spoken_detail_dropped_allowed: 0
+  fault_model_refs:
+  - F-SPEAK-DETAIL-DROPPED
+  test_ids:
+  - T-SPEAK-18
+- criterion_id: AC-XCUT-10
+  name: No screen-ingestion path exists (deferred negative-scope, structural)
+  evidence_class: '[static]'
+  authority_refs:
+  - R-doc02-XCUT-10
+  criticality: P2
+  blocking: true
+  behavior:
+    given: The transport layer's input surfaces (the §3.10 emitted signal list — transcript/chat/roster/speaking/boundary/barge-in/bot-status/meeting-end/channel-report).
+    when: Static analysis inspects the layer for any screen-ingestion path.
+    then:
+    - No code path reads, captures, screenshots, OCRs, or interprets OTHER participants' shared-screen or presented pixels (screen-ingestion is deferred — §1).
+    - The §3.10 emitted signal surface contains NO inbound presented-screen / screen-content field; screen handling is output-only (our canvas → tile/screenshare), never input.
+    - Scope creep here (building a 'read the presenter's screen' path) trips this guard — matching the treatment of its sibling negatives (AC-TURN-02, AC-SEAM-21, AC-CANVAS-07, AC-SEAM-18).
+  primary_oracle:
+    type: static_analysis
+    artifact: assert 0 screen-read / screen-capture / OCR / presented-pixel parse-or-render paths in the layer; assert the emitted signal surface declares no inbound presented-screen field
+  thresholds:
+    screen_ingestion_paths_allowed: 0
+    inbound_presented_screen_signals_allowed: 0
+  fault_model_refs:
+  - F-SCREEN-INGESTION-SCOPE-CREEP
+  test_ids:
+  - T-XCUT-10
+- criterion_id: AC-FAIL-19
+  name: Rejoin gap line, when spoken, keeps byte-equal text-copy parity
+  evidence_class: '[fault-injection]'
+  authority_refs:
+  - R-doc02-FAIL-03
+  - R-doc02-SPEAK-05
+  - R-doc02-SPEAK-06
+  criticality: P1
+  blocking: true
+  behavior:
+    given: A forced disconnect and successful rejoin whose honest gap line ('I was disconnected 14:03-14:04 — notes have a gap there') is delivered.
+    when: The gap line's delivery channels are compared.
+    then:
+    - The gap line is emitted to notes/chat as text (record-safe by construction; R-doc02-SPEAK-05 parity — no user-visible line without a text copy).
+    - If the gap line is ALSO spoken, its chat/text copy is byte-equal to the synthesized text (R-doc02-SPEAK-06 verbatim parity) — no paraphrase between the spoken and written gap line.
+    - Closes review-gaps.md item 9 — binds the §3.7 gap line to the SPEAK-05/06 text-copy parity invariant.
+  primary_oracle:
+    type: fault_injection
+    artifact: 'inject drop@t0, rejoin@t1; assert a gap-line text artifact exists; if a spoken variant exists assert chat_post.text == synthesize.input_text for the gap line-id'
+  thresholds:
+    gap_line_copy_mismatch_allowed: 0
+    spoken_gap_line_without_text_copy_allowed: 0
+  fault_model_refs:
+  - F-SILENT-AUDIO-GAP
+  - F-SPEAK-TEXT-COPY-PARAPHRASED
+  test_ids:
+  - T-FAIL-19
+- criterion_id: AC-FAIL-20
+  name: Voice-down notice is text; any spoken variant keeps text-copy parity
+  evidence_class: '[fault-injection]'
+  authority_refs:
+  - R-doc02-FAIL-12
+  - R-doc02-SPEAK-05
+  - R-doc02-SPEAK-06
+  criticality: P2
+  blocking: true
+  behavior:
+    given: A TTS/voice outage where the 'voice is down — I''ll type' notice is emitted.
+    when: The notice's delivery is inspected.
+    then:
+    - The notice is delivered as chat text (text by construction when voice is down) and is not dropped (R-doc02-SPEAK-05 parity).
+    - If a spoken variant of the notice is ever emitted, its text copy is byte-equal to the synthesized text (R-doc02-SPEAK-06 verbatim parity) — no paraphrase.
+    - Closes review-gaps.md item 9 — binds the §3.7 voice-down notice to the SPEAK-05/06 text-copy parity invariant.
+  primary_oracle:
+    type: fault_injection
+    artifact: 'inject TTS outage; assert voice-down notice chat text exists; if a spoken variant exists assert chat_post.text == synthesize.input_text for the notice line-id'
+  thresholds:
+    voice_down_notice_missing_allowed: 0
+    voice_down_notice_copy_mismatch_allowed: 0
+  fault_model_refs:
+  - F-TTS-DOWN-MUTE
+  - F-SPEAK-TEXT-COPY-PARAPHRASED
+  test_ids:
+  - T-FAIL-20

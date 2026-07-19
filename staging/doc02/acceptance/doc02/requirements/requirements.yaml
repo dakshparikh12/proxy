@@ -2029,3 +2029,15 @@
   criticality: P1
   testability: analyzable
   status: qualified
+- requirement_id: R-doc02-XCUT-10
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §1 What this layer is NOT
+  source_quote: 'Screen-*ingestion* (reading what others present) is deferred — not in this doc.'
+  normalized_statement: 'WHILE the transport layer is built THE SYSTEM SHALL provide NO screen-ingestion capability — no code path reads, captures, screenshots, OCRs, or interprets what OTHER participants present/share on their screens; screen handling is output-only (render our own canvas onto tile/screenshare), never an input. (Negative-scope guard added for review-gaps.md item 8: the one "what this is NOT" boundary that lacked a guarding criterion, unlike its siblings AC-TURN-02 / AC-SEAM-21 / AC-CANVAS-07 / AC-SEAM-18.)
+
+    '
+  requirement_type: architecture
+  criticality: P2
+  testability: analyzable
+  status: qualified
