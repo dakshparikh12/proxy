@@ -101,6 +101,14 @@ class WebhookProcessor:
         self._names: dict[str, str] = {}
         self._snapshot_done = False
         self._metadata_done = False
+        # Meeting-end is terminal and fires exactly once per meeting: real Recall teardown
+        # sends a SEQUENCE of terminal signals (e.g. bot-status ``call_ended`` then ``done``,
+        # plus a separate ``meeting.end``/``bot.removed``), each with its own delivery_guid,
+        # so the guid-dedupe never collapses them. Without this guard each would emit a fresh
+        # MeetingEnd and re-run the Doc 04 close sequence — AC-EVENTS-06 caps
+        # meeting_end_signals_per_close at 1 and §3.1's close is singular. Mirrors the
+        # existing ``_metadata_done``/``_snapshot_done`` once-only pattern.
+        self._ended = False
         # Title and the initial participant list can ride on SEPARATE payloads; both are
         # accumulated here so neither is ever dropped before delivery (AC-EVENTS-05).
         self._meta_title = ""
@@ -141,7 +149,11 @@ class WebhookProcessor:
             emitted.append(bot_status)
 
         # Meeting-end only on the explicit webhook; close sequence AFTER it (AC-EVENTS-06/08).
-        if is_meeting_end(payload):
+        # Exactly once per meeting: a second terminal signal (a distinct delivery_guid that
+        # the dedupe cannot collapse) must NOT emit another MeetingEnd or re-run the close
+        # sequence (AC-EVENTS-06 meeting_end_signals_per_close=1; §3.1 singular close).
+        if is_meeting_end(payload) and not self._ended:
+            self._ended = True
             end = MeetingEnd(reason=str(payload.get("data", {}).get("reason", "meeting_end")))
             await self._carrier.emit(end)
             emitted.append(end)

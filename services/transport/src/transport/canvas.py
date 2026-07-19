@@ -446,9 +446,17 @@ class CanvasSurface:
             raise SurfaceInactiveError("already promoted: the screen is already the active surface")
         frame = self._screen_frame(view)  # built before the swap so the screen is live at once
         self._active = Surface.SCREEN  # atomic single-enum swap → no coactive, no None gap
-        await self._emit(frame)  # screen stream is live the instant we swap (no black frame)
-        self._swaps += 1
+        try:
+            await self._emit(frame)  # screen stream is live the instant we swap (no black frame)
+        except Exception:
+            # A sink-write failure must NOT leave the surface flipped-but-dark: roll back so
+            # the tile stays the one live surface — never BOTH surfaces dark (AC-CANVAS-14).
+            self._active = Surface.TILE
+            raise
+        # Count the swap only AFTER it is announced, so swaps == announcements always holds
+        # even if the announce raises (AC-CANVAS-10: no silent swap).
         await self._announce(SwapAnnouncement(direction="to_screen", trigger=trigger))
+        self._swaps += 1
         self._announcements += 1
         return SwapResult(
             from_surface=Surface.TILE, to_surface=Surface.SCREEN, page_id=self._page_id, frame=frame
@@ -467,9 +475,15 @@ class CanvasSurface:
             raise SurfaceInactiveError("already on the tile: nothing to demote")
         frame = self._tile_frame("resume")
         self._active = Surface.TILE  # atomic single-enum swap back → tile live at once
-        await self._emit(frame)
-        self._swaps += 1
+        try:
+            await self._emit(frame)
+        except Exception:
+            # Roll back on a sink-write failure so the screen stays the one live surface —
+            # never BOTH surfaces dark (AC-CANVAS-14).
+            self._active = Surface.SCREEN
+            raise
         await self._announce(SwapAnnouncement(direction="to_tile", trigger=trigger))
+        self._swaps += 1
         self._announcements += 1
         return SwapResult(
             from_surface=Surface.SCREEN, to_surface=Surface.TILE, page_id=self._page_id, frame=frame
