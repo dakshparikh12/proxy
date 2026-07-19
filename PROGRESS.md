@@ -4620,3 +4620,49 @@ under `tools/verify-linux.sh`); (4) M11 rung-2 eval on `fixtures/estates/`.
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — There is no doc02 criterion-vs-spec conflict to resolve: the "stuck" test `tests/test_m2_clone.py::test_ac_m2_007_git_blame_resolves_on_blobless_clone` is a doc01 `services.code_intel` fixture-import failure (`blame_attribution_fixture` undefined in the guard-protected `tests/fixtures/repos.py`), and it appears in zero doc02 criteria (grep-empty for `code_intel`/`AC-M2`/`blame`/`blobless` across `acceptance/doc02/`). Per §1 of `product/v0-spec/02-VOICE-TRANSPORT.md` — "This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately" — the doc02 builder must implement straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which is coherent with the spec, and must stop re-filing this do
+
+## AUDIT PASS 10 — 4-verifier EXECUTABLE-REPRO sweep over all 164 criteria; ZERO builder gaps, HEAD pending (2026-07-19)
+
+Fresh persistent-builder session. Per "the builder's own word is never evidence," I did not trust the
+prior 9 passes' narrative — I re-ran the gates and full suite live, then subjected the product to the
+strongest behavioral check available (there is intentionally no sealed doc02 rung-1 suite): **4
+fresh-context adversarial verifiers (maker≠checker), each required to PROVE any claimed gap with an
+executable repro** — a runnable snippet showing the real `transport` code producing a result that
+contradicts a criterion's `then`/thresholds. Anything unprovable is SUSPECTED, not a gap.
+
+**Live re-verification:** ruff ✓ · mypy --strict **161 files** ✓ · bandit ✓ · full suite **5 failed /
+261 passed** — the identical pre-existing **doc01** reds (`test_ac_m2_001` `/tenants` SIP host-mount,
+proven green on Linux pass 7; + 4 missing fixtures `blame_attribution_fixture`/`force_push_webhook_fixture`/
+`stale_node_moved_symbol_fixture`/`pr_meeting_fixture` in the guard-PROTECTED `tests/fixtures/repos.py`).
+`tests/doc02/` still absent; `staging/doc02/tests/doc02/` is **empty** while `staging/doc00/tests/doc00/`
+holds authored suites — direct evidence the doc02 rung-1 test-authoring step (test-authority/conductor,
+NOT builder) was never run. Authoring it myself is forbidden (maker≠checker; builder never writes its grader).
+
+**Verifier consensus (executable-repro bar): ZERO confirmed builder-authorable gaps across all 10 families.**
+- JOIN(17)+HEAR(13): every code-reachable criterion holds under repro; consent hard-gate, self-loop guard,
+  fan-out, mark-lost all proven. Only `[eval-realrepo]` accuracy criteria unconfirmable (need real-data gate).
+- SPEAK(36)+TURN(20): boundary/barge-in/ack/mute/mutual-exclusion all proven. Unmet = `[latency]` SLO
+  clocks needing the runtime measurement harness — already-visible, not hidden defects.
+- CHAT(19)+CANVAS(16)+EVENTS(15): forwarding parity, DM sentinel, single-enum canvas exclusion, roster
+  triad all proven. Two consistency notes (EVENTS-05 metadata dual-gate, EVENTS-14 nameless-present) are
+  NOT violations under the criteria's named/non-empty `given` — no repro, left unchanged (change w/o a
+  covering test = speculative regression risk).
+- FAIL(21)+SEAM(33)+XCUT(12): rejoin/honest-stop, gap interval, seam Protocols, rate-card single-source,
+  never-throw verbs, naming-lint surface all proven. Unmet = `[simulation]` end-to-end oracles (harness).
+
+**AC-SPEAK-17 (P0, the one flagged candidate) — adjudicated NOT a transport gap.** It is `[analysis]` over
+"the SLO **harness**" (exclusion predicate: drop >1-pass / live-LSP samples, route LSP-bound to tile-ACK).
+The spec locates this in §11.12 step-0.5 + §12.8 — the **latency-measurement/build gate**, classifying by
+*answer-generation* properties (tool+turn count, gather passes, LSP calls) that originate in **Doc 04**'s
+answer path, not the transport pipe. Building it into transport would invent an owner the spec doesn't
+assign, with no rung-1 target to validate it. Rung-2/verification-layer concern, not a hidden transport defect.
+
+**Zero product changes** (no gap → no edit; the two real gaps AC-FAIL-16 + AC-XCUT-01 from passes 8/9 stay
+fixed). **NOT SPEC_BLOCKED** — no doc02 criterion is untestable/ambiguous or contradicts spec/law; the
+sealed `acceptance/doc02/criteria/criteria.yaml` stays coherent with `02-VOICE-TRANSPORT.md` §1. `verify.sh`
+exit 0 remains unreachable ONLY for the doc01 protected-fixture + host-mount reasons above, entirely outside
+doc02 builder scope. No sealed test/threshold/golden/verifier/harness file touched; no route-around; no
+weakening. **Remaining to full doc02 green — ALL conductor/test-authority/host, NONE builder-authorable:**
+(1) author `tests/doc02/test_*.py` rung-1 suite (staging is empty); (2) author the 4 doc01 fixtures +
+provision `/tenants` (or run `tools/verify-linux.sh`); (3) provision `limits` estate (AC-FAIL-16 rung-2);
+(4) M11 rung-2 eval on `fixtures/estates/`. This session's distinct evidence: the executable-repro sweep.
