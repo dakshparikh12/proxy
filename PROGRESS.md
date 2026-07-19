@@ -5413,3 +5413,6 @@ maker!=checker forbids the builder authoring its own tests). No product edit mad
 **Conductor action (unchanged):** merge the sealed doc02 `T-*` suite into `tests/doc02/`; author the
 4 doc01 fixtures in `tests/fixtures/{repos,stubs}.py`; run on a host with `/tenants` (or
 `tools/verify-linux.sh`); then re-run `verify.sh`.
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — The doc02 builder is not spec-blocked. Implement and verify doc02 straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which `product/v0-spec/02-VOICE-TRANSPORT.md` §1 makes authoritative in its own words ("*This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately*"). The SPEC_BLOCKED filing names no doc02 criterion that is untestable, ambiguous, or in conflict with the spec — its sole blocker is `tests/test_m4_substrate.py::test_ac_m4_013_force_push_triggers_full_rebuild_not_incremental`, a **doc01** `services.code_intel` (M4 substrate) test that maps to `acceptance/doc01/criteria/criteria.yaml` and to **zero** doc02 criteria (`AC-M4`/`code_intel`/`force_push` grep-empty acr
