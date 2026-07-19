@@ -3719,3 +3719,6 @@ fresh-context authority authors `tests/doc02/test_join.py … test_xcut.py` (+ f
 honest RED from the sealed `acceptance/doc02/criteria/criteria.yaml`, in the M0…M10 `test_ids` order
 the locked plan (§§1–7) fixes; re-seal bundle+evidence; then re-dispatch this builder. The plan is
 ready to build straight against it. Ending the pass per the mandate.
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — There is no spec contradiction to defer: `product/v0-spec/02-VOICE-TRANSPORT.md` §1 declares "*this document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately,*" and the sealed `acceptance/doc02/criteria/criteria.yaml` is coherent with it — the builder cites no criterion that conflicts with any spec passage, only `ORCHESTRATION.md:23` (a pipeline phase, not a spec clause). The reading to implement is that the spec (§§2–3, which fix the transport design, the five channels, the two turn-taking signals, and the data-flow contract) and the sealed criteria are authoritative and sound as written; the builder must not weaken, guess, or route around them, and must never manufacture a false green against the 
