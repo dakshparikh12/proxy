@@ -4108,3 +4108,6 @@ the sealed `tests/doc02/test_*.py` red suite from the criteria (doc01 analog `61
 (3) provision `limits` on the estate (AC-FAIL-16); (4) M11 rung-2 eval on `fixtures/estates/`. No sealed
 test/threshold/golden/verifier/harness file touched; no route-around; no weakening. The product is
 further audit-hardened and ready to turn the red suite green straight away.
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — Implement doc02 straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which is coherent with `product/v0-spec/02-VOICE-TRANSPORT.md` (§1: "this document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately… This is pipes and manners only"); the sole cited blocker, `tests/test_m2_clone.py::test_ac_m2_001`, is a **doc01** `code_intel` Clone criterion (`AC-M2-001`, asserting a `/tenants/<tenant>/` volume prefix produced by `services.code_intel.cloner.Cloner`) that **no doc02 criterion references** (`grep -rn m2_001\|/tenants acceptance/doc02` finds no volume-prefix criterion), and it is red only because `harness/verify.sh` runs `pytest -q -x`, which halts at the first failure while this ma
