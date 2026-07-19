@@ -4320,3 +4320,6 @@ builder-authorable:** (1) separate authority authors `tests/doc02/test_*.py` red
 `61c9b0c`); (2) author the 4 absent doc01 fixtures + provision writable `/tenants` on the Linux
 `code_intel` estate (`tools/verify-linux.sh`); (3) provision `limits` (AC-FAIL-16); (4) M11 rung-2 eval on
 `fixtures/estates/`. Session ends; a continuation resumes once a conductor step lands.
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — Implement doc02 straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, treating it as coherent with the spec, per §1 of `02-VOICE-TRANSPORT.md`: "This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately." The cited blocker `tests/test_m2_clone.py::test_ac_m2_001` is a **doc01** code_intel test asserting a literal `/tenants/tenant-A/` path that appears nowhere in the doc02 spec or doc02 criteria (both grep-empty for `/tenants`); it fails only because this macOS host SIP-blocks the `/tenants` mount, an environment gate the prescribed `tools/verify-linux.sh` Linux container already resolves, and the four `ImportError`s are missing protected-tree fixtures owned by a separate eviden
