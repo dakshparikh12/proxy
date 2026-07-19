@@ -4669,3 +4669,174 @@ provision `/tenants` (or run `tools/verify-linux.sh`); (3) provision `limits` es
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — Treat doc02 as code-complete and implement/verify it straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which §1 of `product/v0-spec/02-VOICE-TRANSPORT.md` makes authoritative ("This document is the complete description of what to build and exactly how it must work; **acceptance criteria and tests are generated from it separately**"). The last SPEC_BLOCKED entry names no doc02 criterion that contradicts the spec — it cites `test_ac_m2_007_git_blame_resolves_on_blobless_clone`, a doc01 `services.code_intel` test whose fixture (`blame_attribution_fixture`, plus `stale_node_moved_symbol_fixture` and `pr_meeting_fixture`) is unauthored in the guard-protected `tests/fixtures/repos.py`; `blame`/`AC-M2`/`code_intel` are grep-empty across the entire `acceptance/doc02/` bundl
+
+---
+
+## doc02 plan
+
+*Planner (fresh context, 2026-07-19). Spec: `product/v0-spec/02-VOICE-TRANSPORT.md` + `CANONICAL-DECISIONS.md`.
+Sealed arbiter: `acceptance/doc02/` — sealed at `orchestrator/state/doc02.seal.json`
+(`authority+bundle_sha256 = aebb24cf93b3…0d2d3`, sealed 2026-07-19 06:12). **The builder may not edit
+`acceptance/`, `tests/`, `fixtures/`, or `harness/`.** Authored per `orchestrator/skills/writing-plans.md`;
+independently re-derived against the SEALED bundle; `planner-reviewer` deltas folded in §8. This is the
+milestone-ordered spec-of-record for doc02 and, per §0.5, doubles as the gap-closure map over the existing tree.*
+
+### 0 · Bundle status — 164 sealed criteria (152 blocking + 12 non-blocking), 0 open SPEC_BLOCKED
+Per-prefix (verified against the sealed `criteria.yaml`): **JOIN 17 · EVENTS 14 · HEAR 12 · SPEAK 20 · CHAT 16 ·
+CANVAS 15 · TURN 17 · FAIL 20 · SEAM 22 · XCUT 11 = 164.** The file header comment ("155 … PATCH") is **stale**:
+the tail criteria are appended patches with no PATCH prefix — the enumerated 164 win. Non-blocking (12): JOIN-17,
+EVENTS-13, HEAR-11, SPEAK-02, SPEAK-11, CANVAS-15, FAIL-16, SEAM-05, SEAM-18, SEAM-19, XCUT-06, XCUT-08.
+
+**Rung split.** **160 rung-1** (a pre-authored `T-*` pytest oracle is the arbiter: 70 `[simulation]` + 27 `[static]`
++ 17 `[integration]` + 15 `[fault-injection]` + 14 `[contract]` + 13 `[latency]` + 2 `[analysis]` + 1 `[unit-example]`
++ 1 `[unit]`); **4 rung-2** `[eval-realrepo]` = **AC-JOIN-15, AC-HEAR-06, AC-HEAR-10, AC-TURN-15** — the meeting-surface
+real-data gate (§7). Every criterion carries a pre-authored `T-*` `test_id` (164/164). **No new SPEC_BLOCKED**: no doc02
+criterion is untestable/ambiguous or contradicts spec/law — build to the clarified reading already adjudicated in-tree
+(§1 of the spec makes the criteria authoritative; "acceptance criteria and tests are generated from it separately").
+
+### 0.5 · Relationship to the existing tree (honest, per planner-reviewer C1)
+`services/transport/src/transport/` **already exists and is at audit pass 10** (~3.4k LOC across `carrier, seams,
+consent, join, events, hearing, stt, wire, speak, tts, media, chat, canvas, turn, boundary, failure, delivery,
+outbound, limiter, cost, resolution, surface, signals`). This is **not a greenfield build.** The milestone order below
+is therefore the **verify/close order**, not a rebuild order: each milestone is the slice of criteria to prove green (or
+close if red/deferred) against the current tree, in dependency order. The single named live gap is the "defer stuck
+criterion" recorded upstream in this file; the true remaining work (per the tail entries) is
+**conductor/test-authority/host-side, not builder-authorable**: (1) author the `tests/doc02/test_*.py` rung-1 suite from
+the `T-*` ids (`staging/doc02/` is the merge home, currently empty — sealed, not builder-editable); (2) the doc01
+protected-fixture + `/tenants` host blockers that keep `verify.sh` exit 0 unreachable, entirely outside doc02 scope;
+(3) the 4 rung-2 evals. A builder picking this up **closes gaps against the existing modules**, never re-scaffolds them.
+
+### 1 · Seams first (contract homes — imported, NEVER re-defined)
+- **`libs/contracts`** — the internal signal surface. `registry.py::SIGNAL_SURFACE_EVENTS` currently freezes **8**
+  events (`transcript, roster, speaking, boundary, barge-in, bot-status, meeting-end, channel-report`), EXCLUDED from
+  `assert_registry_closed()` by design; **`chat` is the 9th §3.10 signal and is NOT in that frozenset** (closure still
+  passes because `chat` was never registered as a client `MessageType`). **M0 reconciles this**: either add `chat` to
+  `SIGNAL_SURFACE_EVENTS` (a `libs/contracts` edit is permitted — not sealed) so all nine are guarded, or record that
+  the omission is intentional. `channels.py::ChannelReport.dm_available: bool` is the frozen channel-report field.
+  (SEAM-09/10/11/12, EVENTS-11, CHAT-14)
+- **`libs/http`** — the single `call_external` seam (`libs/http` has both `dispatch.py` and `external.py`); every
+  Recall/AssemblyAI/Cartesia call routes through it (retry + cost telemetry). No raw provider client outside it. (XCUT-03)
+- **`libs/ops`** — `with_operation_run` heartbeat/claim/reconcile; the cost meter persists/reloads here, monotonic across
+  harness recycle. The naming lint is `lint.naming` (packaged under `libs/ops/src/lint/naming.py`). (SEAM-15, XCUT-01)
+- **`libs/db`** — asyncpg pool + repos + Alembic: `meetings`, `webhook_events`, `transcript_segments`. (JOIN-10/11,
+  EVENTS-09/10, FAIL-08/10)
+- **Delivery authority** — `speak`/`send_chat`/`show_screen` wake-turn tools are the SOLE delivery authority; the
+  projector is pure rendering that never auto-speaks; verbs return typed errors, never throw. (XCUT-04/11)
+- **Provider Protocols** (this doc owns, in `services/transport`) — `TransportProvider` (Recall), `STTProvider`
+  (AssemblyAI-via-Recall), `TTSProvider` (Cartesia); a concrete client lives ONLY behind its Protocol. (SEAM-01/02/03/04)
+- **Runtime locus** — in-process package inside `meeting_runtime`, homed at `services/transport` (NO `libs/transport`),
+  in-process asyncio carrier — no bus/broker/wire. (SEAM-06/07/08, XCUT-06)
+- **Tunables** from `config/defaults.toml [transport]`: `tts_chunk_ms=120`, `barge_in_budget_ms=200`, rate card
+  `bot/stt/tts_usd_per_hr` — code reads the file, never hardcodes; those rate constants ARE both the floor-check
+  (SEAM-13) and the elapsed×rate accrual (SEAM-14) constants, so SEAM-22's equality is by construction. (SEAM-22)
+
+### 2 · Adopt-vs-build (per stage)
+**ADOPT** (commodity, zero glue we maintain): **Recall.ai** (bot join, per-speaker audio, Output Media
+camera/screenshare, chat, roster/meeting/bot-status webhooks); **AssemblyAI Universal-Streaming via Recall BYOK
+passthrough** (STT + `end_of_turn` boundary — zero integration code); **Cartesia Sonic 3** (TTS); **Silero VAD**
+(barge-in, OSS CPU — the ONLY turn model we run); **`limits`/`slowapi`** in-memory backend (per-bot outbound limiter,
+FAIL-16 — not hand-rolled); pydantic (contract shapes); asyncpg (db). **EXPLICITLY REJECTED**: any Pipecat/LiveKit-class
+voice framework anywhere in the workspace (SEAM-21) — Recall owns transport.
+**BUILD** (differentiated glue only): the in-process carrier + 9-signal fan-out; the join/consent-gate FSM; the
+boundary-gated speak path + small-chunk Output-Media buffer; the atomic barge-in stop-then-flush; the mark-lost
+transcript path; webhook durability (insert→200→drain + `delivery_guid` idempotent dedupe); the elapsed×rate cost meter;
+the camera↔screenshare mutual-exclusion sequencer. **No abstraction until a 2nd concrete use exists.**
+
+### 3 · Risky-20% register (designed/spiked FIRST, proven early — not last)
+- **R1 · Atomic barge-in stop-then-flush ≤200ms** (TURN-07/08/09/10/17, SPEAK-07/08). The abort/flush concurrency
+  primitive + small-chunk buffer (`tts_chunk_ms < barge_in_budget_ms`) is designed in **M0's carrier** and — per
+  planner-reviewer M2 — **retired at M0** by an injected-barge-in micro-bench asserting stop-latency ≤ budget and
+  `residual ≤ one chunk`, then proven end-to-end at M7. VAD onset (<1ms) must beat the ~300ms transcript; in-flight
+  audible ack stays barge-able (TURN-17).
+- **R2 · Boundary-gating** (TURN-05/06, SPEAK-06/19/20): voice opens ONLY on a real `end_of_turn`; a mid-thought breath
+  never opens; the audible ack is boundary-gated too and degrades to the tile ACK when no boundary opens in budget.
+- **R3 · Consent hard-gate ordering** (JOIN-03/04/12): consent post is the FIRST observable action; nothing
+  observed/recorded until `notice_posted==true`; never a false joined/posted state (JOIN-16).
+- **R4 · Webhook durability + tenant isolation** (EVENTS-09/10, FAIL-08, XCUT-05): insert-then-200-then-drain,
+  exactly-once by `delivery_guid`; `bot_id` resolves to exactly the owning tenant, unknown `bot_id` fails closed.
+- **R5 · Cost-meter monotonic across recycle** (SEAM-13/14/15/22): elapsed×rate, reload not reset, one shared rate card.
+- **R6 · Camera↔screenshare mutual exclusion** (CANVAS-09/14): never coactive; promote/demote drops neither stream.
+- **R7 · Mark-lost honesty** (FAIL-09/10/11, HEAR-11): no promised BYOK buffer-through; un-transcribed stretch marked
+  lost; close backfills `pending`→gap; every failure has an honest non-silent path (XCUT-07, FAIL-13/17).
+
+### 4 · Milestones (each ends in a `verify.sh`-provable slice, ordered bottom-up)
+- **M0 · Seams, contracts & substrate.** Provider Protocols; in-process carrier + 9-signal fan-out (+ `chat`
+  reconcile); delivery verbs (typed errors); `call_external` routing; webhook durability + `delivery_guid` dedupe;
+  elapsed×rate cost meter **+ the floor-sum check** (monotonic/reload); creds from Secret Manager; no-Pipecat/LiveKit +
+  no-screen-ingestion structural guards; the **injected barge-in micro-bench** (R1 early-retire).
+  **Satisfies:** SEAM-01,02,03,04,05,06,07,08,11,12,13,14,15,21,22; XCUT-02,03,04,06,08,10,11; EVENTS-09,10. **(24)**
+  *Provable in isolation:* contract/static/fault-injection tests green — Protocols present, carrier emits typed signals,
+  dupe webhook processed once, meter reloads non-zero, floor-sum == accrual-rate constants, flush residual ≤ one chunk.
+- **M1 · Join & consent gate.** Recall bot join from link (no host install), <10s to listening, consent notice
+  first + hard-gated + one-line + naming-clean, pin/post, late-join re-post, bot-belongs-to-room, `meetings` row +
+  `bot_id` write-back/resolution fail-closed, hard-removal = leave, honest join/consent failure, calendar path.
+  **Satisfies:** JOIN-01..17, XCUT-05. **(18)** *Provable:* join-FSM sim traces + JOIN-15 rung-2.
+- **M2 · Events & roster.** Participant events live; present/join/leave with names; metadata passthrough; explicit
+  meeting-end (NEVER inferred from silence) → close sequence; bot-status flow; internal-events-not-in-closure;
+  name-change. **Satisfies:** EVENTS-01..08,11,12,13,14. **(12)** *Provable:* roster sim + negative-frontier test.
+- **M3 · Hearing.** Per-speaker audio in; AAI BYOK passthrough (no Proxy STT code); words+speaker+timestamps; one WS
+  fans to Doc 03 + 04; ~300ms latency; two-speaker attribution; Proxy-self labelled + never self-routed; human line
+  forwarded; code-heavy accuracy; BYOK boundary honesty; live wire-shape confirm.
+  **Satisfies:** HEAR-01..12. **(12)** *Provable:* transcript sim + HEAR-06/10 rung-2.
+- **M4 · Speaking.** Cartesia synth→Output Media; headlines-only envelope; every spoken line verbatim chat copy;
+  boundary-gated start; barge-in abort; bounded flush; audible ack ≤500ms canned + boundary-gated; TTFA~40ms;
+  decision-to-audible <1s; first-grounded SLOs; text copy still posts on synth failure; un-spoken detail→chat.
+  **Satisfies:** SPEAK-01..19 (SPEAK-20's tile-ACK leg proven at M6 — planner-reviewer H1). **(19)** *Provable:*
+  speak sim + latency + parity tests against a fake boundary source (real VAD/`end_of_turn` lands M7).
+- **M5 · Chat.** Inbound stream; `@proxy` + addressed-without-token forward as first-class ask; parity with spoken ask;
+  non-addressed NOT forwarded; `chat(message,sender,dm?)`; broadcast; text copy to broadcast; DM private to exactly one +
+  never leaks; broadcast-only degrade (judgment not ours); `dm_available` bool from REAL capability;
+  internal-not-in-closure. **Satisfies:** CHAT-01..16. **(16)** *Provable:* chat sim + DM-privacy fault test.
+- **M6 · Canvas.** Tile webpage as camera; renders in-call; drawn signals (no native buttons); tile ACK ≤500ms
+  source-honest; **SPEAK-20's degrade-to-tile-ACK** (proven here — the tile surface now exists); screenshare promote of
+  live work; structured progress view (not pixel mirror); layer executes promote (never self-initiates);
+  camera↔screen mutually exclusive; announced swaps; present-sequence; tile outbound-only structural; meeting-scoped
+  bearer token; promote/demote drops neither. **Satisfies:** CANVAS-01..15, SPEAK-20. **(16)** *Provable:* canvas sim +
+  mutual-exclusion + outbound-only structural.
+- **M7 · Turn-taking, barge-in, mute (RISKY core).** Silero VAD `speaking(on/off)` = barge-in trigger; AAI
+  `end_of_turn` = boundary (no Smart Turn v3 in core; confirm-at-build fallback); both stream continuously; surface
+  exactly `speaking·boundary·barge-in`; voice only on boundary; breath≠boundary; stop mid-word; flush queue atomically;
+  ≤200ms boundary; small-chunk buffer; no false trigger on own audio/silence; hard-mute kills TTS→silent (tile+chat
+  live); speaking⊥muted; in-flight ack barge-able. **Satisfies:** TURN-01..17. **(17)** *Provable:* turn sim +
+  latency-boundary + TURN-15 rung-2 real audio.
+- **M8 · Failure & limits.** Exactly-one rejoin (bounded, never loop/skip); honest gap line = real window + byte-equal
+  text parity; second-drop honest stop; `bot-status`={connected,dropped,rejoined} durable/deduped; mark-lost +
+  `pending`→`comprehended` backfill; no BYOK buffer claim; TTS outage→chat; never mute AND silent; per-bot limiter
+  (`limits`/`slowapi`); 5+ concurrent all deliver none dropped; every failure honest non-silent; provable
+  disconnect→rejoin+gap & burst→queue; voice-down notice text parity.
+  **Satisfies:** FAIL-01..20. **(20)** *Provable:* fault-injection + rate-limit burst tests.
+- **M9 · Cross-cutting seal & aggregate.** 9-signal completeness + shapes + gap-ownership; aggregate cost $0.75–0.85/hr
+  honest; platform-matrix parity all 3; zero per-platform code; native buttons unused; DM platform-dependent reported;
+  user-visible naming lint sweep (`lint.naming`); never-broken-and-pretending aggregate; no latency threshold
+  contradicts CANONICAL §12.8. **Satisfies:** SEAM-09,10,16,17,18,19,20; XCUT-01,07,09. **(10)** *Provable:*
+  static/analysis sweeps + aggregate cost/naming lint.
+
+### 5 · RTM — 164/164 mapped, 0 uncovered, 0 dangling (post-fold)
+**M0 24 · M1 18 · M2 12 · M3 12 · M4 19 · M5 16 · M6 16 · M7 17 · M8 20 · M9 10 = 164.**
+Per-prefix reconciles: JOIN 17(M1) · EVENTS 2(M0)+12(M2) · HEAR 12(M3) · SPEAK 19(M4)+1(M6) · CHAT 16(M5) ·
+CANVAS 15(M6) · TURN 17(M7) · FAIL 20(M8) · SEAM 15(M0)+7(M9) · XCUT 7(M0)+1(M1)+3(M9). No milestone is
+criterion-empty; no criterion is unmapped.
+
+### 6 · Constraints (writing-plans "must NOT")
+No edits to `acceptance/`, `tests/`, `fixtures/`, `harness/`. No criterion weakened, reinterpreted, or deferred — an
+untestable/contradictory one is `SPEC_BLOCKED` (none open). No over-build: no config flags, base classes, or defensive
+branches the criteria don't demand; provider Protocols are the only abstractions, each with a live concrete use.
+
+### 7 · Rung-2 note (meeting-surface, not repo estates)
+The 4 `[eval-realrepo]` criteria (JOIN-15, HEAR-06, HEAR-10, TURN-15) grade the **meeting surface** — the repo estates
+in `fixtures/estates/` (flask/fastapi/netbox/…) test **code intelligence**, NOT join/attribution/barge-in (ESTATES.md
+"cannot test the meeting surface" is explicit). Their fixtures are recorded/scripted meeting audio supplied **sealed** by
+the harness; the builder cannot author them. Section gates run them; the rung-1 `[simulation]`/`[latency]` oracles prove
+the same behaviors deterministically every pass.
+
+### 8 · planner-reviewer deltas folded
+- **C1 (existing tree):** added §0.5 — reframed as gap-closure/verify order over the audit-pass-10 `services/transport`,
+  not a greenfield rebuild; named the non-builder-authorable remaining work.
+- **H1 (SPEAK-20 not isolation-provable in M4):** SPEAK-20 (authority `R-doc02-CANVAS-08`, needs the drawn tile-ACK
+  state) moved to **M6**; M4 now owns SPEAK-01..19. RTM updated (M4 19, M6 16).
+- **H2 (SEAM-22 needs SEAM-13's symbol):** SEAM-13 co-located into **M0** with SEAM-14/22 (all read one `[transport]`
+  rate card). RTM updated (M0 24, M9 10; SEAM 15(M0)+7(M9)).
+- **M1 (registry has 8, not 9):** §1 corrected — `SIGNAL_SURFACE_EVENTS` freezes 8; `chat` is the 9th and un-guarded;
+  M0 reconciles (add to the frozenset or record intentional).
+- **M2 (retire R1 early):** M0 gains the injected-barge-in micro-bench (stop-latency + residual ≤ one chunk).
+- **M3 (naming-lint home):** corrected to `lint.naming` (packaged under `libs/ops`) in §1 and M9.
