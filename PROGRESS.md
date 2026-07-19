@@ -3769,4 +3769,79 @@ Diagnosis is identical to the six prior notes and independently confirmed. This 
 
 **Why this is not services/libs-fixable (and therefore SPEC_BLOCKED, per the debugger mandate).** The failure is a hard Python `ImportError` for a module-level symbol that must exist in `tests/fixtures/repos.py` — the read-only fixtures/evidence tree. No `services/**` or `libs/**` code can inject a name into that module's namespace; `conftest.py` cannot either (these are module-level imports, not pytest fixtures). Even past the import, each fixture encodes **golden acceptance data** (per-line blame SHAs, PR head SHA, live-vs-stale symbol locations) that a builder/debugger must not author — doing so is maker=checker (grading own homework) and violates the arbiter separation. Root cause genuinely lies in the read-only test/evidence tree. No `services/**`/`libs/**` file was written this pass; tree left clean.
 
+## SPEC_BLOCKED — doc02 builder (fresh context, HEAD `5fc371e`, 2026-07-19): CORRECTED + COMPLETE gate diagnosis — the debugger's first-failure was mis-cited, and the fix all 9 prior notes recommended is provably insufficient
+
+**This entry supersedes the prior 8 diagnoses.** I re-derived every fact below by running the real
+gate (`harness/verify.sh` → `pytest -q -x`), not by trusting the notes. Two of the notes' load-bearing
+claims are wrong.
+
+**Correction 1 — the actual first `-x` failure is `test_ac_m2_001`, NOT `test_ac_m2_007`.** The
+debugger (note above) ran a *single* node (`pytest tests/test_m2_clone.py::test_ac_m2_007 -x`) so it
+never saw what the *full* suite hits first. Running the real gate over the whole tree:
+`PYTHONPATH=. .venv/bin/python -m pytest -q -x` → `1 failed, 200 passed`, stopping at
+**`test_m2_clone.py:17 test_ac_m2_001_per_tenant_encrypted_volume`** with an **AssertionError** (not an
+ImportError): the test asserts `str(path_a).startswith("/tenants/tenant-A/")` but `Cloner.clone()`
+returns `…/T/proxy-tenants/tenant-A/repos/…`. Root cause: `services/code_intel/paths.py:volume_root()`
+prefers the `/tenants` mount and falls back to a temp base when it is absent; on this **macOS** host
+`mkdir /tenants` → **`Read-only file system`** (SIP), so `/tenants` can never exist and the assert can
+never hold here. This is an **environment gate**, not a fixture gap — it passed at doc01's GREEN commits
+(`9816db9`/`86b9dc1` "262 passed on **code_intel estate**" = a Linux host with `/tenants` mounted) and
+fails on any host lacking that mount. No env trick rescues it: `PROXY_TENANT_VOLUME_ROOT=/tenants`
+makes the `startswith` pass but then `checkout.mkdir()` raises on the read-only fs.
+
+**Correction 2 — the full doc01 blocker set is FIVE tests, enumerated (ran without `-x`).**
+`pytest -q tests/test_m*.py tests/test_sandbox_boundary.py` → **`5 failed, 66 passed`**:
+| # | Test (all doc01, all in shared rung-1 suite) | Failure | Fixable by doc02 builder? |
+|---|---|---|---|
+| 1 | `test_m2_clone.py::test_ac_m2_001` | AssertionError — needs writable `/tenants` mount (SIP-blocked on macOS) | No (env + doc01 scope) |
+| 2 | `test_m2_clone.py::test_ac_m2_007` | ImportError `blame_attribution_fixture` | No (read-only `tests/fixtures/`) |
+| 3 | `test_m4_substrate.py::test_ac_m4_013` | ImportError `force_push_webhook_fixture` (+`grammar_upgrade_fixture`,`large_changeset_webhook_fixture`) | No |
+| 4 | `test_m5_tools.py::test_ac_m5_016` | ImportError `stale_node_moved_symbol_fixture` | No |
+| 5 | `test_m7_freshness.py::test_ac_m7_007` | ImportError `pr_meeting_fixture` | No |
+
+Archaeology (verified, not guessed): tests 2–5 were added by **`e63a891`** ("test: doc01 remaining
+rung-1 tests … All fail at import (missing fixtures/product code) — tracked in PROGRESS.md"), **17
+commits AFTER** doc01's last GREEN (`9816db9`). They are **doc01's own OPEN, self-declared-RED rung-1
+work** sitting in the shared suite — not doc02's. All 6 fixtures confirmed absent today
+(`grep -rl "def <fixture>" tests/fixtures/` → MISSING for every one).
+
+**Decision-relevant NEW conclusion (this is why re-dispatching keeps failing):** the single action every
+prior note recommended — *"run doc02 Phase-3 EVIDENCE (author `tests/doc02/`), then re-dispatch"* — is
+**provably insufficient to green `verify.sh`.** `verify.sh` runs `pytest -q -x` (halts at the FIRST
+failure); it dies in `test_m2_clone.py` — **upstream of and independent from any doc02 test**. Authoring
+`tests/doc02/` only *adds* red tests behind a barrier that already blocks at doc01. A perfect doc02 build
++ doc02 Phase-3 would STILL exit 1. The prior loop was chasing the wrong (and incomplete) fix.
+
+**Why no builder action greens it (all blockers are outside doc02 product scope, in protected/env layers):**
+- `harness/guard.py:14-19` `PROTECTED` = `tests/`, `fixtures/`, `acceptance/`, … so the 6 missing
+  fixtures + their golden data cannot be authored here; and doing so would be maker=checker (grading own
+  homework). `conftest.py` can't help — these are module-level `import` statements, not pytest fixtures.
+- `/tenants` is SIP-blocked on this macOS host; no `services/**`/`libs/**` edit and no env var makes the
+  `test_ac_m2_001` assert hold here. It is a Linux-`code_intel`-estate-only test.
+- `tests/doc02/` still does not exist (Phase-3 EVIDENCE for doc02 never ran; confirmed again:
+  `git ls-files tests/doc02` empty, `pytest tests/doc02/ --collect-only` → no tests collected). Building
+  `services/transport`/`libs/*` to guessed interfaces to dodge this is forbidden by the standing
+  adjudication (`0ac5bbd`) and would manufacture a Law-1/Law-2 false green.
+
+Not a criterion-vs-spec/law contradiction (the sealed `acceptance/doc02/criteria/criteria.yaml` is
+coherent with `product/v0-spec/02-VOICE-TRANSPORT.md`); classified SPEC_BLOCKED only as the mandate's
+instrument for an *untestable-by-this-loop* scope. No `services/**`/`libs/**` file written; tree clean.
+
+**REQUIRED UNBLOCK — ordered, all upstream/non-doc02-builder (the recommended list is now BIGGER than "run doc02 Phase-3"):**
+1. **Finish doc01's open rung-1 work FIRST** — a fresh-context evidence authority authors the 6 missing
+   fixtures (`blame_attribution_fixture`, `force_push_webhook_fixture`, `grammar_upgrade_fixture`,
+   `large_changeset_webhook_fixture`, `pr_meeting_fixture`, `stale_node_moved_symbol_fixture`) with their
+   golden data in `tests/fixtures/`, and the doc01 builder completes any `services/code_intel` product
+   they exercise. Until this lands, `verify.sh` is red for EVERY downstream doc, doc02 included.
+2. **Resolve the `test_ac_m2_001` environment gate** — decide whether the rung-1 gate must run on a host
+   with a writable `/tenants` mount (the Linux `code_intel` estate, per `9816db9`), or whether the test's
+   hardcoded `/tenants/` prefix should tolerate the documented dev/CI fallback. On this macOS session
+   rung-1 can never be green while that assert stands.
+3. **THEN run doc02 Phase-3 EVIDENCE** — author `tests/doc02/test_join.py … test_xcut.py` (+fixtures/
+   simulations) in honest RED from the sealed `acceptance/doc02/criteria/criteria.yaml`, in the M0…M10
+   `test_ids` order the locked plan fixes; re-seal bundle+evidence.
+4. **THEN re-dispatch this builder** — the locked plan (§§1–7) is ready to build straight against it.
+
+Re-dispatching the builder before steps 1–3 will reproduce this note. Ending the pass per the mandate.
+
 **SINGLE REQUIRED ACTION (evidence authority, mirroring doc01's `61c9b0c` — NOT the doc02 builder).** A fresh-context evidence authority authors the 6 fixtures above in `tests/fixtures/repos.py` and `tests/fixtures/stubs.py` (hermetic/deterministic, per that module's header contract), then the doc01 product code they exercise is built: `services/code_intel/cloner.py` (blobless clone preserving full history — `--filter=blob:none`, not `--depth`), `webhook_handler`/`pipeline` (force-push/grammar-bump/large-changeset → full rebuild), `meeting.py` (PR-head pinning), `mcp_server`/`meeting.py` (stale-node live re-read). Re-run the rung-1 suite **without `-x`** to surface all four at once. Until the 6 fixtures exist, the rung-1 gate — and therefore every downstream doc including doc02 — stays red at collection/import, independent of any doc02 work. Ending the pass per the mandate.
