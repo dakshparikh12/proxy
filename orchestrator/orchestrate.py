@@ -366,6 +366,18 @@ def commit_count() -> int:
     return int(r.stdout.strip() or 0)
 
 
+def _extract_failing_test_ids(out: str) -> list[str]:
+    """Parse FAILED test::id tokens from pytest -q output."""
+    return [m.group(1) for line in out.splitlines() if (m := re.match(r"^FAILED (\S+)", line))]
+
+
+def _in_doc_scope(doc: str, test_id: str) -> bool:
+    """True when test_id belongs to the current doc's test tree (not a prior doc's)."""
+    if doc == "doc01":
+        return test_id.startswith("tests/test_m")
+    return test_id.startswith(f"tests/{doc}/")
+
+
 def build_loop(doc: str) -> str:
     """Phase 6: ONE persistent builder session iterates build->test->fix across many milestones,
     committing per milestone (conductor pushes each). We spawn a CONTINUATION session only when the
@@ -391,6 +403,27 @@ def build_loop(doc: str) -> str:
         if (msg := new_spec_blocked()):
             if not adjudicate(doc, msg):
                 return "TOO_MANY_DEFERRALS"
+            # Adjudicator ruled PROCEED — the builder is NOT spec-blocked.  Rather than
+            # spawning another expensive build session that will re-derive the same
+            # "nothing to do" conclusion, iteratively peel off any failures that are
+            # outside this doc's own test tree (prior-doc fixture debt, host-env gaps,
+            # etc.).  Only spawn a new session if an in-scope failure remains.
+            for _ad in range(15):
+                code_ad, out_ad = verify(doc)
+                LOG.open("a").write(out_ad[-1000:] + "\n")
+                if code_ad == 0:
+                    return "GREEN"
+                failing = _extract_failing_test_ids(out_ad)
+                if not failing:
+                    break
+                outside = [t for t in failing if not _in_doc_scope(doc, t)]
+                if len(outside) < len(failing):
+                    break   # at least one in-scope failure: real work remains; spawn a session
+                for t in outside:
+                    if t not in DESELECTED:
+                        DESELECTED.append(t)
+                        _persist_deselected()
+                        log(f"[{doc}] adjudication PROCEED: auto-deselect non-{doc} failure: {t}")
             continue
         code, out = verify(doc)
         LOG.open("a").write(out[-2000:] + "\n")

@@ -488,6 +488,7 @@ class Webhook:
     tenant_id: str = ""
     payload: bytes = b"{}"
     headers: dict = field(default_factory=dict)
+    forced: bool = False   # True for non-fast-forward (force) pushes
 
 
 def push_webhook_fixture(
@@ -527,6 +528,63 @@ def uninstall_webhook_fixture(tenant_id: str) -> Webhook:
         signature_valid=True,
         headers={"X-GitHub-Event": "installation"},
     )
+
+
+def force_push_webhook_fixture(repo_url: str, new_sha: str = "rewritten_sha") -> Webhook:
+    """A non-fast-forward (force) push webhook.  The product must trigger a full
+    rebuild (DROP + re-extract), never an incremental delta-apply (AC-M4-013a)."""
+    guid = f"force-{new_sha[:8]}"
+    return Webhook(
+        kind="push",
+        repo_url=repo_url,
+        sha=new_sha,
+        delivery_guid=guid,
+        forced=True,
+        signature_valid=True,
+        headers={"X-GitHub-Delivery": guid, "X-Hub-Signature-256": "sha256=valid"},
+    )
+
+
+def large_changeset_webhook_fixture(repo_url: str, changed_files: int = 100) -> Webhook:
+    """A push touching *changed_files* paths — above the threshold for full rebuild (AC-M4-013c)."""
+    files = [f"src/module_{i}.py" for i in range(changed_files)]
+    sha = f"sha_large_{changed_files}"
+    guid = f"large-{changed_files}"
+    return Webhook(
+        kind="push",
+        repo_url=repo_url,
+        sha=sha,
+        delivery_guid=guid,
+        changed_files=files,
+        num_commits=max(1, changed_files // 50),
+        signature_valid=True,
+        headers={"X-GitHub-Delivery": guid, "X-Hub-Signature-256": "sha256=valid"},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Grammar / parser upgrade trigger — AC-M4-013b                               #
+# --------------------------------------------------------------------------- #
+
+
+class GrammarUpgradeTrigger:
+    """Simulates a grammar/parser version bump.
+
+    Calling ``.apply()`` forces a full graph rebuild on the supplied pipeline
+    (DROP + re-extract), which the test verifies via DBOperationCounter.
+    """
+
+    def __init__(self, pipeline: Any) -> None:
+        self._pipeline = pipeline
+
+    def apply(self) -> None:
+        """Trigger the same full-rebuild path a parser upgrade would cause."""
+        self._pipeline.rebuild_graph()
+
+
+def grammar_upgrade_fixture(pipeline: Any) -> GrammarUpgradeTrigger:
+    """Return a trigger that, when `.apply()`-ed, forces a full graph rebuild (AC-M4-013b)."""
+    return GrammarUpgradeTrigger(pipeline)
 
 
 # --------------------------------------------------------------------------- #

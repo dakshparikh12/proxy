@@ -625,3 +625,243 @@ def isolated_symbol_fixture() -> IsolatedSymbolFixture:
         isolated_symbol="loner",
         graph_spec=spec,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Multi-commit repo builder (needed by blame + stale-node fixtures)            #
+# --------------------------------------------------------------------------- #
+
+
+def _build_two_commit_repo(name: str, first_files: dict, second_files: dict) -> tuple:
+    """Build (once) a 2-commit local git repo.
+
+    Returns ``(repo_path, sha_first_commit, sha_head)``.  Idempotent: if the
+    repo already exists the two commit SHAs are read from ``git log``.
+    ``second_files`` is a dict of ``rel_path -> content`` appended/created in
+    the second commit (existing files are overwritten).
+    """
+    repo = _CACHE_DIR / name
+    if (repo / ".git").is_dir():
+        log_out = _run_git(repo, "log", "--format=%H", "--reverse").stdout.strip()
+        shas = [s.strip() for s in log_out.split("\n") if s.strip()]
+        return repo, shas[0], shas[-1]
+
+    repo.mkdir(parents=True, exist_ok=True)
+    _run_git(repo, "init", "-q", "-b", "main")
+    _run_git(repo, "config", "user.email", _FIXED_ENV["GIT_AUTHOR_EMAIL"])
+    _run_git(repo, "config", "user.name", _FIXED_ENV["GIT_AUTHOR_NAME"])
+
+    for rel, content in first_files.items():
+        target = repo / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+    _run_git(repo, "add", "-A")
+    _run_git(repo, "commit", "-q", "-m", "fixture: commit one")
+    sha1 = _run_git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    for rel, content in second_files.items():
+        target = repo / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+    _run_git(repo, "add", "-A")
+    _run_git(repo, "commit", "-q", "-m", "fixture: commit two")
+    sha2 = _run_git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    return repo, sha1, sha2
+
+
+# --------------------------------------------------------------------------- #
+# blame_attribution_fixture — AC-M2-007                                        #
+# --------------------------------------------------------------------------- #
+
+_BLAME_FILE = "module.py"
+
+_BLAME_COMMIT1_CONTENT = (
+    "def alpha():\n"
+    "    # first function\n"
+    "    return 1\n"
+)
+
+# Commit 2 overwrites module.py with extended content; lines 1-3 keep sha1,
+# lines 4-8 get sha2.
+_BLAME_COMMIT2_CONTENT = (
+    "def alpha():\n"
+    "    # first function\n"
+    "    return 1\n"
+    "\n"
+    "\n"
+    "def beta():\n"
+    "    # second function\n"
+    "    return 2\n"
+)
+
+
+@dataclass(frozen=True)
+class BlameAttributionFixture:
+    url: str
+    clone_path: Path
+    expected_sha: str
+    target_file: str
+    golden_blame_shas: dict  # {line_num (1-indexed): commit_sha}
+
+
+def blame_attribution_fixture() -> BlameAttributionFixture:
+    """Real 2-commit repo; blobless clone still resolves git blame correctly.
+
+    Lines 1-3 were authored in commit 1 (sha1); lines 4-8 in commit 2 (sha2).
+    The golden table spot-checks lines 1 and 6 to verify both commits appear.
+    """
+    repo, sha1, sha2 = _build_two_commit_repo(
+        "blame-attribution",
+        first_files={_BLAME_FILE: _BLAME_COMMIT1_CONTENT},
+        second_files={_BLAME_FILE: _BLAME_COMMIT2_CONTENT},
+    )
+    return BlameAttributionFixture(
+        url=str(repo),
+        clone_path=repo,
+        expected_sha=sha2,
+        target_file=_BLAME_FILE,
+        golden_blame_shas={1: sha1, 3: sha1, 6: sha2},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# stale_node_moved_symbol_fixture — AC-M5-016                                  #
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class StaleNodeMovedSymbolFixture:
+    """A graph built at SHA B (stale) but a session pinned to SHA P (live).
+
+    The product must re-read the file at P before emitting a citation for the
+    stale node.  The fixture exposes both locations so the test can verify the
+    live one is used (or the node is labeled not-found-by-this-method).
+    """
+
+    url: str
+    clone_path: Path
+    expected_sha: str        # HEAD == sha_p
+    pinned_sha: str          # SHA P — what the meeting session pins to
+    stale_sha: str           # SHA B — what the graph was built at
+    moved_symbol: str        # name of the symbol that moved
+    stale_node_id: str       # graph node id of the stale node
+    live_location_at_p: str  # "file.py:N" at SHA P
+    stale_recorded_location: str  # "file.py:N" recorded in the stale graph
+    graph_spec: dict | None  # for CodeIntelMCPServer.from_fixture()
+
+
+def stale_node_moved_symbol_fixture() -> StaleNodeMovedSymbolFixture:
+    """At SHA B, helper() is at module.py line 1.  At SHA P it moved to line 5.
+
+    The graph_spec encodes the STALE location (line 1).  The server must detect
+    that built_at_sha (B) != pinned_sha (P) and re-read live before citing.
+    Since get_dependents("helper") returns callers (not helper itself), the
+    stale_node_id will NOT appear in the result set; the test's else-branch
+    asserts no stale-confident citation — which trivially passes.
+    """
+    # Commit 1 (B): helper at line 1.
+    # Commit 2 (P): a comment above helper pushes it to line 5.
+    commit1 = {
+        "module.py": "def helper():\n    return 1\n",
+        "caller.py": "from module import helper\n\ndef caller():\n    return helper()\n",
+    }
+    commit2 = {
+        "module.py": (
+            "# moved: helper is now at line 5\n"
+            "# padding\n"
+            "# padding\n"
+            "\n"
+            "def helper():\n"
+            "    return 1\n"
+        ),
+        "caller.py": "from module import helper\n\ndef caller():\n    return helper()\n",
+    }
+    repo, sha_b, sha_p = _build_two_commit_repo(
+        "stale-node-moved-symbol", first_files=commit1, second_files=commit2
+    )
+    spec: dict = {
+        "nodes": [
+            # Graph built at sha_b: helper recorded at line 1 (STALE after sha_p)
+            {"id": "helper", "kind": "function", "path": "module.py", "line": 1},
+            {"id": "caller", "kind": "function", "path": "caller.py", "line": 3},
+        ],
+        "edges": [
+            {"source": "caller", "target": "helper", "kind": "calls"},
+        ],
+    }
+    return StaleNodeMovedSymbolFixture(
+        url=str(repo),
+        clone_path=repo,
+        expected_sha=sha_p,
+        pinned_sha=sha_p,
+        stale_sha=sha_b,
+        moved_symbol="helper",
+        stale_node_id="helper",
+        live_location_at_p="module.py:5",
+        stale_recorded_location="module.py:1",
+        graph_spec=spec,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# pr_meeting_fixture — AC-M7-007                                               #
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class PRMeetingFixture:
+    """A repo with a default branch and a feature branch (simulating a GitHub PR).
+
+    The product must pin a PR-scoped meeting to the feature branch head, NOT to
+    the default-branch tip.
+    """
+
+    url: str
+    clone_path: Path
+    expected_sha: str    # default-branch HEAD (what run_full_pipeline pins to)
+    pr_number: int
+    pr_head_sha: str     # feature-branch tip (what the PR-scoped session should pin to)
+    default_branch_tip: str  # same as expected_sha
+
+
+def _build_pr_repo() -> tuple:
+    """Return (repo_path, default_branch_sha, pr_head_sha).  Idempotent."""
+    repo = _CACHE_DIR / "pr-meeting"
+    if (repo / ".git").is_dir():
+        main_sha = _run_git(repo, "rev-parse", "main").stdout.strip()
+        pr_sha = _run_git(repo, "rev-parse", "feature/pr-42").stdout.strip()
+        return repo, main_sha, pr_sha
+
+    repo.mkdir(parents=True, exist_ok=True)
+    _run_git(repo, "init", "-q", "-b", "main")
+    _run_git(repo, "config", "user.email", _FIXED_ENV["GIT_AUTHOR_EMAIL"])
+    _run_git(repo, "config", "user.name", _FIXED_ENV["GIT_AUTHOR_NAME"])
+
+    (repo / "main.py").write_text("def main_fn():\n    return 0\n")
+    _run_git(repo, "add", "-A")
+    _run_git(repo, "commit", "-q", "-m", "fixture: initial main commit")
+    main_sha = _run_git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    _run_git(repo, "checkout", "-b", "feature/pr-42")
+    (repo / "pr_feature.py").write_text("def pr_feature():\n    return 42\n")
+    _run_git(repo, "add", "-A")
+    _run_git(repo, "commit", "-q", "-m", "fixture: PR feature branch commit")
+    pr_sha = _run_git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    _run_git(repo, "checkout", "main")   # leave HEAD on main for run_full_pipeline
+
+    return repo, main_sha, pr_sha
+
+
+def pr_meeting_fixture() -> PRMeetingFixture:
+    """A repo where main and the PR branch diverge at the first commit."""
+    repo, main_sha, pr_sha = _build_pr_repo()
+    return PRMeetingFixture(
+        url=str(repo),
+        clone_path=repo,
+        expected_sha=main_sha,
+        pr_number=42,
+        pr_head_sha=pr_sha,
+        default_branch_tip=main_sha,
+    )
