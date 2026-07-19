@@ -259,9 +259,34 @@ def promote(doc: str) -> None:
                 shutil.rmtree(tmp)
                 raise RuntimeError(
                     f"promote({doc}): copytree produced a bundle without criteria/requirements — aborting")
-            if dst.exists():
-                shutil.rmtree(dst)
-            tmp.rename(dst)
+            # Content-hash guard: if the live bundle already matches the recorded seal,
+            # staging is stale (manual post-staging fixes were applied after the last
+            # orchestrator seal). Never overwrite a correctly-sealed live bundle with
+            # stale staging content — same protection principle as the mtime guard on
+            # tests/ and fixtures/goldens/, applied here via content hash (more reliable
+            # than mtime for the atomic-copytree path).
+            seal_path = ORCH / "state" / f"{doc}.seal.json"
+            _skip_replace = False
+            if dst.exists() and seal_path.exists():
+                try:
+                    recorded = json.loads(seal_path.read_text()).get("authority+bundle_sha256", "")
+                    spec_file = ROOT / "product" / "v0-spec" / DOCS[doc]["spec"]
+                    _h = hashlib.sha256()
+                    for _p in [spec_file, *sorted(dst.rglob("*"))]:
+                        if _p.is_file():
+                            _h.update(_p.read_bytes())
+                    if _h.hexdigest() == recorded:
+                        shutil.rmtree(tmp)
+                        log(f"[{doc}] promote: live bundle matches recorded seal "
+                            f"{recorded[:12]} — staging is stale; skipping acceptance "
+                            f"overwrite (live bundle preserved)")
+                        _skip_replace = True
+                except Exception as _exc:
+                    log(f"[{doc}] promote: seal-hash guard error ({_exc}); proceeding with replace")
+            if not _skip_replace:
+                if dst.exists():
+                    shutil.rmtree(dst)
+                tmp.rename(dst)
     if (s / "tests").exists():
         for item in (s / "tests").rglob("*"):
             if item.is_file():
@@ -588,11 +613,13 @@ def run_doc(doc: str) -> str:
         log(f"[{doc}] P3 generate evidence layer (tests/fixtures/sims/goldens -> staging)")
         agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]}, model=SONNET_MODEL)
     # P4: gate + promote + seal (THIS process, deterministic)
-    # Prefer the staging bundle only if it has actual content (requirements file); otherwise
-    # fall back to the already-sealed bundle_dir (handles idempotent reruns where staging is
-    # an empty shell left over from a prior promote).
+    # Use the live (already-sealed) bundle for the coverage gate when it has content —
+    # staging may be a stale leftover from the original build run and must NOT shadow
+    # manual fixes applied to the live acceptance/ tree after sealing. Only fall back
+    # to staging when the live bundle is empty (first-time build, nothing promoted yet).
     staged = sdir / "acceptance" / doc
-    base = staged if (staged / "requirements" / "requirements.yaml").exists() else bundle_dir(doc)
+    live = bundle_dir(doc)
+    base = live if (live / "requirements" / "requirements.yaml").exists() else staged
     if not coverage_gate(doc, base):
         return "COVERAGE_GATE_FAILED"
     promote(doc)
