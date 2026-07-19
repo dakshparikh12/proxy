@@ -70,6 +70,12 @@ class SpeakOrchestrator:
         self._now = now
         self._headline_cap = headline_cap if headline_cap is not None else config.get_int("headline_char_soft_cap")
         self._hourly_cap = hourly_cap if hourly_cap is not None else config.get_int("max_spoken_chars_per_hour")
+        # Headroom reserved for the budget-exempt audible ack (AC-SPEAK-09): the ack must
+        # fire on a boundary and is never gated, yet its chars still count toward the
+        # synthesized hourly sum the AC-SPEAK-03 oracle reads. Gating headlines at
+        # ``hourly_cap - ack_reserve`` keeps that reflex from pushing the summed total past
+        # the 4000 ceiling. Derived from the canned set (Law 4: no magic number).
+        self._ack_reserve = max(len(a) for a in CANNED_ACKS)
         self._spoken_window: deque[tuple[float, int]] = deque()
 
     async def speak(self, text: str) -> SpeakOutcome:
@@ -99,8 +105,9 @@ class SpeakOrchestrator:
         must fire reliably on a boundary and can never be silently routed to chat by the
         content budget (AC-SPEAK-09). Its verbatim copy still posts (parity, AC-SPEAK-04/05)
         and its chars still count toward the synthesized hourly sum (AC-SPEAK-03 sums all
-        synthesize calls), so it is a subsequent *headline* — never the ack — that yields
-        budget when near the cap.
+        synthesize calls) — so the headline gate reserves ``_ack_reserve`` chars of headroom
+        (:meth:`_within_envelope`), keeping the ack reflex from pushing that summed total
+        past the 4000 ceiling.
         """
         ack = CANNED_ACKS[0]  # fixed canned string, never the resolved answer
         await self._post_copy(ack)
@@ -125,7 +132,9 @@ class SpeakOrchestrator:
     def _within_envelope(self, text: str) -> bool:
         if len(text) > self._headline_cap:
             return False
-        return self._spoken_chars_last_hour() + len(text) <= self._hourly_cap
+        # Reserve headroom for a following budget-exempt ack so the summed hourly total
+        # (headlines + acks — the AC-SPEAK-03 oracle read) stays within the 4000 ceiling.
+        return self._spoken_chars_last_hour() + len(text) <= self._hourly_cap - self._ack_reserve
 
     def _account(self, text: str) -> None:
         self._spoken_window.append((self._now(), len(text)))
