@@ -3722,3 +3722,17 @@ ready to build straight against it. Ending the pass per the mandate.
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — There is no spec contradiction to defer: `product/v0-spec/02-VOICE-TRANSPORT.md` §1 declares "*this document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately,*" and the sealed `acceptance/doc02/criteria/criteria.yaml` is coherent with it — the builder cites no criterion that conflicts with any spec passage, only `ORCHESTRATION.md:23` (a pipeline phase, not a spec clause). The reading to implement is that the spec (§§2–3, which fix the transport design, the five channels, the two turn-taking signals, and the data-flow contract) and the sealed criteria are authoritative and sound as written; the builder must not weaken, guess, or route around them, and must never manufacture a false green against the 
+
+## BUILD-BLOCKED — 6th builder dispatch (HEAD `5d243d8`, 2026-07-19): loop is non-terminating; needs a HUMAN, not another builder pass
+
+Fresh ground truth, re-derived (not trusted) at HEAD `5d243d8`, clean tree:
+- `tests/doc02/` does not exist; `grep -rl 'doc02' tests/` → nothing; `pytest tests/doc02/` → no tests collected. There is **no red suite to build against.**
+- `harness/guard.py` `PROTECTED` contains `tests/`, and my builder mandate forbids editing `tests/`. I **cannot** author the missing suite. maker≠checker forbids it anyway.
+- `harness/verify.sh` runs the whole suite; with 266 green doc00/doc01 tests and 0 doc02 tests it prints `ALL GREEN` — a **false green** proving nothing about doc02. Building `services/transport`/`libs/*` to guessed shapes to ride that is exactly what the standing adjudication (`0ac5bbd`) forbids. I will not manufacture it.
+- Not SPEC_BLOCKED: the sealed `acceptance/doc02/criteria/criteria.yaml` is coherent with `product/v0-spec/02-VOICE-TRANSPORT.md`. The gap is pipeline-sequencing, not a spec defect.
+
+**The precedent proves the fix.** doc01 ran its Phase-3 EVIDENCE step — commit `61c9b0c tests: doc01 tier-1 suite from sealed bundle (red)` — authoring its red suite BEFORE the builder ran. doc02's seal (`orchestrator/state/doc02.seal.json`) sealed criteria+requirements only; **no `61c9b0c` analog for doc02 exists.** Phase-3 was simply skipped.
+
+**Why this needs a human now:** the automated loop cannot self-terminate. Five prior builder passes correctly diagnosed this; each was answered by an `ADJUDICATION RESOLVED — proceed` note that agrees the criteria are sound but does **not** author the red suite and does **not** authorize building blind — then re-dispatches the builder, which re-confirms the identical block. `adjudicate → re-dispatch-builder` is a fixed point; it will spin forever. The builder is the wrong actor and re-running it changes nothing.
+
+**SINGLE ACTION (human/conductor, mirroring doc01's `61c9b0c`):** run doc02 **Phase-3 EVIDENCE** — a fresh-context evidence authority authors `tests/doc02/test_join.py … test_xcut.py` (+ fixtures/simulations) in honest RED from the sealed criteria, in the M0…M10 `test_ids` order the locked plan (§§1–7) fixes; re-seal bundle+evidence. **Then** re-dispatch this builder — the locked plan is ready to build straight against it. Until Phase-3 runs, do not re-dispatch the builder; it will only reproduce this note. Ending the pass per the mandate.
