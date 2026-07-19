@@ -242,6 +242,43 @@ No untestable or contradictory criteria identified. Confirm-at-build items (AAI 
 
 # PROGRESS
 
+## doc01 — BUILDER fixed 2 genuine authorable doc01 gaps; suite 265/266 (2026-07-19, @ HEAD `ee37cbd`)
+
+**Disposition: NOT SPEC_BLOCKED. 2 genuine builder-authorable doc01 defects found + FIXED.**
+
+Arrived at HEAD `0a930b8` (locked plan). Ran full suite: **3 failed, 263 passed** — down from
+the 5 reds documented in prior SPEC_BLOCKED entries. The 2 that improved were the `ImportError`
+fixture stubs authored in commit `c87bf3d`; but the stubs left REAL product gaps:
+
+**Two genuine builder-authorable defects found + FIXED (commit `ee37cbd`):**
+
+1. **AC-M5-016** (`services/code_intel/src/code_intel/meeting.py`):
+   `MeetingSession.__init__` did not accept `pinned_sha`, so
+   `MeetingSession(server=server, pinned_sha=fixture.pinned_sha)` raised `TypeError`.
+   This made it impossible to create a session pinned to an arbitrary SHA (e.g. to
+   test stale-graph-node re-read). **Fixed:** added optional `pinned_sha` param;
+   when provided it overrides auto-resolution from pipeline/server.
+
+2. **AC-M7-007** (`services/code_intel/src/code_intel/meeting.py`):
+   `MeetingSession.start` did not accept `pr_number`, so PR-scoped sessions always
+   pinned to the default-branch tip instead of the PR head SHA. **Fixed:** added
+   `pr_number` param + `_pr_head_sha` helper that resolves `feature/pr-{n}` (and
+   other common PR branch patterns) from the clone's bare gitdir. Now a PR-scoped
+   meeting pins to the PR head, not the default branch.
+
+**Verification:** ruff ✓ · mypy --strict ✓ (160 files) · bandit ✓ · full suite
+**265 passed / 1 pre-existing non-authorable host-env red** (AC-M2-001:
+`test_ac_m2_001_per_tenant_encrypted_volume` — macOS sealed APFS root, `/tenants`
+mount impossible without sudo/provisioning; verify-linux.sh clears it in a Linux
+root container). ZERO regression.
+
+**Sole remaining blocker (NOT builder-authorable):** AC-M2-001 host-env gap.
+`verify.sh` runs `-x` so it halts there. Unblock: provide a writable `/tenants`
+on the verify host (e.g. `sudo mkdir -p /tenants && sudo chown $USER /tenants`,
+or run `bash tools/verify-linux.sh` in a Linux root container). Session ends here.
+
+---
+
 ## doc02 — fresh-BUILDER 7th adversarial round (4 parallel auditors); 2 genuine authorable defects found + FIXED (2026-07-19, @ HEAD `4348ab5`)
 
 **Disposition: NOT SPEC_BLOCKED — proceeded per the adjudicated reading (audit the built
