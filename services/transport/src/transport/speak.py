@@ -91,13 +91,22 @@ class SpeakOrchestrator:
     async def audible_ack(self) -> SpeakOutcome:
         """Fire a canned audible ack (§3.3) — distinct from the answer (AC-SPEAK-10).
 
-        The ack rides the same boundary-gated path as any line, so no ack audio is ever
-        emitted before a boundary opens (AC-SPEAK-19); when no boundary opens in budget it
-        simply never plays — the tile ACK (Doc 08 / :mod:`transport.canvas`) is the visual
-        fallback, so there is no ungated audible ack (AC-SPEAK-20).
+        The ack is a fixed ≤500ms reflex, NOT headline *content*: it is gated ONLY by the
+        boundary (via the turn-core), so no ack audio is ever emitted before a boundary
+        opens (AC-SPEAK-19) and when none opens in budget it simply never plays — the tile
+        ACK (Doc 08 / :mod:`transport.canvas`) is the visual fallback (AC-SPEAK-20). It is
+        deliberately NOT subject to the headlines-only char/hr envelope: the ≤500ms ack
+        must fire reliably on a boundary and can never be silently routed to chat by the
+        content budget (AC-SPEAK-09). Its verbatim copy still posts (parity, AC-SPEAK-04/05)
+        and its chars still count toward the synthesized hourly sum (AC-SPEAK-03 sums all
+        synthesize calls), so it is a subsequent *headline* — never the ack — that yields
+        budget when near the cap.
         """
         ack = CANNED_ACKS[0]  # fixed canned string, never the resolved answer
-        return await self.speak(ack)
+        await self._post_copy(ack)
+        self._account(ack)
+        self._controller.enqueue(ack)  # boundary-gated + barge-able via the turn-core
+        return SpeakOutcome(text=ack, spoken=True, chat_copy_posted=True)
 
     async def deliver_detail(self, detail: str) -> None:
         """Route upstream-marked detail to chat — never spoken, never dropped (AC-SPEAK-18).

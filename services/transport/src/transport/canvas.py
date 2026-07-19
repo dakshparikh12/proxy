@@ -27,9 +27,12 @@ Invariants pinned to the sealed criteria (AC-CANVAS-01..15):
   self-initiates a promote — a swap is impossible without a :class:`SwapTrigger`
   (AC-CANVAS-08). The camera tile and the screenshare are mutually exclusive via a single
   :class:`Surface` enum, so they can never be coactive (AC-CANVAS-09). Every swap is
-  announced through the INJECTED announce seam (AC-CANVAS-10). The present sequence is
-  speak-headline → swap-to-screen → work → swap-back (AC-CANVAS-11). A promote/demote
-  cycle drops neither stream: the page persists and exactly one surface is always live —
+  announced through the INJECTED announce seam (AC-CANVAS-10). The present sequence
+  (speak-headline → swap-to-screen → work → swap-back, AC-CANVAS-11) is orchestrated by
+  the SPEAK delivery authority in :mod:`transport.delivery` composing this surface's
+  promote/demote — the projector itself is pure rendering and never speaks (AC-XCUT-04).
+  A promote/demote cycle drops neither stream: the page persists and exactly one surface
+  is always live —
   the swap renders onto the new surface synchronously, so there is no black frame
   (AC-CANVAS-14).
 - The tile is **outbound-only**: there is deliberately NO inbound path from the tile — no
@@ -255,7 +258,9 @@ class DuplicateCanvasError(Exception):
 
 
 AnnounceHook = Callable[[SwapAnnouncement], Awaitable[None]]
-SpeakHook = Callable[[str], Awaitable[None]]
+#: The 'work' phase of a present sequence operates on the (pure-rendering) surface —
+#: e.g. :meth:`CanvasSurface.update_screen`. The headline is spoken by the delivery
+#: authority, not here (AC-XCUT-04); the sequence lives in :mod:`transport.delivery`.
 WorkHook = Callable[["CanvasSurface"], Awaitable[None]]
 
 
@@ -279,8 +284,11 @@ class CanvasSurface:
 
     The single page (``page_id``) persists for the whole session; promote/demote only
     change which surface it renders onto (AC-CANVAS-01/14). ``sink`` is the injected
-    Output-Media seam; ``announce`` fires on every swap (AC-CANVAS-10); ``speak`` delivers
-    the present headline (AC-CANVAS-11). No provider SDK or network is touched here.
+    Output-Media seam; ``announce`` fires on every swap (AC-CANVAS-10). This is **pure
+    rendering**: it owns no speak/TTS path and never auto-speaks (AC-XCUT-04) — the present
+    sequence's headline is spoken by the SPEAK delivery verb, which composes this surface's
+    promote/demote (see :func:`transport.delivery.present_on_screen`, AC-CANVAS-11). No
+    provider SDK or network is touched here.
     """
 
     def __init__(
@@ -289,7 +297,6 @@ class CanvasSurface:
         sink: OutputMediaSink,
         *,
         announce: AnnounceHook,
-        speak: SpeakHook,
         now: Callable[[], float] = time.monotonic,
         tile_resolution: Resolution = TILE_RESOLUTION,
         screen_resolution: Resolution = SCREEN_RESOLUTION,
@@ -297,7 +304,6 @@ class CanvasSurface:
         self._meeting_id = meeting_id
         self._sink = sink
         self._announce = announce
-        self._speak = speak
         self._now = now
         self._tile_resolution = tile_resolution
         self._screen_resolution = screen_resolution
@@ -469,29 +475,6 @@ class CanvasSurface:
             from_surface=Surface.SCREEN, to_surface=Surface.TILE, page_id=self._page_id, frame=frame
         )
 
-    async def present(
-        self,
-        headline: str,
-        view: LiveWorkView,
-        *,
-        work: WorkHook | None = None,
-    ) -> PresentTrace:
-        """Sequence a present: speak-headline → swap-to-screen → work → swap-back
-        (AC-CANVAS-11). The headline precedes the swap and the swap-back follows the work,
-        so the two streams never overlap. Returns the ordered trace for the oracle."""
-        trigger = SwapTrigger(source="present", reason="present_work_on_screen")
-        steps: list[str] = []
-        await self._speak(headline)
-        steps.append(STEP_HEADLINE)
-        await self.promote(view, trigger=trigger)
-        steps.append(STEP_SWAP_TO_SCREEN)
-        if work is not None:
-            await work(self)
-        steps.append(STEP_WORK)
-        await self.demote(trigger=trigger)
-        steps.append(STEP_SWAP_BACK)
-        return PresentTrace(steps=tuple(steps))
-
 
 class CanvasRegistry:
     """Guards ONE canvas page per meeting (AC-CANVAS-01). ``open`` refuses a second page for
@@ -506,13 +489,12 @@ class CanvasRegistry:
         sink: OutputMediaSink,
         *,
         announce: AnnounceHook,
-        speak: SpeakHook,
         now: Callable[[], float] = time.monotonic,
     ) -> CanvasSurface:
         """Open the single canvas page for ``meeting_id``; a duplicate is refused."""
         if meeting_id in self._open:
             raise DuplicateCanvasError(f"a canvas page already exists for meeting {meeting_id!r}")
-        surface = CanvasSurface(meeting_id, sink, announce=announce, speak=speak, now=now)
+        surface = CanvasSurface(meeting_id, sink, announce=announce, now=now)
         self._open[meeting_id] = surface
         return surface
 

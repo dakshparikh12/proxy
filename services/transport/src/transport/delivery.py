@@ -19,12 +19,26 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from .canvas import (
+    STEP_HEADLINE,
+    STEP_SWAP_BACK,
+    STEP_SWAP_TO_SCREEN,
+    STEP_WORK,
+    CanvasSurface,
+    LiveWorkView,
+    PresentTrace,
+    SwapTrigger,
+    WorkHook,
+)
 from .consent import consent_notice
 from .failure import _VOICE_DOWN_NOTICE, Gap
 from .speak import CANNED_ACKS
 
 #: The sole delivery verbs — the only emitters of any channel output (AC-XCUT-04).
 DELIVERY_VERBS: frozenset[str] = frozenset({"speak", "send_chat", "show_screen"})
+
+#: Speaks one line via the SPEAK delivery authority (wired to the speak orchestrator).
+SpeakHook = Callable[[str], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -66,6 +80,36 @@ async def show_screen(run: Callable[[], Awaitable[Any]]) -> DeliveryResult:
         return DeliveryResult(verb="show_screen", ok=True)
     except Exception as exc:  # noqa: BLE001 - contract: return errors, never throw (AC-XCUT-11)
         return _failed("show_screen", exc)
+
+
+async def present_on_screen(
+    surface: CanvasSurface,
+    headline: str,
+    view: LiveWorkView,
+    *,
+    speak: SpeakHook,
+    work: WorkHook | None = None,
+) -> PresentTrace:
+    """Sequence a present: speak-headline → swap-to-screen → work → swap-back (AC-CANVAS-11).
+
+    The headline is spoken through the SPEAK delivery authority (the sole speak path,
+    AC-XCUT-04) and only THEN does the pure-rendering :class:`~transport.canvas.CanvasSurface`
+    swap to the screen — so the projector never speaks. The headline precedes the swap and
+    the swap-back follows the work, so the two streams never overlap; the ordered trace is
+    returned for the oracle.
+    """
+    trigger = SwapTrigger(source="present", reason="present_work_on_screen")
+    steps: list[str] = []
+    await speak(headline)  # sole delivery authority — NOT the projector (AC-XCUT-04)
+    steps.append(STEP_HEADLINE)
+    await surface.promote(view, trigger=trigger)
+    steps.append(STEP_SWAP_TO_SCREEN)
+    if work is not None:
+        await work(surface)
+    steps.append(STEP_WORK)
+    await surface.demote(trigger=trigger)
+    steps.append(STEP_SWAP_BACK)
+    return PresentTrace(steps=tuple(steps))
 
 
 def user_visible_strings() -> dict[str, str]:

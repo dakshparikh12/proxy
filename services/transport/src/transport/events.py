@@ -29,7 +29,11 @@ _EVT_LEAVE = "participant.leave"
 _EVT_UPDATE = "participant.update"
 _EVT_BOT_STATUS = "bot.status"
 _EVT_MEETING_END = "meeting.end"
+_EVT_BOT_REMOVED = "bot.removed"
 _VALID_BOT_STATUS = {"connected", "dropped", "rejoined"}
+# Terminal bot-status codes that mean the bot was removed from the call (not a transient
+# drop that rejoins) — these close the meeting exactly like an explicit meeting-end (§3.1).
+_REMOVED_BOT_STATUS = {"removed", "call_ended", "done"}
 
 
 class DurableStore(Protocol):
@@ -49,9 +53,24 @@ class ProcessResult:
     emitted: list[Signal] = field(default_factory=list)
 
 
+def is_bot_removed(payload: dict[str, Any]) -> bool:
+    """True for an explicit bot-removed webhook (dedicated event or a terminal bot-status).
+
+    A removal is terminal — the bot is out of the call for good — unlike a transient
+    ``dropped`` that rejoins; it closes the meeting exactly like a meeting-end (§3.1).
+    """
+    event = payload.get("event")
+    if event == _EVT_BOT_REMOVED:
+        return True
+    if event == _EVT_BOT_STATUS:
+        return payload.get("data", {}).get("status") in _REMOVED_BOT_STATUS
+    return False
+
+
 def is_meeting_end(payload: dict[str, Any]) -> bool:
-    """True ONLY for the explicit meeting-end webhook — never silence (AC-EVENTS-06/07)."""
-    return payload.get("event") == _EVT_MEETING_END
+    """True ONLY for an explicit meeting-closed OR bot-removed webhook — never inferred
+    from silence (AC-EVENTS-06/07; R-doc02-EVENTS-07: "meeting closes / bot removed")."""
+    return payload.get("event") == _EVT_MEETING_END or is_bot_removed(payload)
 
 
 def meeting_metadata(payload: dict[str, Any]) -> MeetingMetadata:
