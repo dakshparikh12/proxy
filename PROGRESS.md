@@ -3328,3 +3328,17 @@ working tree was already clean (`git status --short` empty at `4f6e3bd`) and com
 **Conclusion:** doc01 rung-1 is GREEN via the sole arbiter in its prescribed environment (exit 0).
 No buildable `services/**`/`libs/**` work remains; nothing uncommitted. The AC-M2-001 local red is
 an environmental host limitation, not a build gap (matching every prior adjudication).
+
+## ⚠️ CONFLICT NOTED — staged evidence source lags promoted fixtures (2026-07-18, evidence author)
+
+The promoted `tests/fixtures/repos.py` was extended during "completeness sweep 1" with two
+gap-closure fixtures — `parse_error_fixture` / `ParseErrorFixture` (AC-M6-005) and
+`low_coverage_fully_classified_fixture` (AC-M6-008) — but those additions were never back-ported
+to the sealed staged source `staging/doc01/tests/fixtures/repos.py`. `tests/test_m6_readiness.py`
+imports both symbols, so **re-promoting the staged copy verbatim would break `test_m6` collection**
+with `ImportError`. The staged path is guarded (protected), so I could not sync it; recorded here
+per the guard's directive instead of forcing the edit. Current state is nonetheless GREEN:
+`--collect-only tests` → 262 collected, `--collect-only staging/doc01/tests` → 12 collected, both
+zero collection errors, working tree clean. Fix (for a conductor with write authority): copy the
+"Sweep gap-closure fixtures" block from the promoted `tests/fixtures/repos.py` into the staged
+`repos.py` before any future re-promotion.
