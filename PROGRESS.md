@@ -4361,3 +4361,6 @@ all 10 criteria families), static gates clean on BOTH macOS and Linux. **Zero pr
 `tests/fixtures/repos.py` — after which `tools/verify-linux.sh` is *proven* to reach them (206
 already pass before the halt); (3) provision `limits` estate (AC-FAIL-16); (4) M11 rung-2 eval.
 Session ends; a continuation resumes once a conductor step lands.
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — The last SPEC_BLOCKED entry does not identify any genuine spec-vs-criterion contradiction; it re-purposes SPEC_BLOCKED for an out-of-scope pipeline blocker (a doc01 test `test_ac_m2_001` asserting a `/tenants/tenant-A/` path that appears in neither the doc02 spec nor doc02 criteria — both grep-empty for that path prefix — plus four missing doc01 fixtures in the guard-protected `tests/` tree), and the entry itself concedes `acceptance/doc02/criteria/criteria.yaml` is coherent with `02-VOICE-TRANSPORT.md` §1 ("This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately"), a fact independently re-proven by Audit Pass 7 running the prescribed `tools/verify-linux.sh`, where `test_ac_m2_001` passes on 
