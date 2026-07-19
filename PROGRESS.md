@@ -3682,3 +3682,40 @@ build straight against it. Ending the pass per the mandate.
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — The claimed conflict is not a spec contradiction and warrants no spec change: `product/v0-spec/02-VOICE-TRANSPORT.md` §1 states "*this document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately,*" and the sealed `acceptance/doc02/criteria/criteria.yaml` is coherent with it — the builder cites no criterion that conflicts with any spec passage, only `ORCHESTRATION.md:23` (the EVIDENCE phase), which is a pipeline step, not a spec clause. The reading to implement is therefore: the spec and the sealed criteria are sound as written, so the builder must not weaken, guess, or route around them; the block is a pipeline-sequencing gap (the doc02 Phase-3 EVIDENCE `tests/doc02/` red suite was never authored — th
+
+## BUILD-BLOCKED — RE-CONFIRMED at HEAD `71f1a70` (5th builder dispatch, 2026-07-19) — doc02 Phase-3 EVIDENCE never authored; loop is non-terminating without the conductor
+
+Disposition unchanged from the four prior notes and re-verified fresh at HEAD `71f1a70`
+(`git status` clean; no `services/**`/`libs/**` file written this session). This note is deliberately
+short — the diagnosis is settled; what is missing is a **conductor action**, not more analysis.
+
+Fresh ground truth this pass:
+- `pytest --collect-only` → **266 tests, 0 doc02** (`grep -c doc02` = 0). `git ls-files tests/doc02`
+  and `find tests/doc02` → empty; `pytest tests/doc02/ --collect-only` → "no tests collected".
+- `git log --all` shows doc01's Phase-3 commit `61c9b0c tests: doc01 tier-1 suite from sealed bundle
+  (red)` but **no doc02 analog** — doc02 history has only these BUILD-BLOCKED notes; the seal commit
+  `199c567` diff is criteria.yaml + requirements.yaml only (zero `tests/`/`fixtures/`).
+- `ORCHESTRATION.md` Phase-3 EVIDENCE ("author the tests + fixtures + simulation workflows") precedes
+  Phase-4 SEAL, and "from [seal] the builder is read-only" — the Phase-6 builder is strictly
+  downstream of the evidence authority and cannot author it (also `harness/guard.py` `PROTECTED`
+  contains `"tests/"`, and maker≠checker forbids the builder authoring its own arbiter).
+- `harness/verify.sh:10` runs `pytest -q -x` over the WHOLE suite; with 266 green doc00/01 tests and
+  zero doc02 tests it exits 0 = **false green** proving nothing about doc02. Building
+  `services/transport` to guessed class/method/dataclass/payload shapes to manufacture a pass is
+  exactly what the standing adjudication (commit `0ac5bbd`) forbids.
+
+Per my builder mandate this is also the "untestable scope → record + stop, do not guess/weaken/route
+around" case: every doc02 criterion is currently unrealized as an executable test, so there is
+nothing to turn green. Not `SPEC_BLOCKED` (the sealed criteria are coherent with
+`product/v0-spec/02-VOICE-TRANSPORT.md`); not a builder fix.
+
+**The loop cannot self-terminate:** each builder dispatch re-confirms the block; each "ADJUDICATION
+RESOLVED — proceed" note agrees the criteria are sound but does not author the missing red suite
+(the last one, in commit `71f1a70`, truncates mid-sentence and gives no builder-actionable step).
+Re-dispatching the builder without first running Phase-3 will reproduce this identically, forever.
+
+**SINGLE CONDUCTOR ACTION (unchanged, the only unblock):** run doc02 **Phase-3 EVIDENCE** — a
+fresh-context authority authors `tests/doc02/test_join.py … test_xcut.py` (+ fixtures/simulations) in
+honest RED from the sealed `acceptance/doc02/criteria/criteria.yaml`, in the M0…M10 `test_ids` order
+the locked plan (§§1–7) fixes; re-seal bundle+evidence; then re-dispatch this builder. The plan is
+ready to build straight against it. Ending the pass per the mandate.
