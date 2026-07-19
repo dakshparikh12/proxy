@@ -3606,3 +3606,36 @@ guessed.**
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — This is not a spec contradiction: the sealed `acceptance/doc02/criteria.yaml` is coherent with `product/v0-spec/02-VOICE-TRANSPORT.md`, and the builder cites no criterion that conflicts with any spec passage (it cites `ORCHESTRATION.md:23`, the Phase-3 EVIDENCE step). Per `ORCHESTRATION.md:23-25`, "author the tests + fixtures + simulation workflows that make each criterion checkable … Simulations replace real-data cost" is a **separate-authority phase that precedes SEAL** — so the missing `tests/doc02/` red suite is a pipeline-sequencing gap, not a spec impossibility, and no spec edit could green it (DEFER, which only warrants a spec change, would be the wrong instrument). The builder's refusal to build against guessed interfaces was correct and must stand; the reading to implement is: 
+
+## BUILD-BLOCKED — RE-AFFIRMED at HEAD `0ac5bbd`, fresh builder session (2026-07-19) — Phase-3 EVIDENCE still missing
+
+**Disposition unchanged: the doc02 Phase-3 EVIDENCE layer (sealed `tests/doc02/` red suite) does not
+exist, so there is nothing for the builder to turn green. This is a pipeline-sequencing gap requiring a
+CONDUCTOR action (run ORCHESTRATION.md Phase-3), NOT a builder fix and NOT another adjudication pass.**
+
+Independently re-verified this session at HEAD `0ac5bbd` (`doc02: adjudication — proceed with clarified
+reading`); **no `services/**` or `libs/**` file written; tree clean**:
+- `git ls-files tests/doc02` → empty · `find tests/doc02` → nothing · `pytest tests/doc02/ --collect-only`
+  → **"no tests collected"**. No `T-JOIN-*`…`T-XCUT-*` realized as executable tests anywhere outside
+  `acceptance/`. No `conftest.py` generates them from `criteria.yaml` (root `conftest.py` = env wiring only).
+- `services/transport/` = empty scaffold (`__init__.py` shells only); no product code exists to prove.
+- `harness/guard.py:15` `PROTECTED` includes `"tests/"` → authoring the red suite is blocked at the tool
+  boundary (correctly — Phase-3 EVIDENCE is a separate authority, ORCHESTRATION.md:23-33, that must
+  precede Phase-4 SEAL and Phase-6 BUILD; for doc02 it never ran).
+- `harness/verify.sh` runs the whole suite (`pytest -q -x`); with zero doc02 tests it would exit 0 on the
+  doc00/doc01 suites alone — a **false green** proving nothing about doc02. Building `services/transport`
+  to guessed class/method/dataclass/payload shapes to dodge this is exactly what the standing adjudication
+  forbids.
+
+**The last commit's adjudication is itself the signal the fix was never applied.** Commit `0ac5bbd`
+affirms *"The builder's refusal to build against guessed interfaces was correct and must stand"* and then
+**truncates mid-sentence** at "the reading to implement is:" — no builder-actionable reading follows, and
+the required Phase-3 EVIDENCE commit (doc01's analog was `61c9b0c tests: doc01 tier-1 suite from sealed
+bundle (red)`) still has no doc02 equivalent. Re-adjudicating cannot conjure the missing red suite; only
+the Phase-3 authority can.
+
+**CONDUCTOR ACTION (single unblock):** run doc02 **Phase-3 EVIDENCE** — a fresh-context authority authors
+`tests/doc02/test_join.py … test_xcut.py` (+ fixtures/simulations) in honest RED from the sealed
+`acceptance/doc02/criteria/criteria.yaml`, in the M0…M10 `test_ids` order the locked plan (§§1–7) fixes;
+re-seal bundle+evidence; then re-dispatch this builder. The plan is ready to build straight against it.
+Ending the pass per the mandate: an untestable-by-this-loop scope, recorded with fresh evidence, not guessed.
