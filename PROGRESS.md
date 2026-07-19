@@ -1,5 +1,29 @@
 # PROGRESS
 
+## ✅ RE-VERIFIED at HEAD `f96d8d1` (re-sealed 262-test bundle) — verify.sh EXIT=0 on the code_intel estate (2026-07-18)
+
+Fresh builder session re-confirmed the terminal state below against the **current, re-sealed**
+arbiter (the `sweep-extended arbiter re-sealed` bundle now collects **262** tests, up from 255).
+No product code changed — none is needed and none can help the single host-gap red.
+
+- **This macOS sealed-root host** — scoped `tests/test_m*.py tests/doc01/` → **76 passed / 1 failed**;
+  sole red is `test_m2_clone.py:17 test_ac_m2_001` (returned temp-fallback path
+  `…/T/proxy-tenants/tenant-A/…` ⊄ literal `/tenants/tenant-A/`). Host gap re-confirmed live:
+  `mkdir /tenants` → `Read-only file system`; root is `apfs, sealed, read-only`; `sudo -n` → password
+  required; `/etc/synthetic.conf` absent. `PROXY_TENANT_VOLUME_ROOT` cannot satisfy a **literal**
+  `/tenants/` prefix assertion, so no `services/`/`libs/` edit turns line 17 green here.
+- **Prescribed `code_intel` estate** (`bash tools/verify-linux.sh` — the UNMODIFIED `harness/verify.sh`
+  in a Linux root container with writable `/tenants` + Postgres 15 + ripgrep, repo copied **read-only**,
+  host checkout never mutated) → **`EXIT=0`**: `ruff` ✓ · `mypy --strict` (134 files) ✓ · `bandit` ✓ ·
+  **262 passed** · `ALL GREEN`. No sealed test / threshold / golden / verifier / harness file touched.
+
+Conclusion unchanged: doc01 is **code-complete and green on the estate the spec prescribes**. The only
+thing between this laptop and a local exit-0 is a privileged `/tenants` mount — a conductor/human
+provisioning step, not a builder code task. Session ends here (nothing to build; no route-around, no
+weakening).
+
+---
+
 ## ✅ DONE — doc01 GREEN on the code_intel estate: unmodified `harness/verify.sh` → exit 0, 255 passed (2026-07-18)
 
 **Terminal state. Supersedes every SPEC_BLOCKED entry below** — per the ADJUDICATION RESOLVED note
