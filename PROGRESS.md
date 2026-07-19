@@ -4666,3 +4666,6 @@ weakening. **Remaining to full doc02 green — ALL conductor/test-authority/host
 (1) author `tests/doc02/test_*.py` rung-1 suite (staging is empty); (2) author the 4 doc01 fixtures +
 provision `/tenants` (or run `tools/verify-linux.sh`); (3) provision `limits` estate (AC-FAIL-16 rung-2);
 (4) M11 rung-2 eval on `fixtures/estates/`. This session's distinct evidence: the executable-repro sweep.
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — Treat doc02 as code-complete and implement/verify it straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which §1 of `product/v0-spec/02-VOICE-TRANSPORT.md` makes authoritative ("This document is the complete description of what to build and exactly how it must work; **acceptance criteria and tests are generated from it separately**"). The last SPEC_BLOCKED entry names no doc02 criterion that contradicts the spec — it cites `test_ac_m2_007_git_blame_resolves_on_blobless_clone`, a doc01 `services.code_intel` test whose fixture (`blame_attribution_fixture`, plus `stale_node_moved_symbol_fixture` and `pr_meeting_fixture`) is unauthored in the guard-protected `tests/fixtures/repos.py`; `blame`/`AC-M2`/`code_intel` are grep-empty across the entire `acceptance/doc02/` bundl
