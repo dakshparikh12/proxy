@@ -7,10 +7,13 @@ from __future__ import annotations
 
 from .boundary import BoundaryDecision, BoundarySource, resolve_boundary_source
 from .carrier import SignalCarrier
+from .consent import consent_notice, notice_is_valid
 from .external import CallExternal
 from .fakes import FakeOutputMediaSink, FakeTTS
+from .join import Action, JoinResult, JoinSession, JoinSource, JoinState
 from .media import AudioChunk, CanvasFrame
 from .recall import RecallTransport
+from .resolution import MeetingRef, MeetingResolver, UnknownBotError, resolve_meeting
 from .seams import OutputMediaSink, STTProvider, TransportProvider, TTSProvider
 from .signals import (
     EMITTED_SIGNAL_NAMES,
@@ -31,6 +34,7 @@ from .tts import CartesiaTTS
 from .wire import WireDriftError, parse_transcript
 
 __all__ = [
+    "Action",
     "AudioChunk",
     "BargeIn",
     "BotStatus",
@@ -45,7 +49,13 @@ __all__ = [
     "EMITTED_SIGNAL_NAMES",
     "FakeOutputMediaSink",
     "FakeTTS",
+    "JoinResult",
+    "JoinSession",
+    "JoinSource",
+    "JoinState",
     "MeetingEnd",
+    "MeetingRef",
+    "MeetingResolver",
     "OutputMediaSink",
     "RecallPassthroughSTT",
     "RecallTransport",
@@ -57,8 +67,12 @@ __all__ = [
     "TTSProvider",
     "Transcript",
     "TransportProvider",
+    "UnknownBotError",
     "WireDriftError",
+    "consent_notice",
+    "notice_is_valid",
     "parse_transcript",
     "resolve_boundary_source",
+    "resolve_meeting",
     "signal_name",
 ]
