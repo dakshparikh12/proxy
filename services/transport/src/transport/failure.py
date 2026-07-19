@@ -30,7 +30,6 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from .hearing import TranscriptGap
 from .signals import BotStatus
 
 #: The bot-status signal is exactly this enum — no out-of-enum value is ever emitted (AC-FAIL-07).
@@ -215,9 +214,3 @@ class VoiceChatDegrade:
         await self._post_chat(text)
         await self._post_chat(_VOICE_DOWN_NOTICE)
         return DeliveryResult(voice_delivered=False, chat_delivered=True, notice=_VOICE_DOWN_NOTICE)
-
-
-def is_marked_lost(gap: TranscriptGap) -> bool:
-    """The mark-lost path (AC-FAIL-09/11) is the sole honest STT-gap guarantee — no
-    buffer-through is promised on the external BYOK leg (see :mod:`transport.hearing`)."""
-    return gap.reason == "stt_gap" or bool(gap.reason)

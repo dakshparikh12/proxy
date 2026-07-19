@@ -4165,3 +4165,60 @@ audit-hardened; the red suite, once authored, should turn green straight away.
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — Implement doc02 straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which is coherent with `product/v0-spec/02-VOICE-TRANSPORT.md` (§1: "this document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately… This is pipes and manners only"). The sole cited blocker, `tests/test_m2_clone.py::test_ac_m2_001`, is a **doc01** `code_intel` Clone test asserting a `/tenants/<tenant>/` volume prefix produced by `services.code_intel.cloner.Cloner` — no doc02 criterion references `/tenants` or that test (`grep -rn "tenants\|m2_001" acceptance/doc02` yields only an unrelated "two tenants… live meeting" scenario, never a volume-path criterion) — and it is red only because `harness/verify.sh` runs `py
+
+## HARDENING — doc02 audit pass 4 (HEAD 2950d4c, 2026-07-19): terminal state INDEPENDENTLY re-verified; 1 dead/tautological helper removed; 3 law-path audits clean
+
+Continuation builder session. Rather than trust the prior passes' word, this session **independently
+re-verified** the honest terminal state from scratch (the builder's own word is never evidence):
+
+- **Full suite live: 5 failed / 261 passed** — the identical pre-existing **doc01** rung-1 reds:
+  `test_ac_m2_001` (`/tenants` volume-prefix, SIP-blocked host mount on this macOS root → temp-dir
+  fallback in `services/code_intel`), plus 4 `ImportError`s from fixtures **absent** in the protected
+  `tests/fixtures/repos.py` (`stale_node_moved_symbol_fixture`, `pr_meeting_fixture`, +2 feeding
+  `m2_007`/`m4_013`/`m5_016`/`m7_007`). None are doc02; none are builder-authorable (host mount +
+  protected `tests/fixtures/` tree).
+- **Red-suite authority confirmed via git:** commit `61c9b0c` ("tests: doc01 tier-1 suite from sealed
+  bundle (red)") shows the doc01 red suite was authored by a **separate test-authoring authority**, then
+  turned green by the builder. `tests/doc02/` (the doc02 analog) has not been authored; `tests/` is a
+  protected tree regardless. So there is **no doc02 test to drive against** — the product is built
+  straight to the sealed `acceptance/doc02/criteria/criteria.yaml`.
+- **`harness/verify.sh` exit 0 is therefore genuinely unreachable this pass for reasons entirely
+  OUTSIDE doc02 builder scope.** No green claimed or manufactured. **NOT SPEC_BLOCKED** — no criterion
+  contradicts the spec or a law.
+
+**Highest-value builder work available — a 4th fresh-context adversarial audit** of the never-red-tested
+M0–M10 product, via **3 parallel auditors** over the law-bearing paths (maker≠checker):
+- **Law 3 (human-control):** consent gate (JOIN-04/03/12), barge-in stop-then-flush (TURN-07/08,
+  SPEAK-07), quiet/hard-mute (TURN-12/13/14), canvas swap-back (CANVAS-08/09/11) — **CLEAN**.
+- **Laws 1&2 (grounded / never-overstate):** transcript shape (HEAR-03/12), self-loop guard
+  (HEAR-08/09), metadata pass-through + present-set (EVENTS-05/14/06/07), nine-signal completeness +
+  leak-guard (SEAM-09/10/12), voice/chat parity + DM privacy (CHAT-02/03/08/09/16) — **CLEAN**.
+- **turn/boundary/failure/delivery/cost/limits:** boundary resolution+consumption (TURN-16), rejoin
+  budget=one (FAIL-01/02/06), mark-lost/backfill (FAIL-09/10/11), voice→chat degrade (FAIL-12/13),
+  limiter/queue (FAIL-14/15/16), sole delivery authority (XCUT-04, CANVAS-11), rate card
+  (SPEAK/SEAM) — **CLEAN**.
+
+**Zero new input→wrong-output defects.** One inert code-quality item confirmed and fixed:
+
+- **`failure.py` — removed `is_marked_lost`** (dead + tautological: `reason == "stt_gap" or bool(reason)`
+  collapses to `bool(reason)`; defined once, called nowhere in the repo, not re-exported). Removed the
+  helper and its now-unused `from .hearing import TranscriptGap` import. Zero behavior change (the real
+  AC-FAIL-09/11 mark-lost guarantee lives in `HearingStage.mark_lost`, untouched). ruff + mypy --strict
+  (30 transport files) clean; full suite **unregressed at 5 failed / 261 passed** (261 green prove no
+  behavior change). Flagged inert across passes 2–3; now genuinely excised.
+
+**Residuals re-confirmed, NOT routed-around or weakened (unchanged dispositions):**
+- **`hearing.py` `can_observe=None` fail-open default** (Law-3 latent risk): the consent gate only fires
+  when `can_observe` is wired; the default `None` means no gate. AC-JOIN-04's oracle assumes the guard is
+  wired, so there is no in-scope input→wrong-output repro; changing the default to fail-closed could break
+  legitimately-ungated upstream contexts. Left as-is; flagged as a harness-wiring dependency to verify.
+- **AC-EVENTS-13 roster-name cache-first**, **split-metadata completion (EVENTS-05)**, **CANVAS
+  promote/demote counter path**, **`surface.platform_matrix()`**, **AC-FAIL-16 `limits` estate install**,
+  **AC-SPEAK-09/20/03 char-sum reconciliation (Doc02/04 boundary)**, **AC-SEAM-12 chat leak-guard
+  (protected `libs/contracts` frozenset)** — all re-confirmed consistent with prior passes; no new repro.
+
+**Remaining to full doc02 green (unchanged, none builder-authorable):** (1) Phase-3 EVIDENCE — author the
+sealed `tests/doc02/test_*.py` red suite from the criteria (doc01 analog `61c9b0c`); (2) resolve the 5
+doc01 rung-1 reds (fixtures + `/tenants` on the Linux `code_intel` estate); (3) provision `limits` on the
+estate (AC-FAIL-16); (4) M11 rung-2 eval on `fixtures/estates/`. No sealed test/threshold/golden/verifier/
+harness file touched; no route-around; no weakening.
