@@ -5183,3 +5183,47 @@ An `ImportError` inside a protected test file is unresolvable from `services/`/`
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — Implement and verify doc02 straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which `02-VOICE-TRANSPORT.md` §1 makes authoritative in its own words ("This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately"); the filing names no doc02 criterion that is untestable, ambiguous, or in conflict with the spec — its only blockers are the doc01 `services.code_intel` red `tests/test_m2_clone.py::test_ac_m2_007_git_blame_resolves_on_blobless_clone` (and the sibling `test_ac_m2_001` `/tenants` env assertion + the four unauthored fixtures `blame_attribution_fixture`/`force_push_webhook_fixture`/`stale_node_moved_symbol_fixture`/`pr_meeting_fixture`), all of which are grep-empty across
+
+## DEBUGGER (fresh context, 2026-07-19) — SPEC_BLOCKED: doc01 fixture-authoring gap in sealed arbiter
+Escalated after the build loop failed with the IDENTICAL error across 16 build sessions (run.log
+06:12→08:34). Reproduced independently (`pytest tests/test_m4_substrate.py::test_ac_m4_013 -x`) →
+same red every time.
+
+**Failing test (repeated red):** `tests/test_m4_substrate.py::test_ac_m4_013_force_push_triggers_full_rebuild_not_incremental`
+— a **doc01** `services.code_intel` test (M4 substrate), outside doc02 (voice-transport) builder scope.
+
+**Root cause — collection-time ImportError from the READ-ONLY arbiter fixture tree:**
+`test_ac_m4_013` (line 303) imports four names from `tests.fixtures.stubs`:
+`DBOperationCounter` (exists, stubs.py:305) plus `force_push_webhook_fixture`,
+`grammar_upgrade_fixture`, `large_changeset_webhook_fixture` — the latter **three are defined
+nowhere in the repository**. Verified airtight: `grep -rn "def force_push_webhook_fixture\|def
+grammar_upgrade_fixture\|def large_changeset_webhook_fixture" .` → NONE (not in `tests/`, not in
+`staging/`, not anywhere); the three tokens are referenced by this single test only.
+
+**Decisive NEW evidence — a test-authoring gap in the sealed bundle (git timeline):**
+- `tests/fixtures/stubs.py` sealed by `49d2a70` ("doc01: promote + seal arbiter") at **2026-07-18 12:17:35**.
+- The test referencing the three fixtures added by `e63a891` ("test: doc01 remaining rung-1 tests —
+  force-push rebuild, …") at **2026-07-18 22:58:31** — ~10h AFTER the seal, without adding the
+  corresponding fixtures. `git log` on `stubs.py` shows exactly one commit (the seal); the fixtures
+  were never present.
+
+**Why this is un-fixable from `services/`/`libs/` (not a product-code defect):** the failure is an
+`ImportError` for undefined names inside `tests/fixtures/stubs.py`, raised at pytest collection
+before any product code runs. `stubs.py` is by design pure test-tree code (module docstring:
+"Pure test doubles: nothing imports product code") — it does not re-export from `services`/`libs`.
+No change under `services/` or `libs/` can define a name inside `tests.fixtures.stubs`. The fixture
+tree is read-only to the builder/debugger (arbiter: acceptance/tests/fixtures/harness/criteria).
+
+**SPEC_BLOCKED — names the exact defect (test authority owns the fix):** author the three missing
+webhook-trigger fixtures into `tests/fixtures/stubs.py`, matching the existing inline style of
+`push_webhook_fixture`/`uninstall_webhook_fixture` (return `Webhook(...)`) and used as:
+- `force_push_webhook_fixture(repo_url=..., new_sha=...)`            (test_m4_substrate.py:323)
+- `grammar_upgrade_fixture(pipeline=...)` → `.apply()`               (test_m4_substrate.py:344)
+- `large_changeset_webhook_fixture(repo_url=..., changed_files=500)` (test_m4_substrate.py:361)
+
+**No services/libs change made** — doing so could not turn this test green and would be a
+route-around of a read-only-arbiter defect. This is the same doc01 protected-fixture wall the prior
+16 sessions hit; this entry adds the git-timeline proof that it is a sealed-bundle test-authoring
+gap, and localizes the fix precisely to `tests/fixtures/stubs.py`. Consistent with the recorded
+"5 reds all non-authorable doc01" terminal state; doc02 surface (`services/transport`) remains
+complete and gate-clean (ruff/mypy --strict/bandit).
