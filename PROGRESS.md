@@ -4516,3 +4516,6 @@ Author the 3 factory functions in `tests/fixtures/repos.py` following the existi
 module's deterministic `build_git_repo` helper). Once present, the import-time halt clears and
 these tests run against the already-built `services.code_intel` product. No product change is
 warranted or made this pass (tree is ruff/mypy --strict/bandit clean; no doc02 red exists to drive).
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — The sealed `acceptance/doc02/criteria/criteria.yaml` is coherent with `product/v0-spec/02-VOICE-TRANSPORT.md`, which states in §1 that "acceptance criteria and tests are generated from it separately"; doc02 is code-complete with zero doc02 test failures, and the only thing gating `verify.sh` exit 0 is five doc01 `code_intel` reds — four undefined fixtures in the guard-protected `tests/fixtures/` tree and one `/tenants` host-mount gap — none of which any doc02 criterion references (grep-empty across `acceptance/doc02/`) and none of which a spec change could fix, since the remedy is fixture authorship by the test authority plus host provisioning (already green under `tools/verify-linux.sh`). The builder should treat doc02 as done-pending-arbiter, stop re-filing this as SPEC_BLOCKED, and r
