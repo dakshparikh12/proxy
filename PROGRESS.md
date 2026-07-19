@@ -5164,3 +5164,16 @@ was made. **Conductor action:** merge the sealed doc02 `T-*` suite into `tests/d
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — Implement and verify doc02 straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which `product/v0-spec/02-VOICE-TRANSPORT.md` §1 makes authoritative in its own words: *"This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately."* The last SPEC_BLOCKED entry identifies no doc02 criterion that is untestable, ambiguous, or in conflict with the spec — it cites `test_m2_clone.py::test_ac_m2_007_git_blame_resolves_on_blobless_clone`, a **doc01** `services.code_intel` test whose `blame_attribution_fixture` (plus `stale_node_moved_symbol_fixture` and `pr_meeting_fixture`) is unauthored in the guard-protected `tests/fixtures/repos.py`, and every one of `blame`/`code_intel`/`blobless`/`
+
+## BUILDER RE-VERIFICATION (2026-07-19, fresh session) — terminal state independently re-confirmed
+Ran `harness/verify.sh` and full `pytest` from a fresh builder context; root-caused every red.
+- **Gates green:** ruff ✓ · mypy --strict ✓ (161 files) · bandit ✓.
+- **261 passed; 5 failed — all doc01, all non-builder-authorable:**
+  - `test_ac_m2_001_per_tenant_encrypted_volume` — `/tenants` mount not creatable under macOS SIP (needs root/Linux host; `tools/verify-linux.sh` supplies it). ENV.
+  - `test_ac_m2_007_git_blame_resolves_on_blobless_clone` — `ImportError: blame_attribution_fixture` absent from guard-protected `tests/fixtures/repos.py`.
+  - `test_ac_m4_013_force_push_triggers_full_rebuild_not_incremental` — `ImportError: force_push_webhook_fixture` (+`grammar_upgrade_fixture`, `large_changeset_webhook_fixture`) absent from guard-protected `tests/fixtures/stubs.py`.
+  - `test_ac_m5_016_stale_graph_node_reread_live_before_citation` — `ImportError: stale_node_moved_symbol_fixture` absent from guard-protected `tests/fixtures/repos.py`.
+  - `test_ac_m7_007_pr_meeting_pins_to_pr_head_not_default_branch` — `ImportError: pr_meeting_fixture` absent from guard-protected `tests/fixtures/repos.py`.
+- **doc02 surface complete & gate-clean:** `services/transport` = 30 modules / 3445 LOC across every criteria family (JOIN/EVENTS/HEAR/SPEAK/CHAT/CANVAS/TURN/FAIL/SEAM/XCUT); substantive, not stubs.
+- **No doc02 `T-*` suite in the tree** (`tests/doc02/` empty); a builder may not author its own tests (maker≠checker).
+An `ImportError` inside a protected test file is unresolvable from `services/`/`libs/` — no product-code change alters any of the 5 reds. Consistent with the recorded ADJUDICATION RESOLVED: none of the 5 is a doc02-criterion conflict, so no fresh SPEC_BLOCKED is raised; and no builder-authorable work remains that moves `verify.sh` toward exit 0. **Conductor action unchanged:** merge the sealed doc02 `T-*` suite into `tests/doc02/`; author the 4 doc01 fixtures in `tests/fixtures/{repos,stubs}.py`; run on a host with `/tenants` (or `tools/verify-linux.sh`); then re-run `verify.sh`.
