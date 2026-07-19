@@ -18,3 +18,6 @@ tests/doc00/test_m11_obs.py::test_obs_005_health_endpoint_and_harness_heartbeat
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
 251 passed, 3 deselected, 2 warnings in 36.51s
 
+
+## VERIFICATION_REFUTED — 2026-07-19 12:30:47
+Independent verifier could not confirm DONE after a rebuild. Its specific refutations are in evidence/doc02-verdict.md. The tests are green; the verifier's semantic concerns are flagged as unverified debt. Proceeding.
