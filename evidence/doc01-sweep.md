@@ -1,29 +1,23 @@
-h node stale vs pinned commit → deference rule (2), re-read live"*).
-> `built_at_sha` = 0 hits in criteria. This is dispositioned in `dispositions.yaml` D-INV-05 as *"No separate criterion needed,"* but no criterion enforces the stale-node → re-read behavior, and the `built_at_sha` node column exists solely to power it.
+4-007 only checks `flag_reason` is non-empty generically. The "never silently lies" distinction is untested.
 
-**6. Force-push (and parser/grammar upgrade) forces the full rebuild / safe history-rewrite handling.**
-> §3.6: *"A **force-push, a parser/grammar upgrade, or a large change-set forces the full rebuild**"* (also §4: *"force-push → safe full rebuild"*).
-> `force-push` = 0 hits in criteria. AC-M4-009 tests that an ordinary single-file push does a full rebuild, but nothing exercises the force-push / non-fast-forward (history-rewrite) delta-pull path the spec calls out as a distinct safe-handling case.
+**3. The `~10s` push-to-queryable freshness SLO.** §3.6 (line 275): *"Target: `[~10s]` push-to-queryable on a pilot-scale repo."* §4 (line 375): *"substrate + graph push-to-fresh `[~10s]` (full rebuild, pilot scale)."* AC-M4-009/AC-M4-013 verify a full rebuild *happens*; AC-LAT-001 (first-text p50) and AC-LAT-002 (connect→ready 15 min) are different SLOs. No latency criterion measures push-to-queryable elapsed time.
 
-**7. `git blame` resolves on a blobless clone.**
-> §3.2: *"so huge repos clone in minutes and **`git blame` still works** (we never use *shallow* clones; they break history)."*
-> §3.8 step 2 provable: *"`git blame` resolves on a large repo."* AC-M2-002 verifies the pinned SHA and file tree only; no criterion verifies `git blame` works after a blobless clone (the specific reason shallow clones are rejected).
+**4. Deferred agentic-map tools absent from the core tool surface.** §3.5 (line 265): *"The deferred agentic-map tools (`get_capability`, `search_capabilities`, `get_flow`) are **not** in the core (CANONICAL §7)."* No criterion asserts these names are absent from the core `allowed_tools` — the parallel absence checks (AC-SANDBOX-001/002) only cover LSP-in-sandbox, not agentic-map-in-core.
 
-**8. Meeting about a PR pins to the PR head (not the default-branch tip).**
-> §3.6: *"the session **pins to one commit** — the default branch's tip, or the **PR head** for a meeting about a PR."*
-> AC-M7-004 tests pinning to a known SHA (default-tip case) only; the PR-head branch of the pin selection has no criterion.
+**5. `alwaysLoad:true` on the `code_intel` MCP server.** §3.5 (line 265): *"`alwaysLoad:true` on this MCP server (Doc 00 III.8 — else an intermittent tool-less first turn)."* This is a stated config contract guarding a user-visible failure (a tool-less first turn); no criterion checks it.
 
----
+**6. Sandbox re-provision re-seeds at the pinned SHA, not HEAD.** §3.6 (line 279): *"On a sandbox re-provision (Workroom recycle), the sandbox **re-seeds at `meeting.pinned_sha`**, not at HEAD."* No criterion covers the re-provision/recycle re-seed behavior. (Borderline cross-doc with Doc 05, but the requirement is asserted here in Doc 01.)
 
-## Dispositioned / boundary items (asserted behavior, no criterion — but explicitly accounted for, not silently missed)
+**7. Incremental parse — unchanged files keyed by hash are never re-touched.** §3.4 (line 123): *"The parse is incremental — a changed file re-parses in milliseconds; **unchanged files (keyed by hash) are never touched.**"* The graph *rebuild* is full (AC-M4-009), but the tree-sitter *parse* skip-by-hash is a distinct, separately-observable behavior with no criterion.
 
-Reporting these for completeness; each is a documented decision rather than an oversight:
-
-- **`~10s` push-to-queryable freshness target** — §3.6 *"Target: `[~10s]` push-to-queryable on a pilot-scale repo"* / §4 *"substrate + graph push-to-fresh `[~10s]`."* No latency criterion (AC-LAT covers only direct-answer p50/p95 and 15-min ready). Explicitly dispositioned aspirational-not-a-gate in `ambiguities.yaml` A-001 and A-006.
-- **Sandbox re-provision re-seeds at `meeting.pinned_sha`, not HEAD** — §3.6. No criterion; falls in the Doc 05 / Workroom sandbox boundary (AC-M3-005 only checks sandbox secret-exclusion).
-- **Incremental parse — unchanged files keyed by hash are never re-touched** — §3.4. No criterion; an optimization mechanism (the *graph* rebuild is full and is tested by AC-M4-009).
-- **`propose_change` and the deferred agentic-map tools (`get_capability`/`search_capabilities`/`get_flow`) absent from the core** — dispositioned as not-built-here (`D-BOUNDARY-01`) / Expansion (§5).
+**8. The `too-large` flag reason.** §3.4 (line 127): flag_reason enum `unsupported-language | generated | too-large | excluded | submodule-uninitialized`. Criteria test `unsupported-language` (AC-M4-010) and `generated`/`vendor` (AC-M6-005), but no criterion exercises a file flagged `too-large`.
 
 ---
 
-Note: I made no modifications (read-only sweep). Items 1–8 are the actionable coverage gaps; 1, 2, 6, and 7 are the strongest (each has an explicit "provable" clause in the §3.8 build steps yet no criterion), and 5 is notable because a graph column exists purely to serve a behavior that is never tested.
+Lower-confidence (stated but arguably subsumed / delegated — flagging for completeness, not asserting they are hard gaps):
+
+**9. The `~50–100ms` host-side `code_intel` API hop.** §4 (line 375) / §2.1: *"a host-side `code_intel` API call on the direct-answer path ~50–100ms."* Stated as a distinct sub-target; only the composite p50≤2s (AC-LAT-001) is measured, never the hop itself.
+
+**10. Durable enqueue (survives restart), as opposed to dedup.** §3.6 (line 275): *"enqueued **durably** and deduplicated by delivery-GUID + commit SHA."* AC-M7-002 covers dedup; no criterion covers durability (an enqueued webhook survives a worker restart and still triggers the rebuild).
+
+The full walk found gaps, so I am **not** emitting `SWEEP: NO GAPS`. Nothing was modified.
