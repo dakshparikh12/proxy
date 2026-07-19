@@ -4364,3 +4364,56 @@ Session ends; a continuation resumes once a conductor step lands.
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — The last SPEC_BLOCKED entry does not identify any genuine spec-vs-criterion contradiction; it re-purposes SPEC_BLOCKED for an out-of-scope pipeline blocker (a doc01 test `test_ac_m2_001` asserting a `/tenants/tenant-A/` path that appears in neither the doc02 spec nor doc02 criteria — both grep-empty for that path prefix — plus four missing doc01 fixtures in the guard-protected `tests/` tree), and the entry itself concedes `acceptance/doc02/criteria/criteria.yaml` is coherent with `02-VOICE-TRANSPORT.md` §1 ("This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately"), a fact independently re-proven by Audit Pass 7 running the prescribed `tools/verify-linux.sh`, where `test_ac_m2_001` passes on 
+
+## AUDIT PASS 8 — fresh code-vs-criteria cross-check found + FIXED a real gap (AC-FAIL-16), HEAD `d8bf777` (2026-07-19)
+
+Fresh persistent-builder session. Instead of an 8th paper re-audit, I fanned out **4 fresh-context
+verifier subagents** (maker≠checker) to cross-check ALL 164 doc02 criteria (10 families) against the
+implementing code, hunting specifically for criteria the code does NOT satisfy — the one class of
+builder-authorable work. This behavioral cross-check is the only behavioral verification available
+(there is intentionally no doc02 test suite). Result: 3 of 4 families **NO GAPS** (JOIN+HEAR,
+CHAT+CANVAS+EVENTS, SEAM+FAIL+XCUT-minus-one), with two candidates surfaced and adjudicated:
+
+**AC-FAIL-16 — GENUINE GAP, now FIXED (this is the first product change in 8 passes).**
+`transport.limiter` imported `limits` but the package was pinned **nowhere** — absent from every
+`pyproject.toml` dependency list and from `uv.lock` (grep count 0). So `import transport.limiter`
+raised `ModuleNotFoundError` on a clean `uv sync`, and the module docstring **falsely** claimed
+`limits` was "added to the workspace lock + installed there" — a **Law-2 (never-overstate) violation
+baked into source**. The full suite passed only because no current test imports that module (dead on
+the test path); `mypy --strict` was silent because the root `[[tool.mypy.overrides]]` ignore-missing
+covers `limits`/`limits.*`. AC-FAIL-16 explicitly inspects "the limiter source **and dependency pins**
+… built on the **pinned** `limits`," so the missing pin genuinely fails the contract.
+FIX: `uv add --package transport "limits>=3.13"` → resolved+locked `limits==5.8.0` into the shared
+`uv.lock`. Now `import transport.limiter` succeeds; the real `MemoryStorage` + `MovingWindowRateLimiter`
+(no hand-rolled token bucket) loads; the docstring claim is now true. Gates re-run clean (ruff · mypy
+--strict 161 files · bandit); full suite **261 passed / 5 failed UNCHANGED** (zero regression);
+AC-SEAM-21 pipecat/livekit grep on `uv.lock` still 0. Committed `d8bf777`.
+
+**AC-SPEAK-03 — adjudicated NOT a builder-actionable gap (left as-is, deliberately).** A verifier
+constructed an adversarial worst-case (headlines saturate the 4000 char/hr cap, then ack-only pickups
+pile 5 chars each on top via `audible_ack()`, which is ungated by `_within_envelope`). But (a) the
+sealed oracle is `[simulation]` driven by "a one-hour **representative** meeting transcript," not an
+adversarial fuzz — a representative meeting does not saturate 4000 chars of spoken headlines; (b) the
+only "fix" — gating the ack on the char envelope — would **directly violate P0 AC-SPEAK-09** ("the
+≤500ms ack must fire reliably … can never be silently routed to chat by the content budget") and
+AC-SPEAK-20; (c) acks/hr is unbounded by pickups, so no finite ack-reserve strictly bounds the sum
+either. The spec deliberately resolves this tension in favor of the P0 ack, and `speak.py:91-109`
++ its docstring already document the decision honestly. Same disposition class as the previously-cleared
+JOIN-04 / JOIN-13 action-trace subtleties.
+
+**Terminal state re-confirmed:** the 5 rung-1 reds are ALL doc01 (`AC-M*` ids, `services.code_intel`,
+`tests/test_m*.py`) — grep-confirmed **0** occurrences in doc02 criteria — failing on (1) the `/tenants`
+SIP host-mount gate (proven to PASS on Linux in pass 7) and (2) four fixtures absent from the
+guard-PROTECTED `tests/fixtures/repos.py` (doc01 test-authoring authority, not builder-writable).
+`harness/verify.sh` runs `pytest -q -x --maxfail=1` over the whole tree, so it halts at the first
+doc01 red regardless of doc02 state → **exit 0 is unreachable from the doc02 builder seat for reasons
+ENTIRELY outside doc02 scope. NOT SPEC_BLOCKED** — no doc02 criterion is untestable/ambiguous or
+contradicts spec/law; `acceptance/doc02/criteria/criteria.yaml` stays coherent with
+`02-VOICE-TRANSPORT.md` §1. No sealed test/threshold/golden/verifier/harness file touched; no
+route-around; no weakening.
+
+**Remaining to full doc02 green — ALL conductor/test-authority, NONE builder-authorable:** (1) author
+`tests/doc02/test_*.py` red suite; (2) author the 4 absent doc01 fixtures in `tests/fixtures/repos.py`
+(after which pass 7 proved `tools/verify-linux.sh` reaches 206+ pass before the halt); (3) provision the
+`limits` estate for AC-FAIL-16 rung-2; (4) M11 rung-2 eval on `fixtures/estates/`. Session ends after
+committing the real AC-FAIL-16 fix; a continuation resumes once a conductor step lands.
