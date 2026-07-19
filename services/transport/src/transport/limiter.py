@@ -18,9 +18,10 @@ from limits import RateLimitItemPerSecond
 from limits.storage import MemoryStorage
 from limits.strategies import MovingWindowRateLimiter
 
-# The shared Recall workspace outbound budget, expressed as a moving window (in-memory).
-# Value is a floor the queue paces against; the never-drop guarantee is the queue's.
-_DEFAULT_PER_SECOND = 4
+from . import config
+
+# Poll granularity for the wait loop — a mechanism/physics constant (how often the queue
+# re-checks the moving window), not an operational tunable, so it stays in code (Law 4).
 _POLL_INTERVAL_S = 0.005
 
 
@@ -29,12 +30,18 @@ class LimitsRateGate:
 
     :meth:`acquire` blocks (polling the moving window) until a slot is free, then consumes
     it — it never rejects, so the outbound queue only ever *waits*, never drops a send.
+
+    The shared Recall-workspace outbound budget (sends/second) is a genuine operational
+    tunable, so it is read from ``config/defaults.toml`` (one value + unit + range,
+    Law 4) rather than hard-coded — the value is the floor the never-drop queue paces
+    against.
     """
 
-    def __init__(self, *, per_second: int = _DEFAULT_PER_SECOND) -> None:
+    def __init__(self, *, per_second: int | None = None) -> None:
         self._storage = MemoryStorage()  # in-memory backend (AC-FAIL-16), not a hand-rolled bucket
         self._limiter = MovingWindowRateLimiter(self._storage)
-        self._item = RateLimitItemPerSecond(per_second)
+        rate = per_second if per_second is not None else config.get_int("outbound_sends_per_second")
+        self._item = RateLimitItemPerSecond(rate)
 
     async def acquire(self, bot_id: str) -> None:
         """Wait until the moving window admits one send for ``bot_id``, then consume it."""

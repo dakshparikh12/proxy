@@ -149,9 +149,16 @@ class GapAnnouncer:
 
 
 class SegmentStore(Protocol):
-    """Injected seam over doc00 ``transcript_segments`` (status pending|comprehended|lost)."""
+    """Injected seam over doc00 ``transcript_segments`` (status pending|comprehended|lost).
 
-    def pending_ids(self) -> list[str]: ...
+    Every method is ``async``: the concrete implementation is the per-meeting-scoped
+    adapter assembled in ``meeting_runtime`` over the asyncpg-backed
+    :mod:`db.repos.transcript` primitives (``pending_segment_ids`` /
+    ``flip_and_append`` / ``backfill_segment_as_lost``, all async) — so the read of
+    still-``pending`` ids at close is a live, meeting-scoped DB query, never a stale
+    pre-fetch, and the seam is faithfully implementable over the substrate (Law 2)."""
+
+    async def pending_ids(self) -> list[str]: ...
 
     async def mark_comprehended(self, segment_id: str) -> None: ...
 
@@ -178,7 +185,7 @@ class SegmentReconciler:
 
     async def on_close(self) -> int:
         """Backfill every still-pending segment as a gap; return how many were backfilled."""
-        for segment_id in self._store.pending_ids():
+        for segment_id in await self._store.pending_ids():
             await self._store.backfill_gap(segment_id)
             self.backfilled += 1
         return self.backfilled

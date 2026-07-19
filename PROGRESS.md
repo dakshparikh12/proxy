@@ -1,5 +1,70 @@
 # PROGRESS
 
+## doc02 — fresh-BUILDER 5-cluster adversarial audit; 3 genuine authorable defects found + FIXED (2026-07-19, @ HEAD `6ba42f5`)
+
+**Disposition: NOT SPEC_BLOCKED — proceeded per the adjudicated reading (audit the built
+product against the sealed 155 criteria; fix genuine builder-authorable gaps toward the
+real-data DoD). No route-around, no weakening, no criterion claimed green that isn't.**
+
+**Independently re-derived the arbiter wall (unchanged).** `bash harness/verify.sh` passes
+ALL gates (ruff · mypy --strict 160 files · bandit on `src`) and halts at the first doc01 red
+under `pytest -q -x` — `test_ac_m2_001` (clone lands under a macOS temp dir, not `/tenants/…`:
+a host-mount env gap). Whole-tree `pytest` (no `-x`): **261 passed / 5 pre-existing doc01
+protected-tree reds** — `test_ac_m2_001` (host `/tenants`) + 4 undefined `tests/fixtures/`
+fixtures (`blame_attribution_fixture`, `force_push_webhook_fixture`,
+`stale_node_moved_symbol_fixture`, `pr_meeting_fixture`). ZERO doc02 tests exist in the tree
+(`tests/doc02/` absent; the sealed bundle ships only `criteria/` + `requirements/`). All 5 reds
+live in guard-PROTECTED `tests/`; none is builder-authorable.
+
+**Method.** 5 fresh-context adversarial auditors (maker≠checker) re-checked all 155 sealed
+criteria (JOIN·EVENTS·HEAR / SPEAK·TURN / CHAT·CANVAS / FAIL / SEAM·XCUT·PATCH) against
+`services/transport/**` + `libs/**`, each told to BREAK the code with `file:line`. CHAT/CANVAS,
+JOIN/EVENTS/HEAR — clean (only non-authorable harness composition gaps). Each finding was
+re-verified first-hand before any edit.
+
+**Three GENUINE builder-authorable defects found + FIXED (all toward the real-data DoD; the
+imported paths are exercised by ZERO tree tests, so no sealed oracle flips — but all three are
+real correctness/honesty gaps the criteria describe):**
+1. **AC-SPEAK-01** (`services/transport/tts.py:78`): the Cartesia `_synth` request body carried
+   only `"text_len": len(text)` — the **verbatim text was never placed in the request**. On real
+   Cartesia Sonic 3 this submits no text to synthesize (nothing is spoken). The `[simulation]`
+   stub oracle reads the `synthesize(text)` argument (byte-equal) and asserts no audio, so it
+   passes today while the product would fail on real data (contra "Done means proven on real
+   data"), and the docstring's "exact text rides every request" was a Law-2 overstatement.
+   **Fixed:** the body now carries `"text": text` (verbatim, no extraction/substitution).
+2. **AC-FAIL-16 / Law 4** (`services/transport/limiter.py` + `config/defaults.toml` + `config.py`):
+   the shared Recall-workspace outbound budget was hard-coded (`_DEFAULT_PER_SECOND = 4`) — a
+   genuine operational rate tunable that Law 4 ("dynamic, never hard-coded"; tunables live in
+   `config/defaults.toml` with one value + unit + range) requires be config-sourced, exactly like
+   every sibling (`tts_chunk_ms`, `barge_in_budget_ms`, the rate card). **Fixed:** added
+   `[transport] outbound_sends_per_second = 4` (unit: sends/second, range 1..10) + the `_DEFAULTS`
+   mirror; `LimitsRateGate` now defaults from `config.get_int`. The poll-granularity constant
+   (`_POLL_INTERVAL_S`) stays in code — it is mechanism/physics, not an operational tunable.
+3. **AC-FAIL-09/10 / Law 2** (`services/transport/failure.py:151-158,181`): the `SegmentStore`
+   Protocol declared `pending_ids()` **sync**, but every DB primitive the repositories/transcript
+   docstrings say the concrete "per-meeting adapter assembled in meeting_runtime" drives
+   (`pending_segment_ids`/`flip_and_append`/`backfill_segment_as_lost`) is **async** — a sync
+   `pending_ids()` cannot honestly be backed by a live asyncpg meeting-scoped read, so the claimed
+   adapter was un-implementable (Law-2 overclaim). **Fixed:** `pending_ids()` is now `async` and
+   `SegmentReconciler.on_close` awaits it, so the close-time read of still-`pending` ids is a live
+   meeting-scoped DB query and the seam is faithfully implementable over the substrate.
+
+**Verification:** ruff ✓ · mypy --strict ✓ (160 source files) · bandit (`src`) ✓ · full suite
+**261 passed / 5 pre-existing doc01 reds — ZERO regression** (identical baseline). No sealed
+test/threshold/golden/verifier/fixture touched; the config change is a new `[transport]` key, no
+existing value altered.
+
+**Honest terminal residual (unchanged, NONE builder-authorable):** (a) no doc02 `T-*` suite in
+the tree → every doc02 criterion is untestable by the sole arbiter (bundle-authoring gap;
+`tests/` guard-PROTECTED); (b) the JoinSession re-post trigger, the SegmentStore/JoinSession
+scoped-store + write-back compositions, and the webhook-endpoint 200-response await meeting_runtime
+/ guard-PROTECTED harness assembly; (c) `verify.sh` exit 0 blocked solely by the 5 doc01
+protected-tree reds. Unblock is conductor / bundle-author / assembly authority. The doc02 product
+code is complete + gate-clean with every builder-authorable defect found across six audit rounds
+now fixed.
+
+---
+
 ## doc02 — fresh-BUILDER 4-cluster adversarial re-audit; 2 more genuine authorable defects found + fixed (2026-07-19, @ HEAD `9ff816a`)
 
 **Disposition: NOT SPEC_BLOCKED — proceeded per the adjudicated reading (audit the built

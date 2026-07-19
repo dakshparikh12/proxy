@@ -80,6 +80,10 @@ headline_char_soft_cap = 240
 # Aggregate spoken characters synthesized per meeting-hour (the ~2-4k design envelope,
 # the speak-short/detail-in-chat cost lever). unit: characters/hour. range: 2000..4000.
 max_spoken_chars_per_hour = 4000
+# Shared Recall-workspace outbound budget the per-bot never-drop queue paces against
+# (§3.7, AC-FAIL-14/15/16): the floor sends/second across Output-Media + chat. A burst
+# waits on this window rather than being dropped. unit: sends/second. range: 1..10.
+outbound_sends_per_second = 4
 # Managed transport rate card (§4) — the SINGLE source of the per-component rates that
 # BOTH the cost-floor check (AC-SEAM-13) and the elapsed×rate accrual (AC-SEAM-14) use,
 # so the floor binds real accrued spend (AC-SEAM-22). unit: USD/meeting-hour.

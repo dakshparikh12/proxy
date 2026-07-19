@@ -69,13 +69,15 @@ class CartesiaTTS:
             yield AudioChunk(pcm=b"", seq=seq, is_final=(seq == int(chunks) - 1))
 
     async def _synth(self, text: str) -> dict[str, object]:
-        # Sole raw round-trip closure; invoked only via ``call_external``. The single
+        # Sole raw round-trip closure; invoked only via ``call_external``. The **exact,
+        # verbatim** text rides the request body — no headline extraction or substitution
+        # (AC-SPEAK-01); Cartesia synthesizes precisely what upstream handed us. The single
         # configured voice/register rides every request (AC-SPEAK-02), and the small-chunk
         # bound rides it too so Cartesia streams chunks ≤ ``tts_chunk_ms`` — a surviving
         # in-flight chunk then can't defeat the mid-word cut (AC-SPEAK-08 / AC-TURN-10).
         return {
             "url": f"{_CARTESIA_BASE}/tts/bytes",
-            "text_len": len(text),
+            "text": text,
             "voice_id": self._voice_id,
             "register": self._register,
             "chunk_ms": self._chunk_ms,

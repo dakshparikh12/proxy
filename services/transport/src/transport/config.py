@@ -25,6 +25,7 @@ _DEFAULTS: dict[str, Any] = {
     "barge_in_budget_ms": 200,
     "headline_char_soft_cap": 240,
     "max_spoken_chars_per_hour": 4000,
+    "outbound_sends_per_second": 4,
     "bot_usd_per_hr": 0.50,
     "stt_usd_per_hr": 0.15,
     "tts_usd_per_hr": 0.15,
