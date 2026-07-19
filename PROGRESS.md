@@ -3639,3 +3639,43 @@ the Phase-3 authority can.
 `acceptance/doc02/criteria/criteria.yaml`, in the M0…M10 `test_ids` order the locked plan (§§1–7) fixes;
 re-seal bundle+evidence; then re-dispatch this builder. The plan is ready to build straight against it.
 Ending the pass per the mandate: an untestable-by-this-loop scope, recorded with fresh evidence, not guessed.
+
+## BUILD-BLOCKED — RE-AFFIRMED at HEAD `cf4f223` (4th builder dispatch, 2026-07-19) — the seal commit's own diff proves NO evidence layer was ever authored
+
+**Disposition unchanged and now proven from the seal itself: doc02 has no Phase-3 EVIDENCE (no
+sealed `tests/doc02/` red suite), so there is nothing for the builder to turn green. CONDUCTOR must
+run ORCHESTRATION.md Phase-3 EVIDENCE. Not a builder fix; not `SPEC_BLOCKED` (criteria are coherent
+with `product/v0-spec/02-VOICE-TRANSPORT.md`); not another adjudication.**
+
+**New grounded fact this session (not cited by the prior three notes):** the commit whose message
+claims to seal the evidence — `199c567 doc02: promote + seal arbiter (bundle+evidence)
+[aebb24cf93b3]` — has a diff (`git show --stat 199c567`) touching **exactly two files**:
+`acceptance/doc02/criteria/criteria.yaml` (+3818) and `acceptance/doc02/requirements/requirements.yaml`
+(+2081). **Zero** `tests/`, `fixtures/`, or simulation files. The word "evidence" in that message is
+not backed by any authored artifact — the seal covered criteria+requirements only. Doc01's analog
+Phase-3 commit (`61c9b0c tests: doc01 tier-1 suite from sealed bundle (red)`) still has **no doc02
+equivalent** anywhere in history (`git log --all`).
+
+Independently re-verified at HEAD `cf4f223`; **no `services/**` or `libs/**` file written; tree clean
+apart from this note**:
+- `git ls-files tests/doc02` → empty · `find tests/doc02` → nothing · `pytest tests/doc02/
+  --collect-only` → **"no tests collected"**.
+- `grep -rlE 'AC-JOIN-|T-JOIN-|AC-TURN-|AC-SPEAK-' --include='*.py'` outside `acceptance/` → **NONE**
+  (no `T-*`/`AC-*` doc02 id is realized as an executable test).
+- Root `conftest.py` = env/DB-optional wiring only; no `pytest_generate_tests`/collector reads
+  `criteria.yaml`. No dynamic generation closes the gap.
+- `services/transport/` = 4 empty `__init__`/`pyproject` scaffold shells; no product code exists.
+- Full suite `pytest --collect-only` = **266 tests, all doc00/doc01**. `harness/verify.sh` runs the
+  whole suite and its "no tests collected" guard is over the WHOLE suite → with 266 green non-doc02
+  tests it would print **ALL GREEN**, a false green proving nothing about doc02. Building
+  `services/transport` to guessed class/method/dataclass/payload shapes to dodge this is exactly what
+  the standing adjudication (commit `0ac5bbd`) forbids.
+- `harness/guard.py:14` `PROTECTED` includes `"tests/"` → authoring the red suite is blocked at the
+  tool boundary (correctly — Phase-3 EVIDENCE is a separate authority per ORCHESTRATION.md:23-33, and
+  maker≠checker forbids the builder authoring its own arbiter).
+
+**CONDUCTOR ACTION (single unblock, unchanged):** run doc02 **Phase-3 EVIDENCE** — a fresh-context
+authority authors `tests/doc02/test_join.py … test_xcut.py` (+ fixtures/simulations) in honest RED
+from the sealed `acceptance/doc02/criteria/criteria.yaml`, in the M0…M10 `test_ids` order the locked
+plan (§§1–7) fixes; re-seal bundle+evidence; then re-dispatch this builder. The plan is ready to
+build straight against it. Ending the pass per the mandate.
