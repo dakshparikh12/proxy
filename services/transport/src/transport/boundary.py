@@ -13,9 +13,9 @@ is resolved (``boundary_source_unresolved`` == 0).
 from __future__ import annotations
 
 import enum
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from .wire import has_end_of_turn
 
@@ -25,6 +25,22 @@ class BoundarySource(enum.Enum):
 
     AAI_END_OF_TURN = "aai_end_of_turn"
     SMART_TURN_V3 = "smart_turn_v3"
+
+
+class SmartTurnBoundary(Protocol):
+    """The fallback boundary-source seam, wired ONLY when the build probe finds Recall does
+    not forward AAI ``end_of_turn`` (AC-TURN-16, F-NO-BOUNDARY-FALLBACK).
+
+    It yields a monotonic instant each time Smart Turn v3 detects a natural end-of-turn.
+    Keeping it a seam (not a concrete model) is why Smart Turn v3 stays OUT of core on the
+    expected AAI branch (CANONICAL §12.11): on that branch this seam is simply never
+    constructed. The turn pump consumes it in place of ``end_of_turn`` when the resolved
+    :class:`BoundaryDecision` selects ``SMART_TURN_V3``.
+    """
+
+    def boundaries(self) -> AsyncIterator[float]:
+        """Yield a boundary instant per detected end-of-turn, until the stream ends."""
+        ...
 
 
 @dataclass(frozen=True)

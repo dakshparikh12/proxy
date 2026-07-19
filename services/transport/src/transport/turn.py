@@ -30,6 +30,7 @@ from typing import Any
 
 from agentkit.abort import AbortRegistry
 
+from .boundary import BoundarySource, SmartTurnBoundary
 from .carrier import SignalCarrier
 from .hearing import PROXY_SPEAKER
 from .seams import OutputMediaSink, TTSProvider
@@ -247,11 +248,20 @@ class TurnSignalPump:
         *,
         detector: SpeakingDetector | None = None,
         now: Callable[[], float] = time.monotonic,
+        boundary_source: BoundarySource = BoundarySource.AAI_END_OF_TURN,
+        smart_turn: SmartTurnBoundary | None = None,
     ) -> None:
         self._carrier = carrier
         self._controller = controller
         self._detector = detector or SpeakingDetector()
         self._now = now
+        # The resolved boundary source (AC-TURN-16). Default = AAI end_of_turn (CANONICAL
+        # §12.11 keeps Smart Turn v3 out of core). When the build probe resolves the
+        # fallback, the harness constructs this pump with ``boundary_source=SMART_TURN_V3``
+        # and an injected ``smart_turn`` producer — then boundaries flow from that seam
+        # (:meth:`pump_boundaries`) instead of ``end_of_turn``, and never from a timer.
+        self._boundary_source = boundary_source
+        self._smart_turn = smart_turn
 
     async def on_vad(self, frame: VadFrame) -> None:
         """Fold a VAD frame: emit the speaking edge; on a human onset, barge-in."""
@@ -263,7 +273,31 @@ class TurnSignalPump:
             await self._controller.barge_in()  # no-op unless Proxy is speaking
 
     async def on_stt_message(self, message: dict[str, Any]) -> None:
-        """Open a boundary ONLY on a real AAI ``end_of_turn`` (never a timer, AC-TURN-02)."""
+        """Open a boundary ONLY on a real AAI ``end_of_turn`` (never a timer, AC-TURN-02).
+
+        No-op when the resolved boundary source is Smart Turn v3: on the fallback branch
+        the STT stream carries no ``end_of_turn`` to trust, and boundaries arrive via
+        :meth:`pump_boundaries` instead (AC-TURN-16).
+        """
+        if self._boundary_source is not BoundarySource.AAI_END_OF_TURN:
+            return
         if boundary_opened(message):
-            await self._carrier.emit(Boundary(t=self._now()))
-            await self._controller.on_boundary()
+            await self._emit_boundary(self._now())
+
+    async def pump_boundaries(self) -> None:
+        """Drive boundaries from the wired Smart Turn v3 fallback seam (AC-TURN-16).
+
+        Active only when the resolved source is ``SMART_TURN_V3`` and a producer is wired;
+        it consumes the seam's detected end-of-turn instants and opens each as a boundary,
+        exactly as ``on_stt_message`` does for AAI — so the fallback is a real boundary
+        source, not merely a recorded decision (F-NO-BOUNDARY-FALLBACK).
+        """
+        if self._boundary_source is not BoundarySource.SMART_TURN_V3 or self._smart_turn is None:
+            return
+        async for t in self._smart_turn.boundaries():
+            await self._emit_boundary(t)
+
+    async def _emit_boundary(self, t: float) -> None:
+        """Emit one ``boundary(now)`` and open the turn gate — the single boundary path."""
+        await self._carrier.emit(Boundary(t=t))
+        await self._controller.on_boundary()

@@ -5,7 +5,7 @@ no bus/broker/wire, no ``libs/transport``: Recall owns transport, this is the th
 """
 from __future__ import annotations
 
-from .boundary import BoundaryDecision, BoundarySource, resolve_boundary_source
+from .boundary import BoundaryDecision, BoundarySource, SmartTurnBoundary, resolve_boundary_source
 from .carrier import SignalCarrier
 from .consent import consent_notice, notice_is_valid
 from .events import (
@@ -57,6 +57,7 @@ __all__ = [
     "Boundary",
     "BoundaryDecision",
     "BoundarySource",
+    "SmartTurnBoundary",
     "CallExternal",
     "CanvasFrame",
     "CartesiaTTS",
