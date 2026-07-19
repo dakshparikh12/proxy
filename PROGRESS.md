@@ -4111,3 +4111,54 @@ further audit-hardened and ready to turn the red suite green straight away.
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
  — Implement doc02 straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which is coherent with `product/v0-spec/02-VOICE-TRANSPORT.md` (§1: "this document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately… This is pipes and manners only"); the sole cited blocker, `tests/test_m2_clone.py::test_ac_m2_001`, is a **doc01** `code_intel` Clone criterion (`AC-M2-001`, asserting a `/tenants/<tenant>/` volume prefix produced by `services.code_intel.cloner.Cloner`) that **no doc02 criterion references** (`grep -rn m2_001\|/tenants acceptance/doc02` finds no volume-prefix criterion), and it is red only because `harness/verify.sh` runs `pytest -q -x`, which halts at the first failure while this ma
+
+## HARDENING — doc02 audit pass 3 (HEAD 8e0a7bb, 2026-07-19): 1 confirmed defect fixed (AC-EVENTS-05), 4 sections re-audited clean
+
+Persistent builder session. `harness/verify.sh` exit 0 remains **genuinely unreachable this pass for
+reasons OUTSIDE doc02 scope** — re-confirmed live: gates ruff/mypy --strict/bandit pass tree-wide, then
+the full suite is **5 failed / 261 passed**, the identical pre-existing **doc01** rung-1 reds:
+`test_ac_m2_001` (`/tenants` SIP-blocked host mount on this macOS root) + four missing fixture functions
+in the **protected** `tests/fixtures/` tree (`blame_attribution_fixture`, `force_push_webhook_fixture`,
+`stale_node_moved_symbol_fixture`, `pr_meeting_fixture` — feeding `m2_007`/`m4_013`/`m5_016`/`m7_007`).
+None are doc02; none are product-code fixable; none are builder-authorable (protected trees). `tests/doc02/`
+still absent (Phase-3 EVIDENCE, separate authority). No green claimed or manufactured. **NOT SPEC_BLOCKED**
+— the sealed `acceptance/doc02/criteria/criteria.yaml` stays coherent with the spec/laws.
+
+Highest-value builder work available: a third fresh-context adversarial audit of the never-red-tested
+M0–M10 product — **5 parallel section auditors** (JOIN+EVENTS, HEAR+TURN, SPEAK+CHAT, CANVAS+XCUT,
+FAIL+SEAM), each grounding every criterion's exact text/oracle against exact code and reporting only
+concrete input→wrong-output repros. **4 of 5 sections audited fully clean.** One CONFIRMED defect found
+and fixed:
+
+- **8e0a7bb — AC-EVENTS-05** (`events.py`): `_deliver_metadata` committed meeting metadata on the FIRST
+  payload carrying EITHER a title OR a participant roster, then permanently locked (`_metadata_done`).
+  A split source (participants ride on bot-join/connected; title lands on a later meeting-init — a shape
+  the module's own present-set comment anticipates) dropped the field absent from the first payload:
+  Orchestrator received `title=""` (or `participants=()`), violating
+  `metadata_fields_dropped_allowed=0` / F-METADATA-NOT-PASSED. Now accumulates `_meta_title` +
+  `_meta_participants` across payloads and delivers the merged `MeetingMetadata` once BOTH are in hand —
+  never dropping a field, still delivered once and off the §3.10 nine-signal carrier. Combined-payload
+  case still delivers immediately and never double-fires. Behavioral smoke (split / symmetric-split /
+  combined) 3/3; ruff + mypy --strict (30 files) clean; full suite ZERO regression.
+
+**Audit residuals dispositioned (recorded, NOT routed-around or weakened):**
+- CANVAS `promote`/`demote` mutate `_active` before `await _emit(frame)` — if the injected sink raises
+  mid-swap, `_active` can be left at SCREEN while both counters stay unincremented; the sealed AC-CANVAS-10
+  oracle is counter-based (`count(announcements)==count(swaps)`) and stays balanced under this path, so no
+  input→wrong-output violates it as written. Matches prior passes' "CANVAS exception refinements left as-is
+  (low value, risk of disturbing the swap-then-announce trace)." Not touched.
+- `surface.platform_matrix()` returns `{cell: True}` by construction — passes AC-SEAM-16 as written and is
+  structurally justified by the verified zero-per-platform-code property (AC-SEAM-17). Not a defect.
+- Pre-dispositioned items re-confirmed consistent, not re-reported: AC-EVENTS-13 roster-name cache-first;
+  AC-SPEAK-09 boundary-gated ack + AC-SPEAK-20/03 char-sum reconciliation (Doc02/04 boundary); AC-SEAM-12
+  chat leak-guard (protected `libs/contracts` frozenset); AC-FAIL-16 `limits` estate-install
+  (guard blocks the install verb; mypy override covers absent stubs; doesn't gate verify.sh);
+  `failure.py:223 is_marked_lost` tautology (dead code, zero call sites); AC-TURN-16 SmartTurnBoundary seam
+  + barge budget 200 with chunk/buffer 120.
+
+**Remaining to full doc02 green (unchanged, none builder-authorable):** (1) Phase-3 EVIDENCE — author the
+sealed `tests/doc02/test_*.py` red suite from the criteria (doc01 analog `61c9b0c`); (2) resolve the 5
+doc01 rung-1 reds (fixtures + `/tenants` on the Linux `code_intel` estate / `tools/verify-linux.sh`);
+(3) provision `limits` on the estate (AC-FAIL-16); (4) M11 rung-2 eval on `fixtures/estates/`. No sealed
+test/threshold/golden/verifier/harness file touched; no route-around; no weakening. The product is further
+audit-hardened; the red suite, once authored, should turn green straight away.
