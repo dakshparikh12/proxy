@@ -56,3 +56,17 @@ batch_read_max_files = 10
 ready_deadline_s = 900
 # Hard-delete deadline after App uninstall. unit: seconds. range: 60..1800.
 uninstall_delete_deadline_s = 900
+
+[transport]
+# Doc 02 (Voice & Transport) non-§12.8 tunables. The §12.8-pinned latency SLOs stay
+# single-homed in [latency_slo] above (reused, never redeclared — AC-XCUT-09); only
+# numbers NOT pinned by §12.8 live here.
+# Output-Media audio chunk size. Small by design so a barge-in flush drops at most one
+# in-flight chunk (§3.3, AC-SPEAK-08). unit: milliseconds. range: 50..250.
+tts_chunk_ms = 250
+# Max audio buffered ahead in Output Media, so buffered audio can't defeat barge-in
+# (§3.3, AC-TURN-10). unit: milliseconds. range: 50..250.
+max_buffered_audio_ms = 250
+# Barge-in stop budget: human onset → TTS silence (§3.6/§4/Law-3; NOT §12.8-pinned, so
+# home here). unit: milliseconds. range: 100..200.
+barge_in_budget_ms = 200

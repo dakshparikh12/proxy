@@ -8,6 +8,7 @@ a barge-in test can prove at most one in-flight chunk survived a mid-word cut.
 """
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 
 from .media import AudioChunk, CanvasFrame
@@ -24,6 +25,9 @@ class FakeTTS:
 
     async def _stream(self) -> AsyncIterator[AudioChunk]:
         for seq in range(self._chunks):
+            # A real suspension point per chunk so a barge-in/mute can interrupt the
+            # stream mid-utterance (the small-chunk cut, §3.3) deterministically.
+            await asyncio.sleep(0)
             yield AudioChunk(pcm=b"\x00", seq=seq, is_final=(seq == self._chunks - 1))
 
 

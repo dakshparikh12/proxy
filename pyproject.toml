@@ -52,9 +52,10 @@ ignore_missing_imports = true
 # its filesystem path (``libs.contracts.src.contracts``), so the import can't be tied
 # back to the checked source without a dual-name collection error. Silence the missing
 # import for the top-level name; the module's own source is still fully strict-checked
-# under its walk name. (Doc 02 transport is the first cross-member runtime importer.)
+# under its walk name. (Doc 02 transport is the first cross-member runtime importer;
+# it imports both ``contracts`` and ``agentkit`` — the AbortRegistry reused for barge-in.)
 [[tool.mypy.overrides]]
-module = ["contracts.*"]
+module = ["contracts.*", "agentkit.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
