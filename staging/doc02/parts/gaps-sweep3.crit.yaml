@@ -1,0 +1,149 @@
+# Sweep-3 gap closure (patch) — appended to acceptance/doc02/criteria/criteria.yaml by the conductor.
+# One criterion per review-gaps.md (working-tree review) item 1-5. Deterministic-preferred oracles; zeros explicit.
+- criterion_id: AC-JOIN-18
+  name: Consent hard-gate reconciled with CANONICAL default-consent — no observe/record/emit until notice post confirmed
+  evidence_class: '[simulation]'
+  authority_refs:
+  - R-doc02-JOIN-08
+  - R-doc02-JOIN-15
+  criticality: P0
+  blocking: true
+  behavior:
+    given: 'A join where the consent-notice post is NOT yet confirmed (post pending, or post failed), while the transport already has live Recall->AssemblyAI transcript/roster available'
+    when: The transport is asked to forward/persist transcript, roster, or record before the notice post is confirmed
+    then:
+    - No transcript / roster / record is forwarded downstream or persisted until the consent-notice post is confirmed (the §3.1 hard gate holds — R-doc02-JOIN-08)
+    - Once the notice post is confirmed the room is treated as default-consented (CANONICAL §12.9 / R-doc02-JOIN-15) and observation proceeds
+    - 'SPEC AMBIGUITY (routed inline, item-1, unresolved by CANONICAL): §3.1 "hard gate ... not a courtesy" (block until posted) vs CANONICAL §12.9 "default-consented via the join notice" (permissive once posted). Reconciled here as: post-confirmation IS the gate; default-consent applies only AFTER post-confirmation. Because the BYOK audio path is Recall->AssemblyAI direct (§3.2), the enforceable Doc-02 gate is on DOWNSTREAM emission/persistence, not on the upstream STT link. Flagged confirm-at-build.'
+  primary_oracle:
+    type: simulation_trace
+    artifact: 'drive notice-post state = {pending, failed, confirmed}; assert count(downstream transcript|roster|record emissions before confirmed) == 0; assert emissions resume only after confirmed'
+  thresholds:
+    downstream_emissions_before_notice_confirmed_allowed: 0
+  fault_model_refs:
+  - F-CONSENT-GATE-LEAK
+  test_ids:
+  - T-JOIN-18
+- criterion_id: AC-SPEAK-21
+  name: Per-utterance spoken-line length is a hard blocking gate (headlines-only per line, not just per hour)
+  evidence_class: '[unit-property]'
+  authority_refs:
+  - R-doc02-SPEAK-23
+  - R-doc02-SPEAK-04
+  criticality: P1
+  blocking: true
+  behavior:
+    given: 'A single spoken line submitted to the speak path whose length exceeds the per-utterance headline ceiling (e.g. a read-out of full screen/detail content), while the hourly char/hr aggregate is still under the AC-SPEAK-03 envelope'
+    when: The over-length single line reaches the speak-path length gate
+    then:
+    - The over-length line is BLOCKED/rejected from synthesis (hard gate), not merely flagged — closing the AC-SPEAK-03 hole (item-2) where one wall-of-text line passes because only the hourly sum is enforced
+    - A line at or under the ceiling passes unchanged
+    - 'NOTE (threshold not spec-pinned, item-2): spec pins "headlines only" (qualitative) + ~2-4k chars/hr; the per-line hard cap is author-set conservatively (confirm-at-build). Distinct from AC-SPEAK-03''s per-line headline_char_soft_cap (240, non-blocking) which this gate upgrades to a BLOCKING per-line contract at a higher wall-of-text ceiling.'
+  primary_oracle:
+    type: deterministic
+    artifact: 'submit lines at {cap-1, cap, cap+1, 10x cap}; assert len>cap => 0 synthesize calls (rejected from speak path) and len<=cap => accepted; assert rejection is blocking not advisory'
+  thresholds:
+    per_utterance_char_hard_cap: 500
+    overlong_line_synthesized_allowed: 0
+  fault_model_refs:
+  - F-SPEAK-PER-LINE-WALL-OF-TEXT
+  test_ids:
+  - T-SPEAK-21
+- criterion_id: AC-EVENTS-15
+  name: Present-but-nameless participant preserved as name-unresolved roster — never dropped, never emitted complete
+  evidence_class: '[simulation]'
+  authority_refs:
+  - R-doc02-EVENTS-17
+  - R-doc02-EVENTS-04
+  criticality: P1
+  blocking: true
+  behavior:
+    given: 'A real Recall participant payload for a participant who IS present (join event) but carries no resolvable name (guest / dial-in / nameless)'
+    when: The transport ingests the payload and emits roster signals
+    then:
+    - Exactly one roster(join) signal is emitted preserving the participant's presence, marked name-unresolved (placeholder identity)
+    - The participant is NOT dropped — presence preserved, feeding the presence-keyed late-join consent re-post (AC-JOIN-19)
+    - The signal is NOT emitted as a complete/named roster event and NO name is fabricated (R-doc02-EVENTS-04 name rule not violated)
+  primary_oracle:
+    type: simulation_trace
+    artifact: 'feed nameless-present fixture; assert 1 roster(join) emitted with name_resolved==false AND presence preserved; assert participants_dropped==0; assert 0 synthetic/fabricated name fields'
+  thresholds:
+    present_participant_dropped_for_missing_name_allowed: 0
+    fabricated_name_on_nameless_participant_allowed: 0
+    roster_join_emitted_per_nameless_present: 1
+  fault_model_refs:
+  - F-NAMELESS-PARTICIPANT-DROPPED
+  test_ids:
+  - T-EVENTS-15
+- criterion_id: AC-JOIN-19
+  name: Nameless mid-meeting joiner still receives the late-join consent re-post
+  evidence_class: '[simulation]'
+  authority_refs:
+  - R-doc02-JOIN-20
+  - R-doc02-JOIN-10
+  criticality: P0
+  blocking: true
+  behavior:
+    given: 'A meeting where the notice already posted, then a nameless / guest / dial-in participant joins mid-meeting (name-unresolved per AC-EVENTS-15)'
+    when: The nameless participant's mid-meeting join/presence event fires
+    then:
+    - The consent notice re-posts for that joiner, keyed on the join/presence event — NOT suppressed by the missing name
+    - A nameless joiner who triggers no re-post is a consent hole (fail) — closes the P0 gap (item-3) where the name-required roster gate would drop the joiner and skip the re-post
+  primary_oracle:
+    type: simulation_trace
+    artifact: 'inject post-notice join with name_resolved==false; assert re-post fired for that joiner; assert nameless_late_joiner_without_repost == 0'
+  thresholds:
+    nameless_late_joiner_without_repost_allowed: 0
+  fault_model_refs:
+  - F-NAMELESS-JOINER-NO-CONSENT-REPOST
+  test_ids:
+  - T-JOIN-19
+- criterion_id: AC-HEAR-13
+  name: 'Code-heavy STT "not worse": +/-0.02 tolerance recorded as an explicit decision; spec-literal target delta >= 0'
+  evidence_class: '[eval-realrepo]'
+  authority_refs:
+  - R-doc02-HEAR-10
+  criticality: P1
+  blocking: false
+  behavior:
+    given: 'The AC-HEAR-10 code-heavy side-by-side gate, whose thresholds (code_token_recall_delta_min:-0.02 / code_token_wer_delta_max:0.02) allow the passthrough to be up to 2 points worse than the alternative'
+    when: The tolerance is compared against the §3.2 spec absolute "Quality cannot drop ... not worse than the alternative"
+    then:
+    - 'SPEC AMBIGUITY (routed inline, item-4): §3.2 "not worse" is a spec-literal absolute (delta >= 0); AC-HEAR-10''s +/-0.02 permits the passthrough to be slightly worse and still pass.'
+    - The +/-0.02 is recorded here as an author-asserted engineering tolerance (pinned-sample measurement noise), NOT sourced from spec/CANONICAL — closing the "silent softening" gap by making it an explicit decision rather than an unrecorded softening
+    - 'Confirm-at-build target: if the pinned code-heavy sample supports it, tighten AC-HEAR-10 to the spec-literal delta >= 0 (code_token_recall_delta_min: 0, code_token_wer_delta_max: 0)'
+  primary_oracle:
+    type: analyzable
+    artifact: 'assert AC-HEAR-10 thresholds are documented as tolerance-with-rationale (not spec-sourced); at build, re-run the pinned sample and record whether passthrough meets delta >= 0; if yes, adopt the tightened thresholds'
+  thresholds:
+    spec_literal_recall_delta_min: 0
+    spec_literal_wer_delta_max: 0
+    documented_tolerance_recall_delta_min: -0.02
+    documented_tolerance_wer_delta_max: 0.02
+  fault_model_refs:
+  - F-CODE-HEAVY-TOLERANCE-UNRECORDED
+  test_ids:
+  - T-HEAR-13
+- criterion_id: AC-CANVAS-19
+  name: Webhook-retry / tile-WS-reconnect ingress carries the routing key for instance affinity (Doc-02 slice)
+  evidence_class: '[contract]'
+  authority_refs:
+  - R-doc02-CANVAS-18
+  criticality: P1
+  blocking: true
+  behavior:
+    given: 'A retried Recall webhook and a reconnecting tile / Output-Media WS for a meeting whose single harness runs on a specific instance'
+    when: The webhook retry / WS reconnect arrives at the Doc-02 ingress
+    then:
+    - The ingress surfaces the meeting routing key (meeting/bot id resolvable to the operation_runs claim owner) so upstream can route to the harness-owning instance — never depending on random Cloud Run load-balancing
+    - A retry/reconnect that lands with no resolvable routing key is a defect (affinity lost)
+    - 'NOTE (scope, confirm-at-build, item-5): the owner-routing MECHANISM (Cloud Run routing to the claim owner) is Doc 04 §3.6 + Doc 00; this criterion asserts ONLY the Doc-02 ingress obligation (routing key present + resolvable). Flagged for the author to confirm the Doc-02/Doc-04 ownership boundary; if routing is wholly Doc-04-owned this reduces to the key-presence contract.'
+  primary_oracle:
+    type: static_analysis
+    artifact: 'assert every webhook-retry + tile-WS-reconnect ingress path attaches/resolves the meeting routing key (bot_id -> operation_runs claim owner); assert 0 ingress paths that discard the key'
+  thresholds:
+    reconnect_or_retry_without_routing_key_allowed: 0
+  fault_model_refs:
+  - F-WS-WEBHOOK-INSTANCE-AFFINITY-LOST
+  test_ids:
+  - T-CANVAS-19

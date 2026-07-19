@@ -1,0 +1,55 @@
+# Sweep-3 gap closure (patch) — appended to acceptance/doc02/requirements/requirements.yaml by the conductor.
+# Closes review-gaps.md (working-tree review) items:
+#   (1) consent hard-gate vs CANONICAL §12.9 default-consent — routed inline (criterion only; refs existing R-doc02-JOIN-08/15)
+#   (2) headlines-only reduced to hourly byte ceiling -> add BLOCKING per-utterance spoken-length gate (R-doc02-SPEAK-23)
+#   (3) present-but-nameless roster off-case + consent-repost dependency (R-doc02-EVENTS-17, R-doc02-JOIN-20)
+#   (4) code-heavy STT "not worse" tolerance — routed inline (criterion only; refs existing R-doc02-HEAR-10)
+#   (5) webhook-retry / tile-WS-reconnect instance affinity — Doc-02 ingress slice with scope note (R-doc02-CANVAS-18)
+- requirement_id: R-doc02-EVENTS-17
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.1 paragraph 2 (roster "with names") / real-transport frontier
+  source_quote: who is present, joins, leaves, with names
+  normalized_statement: 'WHEN the transport observes a participant who IS present (join/present event) but the source payload carries no resolvable name (guest / dial-in / nameless) THE SYSTEM SHALL still emit a roster signal preserving that participant''s presence, marked name-unresolved (placeholder/degraded identity), and SHALL NOT drop the participant NOR emit the event as a complete/named roster event (reconciling R-doc02-EVENTS-04). NOTE (spec ambiguity, unresolved by CANONICAL, item-3): §3.1 states roster "with names" while real transports (Recall) surface nameless participants; the frontier — drop (loses a present participant) vs emit-complete (violates the name rule) — is resolved conservatively to preserve presence with an unresolved-name marker, so presence-keyed downstream behaviors (late-join consent, §3.1) are never silently starved. Exact placeholder shape is confirm-at-build.
+
+    '
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-JOIN-20
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.1 late-join consent
+  source_quote: 'late-join consent: a participant joining mid-meeting never saw the notice, so it re-posts on their join.'
+  normalized_statement: 'WHEN a participant joins mid-meeting after the consent notice was posted THE SYSTEM SHALL fire the late-join consent re-post keyed on the join/presence event itself, INDEPENDENT of whether that participant''s name resolved (R-doc02-EVENTS-17) — a nameless / guest / dial-in joiner SHALL still receive the consent re-post; the re-post SHALL NOT be suppressed by a missing name. This closes the consent hole (item-3) where a name-required roster gate (R-doc02-EVENTS-04) would otherwise drop a nameless joiner and silently skip the re-post on a P0 safety behavior.
+
+    '
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-23
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §2 channel 1 / §3.3 ("Headlines only by design")
+  source_quote: Headlines only by design (detail goes to chat)
+  normalized_statement: 'WHEN Proxy synthesizes any single spoken line THE SYSTEM SHALL enforce a per-utterance length ceiling as a HARD, blocking gate — a single spoken line exceeding the headline ceiling (e.g. a wall-of-text / read-out of screen or detail content) SHALL be blocked/rejected from the speak path, not merely flagged; the "headlines only" rule is a per-line contract, not only an hourly aggregate. This complements the hourly char/hr envelope (R-doc02-SPEAK-04 / AC-SPEAK-03), which alone permits one overlong line to pass (item-2). NOTE (threshold not spec-pinned): the spec pins only "headlines only" (qualitative) and ~2-4k chars/hr (aggregate); the exact per-line hard cap is author-set conservatively above a real headline and below a detail-dump — confirm-at-build.
+
+    '
+  requirement_type: ux
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CANVAS-18
+  authority_type: canonical_decision
+  authority_document: CANONICAL (live-WS instance affinity) / DOC-02
+  source_location: CANONICAL §12 live-WS instance affinity; §3.5 tile-WS; §3.1/§3.2 Recall webhook ingress
+  source_quote: 'a reconnecting tile WS / retried Recall webhook must reach the instance holding the meeting''s harness — route via the operation_runs claim owner, not random Cloud Run load-balancing.'
+  normalized_statement: 'WHEN a Recall webhook is retried OR a tile / Output-Media WS reconnects THE SYSTEM SHALL carry the meeting routing key (meeting/bot id resolvable to the operation_runs claim owner) on the ingress so the request can be routed to the instance holding that meeting''s single harness — never served by a random instance. NOTE (scope, confirm-at-build, item-5): primary ownership of the owner-routing MECHANISM is Doc 04 §3.6 + Doc 00 (Cloud Run routing / claim ownership); Doc 02''s obligation asserted here is ONLY that its webhook + tile-WS INGRESS surfaces the routing key so upstream can route — it does not implement the load-balancer. Flagged for the author to confirm the Doc-02/Doc-04 ownership boundary.
+
+    '
+  requirement_type: correctness
+  criticality: P1
+  testability: analyzable
+  status: qualified
