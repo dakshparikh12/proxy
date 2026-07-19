@@ -4280,3 +4280,6 @@ red suite from the criteria (doc01 analog `61c9b0c`); (2) author the four absent
 (`tools/verify-linux.sh`); (3) provision `limits` on the estate (AC-FAIL-16); (4) M11 rung-2 eval on
 `fixtures/estates/`. No sealed test/threshold/golden/verifier/harness file touched; no route-around; no
 weakening. Session ends here — the loop is non-terminating on this host without the conductor step.
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — The sealed `acceptance/doc02/criteria/criteria.yaml` is coherent with `product/v0-spec/02-VOICE-TRANSPORT.md` (§1: "this document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately"), and the builder's own note concedes "Not a criterion-vs-spec/law contradiction." The cited blocker `test_ac_m2_001` is a **doc01** test (absent from `acceptance/doc02/`) failing on an environment gate (`/tenants` mount SIP-blocked on this macOS host) and on four missing fixtures in the guard-PROTECTED `tests/` tree — none of which a spec change could fix, which is the sole license for DEFER. Implement doc02 straight against the sealed criteria in the locked M0…M10 order (the M0–M2/M0–M10 product is already built to spec)
