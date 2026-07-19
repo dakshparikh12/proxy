@@ -4840,3 +4840,6 @@ the same behaviors deterministically every pass.
   M0 reconciles (add to the frozenset or record intentional).
 - **M2 (retire R1 early):** M0 gains the injected-barge-in micro-bench (stop-latency + residual ≤ one chunk).
 - **M3 (naming-lint home):** corrected to `lint.naming` (packaged under `libs/ops`) in §1 and M9.
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — Treat doc02 as code-complete and implement/verify it straight against the sealed `acceptance/doc02/criteria/criteria.yaml`, which §1 of `product/v0-spec/02-VOICE-TRANSPORT.md` makes authoritative ("This document is the complete description of what to build and exactly how it must work; **acceptance criteria and tests are generated from it separately**"); there is no doc02 criterion that is untestable, ambiguous, or in conflict with the spec, because the blocker the builder filed — the `ImportError` for `blame_attribution_fixture` at `tests/test_m2_clone.py::test_ac_m2_007_git_blame_resolves_on_blobless_clone` (plus `stale_node_moved_symbol_fixture` and `pr_meeting_fixture`) — is a **doc01** `services.code_intel` criterion (`AC-M2-007`, mapped only in `acceptance/doc01/criteria/criteria.
