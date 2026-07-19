@@ -3964,3 +3964,63 @@ XCUT-01/04/07/08/09/10/11 + SPEAK-18/19/20).**
 tests/doc02/test_*.py red suite from the criteria (doc01 analog 61c9b0c); (2) resolve the 5 doc01 rung-1
 reds (fixtures + /tenants); (3) provision limits on the estate; (4) M11 rung-2 eval on fixtures/estates/.
 No sealed test/threshold/golden/verifier/harness file was touched; no route-around; no weakening.
+
+## HARDENING — doc02 audit-driven correctness pass (HEAD c8c86fa, 2026-07-19): 4 confirmed defects fixed, adversarially re-verified
+
+Persistent builder session. `harness/verify.sh` exit 0 is **genuinely unreachable this pass for
+reasons OUTSIDE doc02 scope** (unchanged from the M3->M10 entry, re-confirmed live: full suite **5
+failed / 261 passed** = the identical pre-existing doc01 rung-1 reds — `test_ac_m2_001` /tenants env
+gap + 4 missing guard-protected `tests/fixtures/` fixtures — plus `tests/doc02/` still unauthored). No
+green was claimed or manufactured. Neither blocker is doc02-builder-authorable (protected trees +
+maker≠checker + separate Phase-3 authority). **This is NOT SPEC_BLOCKED** — the sealed
+`acceptance/doc02/criteria/criteria.yaml` remains coherent with the spec/laws; there is no criterion
+contradiction to record.
+
+Rather than re-declare that fixed point, this pass did the highest-value builder work available: a
+rigorous fresh-context **audit of the never-red-tested M0–M10 product against the sealed criteria** (5
+parallel section finders → 1 fault-model/law finder → 1 adversarial diff verifier), fixing every
+CONFIRMED defect. **4 real correctness defects found and fixed** (2 commits, both ruff + mypy --strict
+(161 files) + bandit clean, behavioral smoke from /tmp, ZERO regression on the full suite):
+
+- **7e94446** — three defects:
+  - **AC-EVENTS-06** (`events.py`): meeting-end fired ONLY on `meeting.end`; criterion + R-doc02-EVENTS-07
+    require it on meeting-closed **OR bot-removed**. A host force-remove produced no meeting-end and no
+    close sequence (it emitted nothing at all). Added `is_bot_removed` (dedicated `bot.removed` event +
+    terminal bot-status `removed/call_ended/done`, disjoint from `connected/dropped/rejoined` so no
+    double-signal); silence still never infers end.
+  - **AC-SPEAK-09** (`speak.py`): the ≤500ms audible reflex ack rode `speak()`'s headlines-only char/hr
+    envelope, so near the hourly cap it was silently suppressed to chat — a suppression path AC-SPEAK-19/20
+    forbid (the ack is gated ONLY by the boundary; tile ACK is the fallback). `audible_ack` now posts its
+    verbatim copy + accounts + enqueues to the boundary-gated controller, never envelope-suppressed.
+  - **AC-XCUT-04 / AC-CANVAS-11** (`canvas.py`,`delivery.py`): `CanvasSurface` (the projector) embedded
+    `present()` calling an injected `_speak`, contradicting `delivery.py`'s own stated contract
+    ("projector is pure rendering — no speak/TTS path"). Extracted the sequence to
+    `delivery.present_on_screen` (the SOLE delivery authority composes speak + the projector's
+    promote/demote); the projector is now speak-free (static scan clean) and the
+    speak→swap→work→swap-back trace is preserved.
+- **c8c86fa** — **AC-TURN-10 vs AC-SPEAK-08** (`config/defaults.toml`,`config.py`,`tts.py`): `tts_chunk_ms`
+  and `max_buffered_audio_ms` were **250ms** while `barge_in_budget_ms` is 200ms — the one in-flight chunk
+  surviving a flush is residual playout of up to 250ms, exceeding AC-TURN-10's P0 200ms stop budget
+  (`residual_playout_over_200ms_allowed: 0`). AC-SPEAK-08's `max_chunk_ms: 250` is a CEILING, not a mandate;
+  choosing it made the tighter P0 unsatisfiable. Set both to **120ms** (in-range, ≤ ceiling, ~80ms headroom);
+  `CartesiaTTS` now reads `tts_chunk_ms` from config (single source of truth, Law 4).
+
+**Adversarial verifier (fresh context) CONFIRMED-CORRECT all 3 fixes in 7e94446**, no neighbor breakage.
+One residual flagged and dispositioned (NOT weakened): the AC-SPEAK-09 ack, per AC-SPEAK-19/20, must always
+fire on a boundary, so at the exact 4000-char AC-SPEAK-03 ceiling an ack can push the synthesized sum
+marginally over — inherent to any faithful implementation of those criteria, not introduced by the fix;
+accounting the ack (current choice) is the minimal-harm reconciliation (exempting breaches the
+all-synthesize-calls oracle *more*). Flagged for the section owner / M11 eval, not a builder-resolvable
+contradiction.
+
+**Deliberately NOT changed (recorded, not routed-around):** AC-EVENTS-13 roster-name prefers cache over
+payload name — P3/non-blocking and ambiguous (Recall sends renames via `participant.update` which refreshes
+the cache; preferring a possibly-lagging leave/join payload name could REINTRODUCE the staleness the
+criterion forbids), so the current cache-first choice is defensible. `failure.py:223` `is_marked_lost`
+tautology (`x=="stt_gap" or bool(x)` == `bool(x)`) — cosmetic, behavior-identical, zero criterion impact.
+
+**Remaining to full doc02 green (unchanged, none builder-authorable):** (1) Phase-3 EVIDENCE — author the
+sealed `tests/doc02/test_*.py` red suite (doc01 analog `61c9b0c`); (2) resolve the 5 doc01 rung-1 reds
+(fixtures + /tenants); (3) provision `limits` on the estate (AC-FAIL-16); (4) M11 rung-2 eval on
+`fixtures/estates/`. No sealed test/threshold/golden/verifier/harness file touched; no route-around; no
+weakening. The product is now audit-hardened and ready to turn the red suite green straight away.
