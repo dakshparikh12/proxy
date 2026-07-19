@@ -24,7 +24,7 @@ import contextlib
 import enum
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -111,17 +111,20 @@ class TurnController:
         *,
         abort: AbortRegistry | None = None,
         now: Callable[[], float] = time.monotonic,
+        on_error: Callable[[str, BaseException], Awaitable[None]] | None = None,
     ) -> None:
         self._tts = tts
         self._sink = sink
         self._abort = abort or AbortRegistry()
         self._now = now
+        self._on_error = on_error
         self._state = TurnState.IDLE
         self._queue: deque[str] = deque()
         self._current_id: str | None = None
         self._task: asyncio.Task[None] | None = None
         self._seq = 0
         self.chunks_written = 0
+        self.last_error: BaseException | None = None
 
     # ---- observable state (AC-TURN-13/14) -------------------------------------------
     @property
@@ -182,6 +185,12 @@ class TurnController:
                     return  # cooperative mid-word stop
                 await self._sink.write_audio(chunk)
                 self.chunks_written += 1
+        except asyncio.CancelledError:
+            raise  # barge-in / hard-mute cancellation — propagate, never swallow
+        except Exception as exc:  # noqa: BLE001 — a provider fault degrades honestly (voice→chat, §3.7), never crashes the harness or orphans the task
+            self.last_error = exc
+            if self._on_error is not None:
+                await self._on_error(text, exc)
         finally:
             # Natural completion returns to IDLE; an interrupted turn is reset by the
             # caller (which nulls _current_id first), so this guard skips then.

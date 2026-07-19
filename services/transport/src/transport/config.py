@@ -20,6 +20,8 @@ _DEFAULTS: dict[str, Any] = {
     "tts_chunk_ms": 250,
     "max_buffered_audio_ms": 250,
     "barge_in_budget_ms": 200,
+    "headline_char_soft_cap": 240,
+    "max_spoken_chars_per_hour": 4000,
 }
 
 

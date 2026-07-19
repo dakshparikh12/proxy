@@ -70,3 +70,9 @@ max_buffered_audio_ms = 250
 # Barge-in stop budget: human onset → TTS silence (§3.6/§4/Law-3; NOT §12.8-pinned, so
 # home here). unit: milliseconds. range: 100..200.
 barge_in_budget_ms = 200
+# Headline-only spoken envelope (§3.3): a single spoken line over this soft cap is
+# detail — routed to chat, not synthesized. unit: characters. range: 120..320.
+headline_char_soft_cap = 240
+# Aggregate spoken characters synthesized per meeting-hour (the ~2-4k design envelope,
+# the speak-short/detail-in-chat cost lever). unit: characters/hour. range: 2000..4000.
+max_spoken_chars_per_hour = 4000
