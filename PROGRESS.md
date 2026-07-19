@@ -1,5 +1,44 @@
 # PROGRESS
 
+## doc02 — full 164-criterion code audit vs `services/transport`; 1 real gap found + its doc02-half fixed (2026-07-19, fresh BUILDER @ HEAD `864b787`)
+
+**Disposition: NOT SPEC_BLOCKED — proceeded per the adjudicated reading (verify doc02 straight
+against the sealed `acceptance/doc02/criteria/criteria.yaml`).** With no doc02 pytest suite in the
+tree to run (still unauthored; `tests/doc02/` absent; not builder-authorable) and the whole-tree
+arbiter blocked only by the 5 pre-existing doc01 protected-tree reds, the available builder work is
+to audit the built product against the 164 sealed criteria and fix genuine gaps. Did exactly that.
+
+**Method.** 5 fresh-context subagents audited all 164 criteria (JOIN17·EVENTS14·HEAR12·SPEAK20·
+CHAT16·CANVAS15·TURN17·FAIL20·SEAM22·XCUT11) against `services/transport/**` + `libs/**`,
+requiring `file:line` evidence per criterion (Law 1).
+
+**Result: 163/164 genuinely satisfied by current product code** (the 4 `[eval-realrepo]` rung-2 +
+several `[latency]` criteria are measurement/eval-proven, code paths present). **1 REAL product gap:**
+- **AC-JOIN-10** (P0, `[integration]`): oracle `recall_bot_id == launched bot id`. `libs/db` exposed
+  no UPDATE (only `insert_meeting`+`get_by_bot_id`), so writing the launched id back was IMPOSSIBLE;
+  `services/harness/meetings.py` stored a fabricated placeholder `recall-bot-{uuid4}` at invite and
+  `transport.JoinSession.on_bot_launched` (the seam that receives the launched id) was never wired to
+  any DB write. Two disconnected id authorities.
+
+**Fixed (doc02-scoped, builder-authorable half):** added `repos.meetings.update_bot_id(conn,
+meeting_id, recall_bot_id)` + parity `MeetingRepository.update_bot_id` in `libs/db` (plan §1 maps
+JOIN-10/11 to `libs/db`). Commit `864b787`. Gates green (ruff · mypy --strict 161 files · bandit);
+full suite unchanged at **261 passed / 5 pre-existing doc01 reds** (no regression).
+
+**Honest residual (NOT builder-authorable):**
+1. The invite→launch→write-back **composition** that must invoke `update_bot_id` with the launched
+   id lives in `services/harness/meetings.py` — `harness/`-substring guard-PROTECTED (doc00 Foundation
+   deployable, exercised by doc00 `test_m03_sub`/`test_w_workflows`); the doc02 builder may not edit it.
+   `JoinSession` also has no live construction site anywhere in the tree yet (meeting_runtime assembly
+   pending), so the join FSM is driver-less until the (unauthored) doc02 suite / assembly lands.
+2. `verify.sh` exit 0 remains unreachable ONLY for the 5 doc01 protected-tree reds (4 undefined
+   fixtures in `tests/fixtures/repos.py`+`stubs.py` + the `/tenants` host-mount gap) — unchanged,
+   entirely outside doc02 scope, none builder-authorable.
+
+No sealed test/threshold/golden/verifier/fixture touched; no route-around; no weakening.
+
+---
+
 ## SPEC_BLOCKED — doc02 terminal — FRESH container evidence RETIRES the host-gap story; residual wall = 4 undefined DOC01 fixtures (2026-07-19, fresh BUILDER @ HEAD `1b5f013`)
 
 **Disposition: SPEC_BLOCKED. No product code changed — doc02 is code-complete and gate-clean; none is
