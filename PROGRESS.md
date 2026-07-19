@@ -4224,4 +4224,59 @@ estate (AC-FAIL-16); (4) M11 rung-2 eval on `fixtures/estates/`. No sealed test/
 harness file touched; no route-around; no weakening.
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
- — The cited blocker `tests/test_m2_clone.py::test_ac_m2_001` is a doc01 `code_intel` Clone test (`AC-M2-001`, asserting a `/tenants/<tenant>/` prefix produced by `services.code_intel.cloner.Cloner`); no doc02 criterion references it (`grep -rn "/tenants\|m2_001\|AC-M2" acceptance/doc02` is empty), and it is red only because `harness/verify.sh` runs `pytest -q -x`, halting at the first failure while this macOS host SIP-blocks the `/tenants` mount — a pipeline/environment gate plus un-authored doc01 fixtures in the protected `tests/fixtures/` tree, all in doc01/Phase-3 scope, not a defect in the sealed `acceptance/doc02/criteria/criteria.yaml`, which `product/v0-spec/02-VOICE-TRANSPORT.md` §1 ("this document is the complete description of what to build and exactly how it must work; acceptan
+ — The cited blocker `tests/test_m2_clone.py::test_ac_m2_001` is a doc01 `code_intel` Clone test (`AC-M2-001`, asserting a `/tenants/<tenant>/` prefix produced by `services.code_intel.cloner.Cloner`); no doc02 criterion references it (`grep -rn "/tenants\|m2_001\|AC-M2" acceptance/doc02` is empty), and it is red only because `harness/verify.sh` runs `pytest -q -x`, halting at the first failure while this macOS host SIP-blocks the `/tenants` mount — a pipeline/environment gate plus un-authored doc01 fixtures in the protected `tests/fixtures/` tree, all in doc01/Phase-3 scope, not a defect in the sealed `acceptance/doc02/criteria/criteria.yaml`, which `product/v0-spec/02-VOICE-TRANSPORT.md` §1 ("this document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately") is coherent with.
+
+## BUILD-BLOCKED (terminal, not SPEC_BLOCKED) — doc02 audit pass 5: independently re-verified at HEAD `33c6063` (2026-07-19)
+
+Fresh persistent-builder session. Per the mandate "the builder's own word is never evidence," I did
+**not** trust the four prior passes — I re-ran every gate live and re-derived the disposition from the
+code and the sealed criteria myself. Result: **the terminal state is confirmed unchanged, and the one
+substantive residual is confirmed NOT a defect by my own analysis.**
+
+**Live re-verification (this session):**
+- Gates clean tree-wide: `ruff check services libs src tests` ✓ · `mypy --strict services/transport/src`
+  (29 files) ✓ · `bandit -r services/transport/src` ✓ (and `bandit -r src`, as `verify.sh` runs it, clean).
+- Full suite: **5 failed / 261 passed** — the identical pre-existing **doc01** rung-1 reds, none in doc02
+  scope, none builder-authorable:
+  - `test_ac_m2_001` — `/tenants/<tenant>/` literal volume prefix; this macOS root is `apfs, sealed,
+    read-only`, so the mount is un-provisionable by unprivileged code (host gap).
+  - `test_ac_m2_007`, `test_ac_m4_013`, `test_ac_m5_016`, `test_ac_m7_007` — **`ImportError`** for four
+    fixtures (`blame_attribution_fixture`, `force_push_webhook_fixture`, `stale_node_moved_symbol_fixture`,
+    `pr_meeting_fixture`) genuinely **absent** from `tests/fixtures/repos.py` (grepped: NONE FOUND). That
+    file is in the guard-PROTECTED `tests/` tree (`harness/guard.py` PROTECTED includes `"tests/"`,
+    `"fixtures/"`) — a separate test-authoring authority owns it, exactly as it authored the doc01 red
+    suite in `61c9b0c`. Not builder-writable.
+- `tests/doc02/` **still absent** (`ls tests/doc02` → No such file or directory; `git ls-files 'tests/doc02/*'`
+  → empty). The doc02 Phase-3 EVIDENCE red suite was never authored, so there is **no doc02 test to drive
+  to green**, and `tests/` is protected regardless. `verify.sh` runs `pytest -q -x` and halts at the first
+  doc01 red; even past it, zero doc02 tests would make ALL GREEN a false green over doc00/doc01 alone.
+
+**Therefore `harness/verify.sh` exit 0 is genuinely unreachable this pass for reasons ENTIRELY OUTSIDE
+doc02 builder scope. No green claimed or manufactured. NOT SPEC_BLOCKED** — no doc02 criterion is
+untestable/ambiguous or contradicts the spec or a law; the sealed `acceptance/doc02/criteria/criteria.yaml`
+stays coherent with `product/v0-spec/02-VOICE-TRANSPORT.md`.
+
+**Independent re-analysis of the sole substantive residual (not just re-quoted — re-derived):**
+`hearing.py::HearingStage` gates observation with `if self._can_observe is not None and not
+self._can_observe(): return` — i.e. **fail-OPEN when `can_observe is None`**. I examined whether this
+violates AC-JOIN-04 (consent hard gate, `records_before_consent_allowed=0`, F-GATE-BYPASSED /
+F-RECORD-BEFORE-CONSENT). **Confirmed NOT a defect, and the prior "leave as-is" disposition is the
+correct engineering call, not avoidance:** the gate is *composable* — `HearingStage` is always wired
+with `JoinSession.can_observe` when consent-enforcement is this stage's job (docstring §125-129), and
+left `None` only in contexts that gate observation **upstream** (the transcript stream itself does not
+start until the notice posts). Forcing fail-closed-when-unwired would silently **drop every transcript**
+in those upstream-gated contexts (a strictly worse, Law-1/Law-2-violating failure) and would break the
+AC-HEAR-04 fan-out path, and **no criterion demands fail-closed-when-unwired** — AC-JOIN-04's
+state-machine oracle assumes the guard is wired. Left unchanged, deliberately.
+
+**Zero product changes this session** (none advances the tree; a change to the consent default would
+regress the wired path). Tree clean; product remains fully built (M0–M10, 30 transport modules) and
+audit-hardened across five passes.
+
+**Remaining to full doc02 green — unchanged, ALL conductor/host actions, NONE builder-authorable:**
+(1) Phase-3 EVIDENCE — the separate test-authoring authority authors the sealed `tests/doc02/test_*.py`
+red suite from the criteria (doc01 analog `61c9b0c`); (2) author the four absent doc01 fixtures in
+`tests/fixtures/repos.py` + provision a writable `/tenants` on the `code_intel` estate
+(`tools/verify-linux.sh`); (3) provision `limits` on the estate (AC-FAIL-16); (4) M11 rung-2 eval on
+`fixtures/estates/`. No sealed test/threshold/golden/verifier/harness file touched; no route-around; no
+weakening. Session ends here — the loop is non-terminating on this host without the conductor step.
