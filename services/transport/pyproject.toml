@@ -3,7 +3,11 @@ name = "transport"
 version = "0.0.0"
 description = "services.transport — bot/STT/TTS/turn transport."
 requires-python = ">=3.12"
-dependencies = ["contracts", "pydantic>=2"]
+dependencies = [
+    "contracts",
+    "limits>=3.13",
+    "pydantic>=2",
+]
 # NOTE: the external-call funnel (libs/http ``call_external``) is injected by the
 # meeting_runtime harness at wire-up (see transport.external.CallExternal); transport
 # holds no provider SDK and no raw client, so it declares no provider dependency.
