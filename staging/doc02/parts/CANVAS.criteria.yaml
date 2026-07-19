@@ -1,0 +1,264 @@
+# Doc 02 (Voice & Transport) — CANVAS section acceptance criteria
+# Scope: canvas webpage streamed by Output Media as the camera tile (ambient) OR
+#        the shared screen (promoted). Surface exists, stream works, promote/demote,
+#        mutual-exclusivity, announced swap, tile outbound-only, tile ACK <=500ms,
+#        frame-rate measurement.
+# Appearance of the drawings (orb/glyphs) is Doc 08 — NOT authored here.
+# Oracles: deterministic-preferred (state-machine / simulation-trace / static-analysis
+#          / latency). Judge only where no deterministic oracle exists.
+criteria:
+
+  - criterion_id: AC-CANVAS-01
+    name: "Canvas webpage streams via Output Media as the camera tile"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-CANVAS-01]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "One canvas webpage rendered for a live meeting"
+      when:  "The transport publishes the canvas to Recall Output Media in tile (ambient) mode"
+      then:
+        - "Exactly one canvas webpage exists for the meeting and is streamed as the camera tile"
+        - "No second/duplicate canvas webpage is instantiated for the same meeting"
+    primary_oracle: {type: state_machine_assertion, artifact: "assert canvas_pages_per_meeting==1 and active_output_media_surface=='tile'"}
+    thresholds: {canvas_pages_per_meeting: 1, duplicate_canvas_pages_allowed: 0}
+    fault_model_refs: [F-CANVAS-DUPLICATE-PAGE]
+    test_ids: [T-CANVAS-01]
+
+  - criterion_id: AC-CANVAS-02
+    name: "Tile renders in-call as the bot's camera (provable)"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-CANVAS-02]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The bot joined to a call with the tile webpage bound to its camera slot"
+      when:  "The call is live and frames are pulled from the bot's camera stream"
+      then:
+        - "The tile renders in-call: the camera stream produces non-empty rendered frames from the tile webpage"
+        - "The camera slot is not empty/black while the tile is the active surface"
+    primary_oracle: {type: simulation_trace, artifact: "capture N frames from the bot camera stream; assert frames originate from the tile render and are non-empty"}
+    thresholds: {tile_frames_rendered_min: 1, empty_camera_frames_while_active_allowed: 0}
+    fault_model_refs: [F-TILE-NOT-RENDERED-IN-CALL]
+    test_ids: [T-CANVAS-02]
+
+  - criterion_id: AC-CANVAS-03
+    name: "Social signals are drawn on the canvas, not via native platform buttons"
+    evidence_class: "[static]"
+    authority_refs: [R-doc02-CANVAS-03]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The canvas/tile signal surface and the transport code (appearance/look is Doc 08 — not checked here)"
+      when:  "Static analysis scans every social-signal path (listening/checking/has-something/raise-hand/reaction)"
+      then:
+        - "Each signal is expressed by a draw-on-canvas call; the signal surface is the canvas"
+        - "No code path invokes a native meeting-platform button/control API (raise-hand/reaction/etc.) to express a signal"
+    primary_oracle: {type: static_analysis, artifact: "AST/grep scan: 0 references to native platform reaction/raise-hand button APIs on any social-signal path; each signal routes to a canvas draw call"}
+    thresholds: {native_platform_button_calls_allowed: 0}
+    fault_model_refs: [F-SIGNAL-USES-NATIVE-BUTTON]
+    test_ids: [T-CANVAS-03]
+
+  - criterion_id: AC-CANVAS-04
+    name: "Tile ACK 'checking…' drawn within 500ms"
+    evidence_class: "[latency]"
+    authority_refs: [R-doc02-CANVAS-04]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "An LSP-bound direct answer exempt from the audio SLO (CANONICAL §12.8)"
+      when:  "The answer begins resolving its slow answer"
+      then:
+        - "The 'checking…' drawn tile state is surfaced with latency <= 500ms from resolve-start"
+        - "The ACK is a drawn tile state (not the audible ack of §3.3); tile ACK is visual"
+    primary_oracle: {type: latency_measurement, artifact: "measure t(checking-state-drawn) - t(resolve-start) over runs; assert p100 <= 500ms"}
+    thresholds: {tile_ack_latency_ms_max: 500, tile_ack_over_budget_allowed: 0}
+    fault_model_refs: [F-TILE-ACK-SLOW]
+    test_ids: [T-CANVAS-04]
+
+  - criterion_id: AC-CANVAS-05
+    name: "Tile ACK fires only on a real in-flight resolve (source-honesty)"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-CANVAS-05]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The tile ACK state machine"
+      when:  "A window with NO LSP-bound direct answer resolving is observed, then one that IS resolving"
+      then:
+        - "The 'checking…' state appears only while a real LSP-bound resolve is in flight"
+        - "No 'checking…' state is surfaced when nothing is resolving (drawn state reflects a real system event, never fabricated)"
+    primary_oracle: {type: state_machine_assertion, artifact: "assert checking_state_active implies an in-flight LSP-bound resolve event; assert 0 checking states during the no-resolve window"}
+    thresholds: {checking_state_without_resolve_allowed: 0}
+    fault_model_refs: [F-TILE-ACK-FABRICATED]
+    test_ids: [T-CANVAS-05]
+
+  - criterion_id: AC-CANVAS-06
+    name: "Screenshare promotes the same canvas showing sandbox live work"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-CANVAS-06]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The single canvas webpage and an active sandbox live-work view"
+      when:  "Screenshare is promoted (same render-a-webpage mechanism, higher resolution)"
+      then:
+        - "The promoted surface is the same canvas webpage rendered onto the presented screen at higher resolution"
+        - "The sandbox live-work view is rendered onto the presented screen (not a separate/second page)"
+    primary_oracle: {type: simulation_trace, artifact: "trace: promote -> active_surface=='screen', page_id==tile_page_id, resolution>tile_resolution, content==sandbox live-work view"}
+    thresholds: {screen_uses_separate_page_allowed: 0}
+    fault_model_refs: [F-SCREEN-NOT-SAME-CANVAS]
+    test_ids: [T-CANVAS-06]
+
+  - criterion_id: AC-CANVAS-07
+    name: "V0 screen is a structured progress view, not a live pixel mirror"
+    evidence_class: "[static]"
+    authority_refs: [R-doc02-CANVAS-07]
+    criticality: P2
+    blocking: true
+    behavior:
+      given: "The V0 screenshare live-work renderer (CANONICAL §12.11 REJECTED / §12.12 bounds this)"
+      when:  "Static analysis inspects what the live-work view renders"
+      then:
+        - "The view renders a structured progress view (+ pinned source w/ cited lines + final artifact preview)"
+        - "No pixel-accurate live browser/terminal mirror, animated cursor, or drawn-diagram renderer is present (Expansion-only)"
+    primary_oracle: {type: static_analysis, artifact: "assert 0 live browser/terminal-mirror or animated-cursor render paths; the live-work component is the structured progress view"}
+    thresholds: {live_pixel_mirror_paths_allowed: 0, animated_cursor_paths_allowed: 0}
+    fault_model_refs: [F-SCREEN-OVERBUILD-LIVE-MIRROR]
+    test_ids: [T-CANVAS-07]
+
+  - criterion_id: AC-CANVAS-08
+    name: "This layer executes promote/demote; never self-initiates a promote"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-CANVAS-08]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The canvas layer with an upstream promote/demote trigger interface (human-gating rule lives in Docs 04/08)"
+      when:  "An upstream trigger requests promote, and separately no upstream trigger is delivered"
+      then:
+        - "On an upstream trigger, the layer executes the promote/demote mechanism"
+        - "With no upstream trigger, the layer never self-initiates a promote (mechanism-only, no autonomous activation)"
+    primary_oracle: {type: state_machine_assertion, artifact: "assert every promote transition is caused by an upstream trigger; assert 0 promotes with no preceding trigger"}
+    thresholds: {self_initiated_promotes_allowed: 0}
+    fault_model_refs: [F-SCREEN-SELF-PROMOTE]
+    test_ids: [T-CANVAS-08]
+
+  - criterion_id: AC-CANVAS-09
+    name: "Camera and screenshare are mutually exclusive (never coactive)"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-CANVAS-09]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The transport streaming the canvas"
+      when:  "A full session with promotes/demotes is simulated and the active-surface state is sampled at every instant"
+      then:
+        - "At every sampled instant at most one of {camera tile, screenshare} is active"
+        - "At no instant are camera AND screenshare both streaming"
+    primary_oracle: {type: state_machine_assertion, artifact: "assert for all t: not (tile_active[t] and screen_active[t]); count coactive instants"}
+    thresholds: {camera_and_screen_coactive_allowed: 0}
+    fault_model_refs: [F-CAMERA-SCREEN-COACTIVE]
+    test_ids: [T-CANVAS-09]
+
+  - criterion_id: AC-CANVAS-10
+    name: "Every swap is announced"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-CANVAS-10]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The transport with camera<->screen swap capability"
+      when:  "A swap (tile->screen or screen->tile) is executed"
+      then:
+        - "An announcement is emitted for the swap"
+        - "No silent swap occurs (every swap transition has a paired announcement)"
+    primary_oracle: {type: state_machine_assertion, artifact: "assert count(announcements) == count(swap_transitions); every swap has an announcement"}
+    thresholds: {unannounced_swaps_allowed: 0}
+    fault_model_refs: [F-SWAP-UNANNOUNCED]
+    test_ids: [T-CANVAS-10]
+
+  - criterion_id: AC-CANVAS-11
+    name: "Present sequence: speak-headline -> swap-to-screen -> work -> swap-back"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-CANVAS-11, R-doc02-CANVAS-09]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "A present-work-on-screen request"
+      when:  "The transport sequences the presentation"
+      then:
+        - "The trace ordering is: speak headline -> swap to screen -> (work) -> swap back to tile"
+        - "The two streams never overlap during the sequence (headline precedes the swap; swap-back follows the work)"
+    primary_oracle: {type: simulation_trace, artifact: "assert index(headline) < index(swap_to_screen) < index(work) < index(swap_back); assert 0 overlap instants"}
+    thresholds: {sequence_order_violations_allowed: 0, stream_overlap_instants_allowed: 0}
+    fault_model_refs: [F-SWAP-SEQUENCE-OUT-OF-ORDER]
+    test_ids: [T-CANVAS-11]
+
+  - criterion_id: AC-CANVAS-12
+    name: "Tile is outbound-only: no inbound path exists from the tile (structural)"
+    evidence_class: "[static]"
+    authority_refs: [R-doc02-CANVAS-12]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The transport codebase (CANONICAL §12.9: humans can't click a video stream)"
+      when:  "Static analysis searches for any tile-originated inbound path"
+      then:
+        - "No TILE_ADDRESS symbol and no tile-originated ChannelAction type/handler exists"
+        - "No code path accepts or dispatches an inbound action originating from the tile"
+    primary_oracle: {type: static_analysis, artifact: "assert 0 defs/uses of TILE_ADDRESS; 0 tile-originated ChannelAction types; 0 inbound handlers keyed to the tile"}
+    thresholds: {tile_inbound_path_exists_allowed: 0}
+    fault_model_refs: [F-TILE-INBOUND-PATH]
+    test_ids: [T-CANVAS-12]
+
+  - criterion_id: AC-CANVAS-13
+    name: "Tile render WS authenticates via a meeting-scoped bearer token in the Recall URL"
+    evidence_class: "[static]"
+    authority_refs: [R-doc02-CANVAS-13]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The tile page opening its render WebSocket"
+      when:  "The WS connection is established and its auth is inspected"
+      then:
+        - "The render WS authenticates using a meeting-scoped bearer token carried in the Recall URL"
+        - "No unauthenticated render WS connection is accepted; a token from another meeting scope is rejected"
+    primary_oracle: {type: static_analysis, artifact: "assert render WS auth reads a meeting-scoped bearer token from the Recall URL; assert reject-on-missing/cross-scope token"}
+    thresholds: {unauthenticated_render_ws_allowed: 0, cross_meeting_token_accepted_allowed: 0}
+    fault_model_refs: [F-TILE-WS-UNAUTH]
+    test_ids: [T-CANVAS-13]
+
+  - criterion_id: AC-CANVAS-14
+    name: "A promote/demote cycle drops neither stream"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-CANVAS-14]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The transport with the tile active"
+      when:  "A full promote (tile->screen) then demote (screen->tile) cycle is executed"
+      then:
+        - "A stream stays live throughout the cycle: at every instant at least one surface is producing frames"
+        - "Neither stream is dropped (no black frame / no stream loss) across the promote and the demote"
+    primary_oracle: {type: simulation_trace, artifact: "sample frame liveness across the cycle; assert min(live_surfaces[t])>=1 for all t; assert 0 dropped-stream events"}
+    thresholds: {stream_drops_during_cycle_allowed: 0, black_frame_instants_allowed: 0}
+    fault_model_refs: [F-PROMOTE-DEMOTE-DROPS-STREAM]
+    test_ids: [T-CANVAS-14]
+
+  - criterion_id: AC-CANVAS-15
+    name: "Frame-rate/smoothness is a pinned measurement; worst case degrades, never loses capability"
+    evidence_class: "[latency]"
+    authority_refs: [R-doc02-CANVAS-15]
+    criticality: P2
+    blocking: false
+    behavior:
+      given: "A live-work view streamed via Output Media (Recall publishes no frame-rate number)"
+      when:  "Frame-rate/smoothness is measured, including a worst-case (constrained) run"
+      then:
+        - "The Output Media frame-rate/smoothness is recorded as a pinned measurement (reported, not a hard pass/fail gate)"
+        - "Under worst case the view degrades to choppier motion and never loses capability: the stream stays live (no crash, no dropped surface)"
+    primary_oracle: {type: latency_measurement, artifact: "record measured fps as a pinned number; assert worst-case run keeps the stream live (0 crashes, 0 lost-capability events) rather than gating on an fps threshold"}
+    thresholds: {frame_rate_is_hard_gate: 0, lost_capability_events_worstcase_allowed: 0, crashes_worstcase_allowed: 0}
+    fault_model_refs: [F-LIVEWORK-CAPABILITY-LOST]
+    test_ids: [T-CANVAS-15]

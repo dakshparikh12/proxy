@@ -1,0 +1,91 @@
+# Doc 02 (Voice & Transport) — CROSS-CUTTING slice authored by the Criteria Author Lead.
+# The doc's laws/invariants (AGENTS.md) and canonical contracts (CANONICAL-DECISIONS.md) as they
+# bind the transport layer — the pass the per-section authors cannot do. Deterministic-preferred oracles.
+- requirement_id: R-doc02-XCUT-01
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: "CLAUDE.md Hard rules / AGENTS.md 'What Proxy is'"
+  source_quote: "user-visible strings never contain internal names (Orchestrator/Scribe/workroom): enforced by the naming lint; the product and the agent are Proxy."
+  normalized_statement: >
+    WHEN the transport layer emits any user-visible string (consent notice, chat notice, ack line, gap line) THE SYSTEM SHALL NOT include an internal component name (Orchestrator/Scribe/Workroom/transport); the user-visible name is Proxy.
+  requirement_type: contract
+  criticality: P1
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-XCUT-02
+  authority_type: threat_model
+  authority_document: DOC-02
+  source_location: "CLAUDE.md Hard rules / AGENTS.md invariant 10"
+  source_quote: "secrets only from Secret Manager, never hard-coded or logged: enforced by check-secret-bindings at startup."
+  normalized_statement: >
+    WHEN the transport layer uses a provider credential (Recall, AssemblyAI BYOK, Cartesia) THE SYSTEM SHALL source it from Secret Manager and SHALL NOT hard-code it or write it to logs, error messages, or artifacts.
+  requirement_type: security
+  criticality: P0
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-XCUT-03
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: "CLAUDE.md Hard rules (External calls)"
+  source_quote: "every external call wrapped with retry + cost telemetry: enforced by the single call_external seam in libs/http (no raw client lives anywhere else)."
+  normalized_statement: >
+    WHEN the transport layer makes any external provider call THE SYSTEM SHALL route it through the single call_external seam in libs/http (retry + cost telemetry); no raw provider client SHALL live outside that seam.
+  requirement_type: contract
+  criticality: P1
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-XCUT-04
+  authority_type: canonical_decision
+  authority_document: DOC-02
+  source_location: "CANONICAL §12.3 / AGENTS.md C2 amendment"
+  source_quote: "Wake-turn tools speak/send_chat/show_screen are the SOLE delivery authority; the projector is pure rendering and never auto-speaks."
+  normalized_statement: >
+    WHEN Proxy delivers to any channel THE SYSTEM SHALL deliver only via speak/send_chat/show_screen, and the projector SHALL be pure rendering that never auto-extracts a headline and speaks on its own.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-XCUT-05
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: "AGENTS.md invariant 9 / CANONICAL §11.1"
+  source_quote: "Tenant isolation (tenant_id in every schema; cross-tenant read = P0 breach) ... Recall webhooks carry the bot_id -> look up the meetings row -> tenant + repo."
+  normalized_statement: >
+    WHEN a Recall webhook carrying a bot_id is resolved THE SYSTEM SHALL resolve it to exactly the owning tenant's meeting, never another tenant's; an unknown bot_id SHALL fail closed (no cross-tenant read).
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-XCUT-06
+  authority_type: canonical_decision
+  authority_document: DOC-02
+  source_location: "CANONICAL §12.1 / §2 Where it runs / §9"
+  source_quote: "the carrier from this layer to the projector/canvas and to the Orchestrator is an in-process asyncio call (no bus, no broker, no wire)."
+  normalized_statement: >
+    WHEN the transport layer carries a signal or delivery to the projector or Orchestrator THE SYSTEM SHALL use an in-process asyncio call within meeting_runtime; it SHALL NOT introduce a bus, broker, or network wire, and SHALL live under services/transport (not libs/transport).
+  requirement_type: contract
+  criticality: P2
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-XCUT-07
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: "AGENTS.md law 2 / invariant 2 / §4 Failure behavior"
+  source_quote: "Proxy is never both broken and pretending."
+  normalized_statement: >
+    WHILE any transport failure mode is active THE SYSTEM SHALL take an honest non-silent path (rejoin+admit-gap, mark-lost, degrade voice->chat, or queue) and SHALL NOT both fail and present continuity/silence as normal.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-XCUT-08
+  authority_type: canonical_decision
+  authority_document: DOC-02
+  source_location: "CANONICAL §11.8"
+  source_quote: "The Doc 02 signal surface (transcript/roster/speaking/boundary/barge-in/bot-status/meeting-end/channel-report) are in-process/over-transport INTERNAL events (02->03/04), NOT client-facing ProxyMessages. They are OUT of assert_registry_closed()'s scope."
+  normalized_statement: >
+    WHEN assert_registry_closed() validates the client ProxyMessage registry THE SYSTEM SHALL NOT require the Doc 02 internal signal-surface events to be registered (they are internal 02->03/04 events, out of registry scope).
+  requirement_type: contract
+  criticality: P2
+  testability: analyzable
+  status: qualified

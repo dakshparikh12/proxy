@@ -1,0 +1,279 @@
+# Doc 02 (Voice & Transport) — TURN-TAKING / BARGE-IN / MUTE / BOUNDARY-SIGNAL requirements slice
+# Extracted per GENERATOR Phase A from:
+#   product/v0-spec/02-VOICE-TRANSPORT.md §1 goal item 4, §2 Turn-taking manners,
+#   §3.6 (turn-taking/barge-in/mute), §3.9 step 7, §3.10 signal surface, §4 latency
+#   AGENTS.md Law 3 (human control is absolute; barge-in <200ms; "quiet" silences)
+#   product/v0-spec/CANONICAL-DECISIONS.md §12.11 (Smart Turn v3 REJECTED for V0 core)
+# Two distinct signals define this layer: Silero VAD speaking(on/off) as the sub-200ms
+# barge-in trigger, and AAI Universal-Streaming `end_of_turn` as the boundary signal.
+# Barge-in and hard-mute are Law-3 P0 manners — human control is absolute.
+
+# ── Signals: VAD speaking + AAI boundary (two distinct streams) ──────────────
+
+- requirement_id: R-doc02-TURN-01
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.6"
+  source_quote: "Silero VAD runs on the incoming audio: is anyone speaking right now? (<1ms/chunk, CPU) — this is the barge-in trigger, and it must stay: a human speech onset has to stop TTS in [<200ms], and the AAI transcript (~300ms) is too slow to do that. Not redundant with the boundary signal."
+  normalized_statement: >
+    WHEN incoming meeting audio is processed
+    THE SYSTEM SHALL run Silero VAD to emit a speaking(on/off) signal and SHALL use that signal as the barge-in trigger.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-TURN-02
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.6"
+  source_quote: "End-of-turn boundary = AssemblyAI Universal-Streaming's `end_of_turn`, already on the STT stream we pay for: is this a real end-of-turn or a mid-thought breath? No Smart Turn v3 model."
+  normalized_statement: >
+    WHEN a natural end-of-turn opens
+    THE SYSTEM SHALL derive the boundary signal from AssemblyAI Universal-Streaming's `end_of_turn` field on the existing STT stream, with no Smart Turn v3 model in V0 core.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-TURN-03
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: "§2 Turn-taking manners"
+  source_quote: "These are not redundant: AAI's transcript latency (~300ms) is far too slow to cut TTS mid-word, so VAD stays as the sub-200ms barge-in trigger. So the Orchestrator gets two clean signals: someone is speaking (Silero VAD) and a natural boundary just opened (AAI `end_of_turn`)."
+  normalized_statement: >
+    WHEN the turn-taking layer runs
+    THE SYSTEM SHALL treat the VAD speaking signal and the AAI `end_of_turn` boundary signal as two distinct, non-redundant signals, and SHALL NOT make barge-in depend on the ~300ms AAI transcript.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-TURN-04
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.6"
+  source_quote: "Both signals stream to the Orchestrator continuously."
+  normalized_statement: >
+    WHILE a meeting is live
+    THE SYSTEM SHALL stream both the VAD speaking signal and the AAI boundary signal to the Orchestrator continuously.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-TURN-05
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.10 signal surface"
+  source_quote: "speaking(on/off) · boundary(now) · barge-in(now)"
+  normalized_statement: >
+    WHEN this layer exposes its signal surface
+    THE SYSTEM SHALL surface exactly speaking(on/off), boundary(now), and barge-in(now).
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Speak-only-on-boundary ──────────────────────────────────────────────────
+
+- requirement_id: R-doc02-TURN-06
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: "§3.6"
+  source_quote: "The contract this layer enforces: voice output may only start on a clear boundary"
+  normalized_statement: >
+    WHEN voice output is about to start
+    THE SYSTEM SHALL start it only on a clear boundary signal, and SHALL NOT start voice output absent a boundary.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-TURN-07
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§2 Turn-taking manners"
+  source_quote: "Proxy speaks only into boundaries"
+  normalized_statement: >
+    WHEN Proxy has speech queued
+    THE SYSTEM SHALL release that speech only into an open boundary, never mid-turn over an active speaker.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-TURN-08
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.6"
+  source_quote: "is this a real end-of-turn or a mid-thought breath?"
+  normalized_statement: >
+    WHEN a pause in speech occurs that is a mid-thought breath rather than a real end_of_turn
+    THE SYSTEM SHALL NOT treat it as a boundary and SHALL NOT open voice output on it.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-TURN-09
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: "§3.9 step 7 / Law 4"
+  source_quote: "AAI `end_of_turn` → boundary signal"
+  normalized_statement: >
+    WHEN the boundary signal is produced
+    THE SYSTEM SHALL derive it from a real AAI `end_of_turn` event, never from a fixed timer or elapsed-silence clock.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Barge-in: stop mid-word + flush queue, within budget ────────────────────
+
+- requirement_id: R-doc02-TURN-10
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: "§1 goal item 4 / Law 3"
+  source_quote: "If a human starts talking while Proxy speaks, Proxy stops mid-word."
+  normalized_statement: >
+    WHEN a human speech onset is detected while Proxy is speaking
+    THE SYSTEM SHALL stop TTS mid-word.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-TURN-11
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: "§3.6"
+  source_quote: "any human speech onset during Proxy's speech = stop TTS mid-word + flush the queue (upstream decides whether to re-queue, bank, or drop — Doc 04)."
+  normalized_statement: >
+    WHEN barge-in fires during Proxy's speech
+    THE SYSTEM SHALL both stop the in-flight TTS mid-word AND flush the speech queue, leaving the re-queue/bank/drop decision to upstream (Doc 04).
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-TURN-12
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: "§3.6 / §4 latency / Law 3"
+  source_quote: "a human speech onset has to stop TTS in [<200ms]"
+  normalized_statement: >
+    WHEN barge-in fires
+    THE SYSTEM SHALL complete the TTS stop within 200ms (barge-in stop budget; measured at p95).
+  requirement_type: performance
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-TURN-13
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: "§4 latency"
+  source_quote: "barge-in stop: effectively instant ([<200ms])"
+  normalized_statement: >
+    WHEN barge-in latency is measured end-to-end
+    THE SYSTEM SHALL keep barge-in stop effectively instant, under the 200ms budget.
+  requirement_type: performance
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-TURN-14
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.9 step 7"
+  source_quote: "kills TTS mid-word + flushes in [<200ms], small-chunk buffer so barge-in isn't defeated by buffered audio"
+  normalized_statement: >
+    WHEN TTS audio is buffered for playback
+    THE SYSTEM SHALL use a small-chunk buffer so that barge-in stop within the 200ms budget is not defeated by already-buffered audio.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-TURN-15
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.6"
+  source_quote: "Silero VAD runs on the incoming audio: is anyone speaking right now?"
+  normalized_statement: >
+    WHILE no human speech onset is present (silence, or only Proxy's own output audio)
+    THE SYSTEM SHALL NOT fire barge-in.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Hard-mute kill-switch ────────────────────────────────────────────────────
+
+- requirement_id: R-doc02-TURN-16
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: "§1 goal item 4 / Law 3"
+  source_quote: "If someone says \"Proxy, quiet,\" it goes silent."
+  normalized_statement: >
+    WHEN a hard-mute ("Proxy, quiet" / "mute") command is delivered to this layer
+    THE SYSTEM SHALL go silent.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-TURN-17
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: "§3.6"
+  source_quote: "Hard mute: \"Proxy, quiet / mute\" → this layer kills any in-flight TTS and enters silent mode (tile + chat remain; voice off) until re-invited. Recognition of the phrase is Doc 04's; the kill-switch is here."
+  normalized_statement: >
+    WHEN hard-mute is invoked
+    THE SYSTEM SHALL kill any in-flight TTS and enter silent mode with voice off while the tile and chat remain live, staying muted until re-invited; phrase recognition is Doc 04's, the kill-switch is this layer's.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-TURN-18
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: "§3.6"
+  source_quote: "enters silent mode (tile + chat remain; voice off) until re-invited"
+  normalized_statement: >
+    WHILE in silent mode after hard-mute
+    THE SYSTEM SHALL keep voice output off and SHALL NOT re-enable voice until Proxy is re-invited; the speaking and muted states SHALL be mutually exclusive.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Provability + confirm-at-build contingency ──────────────────────────────
+
+- requirement_id: R-doc02-TURN-19
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.9 step 7"
+  source_quote: "Provable: speech onset during Proxy's speech stops it inside the budget; \"quiet\" silences voice while chat stays live."
+  normalized_statement: >
+    WHEN this layer is verified on real audio
+    THE SYSTEM SHALL demonstrate a scripted speech onset during Proxy's speech stopping it inside the budget, and "quiet" silencing voice while chat stays live.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-TURN-20
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§2 Turn-taking / §3.9 (CANONICAL §12.11)"
+  source_quote: "Confirm-at-build: verify Recall passthrough forwards AAI's `end_of_turn` field; if it does not, re-add Smart Turn v3."
+  normalized_statement: >
+    WHEN the build confirms the transport, IF Recall passthrough does not forward AAI's `end_of_turn` field
+    THEN THE SYSTEM SHALL re-add Smart Turn v3 as the boundary source; otherwise the boundary stays AAI `end_of_turn` (Smart Turn v3 excluded from V0 core per CANONICAL §12.11 — resolved by build-time confirmation, not a guess).
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified

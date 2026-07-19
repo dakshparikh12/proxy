@@ -1,0 +1,292 @@
+# Doc 02 (Voice & Transport) — JOIN / CONSENT / ROSTER-CONSENT criteria slice
+# Every criterion has a deterministic-preferred oracle; authority_refs point at
+# real requirement_ids in JOIN.requirements.yaml. Numeric thresholds are explicit.
+
+- criterion_id: AC-JOIN-01
+  name: "Join from meeting link launches a Recall bot with no host-side install"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-JOIN-01, R-doc02-JOIN-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A valid meeting link and no host-side install / host approval"
+    when:  "The user invites Proxy with only the link"
+    then:
+      - "A Recall bot is launched and reaches an in-meeting state from the link alone"
+      - "No host-side install or host-approval step is required or requested"
+  primary_oracle: {type: simulation_trace, artifact: "Join FSM trace: link-only path reaches IN_MEETING with install_required=false"}
+  thresholds: {host_install_steps_allowed: 0, host_approval_prompts_allowed: 0}
+  fault_model_refs: [F-JOIN-REQUIRES-INSTALL]
+  test_ids: [T-JOIN-01]
+
+- criterion_id: AC-JOIN-02
+  name: "Join reaches listening state within 10s (boundary: 10s pass, over fail)"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc02-JOIN-04, R-doc02-JOIN-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A meeting invite triggered at t0"
+    when:  "Proxy joins and transitions to the listening state"
+    then:
+      - "join-to-listening elapsed <= 10.0s is PASS"
+      - "join-to-listening elapsed > 10.0s is FAIL (boundary: exactly 10.0s passes)"
+  primary_oracle: {type: latency_measurement, artifact: "Measured t(listening)-t(invite) compared against threshold; p95 over repeated runs"}
+  thresholds: {join_to_listening_seconds_max: 10.0, boundary_at_10s: "pass", over_10s: "fail"}
+  fault_model_refs: [F-JOIN-SLOW-OVER-10S]
+  test_ids: [T-JOIN-02]
+
+- criterion_id: AC-JOIN-03
+  name: "Consent notice posts immediately on join, before any other observable action"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-JOIN-05, R-doc02-JOIN-08]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Proxy has just joined a meeting"
+    when:  "The join event fires"
+    then:
+      - "The consent notice chat post is the first observable action emitted"
+      - "No observe/record/participate action is ordered before the notice post (ordering violation → fail)"
+  primary_oracle: {type: simulation_trace, artifact: "Ordered action trace: assert index(consent_post) < index(any observe/record/speak action)"}
+  thresholds: {consent_notice_missing_allowed: 0, actions_before_notice_allowed: 0}
+  fault_model_refs: [F-CONSENT-NOTICE-OMITTED, F-CONSENT-NOTICE-LATE]
+  test_ids: [T-JOIN-03]
+
+- criterion_id: AC-JOIN-04
+  name: "Consent notice is a hard gate — nothing observed/recorded until it posts"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-JOIN-08]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A join where the consent notice post is delayed or fails"
+    when:  "The gate condition (notice_posted) is not yet true"
+    then:
+      - "No observation/recording/participation occurs while notice_posted=false"
+      - "If the notice never posts, the system halts observation and reports the failure (does not silently proceed)"
+  primary_oracle: {type: state_machine_assertion, artifact: "Guard assertion: observe/record transitions require notice_posted==true precondition"}
+  thresholds: {records_before_consent_allowed: 0}
+  fault_model_refs: [F-GATE-BYPASSED, F-RECORD-BEFORE-CONSENT]
+  test_ids: [T-JOIN-04]
+
+- criterion_id: AC-JOIN-05
+  name: "Consent notice content is one line: AI participant, observes/records, anyone can address it"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc02-JOIN-07]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The rendered consent notice string"
+    when:  "The notice is composed for posting"
+    then:
+      - "It is a single line asserting: AI participant, observes/records, anyone in the room can address it"
+      - "It contains no internal component names (Orchestrator/Scribe/workroom) — naming law holds"
+  primary_oracle: {type: static, artifact: "String assertion on the three required semantic elements + naming lint over the notice template"}
+  thresholds: {required_elements_present: 3, internal_names_allowed: 0, lines_expected: 1}
+  fault_model_refs: [F-CONSENT-CONTENT-INCOMPLETE, F-CONSENT-INTERNAL-NAME-LEAK]
+  test_ids: [T-JOIN-05]
+
+- criterion_id: AC-JOIN-06
+  name: "Consent notice pinned where platform allows; posted where it does not"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-JOIN-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Platforms with and without chat-pin support"
+    when:  "The consent notice is delivered"
+    then:
+      - "On pin-capable platforms the notice is pinned"
+      - "On non-pin platforms the notice is still posted (no pin does not mean no notice)"
+  primary_oracle: {type: simulation_trace, artifact: "Per-platform delivery trace: pin_capable→pinned==true; !pin_capable→posted==true"}
+  thresholds: {notice_missing_on_any_platform_allowed: 0}
+  fault_model_refs: [F-PIN-FALLBACK-DROPS-NOTICE]
+  test_ids: [T-JOIN-06]
+
+- criterion_id: AC-JOIN-07
+  name: "Late-join re-post fires for each new participant who joined after the notice"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-JOIN-10, R-doc02-JOIN-11]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A meeting where the notice already posted, then N new participants join mid-meeting"
+    when:  "Each mid-meeting participant_join event fires"
+    then:
+      - "The consent notice re-posts once per new participant who joined after the notice"
+      - "A late joiner who triggers no re-post is a hole (fail); participants present at first post do not require a re-post"
+  primary_oracle: {type: simulation_trace, artifact: "Event trace: count(re-posts) == count(participant_joins after first notice); assert no post-notice joiner is uncovered"}
+  thresholds: {late_joiner_without_repost_allowed: 0}
+  fault_model_refs: [F-LATE-JOIN-NO-REPOST]
+  test_ids: [T-JOIN-07]
+
+- criterion_id: AC-JOIN-08
+  name: "Bot belongs to the room, not the inviter — any participant may address it"
+  evidence_class: "[static]"
+  authority_refs: [R-doc02-JOIN-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An in-meeting Proxy and a participant who is not the inviter"
+    when:  "That participant addresses Proxy"
+    then:
+      - "Addressing is accepted regardless of whether the speaker is the inviter"
+      - "No code path restricts interaction to the inviter identity"
+  primary_oracle: {type: static, artifact: "Static analysis: no inviter-equality guard on the address/interaction path"}
+  thresholds: {inviter_only_gates_allowed: 0}
+  fault_model_refs: [F-INVITER-ONLY-INTERACTION]
+  test_ids: [T-JOIN-08]
+
+- criterion_id: AC-JOIN-09
+  name: "Join works identically on Meet, Zoom, and Teams via Recall"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-JOIN-12]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Meeting links for Meet, Zoom, and Teams"
+    when:  "Proxy joins each"
+    then:
+      - "Each platform reaches IN_MEETING + notice-posted through the same Recall-backed join path"
+      - "No platform is missing join support (a missing platform branch is a hole)"
+  primary_oracle: {type: simulation_trace, artifact: "Per-platform join FSM trace for {meet,zoom,teams}: all reach IN_MEETING via Recall seam"}
+  thresholds: {platforms_covered: 3, platforms_missing_allowed: 0}
+  fault_model_refs: [F-PLATFORM-JOIN-DIVERGENCE]
+  test_ids: [T-JOIN-09]
+
+- criterion_id: AC-JOIN-10
+  name: "meetings row created on invite; recall_bot_id written back"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc02-JOIN-13]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A user invites Proxy"
+    when:  "The bot launch completes"
+    then:
+      - "A meetings row exists and its recall_bot_id column is populated with the launched bot's id"
+      - "No meetings row is left without a recall_bot_id after a successful launch"
+  primary_oracle: {type: state_machine_assertion, artifact: "DB assertion: meetings row present AND recall_bot_id == launched bot id"}
+  thresholds: {meetings_rows_missing_bot_id_allowed: 0}
+  fault_model_refs: [F-BOT-ID-NOT-WRITTEN-BACK]
+  test_ids: [T-JOIN-10]
+
+- criterion_id: AC-JOIN-11
+  name: "Recall webhook bot_id resolves to meetings row → tenant + repo"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc02-JOIN-14]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A Recall webhook carrying a known bot_id"
+    when:  "The webhook is received"
+    then:
+      - "The bot_id resolves to exactly one meetings row and its tenant + repo"
+      - "An unknown bot_id fails closed (no cross-tenant or default resolution)"
+  primary_oracle: {type: state_machine_assertion, artifact: "Lookup assertion: bot_id→meetings row→(tenant,repo) single-match; unknown id → rejected"}
+  thresholds: {ambiguous_or_cross_tenant_resolutions_allowed: 0}
+  fault_model_refs: [F-WEBHOOK-TENANT-MISRESOLVE]
+  test_ids: [T-JOIN-11]
+
+- criterion_id: AC-JOIN-12
+  name: "Default-consented once join notice posts"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-JOIN-15]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A meeting where the join notice has posted"
+    when:  "Consent state is evaluated"
+    then:
+      - "Consent state is default-consented for the room"
+      - "Consent is never asserted before the notice has posted"
+  primary_oracle: {type: state_machine_assertion, artifact: "Consent FSM: consented state entered iff notice_posted==true"}
+  thresholds: {consent_without_notice_allowed: 0}
+  fault_model_refs: [F-CONSENT-WITHOUT-NOTICE]
+  test_ids: [T-JOIN-12]
+
+- criterion_id: AC-JOIN-13
+  name: "Objection triggers audible defer-to-organizer (not unilateral continuation)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-JOIN-16]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A participant voices an objection to Proxy's presence"
+    when:  "The objection is recognized"
+    then:
+      - "Proxy audibly defers the decision to the organizer"
+      - "Proxy does not continue unilaterally as if no objection occurred"
+  primary_oracle: {type: simulation_trace, artifact: "Objection event trace: assert emitted action == audible defer-to-organizer, not continue"}
+  thresholds: {unilateral_continue_on_objection_allowed: 0}
+  fault_model_refs: [F-OBJECTION-IGNORED]
+  test_ids: [T-JOIN-13]
+
+- criterion_id: AC-JOIN-14
+  name: "Hard-removal ends the bot (leaves), not mute/pause"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-JOIN-17]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A hard-removal is requested"
+    when:  "The removal is processed"
+    then:
+      - "The bot ends/leaves the meeting (terminal end-bot transition)"
+      - "The bot is not left merely muted or paused while still present"
+  primary_oracle: {type: state_machine_assertion, artifact: "FSM assertion: hard_removal → END_BOT terminal; no residual in-meeting state"}
+  thresholds: {residual_presence_after_hard_removal_allowed: 0}
+  fault_model_refs: [F-HARD-REMOVAL-ONLY-MUTES]
+  test_ids: [T-JOIN-14]
+
+- criterion_id: AC-JOIN-15
+  name: "Join is provable — bot appears in a real meeting and consent line is really posted/pinned"
+  evidence_class: "[eval-realrepo]"
+  authority_refs: [R-doc02-JOIN-18]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A real meeting (e.g. Meet) used for the provability check"
+    when:  "Proxy joins"
+    then:
+      - "The bot is observably present in the real meeting roster"
+      - "The consent line is a real posted/pinned chat message captured from the platform, not a synthesized/faked artifact"
+  primary_oracle: {type: integration_capture, artifact: "Real-meeting evidence: roster shows bot + chat API/transcript shows the pinned/posted consent line"}
+  thresholds: {faked_consent_evidence_allowed: 0, real_meeting_runs_required: 1}
+  fault_model_refs: [F-CONSENT-EVIDENCE-FAKED]
+  test_ids: [T-JOIN-15]
+
+- criterion_id: AC-JOIN-16
+  name: "Join or consent-post failure is reported honestly (no false joined/posted state)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-JOIN-19]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A join attempt that fails, or a consent post that cannot be delivered"
+    when:  "The failure occurs"
+    then:
+      - "The system surfaces the failure plainly (failure spoken plainly, per law 2)"
+      - "It never reports a false 'joined' or 'consent posted' success state"
+  primary_oracle: {type: simulation_trace, artifact: "Fault-injection trace: on join/post failure, reported status==failure; assert no success emission"}
+  thresholds: {false_success_reports_allowed: 0}
+  fault_model_refs: [F-JOIN-FAILURE-MASKED, F-CONSENT-POST-FAILURE-MASKED]
+  test_ids: [T-JOIN-16]
+
+- criterion_id: AC-JOIN-17
+  name: "Calendar-invite join path reaches the same gated in-meeting state as link join"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-JOIN-01]
+  criticality: P2
+  blocking: false
+  behavior:
+    given: "A calendar invite carrying a meeting link"
+    when:  "Proxy is scheduled to join from the calendar invite"
+    then:
+      - "The join reaches IN_MEETING and posts the consent notice, identical to the direct-link path"
+      - "No host-side install is required for the calendar-invite path"
+  primary_oracle: {type: simulation_trace, artifact: "Join FSM trace from calendar-invite source converges on same IN_MEETING + notice-posted state"}
+  thresholds: {host_install_steps_allowed: 0, consent_notice_missing_allowed: 0}
+  fault_model_refs: [F-CALENDAR-JOIN-DIVERGES]
+  test_ids: [T-JOIN-17]

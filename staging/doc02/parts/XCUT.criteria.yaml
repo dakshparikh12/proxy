@@ -1,0 +1,130 @@
+# Doc 02 (Voice & Transport) — CROSS-CUTTING acceptance criteria (Criteria Author Lead).
+# Laws/invariants + canonical contracts as they bind transport. Deterministic-preferred oracles.
+- criterion_id: AC-XCUT-01
+  name: "User-visible transport strings carry no internal component name"
+  evidence_class: "[static]"
+  authority_refs: [R-doc02-XCUT-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The transport layer's user-visible string outputs: consent notice, chat notices, ack line, disconnect-gap line."
+    when: "The naming lint (libs.lint.naming) scans these strings."
+    then:
+      - "No string contains an internal component name (Orchestrator/Scribe/Workroom/transport)."
+      - "The only agent/product name presented is Proxy."
+  primary_oracle: {type: static_analysis, artifact: "libs.lint.naming scan over transport user-visible string constants/templates"}
+  thresholds: {internal_name_in_user_visible_string_allowed: 0}
+  fault_model_refs: [F-INTERNAL-NAME-LEAK]
+  test_ids: [T-XCUT-01]
+- criterion_id: AC-XCUT-02
+  name: "Provider credentials never hard-coded or logged"
+  evidence_class: "[static]"
+  authority_refs: [R-doc02-XCUT-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Recall, AssemblyAI (BYOK), and Cartesia credentials used by transport."
+    when: "check-secret-bindings runs at startup and a log/artifact scan runs over a meeting simulation."
+    then:
+      - "Every credential is sourced from Secret Manager (no literal key in source)."
+      - "No credential value appears in any log line, error message, or artifact."
+  primary_oracle: {type: static_analysis, artifact: "secret-binding check + bandit + log-scan for provider key patterns"}
+  thresholds: {hardcoded_provider_key_allowed: 0, provider_key_in_logs_allowed: 0}
+  fault_model_refs: [F-SECRET-HARDCODED, F-SECRET-LOGGED]
+  test_ids: [T-XCUT-02]
+- criterion_id: AC-XCUT-03
+  name: "Every external provider call goes through the call_external seam"
+  evidence_class: "[static]"
+  authority_refs: [R-doc02-XCUT-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Transport code that calls Recall / AssemblyAI / Cartesia."
+    when: "A static scan checks for external client usage outside libs/http call_external."
+    then:
+      - "Every external call is wrapped by the single call_external seam (retry + cost telemetry)."
+      - "No raw provider client is instantiated or invoked outside that seam."
+  primary_oracle: {type: static_analysis, artifact: "AST scan for provider SDK/client calls not routed via libs.http.call_external"}
+  thresholds: {raw_external_client_outside_seam_allowed: 0}
+  fault_model_refs: [F-RAW-EXTERNAL-CLIENT]
+  test_ids: [T-XCUT-03]
+- criterion_id: AC-XCUT-04
+  name: "speak/send_chat/show_screen are the sole delivery authority; projector never auto-speaks"
+  evidence_class: "[static]"
+  authority_refs: [R-doc02-XCUT-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The delivery surface (speak/send_chat/show_screen) and the projector renderer."
+    when: "A static + state-machine check inspects delivery call sites and the projector."
+    then:
+      - "All channel delivery flows through speak/send_chat/show_screen only."
+      - "The projector emits rendering only and has no path that auto-extracts a headline and calls speak."
+  primary_oracle: {type: static_analysis, artifact: "scan: projector module has no speak()/TTS invocation path; delivery verbs are the only emitters"}
+  thresholds: {projector_auto_speak_path_allowed: 0}
+  fault_model_refs: [F-PROJECTOR-AUTO-SPEAK]
+  test_ids: [T-XCUT-04]
+- criterion_id: AC-XCUT-05
+  name: "bot_id resolves to exactly the owning tenant; unknown bot_id fails closed"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-XCUT-05]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Two tenants each with a live meeting and a distinct recall_bot_id; plus one unknown bot_id."
+    when: "A Recall webhook is resolved for each bot_id."
+    then:
+      - "Each known bot_id resolves to exactly its owning tenant's meeting (never the other tenant's)."
+      - "An unknown bot_id fails closed (rejected, no meeting/tenant read)."
+  primary_oracle: {type: state_machine_assertion, artifact: "resolve(bot_id) -> {tenant_id, meeting_id} against a two-tenant fixture; assert no cross-tenant match"}
+  thresholds: {cross_tenant_botid_resolution_allowed: 0, unknown_botid_resolved_allowed: 0}
+  fault_model_refs: [F-CROSS-TENANT-BOTID]
+  test_ids: [T-XCUT-05]
+- criterion_id: AC-XCUT-06
+  name: "In-process asyncio carrier; no bus/broker/wire; transport under services/transport"
+  evidence_class: "[static]"
+  authority_refs: [R-doc02-XCUT-06]
+  criticality: P2
+  blocking: false
+  behavior:
+    given: "The transport package and its carrier to projector/Orchestrator."
+    when: "A structural scan inspects imports and package location."
+    then:
+      - "The carrier is an in-process asyncio call (no message bus, broker, or network wire introduced)."
+      - "Transport lives under services/transport; there is no libs/transport."
+  primary_oracle: {type: static_analysis, artifact: "import/location scan: no broker client; path is services/transport; absence of libs/transport"}
+  thresholds: {bus_or_broker_in_transport_allowed: 0, libs_transport_present_allowed: 0}
+  fault_model_refs: [F-TRANSPORT-BUS-INTRODUCED]
+  test_ids: [T-XCUT-06]
+- criterion_id: AC-XCUT-07
+  name: "Never both broken and pretending — every failure has an honest non-silent path"
+  evidence_class: "[fault-injection]"
+  authority_refs: [R-doc02-XCUT-07]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Each transport failure mode injected in turn: bot drop, STT outage, TTS outage, rate-limit burst."
+    when: "The failure is active."
+    then:
+      - "Exactly one honest non-silent path fires (rejoin+admit-gap / mark-lost / degrade voice->chat / queue)."
+      - "No failure mode results in silent continuity or Proxy both mute and silent."
+  primary_oracle: {type: fault_injection, artifact: "inject each mode; assert the honest signal/output is emitted and nothing is silently dropped"}
+  thresholds: {failure_without_honest_path_allowed: 0}
+  fault_model_refs: [F-SILENT-FAILURE]
+  test_ids: [T-XCUT-07]
+- criterion_id: AC-XCUT-08
+  name: "Internal signal surface is excluded from assert_registry_closed()"
+  evidence_class: "[static]"
+  authority_refs: [R-doc02-XCUT-08]
+  criticality: P2
+  blocking: false
+  behavior:
+    given: "The 9 Doc 02 internal signals and the client ProxyMessage registry."
+    when: "assert_registry_closed() runs."
+    then:
+      - "The registry closure does not demand the internal signal-surface events be registered."
+      - "assert_registry_closed() passes without any Doc 02 signal registered as a client ProxyMessage."
+  primary_oracle: {type: static_analysis, artifact: "assert_registry_closed() over a build where signal surface is internal-only; passes"}
+  thresholds: {signal_required_in_client_registry_allowed: 0}
+  fault_model_refs: [F-SIGNAL-IN-CLIENT-REGISTRY]
+  test_ids: [T-XCUT-08]

@@ -1,0 +1,294 @@
+# Acceptance Criteria — Doc 02 Voice & Transport · CHAT section (both directions)
+# Authored from CHAT.requirements.yaml (R-doc02-CHAT-01..15).
+# Spec refs: 02-VOICE-TRANSPORT.md §3.4, §3.9 step 5, §3.10, §4;
+#            CANONICAL §1.6 (LOCKED dm_available: bool), §11.8.
+# Fault models referenced:
+#   F-CHAT-INBOUND-DROPPED        chat message not received via Recall
+#   F-ATPROXY-NOT-FORWARDED       addressed message fails to reach Orchestrator
+#   F-CHAT-SOCKET-DIVERGENT       chat ask takes a different path than a spoken ask
+#   F-NONADDRESSED-FORWARDED      plain message wrongly forwarded as an ask
+#   F-CHAT-SIGNAL-SHAPE           chat() signal missing message/sender/dm fields
+#   F-BROADCAST-NOT-DELIVERED     broadcast content not posted to public chat
+#   F-SPOKEN-COPY-MISSING         spoken line has no text copy in broadcast chat
+#   F-DM-NOT-PRIVATE              DM delivered to more than one recipient
+#   F-DM-LEAKED-TO-BROADCAST      DM content routed to broadcast channel
+#   F-DM-SILENT-DROP              unsupported DM dropped instead of degraded
+#   F-LAYER-DECIDES               Doc 02 makes the broadcast-or-hold judgment itself
+#   F-CHANNEL-REPORT-WRONG-FIELD  field not named exactly dm_available:bool
+#   F-CHANNEL-REPORT-ASSUMED-CAP  dm_available not from real platform capability
+#   F-CHAT-IN-REGISTRY            chat/channel-report counted by assert_registry_closed
+
+# ================================================================
+# Inbound
+# ================================================================
+
+- criterion_id: AC-CHAT-01
+  name: "Inbound platform chat streams in via Recall"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc02-CHAT-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting with a Recall transport stub that injects an inbound chat message from a participant."
+    when: "A participant posts a message in the platform chat."
+    then:
+      - "The message surfaces to this layer through the Recall transport seam with body and sender intact."
+      - "No inbound chat message is received through any path other than the Recall seam."
+  primary_oracle: {type: state_machine_assertion, artifact: "transport.inbound_chat received == injected message (body, sender)"}
+  thresholds: {inbound_messages_lost_allowed: 0}
+  fault_model_refs: [F-CHAT-INBOUND-DROPPED]
+  test_ids: [T-CHAT-01]
+
+- criterion_id: AC-CHAT-02
+  name: "@proxy chat message forwards to Orchestrator as a first-class ask"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc02-CHAT-02, R-doc02-CHAT-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A running harness with an Orchestrator ask-sink recorder and an inbound '@proxy check the p95' chat message."
+    when: "The @proxy message arrives on the chat socket."
+    then:
+      - "The Orchestrator ask-sink receives exactly one ask carrying the message content and sender."
+      - "A simulation trace links chat-post -> Orchestrator receipt (provable per §3.9 step 5)."
+      - "If the message never reaches the Orchestrator, the criterion fails."
+  primary_oracle: {type: simulation_trace, artifact: "trace(chat_post_id) terminates at orchestrator.ask_received with matching content"}
+  thresholds: {addressed_asks_dropped_allowed: 0}
+  fault_model_refs: [F-ATPROXY-NOT-FORWARDED]
+  test_ids: [T-CHAT-02]
+
+- criterion_id: AC-CHAT-03
+  name: "Chat ask is identical to a spoken ask (parity, different socket only)"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc02-CHAT-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An @proxy chat ask and an equivalent spoken ask with the same content, fed to the same Orchestrator ask-sink."
+    when: "Both asks are processed."
+    then:
+      - "Both produce an ask of the same type/shape at the Orchestrator entry point; the only difference is the recorded source socket (chat vs voice)."
+      - "The chat ask is not tagged as a lesser/secondary class of ask."
+  primary_oracle: {type: state_machine_assertion, artifact: "ask_from_chat.shape == ask_from_speech.shape; only .socket differs"}
+  thresholds: {parity_field_divergences_allowed: 0}
+  fault_model_refs: [F-CHAT-SOCKET-DIVERGENT]
+  test_ids: [T-CHAT-03]
+
+- criterion_id: AC-CHAT-04
+  name: "Non-addressed chat message is NOT forwarded as an ask"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc02-CHAT-04]
+  criticality: P2
+  blocking: true
+  behavior:
+    given: "An inbound chat message that neither mentions @proxy nor is otherwise addressed to Proxy."
+    when: "The message arrives on the chat socket."
+    then:
+      - "No first-class ask is emitted to the Orchestrator for that message (accept/reject frontier honored)."
+      - "The message may still be reported as a chat() signal, but MUST NOT enter the ask path."
+      - "An @proxy message in the same batch still forwards (positive control passes)."
+  primary_oracle: {type: state_machine_assertion, artifact: "orchestrator.ask_count(non_addressed)==0; ask_count(addressed)==1"}
+  thresholds: {nonaddressed_asks_emitted_allowed: 0}
+  fault_model_refs: [F-NONADDRESSED-FORWARDED]
+  test_ids: [T-CHAT-04]
+
+- criterion_id: AC-CHAT-05
+  name: "Emitted chat() signal has shape chat(message, sender, dm?)"
+  evidence_class: "[contract]"
+  authority_refs: [R-doc02-CHAT-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An inbound chat message processed by this layer."
+    when: "The layer emits its chat() signal upstream."
+    then:
+      - "The signal carries a message body field and a sender field (both present)."
+      - "The signal carries an optional dm indicator (dm?) that is present-or-absent, never a spurious extra required field."
+  primary_oracle: {type: contract_schema_validation, artifact: "chat_signal validates against schema {message, sender, dm?}"}
+  thresholds: {schema_violations_allowed: 0}
+  fault_model_refs: [F-CHAT-SIGNAL-SHAPE]
+  test_ids: [T-CHAT-05]
+
+# ================================================================
+# Outbound: broadcast
+# ================================================================
+
+- criterion_id: AC-CHAT-06
+  name: "Broadcast content (detail/links/receipts/notices) delivered to public chat"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc02-CHAT-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Upstream hands this layer broadcast content: a quiet notice 'repo advanced 2 commits' with a link."
+    when: "The layer delivers it."
+    then:
+      - "The content is posted to the meeting's broadcast (public) chat channel exactly once."
+      - "The delivered payload preserves the detail and link content."
+  primary_oracle: {type: state_machine_assertion, artifact: "transport.broadcast_posts == [{text incl 'repo advanced 2 commits', link}]"}
+  thresholds: {broadcast_deliveries_lost_allowed: 0}
+  fault_model_refs: [F-BROADCAST-NOT-DELIVERED]
+  test_ids: [T-CHAT-06]
+
+- criterion_id: AC-CHAT-07
+  name: "Every spoken line's text copy is delivered to broadcast chat"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc02-CHAT-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The voice channel produces a spoken headline line 'p95 is 340ms'."
+    when: "The line is spoken."
+    then:
+      - "A text copy of that spoken line is delivered to the broadcast chat channel."
+      - "Over a run of N spoken lines, broadcast text copies == N (no spoken line lacks its chat copy)."
+  primary_oracle: {type: state_machine_assertion, artifact: "count(broadcast_text_copies) == count(spoken_lines); contents match"}
+  thresholds: {spoken_lines_without_chat_copy_allowed: 0}
+  fault_model_refs: [F-SPOKEN-COPY-MISSING]
+  test_ids: [T-CHAT-07]
+
+# ================================================================
+# Outbound: DM (privacy-critical)
+# ================================================================
+
+- criterion_id: AC-CHAT-08
+  name: "DM lands privately to exactly one participant on a supporting platform"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc02-CHAT-08, R-doc02-CHAT-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A platform stub with dm_available=true and a DM request addressed to participant 'Sam'."
+    when: "The DM is delivered."
+    then:
+      - "The transport receives exactly one private-send call, recipient == {Sam}."
+      - "The recipient set has cardinality exactly 1 (never 0, never >1)."
+      - "A simulation trace shows the payload reaching only Sam's private channel."
+  primary_oracle: {type: state_machine_assertion, artifact: "dm_send.recipients == {'Sam'}; len==1"}
+  thresholds: {dm_recipient_count_required: 1, dm_extra_recipients_allowed: 0}
+  fault_model_refs: [F-DM-NOT-PRIVATE]
+  test_ids: [T-CHAT-08]
+
+- criterion_id: AC-CHAT-09
+  name: "A DM never leaks to the broadcast channel (privacy)"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc02-CHAT-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A DM addressed to 'Sam' with a sentinel body 'DM_SENTINEL_PRIVATE', broadcast channel captured."
+    when: "The DM is delivered on a DM-supporting platform."
+    then:
+      - "The sentinel body does not appear on the broadcast channel at any point."
+      - "The DM is routed solely through the private-send seam."
+  primary_oracle: {type: state_machine_assertion, artifact: "'DM_SENTINEL_PRIVATE' not in broadcast_channel.captured"}
+  thresholds: {dm_leaked_to_broadcast_allowed: 0}
+  fault_model_refs: [F-DM-LEAKED-TO-BROADCAST]
+  test_ids: [T-CHAT-09]
+
+- criterion_id: AC-CHAT-10
+  name: "DM on a broadcast-only platform degrades to broadcast-or-hold, never dropped"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc02-CHAT-10]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A platform stub with dm_available=false and a DM-dependent delivery request."
+    when: "The DM request is handled."
+    then:
+      - "The request mechanically degrades to the broadcast-or-hold path (routed for the upstream broadcast/hold decision), not silently discarded."
+      - "The delivery is accounted for: it is either handed to broadcast or held/queued — count of silently-dropped == 0."
+  primary_oracle: {type: state_machine_assertion, artifact: "dm_unsupported -> degrade_path in {broadcast, hold}; dropped==0"}
+  thresholds: {dm_silently_dropped_allowed: 0}
+  fault_model_refs: [F-DM-SILENT-DROP]
+  test_ids: [T-CHAT-10]
+
+- criterion_id: AC-CHAT-11
+  name: "This layer reports channels but does NOT make the broadcast-or-hold judgment"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc02-CHAT-11, R-doc02-CHAT-10]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A broadcast-only platform and a DM-dependent request, with the Docs-04/06 decision hook stubbed/recorded."
+    when: "The degrade path executes."
+    then:
+      - "Doc 02 emits the report/degrade signal and delegates the broadcast-vs-hold choice upstream — it does not encode that choice itself."
+      - "No branch in this layer selects broadcast-vs-hold based on situational judgment (only mechanical: DM unsupported -> hand to upstream)."
+  primary_oracle: {type: state_machine_assertion, artifact: "layer emits degrade-signal; final broadcast|hold selection made by upstream hook, not Doc02 code"}
+  thresholds: {layer_made_judgment_calls_allowed: 0}
+  fault_model_refs: [F-LAYER-DECIDES]
+  test_ids: [T-CHAT-11]
+
+# ================================================================
+# Per-meeting channel report (LOCKED contract)
+# ================================================================
+
+- criterion_id: AC-CHAT-12
+  name: "channel-report field is named EXACTLY dm_available and is a bool (LOCKED §1.6)"
+  evidence_class: "[contract]"
+  authority_refs: [R-doc02-CHAT-12]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A per-meeting channel-report emitted by this layer."
+    when: "The report schema is validated against CANONICAL §1.6."
+    then:
+      - "The report contains a field named exactly `dm_available` (byte-for-byte)."
+      - "The value of `dm_available` is of type bool (true|false)."
+      - "No alternate spelling (dm-available, dmAvailable, dm_available?) satisfies the contract; wrong name == fail."
+  primary_oracle: {type: contract_schema_validation, artifact: "'dm_available' in report and isinstance(report['dm_available'], bool)"}
+  thresholds: {wrong_field_name_allowed: 0, non_bool_type_allowed: 0}
+  fault_model_refs: [F-CHANNEL-REPORT-WRONG-FIELD]
+  test_ids: [T-CHAT-12]
+
+- criterion_id: AC-CHAT-13
+  name: "dm_available reflects REAL platform capability, not an assumed default"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc02-CHAT-13]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Two meetings: platform-A with DM support, platform-B broadcast-only, each exposing its true capability."
+    when: "The channel-report is computed for each."
+    then:
+      - "meeting-A report has dm_available == true; meeting-B report has dm_available == false."
+      - "The value derives from the probed/known platform capability, not a hard-coded constant (both branches observed)."
+  primary_oracle: {type: state_machine_assertion, artifact: "report_A.dm_available==True and report_B.dm_available==False from real capability source"}
+  thresholds: {assumed_capability_uses_allowed: 0}
+  fault_model_refs: [F-CHANNEL-REPORT-ASSUMED-CAP]
+  test_ids: [T-CHAT-13]
+
+- criterion_id: AC-CHAT-14
+  name: "chat and channel-report are internal events, OUT of assert_registry_closed scope"
+  evidence_class: "[contract]"
+  authority_refs: [R-doc02-CHAT-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The contracts registry and the assert_registry_closed() check over client ProxyMessages."
+    when: "The build's registry-closure assertion runs."
+    then:
+      - "chat and channel-report are classified as internal 02->03/04 events, not client ProxyMessages."
+      - "assert_registry_closed() does not require chat/channel-report to be registered; their absence does not fail the build."
+  primary_oracle: {type: contract_schema_validation, artifact: "assert_registry_closed() passes without chat/channel-report in the ProxyMessage registry"}
+  thresholds: {internal_events_in_registry_scope_allowed: 0}
+  fault_model_refs: [F-CHAT-IN-REGISTRY]
+  test_ids: [T-CHAT-14]
+
+- criterion_id: AC-CHAT-15
+  name: "Per-meeting the layer provides broadcast, DM-where-supported, and a channel report"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc02-CHAT-15]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting on a DM-supporting platform with both a broadcast and a DM delivery requested."
+    when: "The meeting's outbound chat behaviors run."
+    then:
+      - "Broadcast content is posted publicly, the DM lands privately, and a channel-report with dm_available is emitted — all three coherently in the one meeting."
+      - "On a broadcast-only meeting, the same run yields dm_available==false and the DM degrades (ties AC-CHAT-10)."
+  primary_oracle: {type: state_machine_assertion, artifact: "per_meeting outputs == {broadcast_post, dm_send|degrade, channel_report(dm_available)}"}
+  thresholds: {missing_outbound_behaviors_allowed: 0}
+  fault_model_refs: [F-BROADCAST-NOT-DELIVERED, F-DM-SILENT-DROP]
+  test_ids: [T-CHAT-15]

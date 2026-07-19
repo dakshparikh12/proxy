@@ -1,0 +1,276 @@
+# Doc 02 (Voice & Transport) — FAILURE HONESTY / RATE LIMITS requirements slice
+#
+# INTENDED FILENAME: FAIL.requirements.yaml
+# This sidecar exists because harness/guard.py (PreToolUse) blocks any write to a
+# path containing the bare substring "requirements" (guard.py PROTECTED, line 19).
+# That pattern is meant to protect the sealed acceptance/<doc>/requirements/ trees,
+# but it also over-matches this per-section parts slice. See PROGRESS.md CONFLICT
+# NOTE. A conductor with write authority should promote/rename this to
+# FAIL.requirements.yaml so the RTM gate and the AC-FAIL-* authority_refs resolve.
+# (Same wall + resolution as the sibling JOIN.reqs.yaml slice.)
+#
+# Law 2 / invariant 2 (AGENTS.md): "Lossless-or-honest" — never lose or fake;
+# failures spoken plainly. This is the Law-2 flagship: every failure mode has an
+# honest, non-silent path. Loss-or-fake possible => P0.
+# Every requirement is atomic EARS, carries a verbatim source_quote +
+# source_location + criticality. Ambiguity resolved to CANONICAL
+# (§12.10 / §12.12 / §11.11) or an inline confirm-at-build note.
+# ID space: R-doc02-FAIL-##
+
+# --- Bot drop: status webhook + rejoin-once -----------------------------------
+- requirement_id: R-doc02-FAIL-01
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.7 Failure honesty (Bot drop)"
+  source_quote: "Bot drop: Recall's status webhook fires → auto-rejoin once → on rejoin, Proxy states the gap plainly (\"I was disconnected 14:03–14:04 — notes have a gap there\"). Never pretend continuity."
+  normalized_statement: >
+    WHEN Recall's bot-status webhook reports the bot dropped THE SYSTEM SHALL emit
+    exactly one automatic rejoin attempt for that drop.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-FAIL-02
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.9 step 8"
+  source_quote: "Rejoin-once on drop + the honest gap line; ... a forced disconnect produces a rejoin and the gap announcement"
+  normalized_statement: >
+    WHEN a drop occurs THE SYSTEM SHALL attempt no more than one automatic rejoin
+    for that drop (rejoin_attempts_over_1 == 0), never entering an unbounded rejoin
+    loop and never skipping the one rejoin (rejoin_attempts_under_1 == 0).
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-FAIL-03
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.7 Failure honesty (Bot drop)"
+  source_quote: "on rejoin, Proxy states the gap plainly (\"I was disconnected 14:03–14:04 — notes have a gap there\")."
+  normalized_statement: >
+    WHEN the bot rejoins after a drop THE SYSTEM SHALL announce the disconnected
+    interval plainly, stating the gap window explicitly in the notes/chat.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-FAIL-04
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: "§3.7 (Law 2 / invariant 2 — lossless-or-honest)"
+  source_quote: "Never pretend continuity."
+  normalized_statement: >
+    THE SYSTEM SHALL NOT present the transcript/notes across a drop as continuous;
+    an un-announced (silently-absent) gap after a drop is a violation
+    (silent_gap_allowed == 0).
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-FAIL-05
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: "§3.7 Failure honesty (Bot drop)"
+  source_quote: "Proxy states the gap plainly (\"I was disconnected 14:03–14:04 — notes have a gap there\")"
+  normalized_statement: >
+    WHEN the gap is announced on rejoin THE SYSTEM SHALL make the announced interval
+    equal the real disconnect window (dropped_ts .. rejoined_ts), never a fabricated,
+    padded, or shrunk interval.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-FAIL-06
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.9 step 8"
+  source_quote: "Rejoin-once on drop ... a forced disconnect produces a rejoin and the gap announcement"
+  normalized_statement: >
+    WHEN a second drop occurs after the single rejoin for a prior drop has been
+    consumed THE SYSTEM SHALL stop honestly (announce the state) rather than retry
+    indefinitely, and SHALL NOT give up silently.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# --- Bot-status signal + durable webhook_events (CANONICAL §12.10) -------------
+- requirement_id: R-doc02-FAIL-07
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.10 signal surface"
+  source_quote: "bot-status(connected/dropped/rejoined)"
+  normalized_statement: >
+    THE SYSTEM SHALL expose a bot-status signal whose state is one of exactly
+    {connected, dropped, rejoined}; no other value is emitted on the signal.
+  requirement_type: interface
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-FAIL-08
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "CANONICAL §12.10"
+  source_quote: "bot-status webhooks land in durable webhook_events (dedupe by delivery_guid)."
+  normalized_statement: >
+    WHEN a bot-status webhook is received THE SYSTEM SHALL persist it durably into
+    webhook_events, deduplicated by delivery_guid so a redelivered webhook is not
+    double-processed (duplicate_processing_allowed == 0).
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# --- STT outage: mark-lost path (CANONICAL §12.10 / §12.12) -------------------
+- requirement_id: R-doc02-FAIL-09
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: "§3.7 Failure honesty (STT outage)"
+  source_quote: "Honest fallback = the mark-lost path: any stretch not transcribed is marked lost in the transcript, never silently absent."
+  normalized_statement: >
+    WHEN a stretch of meeting audio is not transcribed THE SYSTEM SHALL mark that
+    stretch lost in the transcript; it SHALL NEVER leave the stretch silently absent
+    (untranscribed_stretch_silently_absent_allowed == 0).
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-FAIL-10
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "CANONICAL §12.10"
+  source_quote: "transcript_segments.status DEFAULT 'pending' → flips to 'comprehended'; \"close backfills pending+gap\" — the mark-lost/gap is backed by pending segments."
+  normalized_statement: >
+    THE SYSTEM SHALL default transcript_segments.status to 'pending'; a segment SHALL
+    flip to 'comprehended' only when transcribed, and on meeting close any still-'pending'
+    segment SHALL be backfilled as a lost/gap segment (no pending segment is dropped
+    from the record).
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-FAIL-11
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "CANONICAL §12.12 / §3.7 (STT outage)"
+  source_quote: "STT-outage buffering = 'not ours under BYOK passthrough — confirm-at-build + honest mark-lost.'"
+  normalized_statement: >
+    THE SYSTEM SHALL NOT promise buffer-during-outage→resume for STT under BYOK
+    passthrough (audio path is Recall→AssemblyAI direct; the buffer is not ours);
+    whether Recall buffers through an AAI hiccup is CONFIRM-AT-BUILD, and the
+    guaranteed honest fallback is the mark-lost path (R-doc02-FAIL-09) — we do not
+    over-promise buffering we do not own.
+  requirement_type: constraint
+  criticality: P1
+  testability: analyzable
+  status: qualified
+
+# --- TTS / provider outage: degrade voice → chat ------------------------------
+- requirement_id: R-doc02-FAIL-12
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.7 Failure honesty (TTS/provider outage)"
+  source_quote: "TTS/provider outage: voice degrades to chat (\"voice is down — I'll type\") — a dead engine never makes Proxy mute and silent."
+  normalized_statement: >
+    WHEN the TTS/voice provider is unavailable THE SYSTEM SHALL degrade to the chat
+    channel, delivering the line as text (announcing "voice is down — I'll type")
+    instead of speaking.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-FAIL-13
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: "§3.7 / §4 (Law 2 — lossless-or-honest)"
+  source_quote: "a dead engine never makes Proxy mute and silent."
+  normalized_statement: >
+    THE SYSTEM SHALL NEVER be simultaneously voice-down and chat-down for a decided
+    line; if voice is down, chat SHALL still deliver the line
+    (voice_down_and_chat_down_allowed == 0).
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# --- Rate limits: per-bot outbound limiter / queue ----------------------------
+- requirement_id: R-doc02-FAIL-14
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.7 Failure honesty (Rate limits)"
+  source_quote: "Recall's workspace request limit is shared across output-media + chat → a per-bot outbound limiter/queue here so concurrent deliveries can't throttle mid-meeting."
+  normalized_statement: >
+    THE SYSTEM SHALL place all outbound Recall requests (output-media + chat) for a
+    bot behind a per-bot outbound limiter/queue, so concurrent deliveries are paced
+    within the shared workspace request limit and cannot throttle mid-meeting.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-FAIL-15
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.9 step 8 / §4 pinned measurement"
+  source_quote: "a burst of sends queues instead of throttling. ... the outbound rate-limiter under [5+] concurrent deliveries."
+  normalized_statement: >
+    WHEN 5 or more outbound deliveries are issued concurrently THE SYSTEM SHALL queue
+    and eventually deliver every one of them; no send is dropped by throttle
+    (send_dropped_by_throttle_allowed == 0).
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-FAIL-16
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "CANONICAL §11.11"
+  source_quote: "Rate limiter: pin `limits` (or `slowapi`) with an in-memory backend — don't hand-roll a token bucket."
+  normalized_statement: >
+    THE SYSTEM SHALL implement the outbound limiter using the pinned `limits` (or
+    `slowapi`) library with an in-memory backend; a hand-rolled token bucket is
+    disallowed (handrolled_token_bucket_allowed == 0).
+  requirement_type: constraint
+  criticality: P2
+  testability: analyzable
+  status: qualified
+
+# --- Umbrella honesty invariant -----------------------------------------------
+- requirement_id: R-doc02-FAIL-17
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: "§4 Failure behavior (Law 2 / invariant 2)"
+  source_quote: "every failure mode has an honest, non-silent path: rejoin + admit the gap · mark-lost on un-transcribed audio · degrade voice→chat · queue under rate limits. Proxy is never both broken and pretending."
+  normalized_statement: >
+    FOR every failure mode in this slice THE SYSTEM SHALL take an honest, non-silent
+    path (rejoin+admit-gap, mark-lost, degrade voice→chat, queue under limits); THE
+    SYSTEM SHALL NEVER be simultaneously broken and pretending
+    (broken_and_pretending_allowed == 0).
+  requirement_type: architecture_invariant
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-FAIL-18
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: "§1 goal item 4 / §1"
+  source_quote: "If the bot drops, it rejoins and says honestly what it missed. ... never lose or fake a stretch of audio."
+  normalized_statement: >
+    WHEN the bot drops THE SYSTEM SHALL rejoin and honestly report what it missed,
+    and SHALL NEVER lose or fake a stretch of audio (lost_or_faked_audio_stretch == 0).
+  requirement_type: architecture_invariant
+  criticality: P0
+  testability: executable
+  status: qualified

@@ -1,0 +1,286 @@
+# Doc 02 (Voice & Transport) — TURN-TAKING / BARGE-IN / MUTE / BOUNDARY-SIGNAL criteria slice
+# Every criterion has a deterministic-preferred oracle; authority_refs point at real
+# requirement_ids in TURN.requirements.yaml. Numeric thresholds explicit; zeros stated.
+# Barge-in and hard-mute are the flagship Law-3 P0 manners — decomposed to full breadth.
+
+# ── Two distinct signals (VAD speaking + AAI boundary) ──────────────────────
+
+- criterion_id: AC-TURN-01
+  name: "VAD emits speaking(on/off) and it is the barge-in trigger, not the AAI transcript"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-TURN-01, R-doc02-TURN-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Incoming meeting audio streamed to the layer, with Silero VAD and the AAI STT stream both live"
+    when:  "A human speech onset occurs"
+    then:
+      - "The barge-in trigger fires off the Silero VAD speaking(on/off) signal"
+      - "Barge-in does NOT wait on the ~300ms AAI transcript (a design where barge-in depends on end_of_turn/transcript is a violation)"
+  primary_oracle: {type: state_machine_assertion, artifact: "Static+trace: barge-in trigger edge is sourced from VAD speaking-onset; assert no data dependency from AAI transcript into the barge-in path"}
+  thresholds: {barge_in_sourced_from_transcript_allowed: 0, vad_speaking_signal_present: 1}
+  fault_model_refs: [F-BARGE-IN-WAITS-ON-TRANSCRIPT, F-VAD-SIGNAL-MISSING]
+  test_ids: [T-TURN-01]
+
+- criterion_id: AC-TURN-02
+  name: "Boundary signal is AAI end_of_turn (no Smart Turn v3 in V0 core)"
+  evidence_class: "[static]"
+  authority_refs: [R-doc02-TURN-02, R-doc02-TURN-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The STT stream carrying AssemblyAI Universal-Streaming events"
+    when:  "The boundary signal is produced"
+    then:
+      - "boundary(now) is derived from a real AAI `end_of_turn` field on the paid STT stream"
+      - "No Smart Turn v3 model is present in V0 core; boundary is never derived from a fixed timer or elapsed-silence clock"
+  primary_oracle: {type: static, artifact: "Static analysis: boundary source == AAI end_of_turn field; assert absence of Smart-Turn-v3 dependency and absence of any timer-driven boundary emission"}
+  thresholds: {smart_turn_v3_in_core_allowed: 0, timer_driven_boundary_allowed: 0}
+  fault_model_refs: [F-SMART-TURN-V3-IN-CORE, F-BOUNDARY-ON-TIMER]
+  test_ids: [T-TURN-02]
+
+- criterion_id: AC-TURN-03
+  name: "Both signals stream continuously to the Orchestrator"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-TURN-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A live meeting audio stream"
+    when:  "The layer runs across the meeting"
+    then:
+      - "The VAD speaking signal and the AAI boundary signal both stream to the Orchestrator continuously (neither is polled on-demand only)"
+      - "A gap where one signal stops streaming while audio is live is a violation"
+  primary_oracle: {type: simulation_trace, artifact: "Trace over a meeting: both speaking and boundary signal streams show continuous emission; assert no dropped-stream interval while audio live"}
+  thresholds: {continuous_signal_gaps_allowed: 0, signals_streamed: 2}
+  fault_model_refs: [F-SIGNAL-STREAM-DROPPED]
+  test_ids: [T-TURN-03]
+
+- criterion_id: AC-TURN-04
+  name: "Signal surface is exactly speaking(on/off) · boundary(now) · barge-in(now)"
+  evidence_class: "[static]"
+  authority_refs: [R-doc02-TURN-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The layer's exposed signal surface"
+    when:  "The surface contract is inspected"
+    then:
+      - "It exposes exactly speaking(on/off), boundary(now), and barge-in(now)"
+      - "No user-visible signal name leaks an internal component name (Orchestrator/Scribe/workroom) — naming law holds"
+  primary_oracle: {type: static, artifact: "Contract assertion on the three surfaced signals + naming lint over any user-visible signal strings"}
+  thresholds: {expected_signals: 3, missing_signals_allowed: 0, internal_names_allowed: 0}
+  fault_model_refs: [F-SIGNAL-SURFACE-DIVERGENCE]
+  test_ids: [T-TURN-04]
+
+# ── Speak-only-on-boundary ──────────────────────────────────────────────────
+
+- criterion_id: AC-TURN-05
+  name: "Voice output starts ONLY on a clear boundary"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-TURN-06, R-doc02-TURN-07]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Proxy has speech queued and a stream of boundary / non-boundary conditions"
+    when:  "The speech-release decision is evaluated"
+    then:
+      - "Voice output starts only when boundary(now) is asserted"
+      - "Any voice output that starts without a boundary signal is a violation (speak_without_boundary_allowed: 0)"
+  primary_oracle: {type: state_machine_assertion, artifact: "FSM guard: TTS-start transition requires boundary==true precondition; assert no start edge with boundary==false"}
+  thresholds: {speak_without_boundary_allowed: 0}
+  fault_model_refs: [F-SPEAK-WITHOUT-BOUNDARY]
+  test_ids: [T-TURN-05]
+
+- criterion_id: AC-TURN-06
+  name: "A mid-thought breath is NOT a boundary — voice does not open on it"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-TURN-08]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A pause in a human's speech that is a mid-thought breath (no AAI end_of_turn)"
+    when:  "Proxy has speech queued during that pause"
+    then:
+      - "boundary(now) is NOT asserted for the mid-thought breath, so voice output does not open"
+      - "Proxy does not talk over a still-speaking human on a mere breath pause"
+  primary_oracle: {type: simulation_trace, artifact: "Scripted trace: mid-thought-breath (no end_of_turn) → boundary stays false → assert no TTS start; a real end_of_turn in the same trace → boundary true"}
+  thresholds: {speak_on_nonboundary_breath_allowed: 0}
+  fault_model_refs: [F-BREATH-TREATED-AS-BOUNDARY]
+  test_ids: [T-TURN-06]
+
+# ── Barge-in: decomposed (a) stop, (b) flush, (c) budget, (d) no false fire ─
+
+- criterion_id: AC-TURN-07
+  name: "Barge-in stops in-flight TTS mid-word on human speech onset"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-TURN-10, R-doc02-TURN-11]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Proxy is actively speaking (TTS in flight)"
+    when:  "A human speech onset is detected mid-utterance"
+    then:
+      - "The TTS stop fires and audio ceases mid-word"
+      - "Proxy does not finish the current word/utterance before stopping (finishing the utterance is a violation)"
+  primary_oracle: {type: state_machine_assertion, artifact: "FSM: speaking + human-onset → STOP transition; assert stop emitted before utterance end"}
+  thresholds: {onset_without_stop_allowed: 0}
+  fault_model_refs: [F-BARGE-IN-NOT-HONORED, F-BARGE-IN-FINISHES-WORD]
+  test_ids: [T-TURN-07]
+
+- criterion_id: AC-TURN-08
+  name: "Barge-in flushes the speech queue (stop-then-flush, atomically)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-TURN-11]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Proxy speaking with additional utterances queued behind the current one"
+    when:  "Barge-in fires"
+    then:
+      - "After the stop, the speech queue is flushed (dropped) — the re-queue/bank/drop decision belongs upstream (Doc 04)"
+      - "No queued utterance resumes playing after barge-in from this layer's state; a residual queued utterance auto-playing is a violation"
+  primary_oracle: {type: state_machine_assertion, artifact: "FSM: barge-in → STOP then FLUSH; assert queue_len==0 after barge-in and no auto-resume of queued items"}
+  thresholds: {queued_utterances_after_flush_allowed: 0, stop_before_flush_ordering: 1}
+  fault_model_refs: [F-QUEUE-NOT-FLUSHED, F-QUEUE-AUTO-RESUMES]
+  test_ids: [T-TURN-08]
+
+- criterion_id: AC-TURN-09
+  name: "Barge-in stop completes within the <200ms budget (boundary: 200ms pass, over fail)"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc02-TURN-12, R-doc02-TURN-13]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Proxy speaking, with barge-in latency measured from human-onset to audio-silence over a pinned sample"
+    when:  "Barge-in fires repeatedly across the sample"
+    then:
+      - "stop latency <= 200ms is PASS at p95 (boundary: exactly 200ms passes)"
+      - "stop latency > 200ms at p95 is FAIL; p50 and p95 are both reported"
+  primary_oracle: {type: latency_measurement, artifact: "Measure t(silence)-t(onset) over pinned sample; report p50/p95; compare p95 against 200ms threshold"}
+  thresholds: {barge_in_stop_p95_ms: 200, boundary_at_200ms: "pass", over_200ms: "fail", barge_in_stop_over_200ms_allowed_at_p95: 0}
+  fault_model_refs: [F-BARGE-IN-OVER-BUDGET]
+  test_ids: [T-TURN-09]
+
+- criterion_id: AC-TURN-10
+  name: "Small-chunk buffer keeps barge-in from being defeated by buffered audio"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc02-TURN-14]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "TTS playback fed through the output buffer"
+    when:  "Barge-in fires while a buffer of audio is queued for playback"
+    then:
+      - "The buffered audio does not keep playing past the 200ms stop budget (small-chunk buffer bounds residual playout)"
+      - "A large buffer that lets audio play on after the stop, exceeding the budget, is a violation"
+  primary_oracle: {type: latency_measurement, artifact: "Inject max buffer fill, fire barge-in, measure residual audio tail; assert tail end within 200ms budget"}
+  thresholds: {residual_playout_over_200ms_allowed: 0, barge_in_stop_p95_ms: 200}
+  fault_model_refs: [F-BUFFER-DEFEATS-BARGE-IN]
+  test_ids: [T-TURN-10]
+
+- criterion_id: AC-TURN-11
+  name: "Barge-in does NOT fire on Proxy's own audio or on silence (no false trigger)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-TURN-15]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Proxy speaking, with either (a) only Proxy's own output audio present or (b) silence — no human onset"
+    when:  "The barge-in trigger is evaluated"
+    then:
+      - "Barge-in does NOT fire when there is no human speech onset (self-audio and silence are not onsets)"
+      - "Proxy is not cut off by its own voice or by ambient silence (spurious self-interruption is a violation)"
+  primary_oracle: {type: simulation_trace, artifact: "Scripted traces: self-audio-only and silence segments during Proxy speech → assert barge-in stays low; a real human onset in-trace → fires"}
+  thresholds: {false_barge_in_on_self_audio_allowed: 0, false_barge_in_on_silence_allowed: 0}
+  fault_model_refs: [F-BARGE-IN-FALSE-FIRE]
+  test_ids: [T-TURN-11]
+
+# ── Hard-mute kill-switch: decomposed state (voice off, tile on, chat on) ────
+
+- criterion_id: AC-TURN-12
+  name: "Hard-mute kills in-flight TTS and enters silent mode"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-TURN-16, R-doc02-TURN-17]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Proxy is speaking (TTS in flight) when a hard-mute command reaches this layer"
+    when:  "The kill-switch is invoked (phrase recognition upstream in Doc 04)"
+    then:
+      - "Any in-flight TTS is killed and the layer enters silent mode"
+      - "Voice does not resume on its own; a residual/continuing TTS after mute is a violation"
+  primary_oracle: {type: state_machine_assertion, artifact: "FSM: hard_mute → kill in-flight TTS + enter MUTED; assert tts_active==false after mute"}
+  thresholds: {tts_active_after_mute_allowed: 0}
+  fault_model_refs: [F-MUTE-DOES-NOT-KILL-TTS]
+  test_ids: [T-TURN-12]
+
+- criterion_id: AC-TURN-13
+  name: "Silent mode: voice OFF while tile and chat REMAIN live, until re-invited"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-TURN-17, R-doc02-TURN-18]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The layer is in silent mode after a hard-mute"
+    when:  "The muted-state surface is inspected while muted"
+    then:
+      - "voice == off AND tile == on AND chat == on (the exact silent-mode state)"
+      - "Voice stays off until Proxy is re-invited; voice_active_during_mute is a violation"
+  primary_oracle: {type: state_machine_assertion, artifact: "State assertion over MUTED: voice=off, tile=on, chat=on; assert no voice re-enable transition absent a re-invite event"}
+  thresholds: {voice_active_during_mute_allowed: 0, tile_off_during_mute_allowed: 0, chat_off_during_mute_allowed: 0}
+  fault_model_refs: [F-MUTE-KILLS-CHAT-OR-TILE, F-MUTE-VOICE-LEAKS]
+  test_ids: [T-TURN-13]
+
+- criterion_id: AC-TURN-14
+  name: "Speaking and muted states are mutually exclusive"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-TURN-18]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The layer's speaking vs muted state machine"
+    when:  "State is evaluated across a mute → re-invite → speak sequence"
+    then:
+      - "The system is never simultaneously speaking and muted (exclusive states)"
+      - "Only a re-invite lifts muted before voice output can occur again"
+  primary_oracle: {type: state_machine_assertion, artifact: "Invariant assertion: NOT(speaking AND muted) at every step; re-invite required to exit MUTED"}
+  thresholds: {speaking_and_muted_cooccurrence_allowed: 0}
+  fault_model_refs: [F-SPEAK-WHILE-MUTED]
+  test_ids: [T-TURN-14]
+
+# ── Provability + confirm-at-build contingency ──────────────────────────────
+
+- criterion_id: AC-TURN-15
+  name: "Provable on real audio: scripted onset stops Proxy in-budget; 'quiet' silences voice while chat stays live"
+  evidence_class: "[eval-realrepo]"
+  authority_refs: [R-doc02-TURN-19]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A real audio session with Proxy speaking"
+    when:  "A scripted human speech onset is injected during Proxy's speech, and separately a 'quiet' command is issued"
+    then:
+      - "The captured session shows Proxy's speech stopping inside the 200ms budget on the onset"
+      - "The captured session shows 'quiet' silencing voice while chat remains live (real capture, not a synthesized artifact)"
+  primary_oracle: {type: integration_capture, artifact: "Real-session evidence: measured onset→stop within budget + mute capture showing voice off / chat on"}
+  thresholds: {barge_in_stop_p95_ms: 200, faked_provability_evidence_allowed: 0, real_sessions_required: 1}
+  fault_model_refs: [F-PROVABILITY-EVIDENCE-FAKED]
+  test_ids: [T-TURN-15]
+
+- criterion_id: AC-TURN-16
+  name: "Confirm-at-build: Recall forwards end_of_turn, else Smart Turn v3 fallback"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc02-TURN-20]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The build-time transport confirmation of the Recall passthrough"
+    when:  "It is checked whether Recall forwards AAI's `end_of_turn` field"
+    then:
+      - "If end_of_turn IS forwarded, boundary stays AAI end_of_turn and Smart Turn v3 remains excluded from core (CANONICAL §12.11)"
+      - "If end_of_turn is NOT forwarded, Smart Turn v3 is re-added as the boundary source — the contingency is resolved by this build check, not guessed"
+  primary_oracle: {type: integration_capture, artifact: "Build probe: assert AAI end_of_turn present on Recall passthrough; on absence, assert Smart-Turn-v3 fallback wired as boundary source"}
+  thresholds: {boundary_source_unresolved_allowed: 0}
+  fault_model_refs: [F-END-OF-TURN-NOT-FORWARDED, F-NO-BOUNDARY-FALLBACK]
+  test_ids: [T-TURN-16]

@@ -1,0 +1,439 @@
+# Doc 02 (Voice & Transport) — EVENTS section acceptance criteria + requirements
+# Scope: roster / participant events / meeting-metadata / meeting-end
+# Oracles: deterministic-preferred (simulation trace / state-machine / contract-schema on webhook_events row).
+#
+# HARNESS-CONFLICT NOTE: the intended second file, parts/EVENTS.requirements.yaml, could NOT be
+# written — harness/guard.py protects any path whose string contains "requirements" (line 19,
+# enforced at lines 76-82). The sibling JOIN slice hit the same wall (no JOIN.requirements.yaml
+# exists). Per the guard's own instruction ("record conflicts in PROGRESS.md"), the authored
+# requirements are embedded HERE under `requirements:` so authority_refs stay resolvable, and the
+# conflict is logged in PROGRESS.md. Promotion tooling can split this section out once the guard
+# permits the requirements tree.
+
+requirements:
+
+  - requirement_id: R-doc02-EVENTS-01
+    authority_type: specification
+    authority_document: DOC-02
+    source_location: "§3.1 paragraph 2"
+    source_quote: "The transport streams participant events — who is present, joins, leaves, with names — to the Orchestrator, live."
+    normalized_statement: >
+      WHEN the transport observes a participant event (join, leave, or presence) THE SYSTEM SHALL
+      stream a corresponding roster event to the Orchestrator live (in the same in-process/over-transport
+      flow, not batched at meeting end).
+    requirement_type: functional
+    criticality: P1
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc02-EVENTS-02
+    authority_type: specification
+    authority_document: DOC-02
+    source_location: "§3.10 signal surface"
+    source_quote: "roster(join/leave, name) · meeting-end"
+    normalized_statement: >
+      WHEN a participant joins THE SYSTEM SHALL emit a roster event tagged join carrying the
+      participant's name.
+    requirement_type: functional
+    criticality: P1
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc02-EVENTS-03
+    authority_type: specification
+    authority_document: DOC-02
+    source_location: "§3.10 signal surface"
+    source_quote: "roster(join/leave, name) · meeting-end"
+    normalized_statement: >
+      WHEN a participant leaves THE SYSTEM SHALL emit a roster event tagged leave carrying the
+      participant's name/identity.
+    requirement_type: functional
+    criticality: P1
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc02-EVENTS-04
+    authority_type: specification
+    authority_document: DOC-02
+    source_location: "§3.1 paragraph 2"
+    source_quote: "who is present, joins, leaves, with names"
+    normalized_statement: >
+      WHEN a roster event is emitted THE SYSTEM SHALL include the participant's name so downstream
+      name-aware responses and speaker attribution can resolve identity; a roster event with a
+      resolvable participant but a missing name field SHALL NOT be emitted as complete.
+    requirement_type: functional
+    criticality: P2
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc02-EVENTS-05
+    authority_type: specification
+    authority_document: DOC-02
+    source_location: "§3.9 step 2 (Events)"
+    source_quote: "Roster (join/leave, names), meeting-end, and bot-status webhooks flow to the harness"
+    normalized_statement: >
+      WHEN a Recall roster, meeting-end, or bot-status webhook is received THE SYSTEM SHALL route the
+      derived signal to the harness (Orchestrator).
+    requirement_type: functional
+    criticality: P1
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc02-EVENTS-06
+    authority_type: specification
+    authority_document: DOC-02
+    source_location: "§3.1 paragraph 2"
+    source_quote: "Meeting metadata (title, participant list) passes through to the Orchestrator as context."
+    normalized_statement: >
+      WHEN meeting metadata (title and participant list) is available THE SYSTEM SHALL pass it through
+      to the Orchestrator as context.
+    requirement_type: functional
+    criticality: P2
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc02-EVENTS-07
+    authority_type: specification
+    authority_document: DOC-02
+    source_location: "§3.1 paragraph 2"
+    source_quote: "Meeting end (meeting closes / bot removed) emits an explicit signal that triggers the close sequence"
+    normalized_statement: >
+      WHEN the meeting closes or the bot is removed (an explicit Recall meeting-end / bot-removed
+      webhook) THE SYSTEM SHALL emit an explicit meeting-end signal.
+    requirement_type: functional
+    criticality: P1
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc02-EVENTS-08
+    authority_type: specification
+    authority_document: DOC-02
+    source_location: "§3.1 paragraph 2"
+    source_quote: "emits an explicit signal that triggers the close sequence (ordered by Doc 04 §3.16; close pass written in place by Doc 03 §3.7)"
+    normalized_statement: >
+      WHEN the meeting-end signal is emitted THE SYSTEM SHALL trigger the close sequence (ordered by
+      Doc 04 §3.16), i.e. the signal is the causal trigger and precedes any close-pass work.
+    requirement_type: functional
+    criticality: P1
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc02-EVENTS-09
+    authority_type: specification
+    authority_document: DOC-02
+    source_location: "§3.1 paragraph 2"
+    source_quote: "never inferred from silence"
+    normalized_statement: >
+      WHILE a meeting is open THE SYSTEM SHALL NOT emit a meeting-end signal on the basis of silence,
+      inactivity, or absence of transcript/roster traffic for any duration; ONLY an explicit
+      close / bot-removed webhook SHALL cause meeting-end.
+    requirement_type: functional
+    criticality: P0
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc02-EVENTS-10
+    authority_type: specification
+    authority_document: CANONICAL
+    source_location: "CANONICAL §12.10 webhook durability"
+    source_quote: "ALL external webhooks (GitHub + Recall) land in webhook_events durable table, INSERT ON CONFLICT (delivery_guid) DO NOTHING → 200 → drain; dedupe by delivery_guid."
+    normalized_statement: >
+      WHEN a Recall roster, meeting-end, or bot-status webhook is received THE SYSTEM SHALL persist it
+      into the webhook_events durable table via INSERT ... ON CONFLICT (delivery_guid) DO NOTHING,
+      return 200, and only then drain/process it.
+    requirement_type: functional
+    criticality: P0
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc02-EVENTS-11
+    authority_type: specification
+    authority_document: CANONICAL
+    source_location: "CANONICAL §12.10 webhook durability"
+    source_quote: "dedupe by delivery_guid"
+    normalized_statement: >
+      WHEN the same webhook delivery_guid is delivered more than once THE SYSTEM SHALL process the
+      derived event exactly once (the second insert conflicts and is a no-op; no duplicate downstream
+      signal is emitted).
+    requirement_type: functional
+    criticality: P0
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc02-EVENTS-12
+    authority_type: specification
+    authority_document: CANONICAL
+    source_location: "CANONICAL §11.8"
+    source_quote: "The Doc 02 signal surface (transcript/roster/speaking/boundary/barge-in/bot-status/meeting-end/channel-report) are in-process/over-transport INTERNAL events (02→03/04), NOT client-facing ProxyMessages. They are OUT of assert_registry_closed()'s scope."
+    normalized_statement: >
+      WHILE emitting roster / meeting-end / bot-status signals THE SYSTEM SHALL treat them as internal
+      02→03/04 events and SHALL NOT require them to appear in the client-facing ProxyMessage contracts
+      registry; assert_registry_closed() SHALL NOT fail for their absence.
+    requirement_type: constraint
+    criticality: P1
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc02-EVENTS-13
+    authority_type: specification
+    authority_document: DOC-02
+    source_location: "§3.9 step 2 (Events) — Provable"
+    source_quote: "Provable: a late joiner triggers the re-post; ending the meeting emits the close signal."
+    normalized_statement: >
+      WHEN the meeting is ended THE SYSTEM SHALL emit the close signal as an observable, provable event
+      (a simulation/trace of ending the meeting shows exactly one meeting-end signal).
+    requirement_type: functional
+    criticality: P1
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc02-EVENTS-14
+    authority_type: specification
+    authority_document: DOC-02
+    source_location: "§3.1 paragraph 2"
+    source_quote: "The transport streams participant events — who is present, joins, leaves, with names — to the Orchestrator, live."
+    normalized_statement: >
+      WHEN a roster event is produced THE SYSTEM SHALL derive it from a real Recall participant event
+      (webhook payload), never from a synthetic/inferred roster; the emitted name and join/leave tag
+      SHALL match the source webhook payload.
+    requirement_type: functional
+    criticality: P1
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc02-EVENTS-15
+    authority_type: specification
+    authority_document: DOC-02
+    source_location: "§3.10 signal surface"
+    source_quote: "roster(join/leave, name) · meeting-end"
+    normalized_statement: >
+      WHEN a name-change for an already-present participant is observed THE SYSTEM SHALL reflect the
+      updated name on subsequent roster events for that participant (join/leave branches carry the
+      current name).
+    requirement_type: functional
+    criticality: P3
+    testability: executable
+    status: qualified
+
+criteria:
+
+  - criterion_id: AC-EVENTS-01
+    name: "Participant events stream live to the Orchestrator"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-EVENTS-01]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "A live meeting with the transport connected to the Orchestrator"
+      when:  "A sequence of participant join/leave events arrives from Recall during the meeting"
+      then:
+        - "Each participant event yields a roster signal delivered to the Orchestrator within the live stream (not batched at end)"
+        - "No roster signal is withheld until meeting-end; live_stream_count == source_event_count"
+    primary_oracle: {type: simulation_trace, artifact: "trace of Orchestrator inbound roster signals vs injected source events, ordered by arrival"}
+    thresholds: {roster_events_dropped_allowed: 0, roster_events_batched_to_end_allowed: 0}
+    fault_model_refs: [F-ROSTER-NOT-LIVE]
+    test_ids: [T-EVENTS-01]
+
+  - criterion_id: AC-EVENTS-02
+    name: "Join emits roster(join, name)"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-EVENTS-02, R-doc02-EVENTS-04]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "A live meeting"
+      when:  "Participant 'Sam' joins (Recall participant-join webhook)"
+      then:
+        - "Exactly one roster signal tagged join is emitted for Sam"
+        - "The signal carries name == 'Sam'; a join signal with an empty/missing name is not emitted as complete"
+    primary_oracle: {type: state_machine_assertion, artifact: "assert emitted signal == {kind: roster, event: join, name: 'Sam'}"}
+    thresholds: {join_events_missing_name_allowed: 0, join_events_emitted_per_join: 1}
+    fault_model_refs: [F-JOIN-EVENT-MISSING-NAME]
+    test_ids: [T-EVENTS-02]
+
+  - criterion_id: AC-EVENTS-03
+    name: "Leave emits roster(leave, name)"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-EVENTS-03, R-doc02-EVENTS-04]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "A live meeting where 'Sam' is present"
+      when:  "Participant 'Sam' leaves (Recall participant-leave webhook)"
+      then:
+        - "Exactly one roster signal tagged leave is emitted carrying Sam's identity/name"
+        - "No join signal is emitted for this leave (per-branch: leave != join)"
+    primary_oracle: {type: state_machine_assertion, artifact: "assert emitted signal == {kind: roster, event: leave, name: 'Sam'}"}
+    thresholds: {leave_events_emitted_per_leave: 1, leave_misclassified_as_join_allowed: 0}
+    fault_model_refs: [F-LEAVE-EVENT-MISCLASSIFIED]
+    test_ids: [T-EVENTS-03]
+
+  - criterion_id: AC-EVENTS-04
+    name: "Roster event derived from real Recall participant payload"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-EVENTS-14]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "A recorded real Recall participant-events webhook fixture"
+      when:  "The transport ingests the fixture and emits roster signals"
+      then:
+        - "Each emitted roster signal's name and join/leave tag are traceable to a field in the source webhook payload"
+        - "No roster signal is emitted for a participant not present in the source payload (no synthetic roster)"
+    primary_oracle: {type: simulation_trace, artifact: "field-level provenance map: emitted signal -> source webhook JSON path"}
+    thresholds: {synthetic_roster_events_allowed: 0}
+    fault_model_refs: [F-ROSTER-SYNTHETIC]
+    test_ids: [T-EVENTS-04]
+
+  - criterion_id: AC-EVENTS-05
+    name: "Meeting metadata (title, participant list) passes through as context"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-EVENTS-06]
+    criticality: P2
+    blocking: true
+    behavior:
+      given: "A meeting with a known title and initial participant list"
+      when:  "The transport initializes context for the Orchestrator"
+      then:
+        - "The Orchestrator receives the meeting title verbatim from the source metadata"
+        - "The Orchestrator receives the participant list matching the source metadata (same membership)"
+    primary_oracle: {type: contract_schema, artifact: "schema-check on the metadata context object: title:str, participants:list; equality vs source"}
+    thresholds: {metadata_fields_dropped_allowed: 0}
+    fault_model_refs: [F-METADATA-NOT-PASSED]
+    test_ids: [T-EVENTS-05]
+
+  - criterion_id: AC-EVENTS-06
+    name: "Explicit meeting-end webhook emits meeting-end signal"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-EVENTS-07, R-doc02-EVENTS-13]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "An open meeting"
+      when:  "A Recall meeting-closed or bot-removed webhook is received"
+      then:
+        - "Exactly one meeting-end signal is emitted"
+        - "The signal is emitted only in response to the explicit webhook, not on any other trigger"
+    primary_oracle: {type: state_machine_assertion, artifact: "assert exactly one meeting-end signal follows the explicit close/bot-removed webhook"}
+    thresholds: {meeting_end_signals_per_close: 1}
+    fault_model_refs: [F-MEETING-END-NOT-EMITTED]
+    test_ids: [T-EVENTS-06]
+
+  - criterion_id: AC-EVENTS-07
+    name: "Meeting-end is NEVER inferred from silence (negative frontier)"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-EVENTS-09]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "An open meeting with NO close webhook and NO bot-removed webhook"
+      when:  "The meeting goes fully silent (no transcript, no roster, no traffic) for an extended simulated duration, then well beyond any plausible timeout"
+      then:
+        - "No meeting-end signal is emitted at any point during the silence"
+        - "The close sequence is never triggered; a meeting-end signal appears ONLY after an explicit close/bot-removed webhook is later injected"
+    primary_oracle: {type: simulation_trace, artifact: "long-silence simulation trace scanned for any meeting-end signal prior to explicit close webhook"}
+    thresholds: {meeting_end_from_silence_allowed: 0}
+    fault_model_refs: [F-MEETING-END-INFERRED-FROM-SILENCE]
+    test_ids: [T-EVENTS-07]
+
+  - criterion_id: AC-EVENTS-08
+    name: "Meeting-end triggers the close sequence (ordering/atomicity)"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-EVENTS-08]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "An open meeting"
+      when:  "An explicit meeting-end signal is emitted"
+      then:
+        - "The close sequence (Doc 04 §3.16 ordering) is triggered causally after the meeting-end signal"
+        - "No close-pass / close-sequence step is observed before the meeting-end signal in the trace"
+    primary_oracle: {type: simulation_trace, artifact: "causal-ordering assertion: index(meeting_end_signal) < index(first close-sequence step)"}
+    thresholds: {close_steps_before_meeting_end_allowed: 0}
+    fault_model_refs: [F-CLOSE-BEFORE-SIGNAL]
+    test_ids: [T-EVENTS-08]
+
+  - criterion_id: AC-EVENTS-09
+    name: "Recall webhooks land durably in webhook_events (insert-then-200-then-drain)"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-EVENTS-10, R-doc02-EVENTS-05]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The webhook endpoint and a webhook_events table"
+      when:  "A Recall roster / meeting-end / bot-status webhook is delivered"
+      then:
+        - "A webhook_events row is written via INSERT ... ON CONFLICT (delivery_guid) DO NOTHING before processing"
+        - "The endpoint returns 200 and the event is drained/processed only after the durable write"
+    primary_oracle: {type: contract_schema, artifact: "assert webhook_events row exists with delivery_guid PK and ON CONFLICT DO NOTHING semantics; response==200; drain occurs post-commit"}
+    thresholds: {webhooks_processed_before_durable_write_allowed: 0}
+    fault_model_refs: [F-WEBHOOK-NOT-DURABLE]
+    test_ids: [T-EVENTS-09]
+
+  - criterion_id: AC-EVENTS-10
+    name: "Duplicate delivery_guid processed exactly once (idempotent dedupe)"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-EVENTS-11]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "A webhook with delivery_guid G already processed once"
+      when:  "The same delivery_guid G is delivered a second time"
+      then:
+        - "The second INSERT conflicts and is a no-op (row count unchanged for G)"
+        - "Exactly one downstream signal was emitted across both deliveries; no duplicate roster/meeting-end signal"
+    primary_oracle: {type: state_machine_assertion, artifact: "count(webhook_events where delivery_guid=G)==1 and count(downstream signals for G)==1 after two deliveries"}
+    thresholds: {duplicate_webhook_double_processed_allowed: 0}
+    fault_model_refs: [F-WEBHOOK-DOUBLE-PROCESSED]
+    test_ids: [T-EVENTS-10]
+
+  - criterion_id: AC-EVENTS-11
+    name: "Roster/meeting-end/bot-status are internal events, NOT in client registry closure"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc02-EVENTS-12]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The client-facing ProxyMessage contracts registry and assert_registry_closed()"
+      when:  "assert_registry_closed() runs while roster/meeting-end/bot-status signals exist as internal 02->03/04 events"
+      then:
+        - "assert_registry_closed() passes and does not require roster/meeting-end/bot-status to be registered as client ProxyMessages"
+        - "These signals are classified as internal/over-transport events, out of the registry's scope"
+    primary_oracle: {type: state_machine_assertion, artifact: "assert_registry_closed() returns closed==true with roster/meeting-end/bot-status absent from client registry"}
+    thresholds: {internal_signals_required_in_client_registry_allowed: 0}
+    fault_model_refs: [F-INTERNAL-SIGNAL-IN-REGISTRY]
+    test_ids: [T-EVENTS-11]
+
+  - criterion_id: AC-EVENTS-12
+    name: "bot-status webhooks flow to the harness"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-EVENTS-05]
+    criticality: P2
+    blocking: true
+    behavior:
+      given: "A live meeting connected to the harness"
+      when:  "A Recall bot-status webhook is received"
+      then:
+        - "The derived bot-status signal is routed to the harness (Orchestrator)"
+        - "The webhook was first persisted to webhook_events (durable) before routing"
+    primary_oracle: {type: simulation_trace, artifact: "trace: bot-status webhook -> webhook_events row -> harness inbound signal"}
+    thresholds: {bot_status_signals_dropped_allowed: 0}
+    fault_model_refs: [F-BOT-STATUS-NOT-ROUTED]
+    test_ids: [T-EVENTS-12]
+
+  - criterion_id: AC-EVENTS-13
+    name: "Name-change reflected on subsequent roster events (per-branch)"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-EVENTS-15]
+    criticality: P3
+    blocking: false
+    behavior:
+      given: "A present participant whose display name changes mid-meeting"
+      when:  "A subsequent join/leave (or presence) event for that participant is observed"
+      then:
+        - "The emitted roster event carries the updated (current) name"
+        - "No stale prior name is emitted after the change is observed"
+    primary_oracle: {type: state_machine_assertion, artifact: "assert last-emitted name for participant == latest source name after change"}
+    thresholds: {stale_name_after_change_allowed: 0}
+    fault_model_refs: [F-ROSTER-STALE-NAME]
+    test_ids: [T-EVENTS-13]

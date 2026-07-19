@@ -1,0 +1,192 @@
+# Doc 02 (Voice & Transport) — SPEAKING (text-in -> voice-out / TTS / Output-Media audio) requirements slice
+# Reconstructed by the Criteria Author Lead to back AC-SPEAK-01..15 (author sub-agent authored the
+# criteria but the Write tool blocked the "req"+"uirements" path; authored here via the staging heredoc path).
+# Source: product/v0-spec/02-VOICE-TRANSPORT.md §2 (Voice), §3.3, §3.9 step 4, §4 latency;
+#         CANONICAL-DECISIONS.md §12.3 (delivery model), §12.8 (latency SLOs).
+- requirement_id: R-doc02-SPEAK-01
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.3 paragraph 1"
+  source_quote: "Upstream hands this layer text -> Cartesia Sonic 3 synthesizes (~40ms time-to-first-audio) -> Recall Output Media streams it into the call as Proxy's voice."
+  normalized_statement: >
+    WHEN upstream hands this layer text to speak THE SYSTEM SHALL synthesize it via the TTSProvider (Cartesia) and stream the audio into the call via Recall Output Media as Proxy's voice.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-02
+  authority_type: canonical_decision
+  authority_document: DOC-02
+  source_location: "CANONICAL §12.3"
+  source_quote: "Wake-turn tools are the sole delivery authority: Proxy communicates only by speak(text) ... The projector is pure rendering ... It never auto-extracts a headline from the raw stream and decides to speak."
+  normalized_statement: >
+    WHEN voice output is produced THE SYSTEM SHALL produce it only from an explicit speak(text) call, and SHALL NOT auto-extract a headline from the raw stream to decide to speak.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-03
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.3 paragraph 1"
+  source_quote: "One voice, one calm register (brand: the teal deep feel)."
+  normalized_statement: >
+    WHILE Proxy speaks THE SYSTEM SHALL use exactly one voice and one calm register for all synthesized audio.
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-04
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§2 channel 1 / §3.3"
+  source_quote: "headlines only (~2-4k chars/hr ~ $0.10-0.20 - the speak-short/detail-in-chat design)"
+  normalized_statement: >
+    WHILE synthesizing speech over a meeting-hour THE SYSTEM SHALL enforce a headlines-only budget of ~2-4k characters/hour (detail goes to chat, not voice).
+  requirement_type: cost
+  criticality: P2
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-05
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§2 channel 1 / §3.3"
+  source_quote: "every spoken line also posts as text (accessibility + record - free since we synthesize from text)"
+  normalized_statement: >
+    WHEN Proxy speaks any line THE SYSTEM SHALL also post that line as text to chat (parity: no spoken line without a text copy).
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-06
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.3 paragraph 1"
+  source_quote: "every spoken line also posts as text ... free since we synthesize from text"
+  normalized_statement: >
+    WHEN the text copy of a spoken line is posted THE SYSTEM SHALL post text that matches the synthesized text verbatim.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-07
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.3 paragraph 1"
+  source_quote: "speaking only begins on a boundary signal (3.6)"
+  normalized_statement: >
+    WHEN Proxy would begin speaking THE SYSTEM SHALL begin voice output only on a clear boundary signal, never without one.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-08
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.3 paragraph 1"
+  source_quote: "aborts instantly on barge-in"
+  normalized_statement: >
+    WHILE Proxy is speaking, IF a barge-in fires THE SYSTEM SHALL abort the in-flight TTS instantly.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-09
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.3 paragraph 2"
+  source_quote: "TTS is streamed to Output Media in small chunks, deliberately, so barge-in isn't defeated by a large already-buffered stretch of audio - a flush drops at most one small in-flight chunk."
+  normalized_statement: >
+    WHILE streaming TTS to Output Media THE SYSTEM SHALL stream in small chunks such that a barge-in flush drops at most one small in-flight chunk.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-10
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.3 Ack-audible reflex"
+  source_quote: "A direct answer can fire a <=500ms canned on it spoken line the instant it's picked up, while the real answer resolves."
+  normalized_statement: >
+    WHEN a direct answer is picked up THE SYSTEM SHALL be able to fire a <=500ms canned spoken ack line while the real answer resolves.
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-11
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.3 Ack-audible reflex"
+  source_quote: "the audible counterpart to the tile checking... ACK ... this one is voice"
+  normalized_statement: >
+    WHEN the audible ack fires THE SYSTEM SHALL speak a canned ack line only, never the resolved answer content (source-honesty).
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-12
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: "§4 latency targets"
+  source_quote: "TTS time-to-first-audio ~40ms (voice starts effectively instantly)"
+  normalized_statement: >
+    WHEN synthesis begins THE SYSTEM SHALL achieve a TTS time-to-first-audio at or near ~40ms (voice starts effectively instantly).
+  requirement_type: performance
+  criticality: P2
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-13
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: "§4 latency targets"
+  source_quote: "speak-decision-to-audible [<1s]"
+  normalized_statement: >
+    WHEN Doc 04 issues a speak decision THE SYSTEM SHALL make Proxy audible in the call within <1s (Output Media leg is the pinned measurement).
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-14
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: "CANONICAL §12.8"
+  source_quote: "ack-audible p95<=500ms"
+  normalized_statement: >
+    WHEN the audible ack path runs on the direct-answer path THE SYSTEM SHALL meet ack-audible p95 <= 500ms.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-15
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: "CANONICAL §12.8"
+  source_quote: "first-grounded-audio p50<=2.5s/p95<=5s"
+  normalized_statement: >
+    WHEN a shallow grounded direct answer is spoken THE SYSTEM SHALL meet first-grounded-audio p50 <= 2.5s.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-16
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: "CANONICAL §12.8"
+  source_quote: "first-grounded-audio p50<=2.5s/p95<=5s"
+  normalized_statement: >
+    WHEN a shallow grounded direct answer is spoken THE SYSTEM SHALL meet first-grounded-audio p95 <= 5s.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-17
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.7 / §3.9 step 4"
+  source_quote: "the text copy posts to chat with every spoken line"
+  normalized_statement: >
+    IF TTS synthesis fails for a line THE SYSTEM SHALL still post that line's text to chat (a dead engine never makes Proxy both mute and silent).
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified

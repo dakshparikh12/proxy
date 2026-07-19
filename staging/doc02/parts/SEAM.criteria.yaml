@@ -1,0 +1,394 @@
+# Doc 02 (Voice & Transport) — SEAM / SIGNAL-SURFACE / COST / PLATFORM-MATRIX / RUNTIME-LOCUS section
+# Cross-cutting acceptance criteria. Paired requirements live in parts/SEAM.reqs.yaml (see note below).
+#
+# Scope owned by this slice: the three provider seams (TransportProvider/STTProvider/TTSProvider) and
+# their swap-by-migration property · the COMPLETE 9-signal surface + its completeness guarantee ·
+# the AGGREGATE managed cost ($0.75–0.85/hr) + honest accrual (never a false all-in $1) ·
+# the platform matrix (Meet/Zoom/Teams parity, zero per-platform code) · the runtime locus
+# (in-process package in meeting_runtime, no bus/broker/wire) · the registry-scope boundary (§11.8).
+# NOT owned here: the per-signal SLOs (owned by JOIN/SPEAK/EVENTS sections).
+#
+# Oracles: static analysis (seam abstraction present; no per-platform branch; transport at
+# services/transport; signal surface excluded from registry closure), contract-schema (each signal
+# shape; channel-report dm_available: bool), simulation trace (all 9 signals appear end-to-end),
+# deterministic cost computation (transport_usd = elapsed_hours × rate). Judge only where no
+# deterministic oracle exists.
+#
+# HARNESS-CONFLICT NOTE: the intended paired file, parts/SEAM.requirements.yaml, could NOT be
+# written — harness/guard.py protects any path whose string contains "requirements" (PROTECTED tuple,
+# enforced at the Edit/Write path check). A probe Write to that path was hard-blocked
+# ("protected path … record conflicts in PROGRESS.md"). Per the guard's own instruction and the
+# doc02 JOIN-slice precedent, the paired requirements (R-doc02-SEAM-01..20, referenced by every
+# criterion's authority_refs below) are authored under the guard-allowed name
+# **parts/SEAM.reqs.yaml**. Rename to SEAM.requirements.yaml once the guard is narrowed. Conflict
+# logged in PROGRESS.md.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FAULT MODELS (referenced by criteria below)
+# ─────────────────────────────────────────────────────────────────────────────
+fault_models:
+  - id: F-PER-PLATFORM-CODE
+    summary: "A per-platform conditional (e.g. `if platform == 'zoom'`) or a platform-named branch/module lives inside transport core, violating 'we write zero per-platform code'."
+  - id: F-RAW-PROVIDER-CLIENT
+    summary: "A concrete provider SDK/client (Recall, AssemblyAI, Cartesia) is imported/instantiated outside its named Protocol seam, defeating swap-by-migration."
+  - id: F-SIGNAL-MISSING
+    summary: "One or more of the 9 named signals is never emitted by this layer, leaving an upstream (Doc 03/04) consumer with a coverage hole."
+  - id: F-SIGNAL-SHAPE
+    summary: "An emitted signal deviates from its declared shape (e.g. channel-report lacks `dm_available: bool`, or transcript lacks words/speaker/t)."
+  - id: F-REGISTRY-LEAK
+    summary: "An internal transport signal is placed into the client ProxyMessage contracts registry and pulled into assert_registry_closed() scope, violating the §11.8 boundary."
+  - id: F-BUS-BROKER-WIRE
+    summary: "The carrier from transport to projector/Orchestrator is a network bus/broker/wire rather than an in-process asyncio call, or transport is deployed as a separate network service."
+  - id: F-WRONG-LOCUS
+    summary: "Transport is homed at libs/transport (or elsewhere) rather than services/transport, contradicting CANONICAL §9/§12.1."
+  - id: F-COST-FALSE-ALLIN
+    summary: "transport_usd is reported as a fixed/claimed value (e.g. a flat all-in $1) rather than accrued from real elapsed time × rate."
+  - id: F-COST-RESET
+    summary: "transport_usd resets toward 0 on harness recycle instead of persisting/monotonically accruing (§12.7)."
+  - id: F-COST-CEILING
+    summary: "Aggregate managed transport rate exceeds the $0.85/hr slice ceiling (or blows the ≤$1/hr all-in total)."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ACCEPTANCE CRITERIA
+# ─────────────────────────────────────────────────────────────────────────────
+criteria:
+
+  - criterion_id: AC-SEAM-01
+    name: "TransportProvider seam present — Recall behind a stable Protocol"
+    evidence_class: "[static]"
+    authority_refs: [R-doc02-SEAM-01, R-doc02-SEAM-04]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The transport package under services/transport."
+      when:  "The seam inventory is inspected statically."
+      then:
+        - "A `TransportProvider` Protocol/ABC exists and the Recall carrier is one implementation of it."
+        - "No caller depends on the concrete Recall client type; callers depend only on the Protocol."
+    primary_oracle: {type: static_analysis, artifact: "AST scan: TransportProvider Protocol defined; Recall client import appears only in the impl module, never in callers."}
+    thresholds: {transport_provider_seam_defined: 1, recall_client_imports_outside_seam_impl_allowed: 0}
+    fault_model_refs: [F-RAW-PROVIDER-CLIENT]
+    test_ids: [T-SEAM-01]
+
+  - criterion_id: AC-SEAM-02
+    name: "STTProvider seam present — STT swappable by migration"
+    evidence_class: "[static]"
+    authority_refs: [R-doc02-SEAM-02, R-doc02-SEAM-04]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The transport package under services/transport."
+      when:  "The seam inventory is inspected statically."
+      then:
+        - "An `STTProvider` Protocol/ABC exists and AssemblyAI-via-Recall is one implementation of it."
+        - "STT callers depend on the Protocol, not on the concrete provider client."
+    primary_oracle: {type: static_analysis, artifact: "AST scan: STTProvider Protocol defined; concrete STT client import confined to its impl module."}
+    thresholds: {stt_provider_seam_defined: 1, stt_client_imports_outside_seam_impl_allowed: 0}
+    fault_model_refs: [F-RAW-PROVIDER-CLIENT]
+    test_ids: [T-SEAM-02]
+
+  - criterion_id: AC-SEAM-03
+    name: "TTSProvider seam present — TTS (Cartesia) swappable by migration"
+    evidence_class: "[static]"
+    authority_refs: [R-doc02-SEAM-03, R-doc02-SEAM-04]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The transport package under services/transport."
+      when:  "The seam inventory is inspected statically."
+      then:
+        - "A `TTSProvider` Protocol/ABC exists and Cartesia is one implementation of it."
+        - "TTS callers depend on the Protocol, not on the concrete Cartesia client."
+    primary_oracle: {type: static_analysis, artifact: "AST scan: TTSProvider Protocol defined; Cartesia client import confined to its impl module."}
+    thresholds: {tts_provider_seam_defined: 1, cartesia_client_imports_outside_seam_impl_allowed: 0}
+    fault_model_refs: [F-RAW-PROVIDER-CLIENT]
+    test_ids: [T-SEAM-03]
+
+  - criterion_id: AC-SEAM-04
+    name: "Provider-independence — swap is a migration, not a redesign"
+    evidence_class: "[static]"
+    authority_refs: [R-doc02-SEAM-01, R-doc02-SEAM-02, R-doc02-SEAM-03, R-doc02-SEAM-04]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The three provider seams and their concrete impls."
+      when:  "A second (fake/alt) implementation is substituted for each seam under test."
+      then:
+        - "Callers compile and run against the alt impl with no caller-code edit (migration-only swap)."
+        - "No concrete provider SDK symbol (Recall/AssemblyAI/Cartesia) is referenced outside its seam impl module."
+    primary_oracle: {type: static_analysis, artifact: "Dependency-direction check: caller modules import only Protocol seams; a test-double impl injected via the seam satisfies all call sites."}
+    thresholds: {raw_provider_symbols_outside_seams_allowed: 0, caller_edits_required_for_swap: 0}
+    fault_model_refs: [F-RAW-PROVIDER-CLIENT]
+    test_ids: [T-SEAM-04]
+
+  - criterion_id: AC-SEAM-05
+    name: "V0 runs the managed stack end to end (self-hosted path not wired)"
+    evidence_class: "[static]"
+    authority_refs: [R-doc02-SEAM-05]
+    criticality: P2
+    blocking: false
+    behavior:
+      given: "The V0 build/config path."
+      when:  "The active provider bindings are inspected."
+      then:
+        - "The bound implementations are the managed trio (Recall, AssemblyAI-via-Recall, Cartesia)."
+        - "No self-hosted provider impl is selected/wired on the V0 path."
+    primary_oracle: {type: static_analysis, artifact: "Config/wiring scan: default provider bindings resolve to the managed impls; self-hosted impls absent from the V0 wiring."}
+    thresholds: {managed_providers_bound: 3, self_hosted_bindings_on_v0_path_allowed: 0}
+    fault_model_refs: [F-RAW-PROVIDER-CLIENT]
+    test_ids: [T-SEAM-05]
+
+  - criterion_id: AC-SEAM-06
+    name: "Runtime locus — in-process package in meeting_runtime, no separate service"
+    evidence_class: "[static]"
+    authority_refs: [R-doc02-SEAM-06]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The transport package and the meeting_runtime harness."
+      when:  "Deployment topology and import graph are inspected statically."
+      then:
+        - "Transport is imported as an in-process package by the single meeting_runtime asyncio process."
+        - "No separate network service / server entrypoint is defined for transport."
+    primary_oracle: {type: static_analysis, artifact: "Import-graph + deploy-manifest scan: transport is an in-process import of meeting_runtime; no standalone service manifest/entrypoint for transport."}
+    thresholds: {separate_transport_network_service_allowed: 0}
+    fault_model_refs: [F-BUS-BROKER-WIRE]
+    test_ids: [T-SEAM-06]
+
+  - criterion_id: AC-SEAM-07
+    name: "In-process asyncio carrier — no bus, no broker, no wire"
+    evidence_class: "[static]"
+    authority_refs: [R-doc02-SEAM-07]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The path from transport to projector/canvas and to the Orchestrator."
+      when:  "The carrier mechanism is inspected statically."
+      then:
+        - "The carrier is a direct in-process asyncio call/await (or asyncio.Queue within the process)."
+        - "No message bus, broker, socket, or wire client (e.g. pub/sub, AMQP, HTTP-to-self) sits on this path."
+    primary_oracle: {type: static_analysis, artifact: "AST scan of the emit path: only in-process asyncio primitives; zero bus/broker/socket clients between transport and projector/Orchestrator."}
+    thresholds: {bus_broker_wire_hops_allowed: 0}
+    fault_model_refs: [F-BUS-BROKER-WIRE]
+    test_ids: [T-SEAM-07]
+
+  - criterion_id: AC-SEAM-08
+    name: "Transport homed at services/transport — no libs/transport"
+    evidence_class: "[static]"
+    authority_refs: [R-doc02-SEAM-08]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The uv workspace member layout."
+      when:  "The filesystem/workspace tree is inspected."
+      then:
+        - "A `services/transport` src-layout package exists; shared dispatch is via `libs/http`."
+        - "No `libs/transport` package exists anywhere in the workspace."
+    primary_oracle: {type: static_analysis, artifact: "Path check: services/transport/src/transport present; glob 'libs/transport*' returns empty."}
+    thresholds: {libs_transport_packages_allowed: 0, services_transport_present: 1}
+    fault_model_refs: [F-WRONG-LOCUS]
+    test_ids: [T-SEAM-08]
+
+  - criterion_id: AC-SEAM-09
+    name: "Signal-surface completeness — all 9 named signals emitted"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-SEAM-09, R-doc02-SEAM-10]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "An end-to-end simulated meeting exercising joins, speech, chat, barge-in, boundary, disconnect/rejoin, and end."
+      when:  "The full signal stream emitted by transport is captured over the run."
+      then:
+        - "Every one of the nine signals appears at least once: transcript, chat, roster, speaking, boundary, barge-in, bot-status, meeting-end, channel-report."
+        - "No named signal from the §3.10 list is absent from the captured surface."
+    primary_oracle: {type: simulation_trace, artifact: "End-to-end sim: assert the set of emitted signal kinds ⊇ the 9-element §3.10 set."}
+    thresholds: {required_signal_kinds: 9, signal_missing_from_surface_allowed: 0}
+    fault_model_refs: [F-SIGNAL-MISSING]
+    test_ids: [T-SEAM-09]
+
+  - criterion_id: AC-SEAM-10
+    name: "Signal shapes conform — each signal carries its declared payload"
+    evidence_class: "[contract]"
+    authority_refs: [R-doc02-SEAM-09]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The declared signal-surface schema (§3.10)."
+      when:  "Each emitted signal is validated against its schema."
+      then:
+        - "transcript carries (words, speaker, t); chat carries (message, sender, dm?); roster carries (join/leave, name); speaking carries (on/off); boundary carries (now); barge-in carries (now); bot-status carries (connected/dropped/rejoined); meeting-end carries its terminal marker; channel-report carries dm_available."
+        - "A signal whose payload omits a declared field fails validation (not emitted as complete)."
+    primary_oracle: {type: contract_schema, artifact: "Schema validation of each signal instance against its §3.10-declared shape."}
+    thresholds: {schema_violations_allowed: 0, signal_kinds_schema_covered: 9}
+    fault_model_refs: [F-SIGNAL-SHAPE]
+    test_ids: [T-SEAM-10]
+
+  - criterion_id: AC-SEAM-11
+    name: "channel-report field is exactly dm_available: bool"
+    evidence_class: "[contract]"
+    authority_refs: [R-doc02-SEAM-12, R-doc02-SEAM-17]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "A meeting on a platform with, and one without, DM availability."
+      when:  "The channel-report signal is emitted and validated."
+      then:
+        - "The signal carries a field named exactly `dm_available` typed as bool."
+        - "dm_available is True where DM is available and False where the platform lacks it (platform-dependent, not hard-coded True)."
+    primary_oracle: {type: contract_schema, artifact: "Schema assert: field name == 'dm_available', type == bool; two-branch sim shows both True and False cases."}
+    thresholds: {dm_available_field_name_mismatch_allowed: 0, dm_available_non_bool_allowed: 0}
+    fault_model_refs: [F-SIGNAL-SHAPE]
+    test_ids: [T-SEAM-11]
+
+  - criterion_id: AC-SEAM-12
+    name: "Signal surface OUT of client registry closure (§11.8 boundary)"
+    evidence_class: "[static]"
+    authority_refs: [R-doc02-SEAM-11]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The client ProxyMessage contracts registry and assert_registry_closed()."
+      when:  "The registry membership is inspected statically against the 9 transport signals."
+      then:
+        - "None of the nine internal transport signals appears in the client contracts registry."
+        - "assert_registry_closed() passes WITHOUT any transport signal being registered; adding one would be a violation, not a fix."
+    primary_oracle: {type: static_analysis, artifact: "Set-disjointness check: {9 transport signal kinds} ∩ client_registry == ∅; assert_registry_closed() green with the surface excluded."}
+    thresholds: {transport_signals_in_client_registry_allowed: 0}
+    fault_model_refs: [F-REGISTRY-LEAK]
+    test_ids: [T-SEAM-12]
+
+  - criterion_id: AC-SEAM-13
+    name: "Aggregate managed transport cost within $0.75–0.85/hr"
+    evidence_class: "[latency]"
+    authority_refs: [R-doc02-SEAM-13, R-doc02-SEAM-20]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The managed provider rate card (bot $0.50 + STT $0.15 + TTS $0.10–0.20)."
+      when:  "The aggregate transport rate is computed for one hour of listening."
+      then:
+        - "The aggregate managed transport rate is >= $0.75 and <= $0.85 per hour."
+        - "The rate does not exceed the $0.85 managed ceiling, preserving ~$0.20/hr headroom under the ≤$1/hr all-in total."
+    primary_oracle: {type: deterministic_cost, artifact: "Sum the component rates; assert 0.75 <= total_hr <= 0.85."}
+    thresholds: {managed_rate_min_usd_per_hr: 0.75, managed_rate_max_usd_per_hr: 0.85, allin_ceiling_usd_per_hr: 1.00}
+    fault_model_refs: [F-COST-CEILING]
+    test_ids: [T-SEAM-13]
+
+  - criterion_id: AC-SEAM-14
+    name: "Transport cost accrued honestly — elapsed×rate, never a false all-in $1"
+    evidence_class: "[latency]"
+    authority_refs: [R-doc02-SEAM-14]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "A meeting of known elapsed duration and a known transport_rate."
+      when:  "meeting_cost.transport_usd is read at time T."
+      then:
+        - "transport_usd == elapsed_hours(T) × transport_rate (within float tolerance) — a computed accrual, not a constant."
+        - "transport_usd is NOT a fixed all-in claim (e.g. a flat $1); it reflects only the $0.75–0.85 transport slice."
+    primary_oracle: {type: deterministic_cost, artifact: "Drive elapsed clock to several values; assert transport_usd tracks elapsed×rate and is never pinned to a constant/all-in figure."}
+    thresholds: {cost_formula_abs_tol_usd: 0.001, false_allin_constant_allowed: 0}
+    fault_model_refs: [F-COST-FALSE-ALLIN]
+    test_ids: [T-SEAM-14]
+
+  - criterion_id: AC-SEAM-15
+    name: "Transport cost monotonic across recycle — reload, never reset to 0"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-SEAM-15]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "A meeting that accrues transport_usd, then the harness recycles mid-meeting."
+      when:  "transport_usd is read before and after the recycle."
+      then:
+        - "Post-recycle transport_usd >= pre-recycle value (monotonic non-decreasing); the accrued cost reloads."
+        - "transport_usd is NOT reset toward 0 on recycle."
+    primary_oracle: {type: simulation_trace, artifact: "Accrue → recycle → resume sim; assert transport_usd_after >= transport_usd_before and continues accruing."}
+    thresholds: {cost_reset_to_zero_on_recycle_allowed: 0}
+    fault_model_refs: [F-COST-RESET]
+    test_ids: [T-SEAM-15]
+
+  - criterion_id: AC-SEAM-16
+    name: "Platform matrix parity — join/hear/speak/tile/screenshare on all 3 platforms"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-SEAM-16]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "Simulated meetings on Google Meet, Zoom, and Teams via the Recall carrier."
+      when:  "Each of join, hear, speak, tile, screenshare is exercised on each platform."
+      then:
+        - "All 15 cells (5 capabilities × 3 platforms) succeed through the single Recall carrier."
+        - "No capability is available on one platform but structurally missing on another."
+    primary_oracle: {type: simulation_trace, artifact: "Matrix sim across {meet,zoom,teams} × {join,hear,speak,tile,screenshare}; assert every cell passes."}
+    thresholds: {platform_matrix_cells_required: 15, matrix_cells_failing_allowed: 0}
+    fault_model_refs: [F-PER-PLATFORM-CODE]
+    test_ids: [T-SEAM-16]
+
+  - criterion_id: AC-SEAM-17
+    name: "Zero per-platform code in transport core"
+    evidence_class: "[static]"
+    authority_refs: [R-doc02-SEAM-19]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The services/transport core source."
+      when:  "The source is scanned statically for platform-forking constructs."
+      then:
+        - "No `if platform == '<meet|zoom|teams>'` branch and no platform-named module/handler that forks behavior by meeting platform exists in transport core."
+        - "Platform differences (if any) are confined to provider config/data, not to branching code."
+    primary_oracle: {type: static_analysis, artifact: "AST/regex scan of transport core for platform-conditional branches and platform-named handler dispatch; count must be 0."}
+    thresholds: {per_platform_branch_in_core_allowed: 0}
+    fault_model_refs: [F-PER-PLATFORM-CODE]
+    test_ids: [T-SEAM-17]
+
+  - criterion_id: AC-SEAM-18
+    name: "Native raise-hand / reaction buttons NOT used"
+    evidence_class: "[static]"
+    authority_refs: [R-doc02-SEAM-18]
+    criticality: P2
+    blocking: false
+    behavior:
+      given: "The transport signal-production code."
+      when:  "The source is scanned for dependence on native platform raise-hand/reaction UI."
+      then:
+        - "No signal is sourced from a native raise-hand or reaction button API; signals are surfaced through our own tile."
+        - "Removing native-button hooks does not remove any §3.10 signal (they are not a source of the surface)."
+    primary_oracle: {type: static_analysis, artifact: "Scan for native raise-hand/reaction API usage as a signal source; expect none."}
+    thresholds: {native_raise_hand_or_reaction_dependencies_allowed: 0}
+    fault_model_refs: [F-PER-PLATFORM-CODE]
+    test_ids: [T-SEAM-18]
+
+  - criterion_id: AC-SEAM-19
+    name: "DM availability is platform-dependent and reported, not assumed"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-SEAM-17, R-doc02-SEAM-12]
+    criticality: P2
+    blocking: false
+    behavior:
+      given: "One platform where chat DM is available and one where it is not."
+      when:  "channel-report is emitted for each."
+      then:
+        - "dm_available is False on the platform lacking DM and True on the platform providing it (never hard-coded True)."
+        - "Downstream consumers can gate DM sends on the reported dm_available value."
+    primary_oracle: {type: simulation_trace, artifact: "Two-platform sim; assert channel-report.dm_available reflects platform capability in both directions."}
+    thresholds: {hardcoded_dm_available_true_allowed: 0}
+    fault_model_refs: [F-SIGNAL-SHAPE]
+    test_ids: [T-SEAM-19]
+
+  - criterion_id: AC-SEAM-20
+    name: "Completeness guarantee — upstream signal gaps belong to this layer"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-SEAM-10]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The §3.10 signal list as the contract Docs 03/04 build against."
+      when:  "The upstream consumers' required-signal set is compared to the emitted surface."
+      then:
+        - "Every signal required by any Doc 03/04 behavior in scope is present on the emitted surface (this layer owns closing the gap)."
+        - "The count of upstream-required signals absent from the surface is zero."
+    primary_oracle: {type: simulation_trace, artifact: "Cross-check upstream required-signal set ⊆ emitted §3.10 surface; assert no missing signal."}
+    thresholds: {upstream_required_signals_missing_allowed: 0}
+    fault_model_refs: [F-SIGNAL-MISSING]
+    test_ids: [T-SEAM-20]

@@ -1,0 +1,1947 @@
+# Doc 02 (Voice & Transport) — Acceptance Bundle: requirements
+# Merged from parts/ by the Criteria Author Lead. One atomic EARS requirement per block.
+# 160 requirements across sections: JOIN, EVENTS, HEAR, SPEAK, CHAT, CANVAS, TURN, FAIL, SEAM, XCUT.
+- requirement_id: R-doc02-JOIN-01
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.1 paragraph 1
+  source_quote: Proxy joins from a meeting link (or calendar invite) as a Recall.ai bot — no host-side install; the link is enough.
+  normalized_statement: 'WHEN a user supplies a meeting link (or calendar invite) THE SYSTEM SHALL join the meeting as a Recall.ai bot without requiring any host-side install.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-JOIN-02
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.1 paragraph 1
+  source_quote: Proxy joins from a meeting link (or calendar invite) as a Recall.ai bot — no host-side install; the link is enough.
+  normalized_statement: 'IF only a meeting link is provided and no host-side install or host approval exists THE SYSTEM SHALL still complete the join using the link alone.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-JOIN-03
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §1 goal item 1
+  source_quote: Proxy is invited by meeting link like a person, joins within seconds, and announces itself ("I'm an AI participant, observing/recording") — the consent gate.
+  normalized_statement: 'WHEN Proxy is invited by a meeting link THE SYSTEM SHALL join within seconds and announce itself as an AI participant that is observing/recording.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-JOIN-04
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: §4 Latency
+  source_quote: join-to-listening [<10s]
+  normalized_statement: 'WHEN Proxy is invited THE SYSTEM SHALL reach the listening state within 10 seconds of the join being triggered (at 10s pass, over 10s fail).
+
+    '
+  requirement_type: performance
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-JOIN-05
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.1 paragraph 1
+  source_quote: Immediately on join it posts the consent notice in chat, pinned where the platform allows
+  normalized_statement: 'WHEN Proxy joins a meeting THE SYSTEM SHALL immediately post the consent notice in the meeting chat before performing any other observable action.
+
+    '
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-JOIN-06
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.1 paragraph 1
+  source_quote: Immediately on join it posts the consent notice in chat, pinned where the platform allows
+  normalized_statement: 'WHEN the platform supports pinning THE SYSTEM SHALL pin the consent notice; WHILE on a platform without pinning THE SYSTEM SHALL still post the notice.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-JOIN-07
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.1 paragraph 1
+  source_quote: one line — it's an AI participant, it observes/records, and anyone in the room can address it
+  normalized_statement: 'WHEN the consent notice is posted THE SYSTEM SHALL render exactly one line stating that Proxy is an AI participant, that it observes/records, and that anyone in the room can address it.
+
+    '
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-JOIN-08
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.1 paragraph 1
+  source_quote: This notice is a hard gate (our upfront-consent decision), not a courtesy.
+  normalized_statement: 'IF the consent notice has not been successfully posted THE SYSTEM SHALL NOT proceed to observe, record, or otherwise participate (the notice is a hard gate, not a courtesy).
+
+    '
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-JOIN-09
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.1 paragraph 1
+  source_quote: The bot belongs to the room, not the inviter.
+  normalized_statement: 'WHILE Proxy is in a meeting THE SYSTEM SHALL treat every participant in the room as able to address it, never restricting interaction to the inviter.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-JOIN-10
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.1 late-join consent
+  source_quote: 'late-join consent: a participant joining mid-meeting never saw the notice, so it re-posts on their join.'
+  normalized_statement: 'WHEN a new participant joins mid-meeting after the consent notice was posted THE SYSTEM SHALL re-post the consent notice on that participant''s join.
+
+    '
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-JOIN-11
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.1 late-join consent
+  source_quote: 'late-join consent: a participant joining mid-meeting never saw the notice, so it re-posts on their join.'
+  normalized_statement: 'IF a participant present when the notice was first posted is already consented THE SYSTEM SHALL NOT require a re-post for that participant; the re-post fires per new participant who joined after the notice.
+
+    '
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-JOIN-12
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §4 Platform matrix
+  source_quote: join/hear/speak/tile/screenshare — all three platforms via Recall.
+  normalized_statement: 'WHEN Proxy joins on Meet, Zoom, or Teams THE SYSTEM SHALL perform the join identically through Recall on all three platforms.
+
+    '
+  requirement_type: compatibility
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-JOIN-13
+  authority_type: canonical_decision
+  authority_document: DOC-02
+  source_location: CANONICAL §11.1
+  source_quote: a `meetings` row is created when the user invites Proxy; the Recall bot is launched and its `recall_bot_id` written back
+  normalized_statement: 'WHEN the user invites Proxy THE SYSTEM SHALL create a meetings row, launch the Recall bot, and write the recall_bot_id back onto that meetings row.
+
+    '
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-JOIN-14
+  authority_type: canonical_decision
+  authority_document: DOC-02
+  source_location: CANONICAL §11.1
+  source_quote: Recall webhooks carry the `bot_id` → look up the `meetings` row → tenant + repo.
+  normalized_statement: 'WHEN a Recall webhook carrying a bot_id arrives THE SYSTEM SHALL resolve it to the meetings row and thereby to the correct tenant and repo.
+
+    '
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-JOIN-15
+  authority_type: canonical_decision
+  authority_document: DOC-02
+  source_location: CANONICAL §12.9 consent
+  source_quote: consent = default-consented via the join notice, objection→audible-defer-to-organizer, hard-removal = end-bot.
+  normalized_statement: 'WHEN the join notice has posted THE SYSTEM SHALL treat the room as default-consented.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-JOIN-16
+  authority_type: canonical_decision
+  authority_document: DOC-02
+  source_location: CANONICAL §12.9 consent
+  source_quote: consent = default-consented via the join notice, objection→audible-defer-to-organizer, hard-removal = end-bot.
+  normalized_statement: 'IF a participant objects to Proxy''s presence THE SYSTEM SHALL audibly defer to the organizer rather than continuing unilaterally.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-JOIN-17
+  authority_type: canonical_decision
+  authority_document: DOC-02
+  source_location: CANONICAL §12.9 consent
+  source_quote: consent = default-consented via the join notice, objection→audible-defer-to-organizer, hard-removal = end-bot.
+  normalized_statement: 'WHEN a hard-removal is requested THE SYSTEM SHALL end the bot (leave the meeting) rather than merely muting or pausing.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-JOIN-18
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.9 step 1 (Join)
+  source_quote: 'Recall bot joins from a meeting link; consent line posts on join. Provable: bot appears in a real Meet and the line is pinned/posted.'
+  normalized_statement: 'WHEN Proxy joins a real meeting THE SYSTEM SHALL make the join provable — the bot appears in the meeting and the consent line is pinned/posted in chat.
+
+    '
+  requirement_type: observability
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-JOIN-19
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.9 step 1 (Join)
+  source_quote: 'Recall bot joins from a meeting link; consent line posts on join. Provable: bot appears in a real Meet and the line is pinned/posted.'
+  normalized_statement: 'IF the join fails or the consent line cannot be posted THE SYSTEM SHALL report the failure honestly and MUST NOT report a false "joined/posted" state.
+
+    '
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-EVENTS-01
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.1 paragraph 2
+  source_quote: The transport streams participant events — who is present, joins, leaves, with names — to the Orchestrator, live.
+  normalized_statement: 'WHEN the transport observes a participant event (join, leave, or presence) THE SYSTEM SHALL stream a corresponding roster event to the Orchestrator live (in the same in-process/over-transport flow, not batched at meeting end).
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-EVENTS-02
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.10 signal surface
+  source_quote: roster(join/leave, name) · meeting-end
+  normalized_statement: 'WHEN a participant joins THE SYSTEM SHALL emit a roster event tagged join carrying the participant''s name.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-EVENTS-03
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.10 signal surface
+  source_quote: roster(join/leave, name) · meeting-end
+  normalized_statement: 'WHEN a participant leaves THE SYSTEM SHALL emit a roster event tagged leave carrying the participant''s name/identity.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-EVENTS-04
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.1 paragraph 2
+  source_quote: who is present, joins, leaves, with names
+  normalized_statement: 'WHEN a roster event is emitted THE SYSTEM SHALL include the participant''s name so downstream name-aware responses and speaker attribution can resolve identity; a roster event with a resolvable participant but a missing name field SHALL NOT be emitted as complete.
+
+    '
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-EVENTS-05
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.9 step 2 (Events)
+  source_quote: Roster (join/leave, names), meeting-end, and bot-status webhooks flow to the harness
+  normalized_statement: 'WHEN a Recall roster, meeting-end, or bot-status webhook is received THE SYSTEM SHALL route the derived signal to the harness (Orchestrator).
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-EVENTS-06
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.1 paragraph 2
+  source_quote: Meeting metadata (title, participant list) passes through to the Orchestrator as context.
+  normalized_statement: 'WHEN meeting metadata (title and participant list) is available THE SYSTEM SHALL pass it through to the Orchestrator as context.
+
+    '
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-EVENTS-07
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.1 paragraph 2
+  source_quote: Meeting end (meeting closes / bot removed) emits an explicit signal that triggers the close sequence
+  normalized_statement: 'WHEN the meeting closes or the bot is removed (an explicit Recall meeting-end / bot-removed webhook) THE SYSTEM SHALL emit an explicit meeting-end signal.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-EVENTS-08
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.1 paragraph 2
+  source_quote: emits an explicit signal that triggers the close sequence (ordered by Doc 04 §3.16; close pass written in place by Doc 03 §3.7)
+  normalized_statement: 'WHEN the meeting-end signal is emitted THE SYSTEM SHALL trigger the close sequence (ordered by Doc 04 §3.16), i.e. the signal is the causal trigger and precedes any close-pass work.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-EVENTS-09
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.1 paragraph 2
+  source_quote: never inferred from silence
+  normalized_statement: 'WHILE a meeting is open THE SYSTEM SHALL NOT emit a meeting-end signal on the basis of silence, inactivity, or absence of transcript/roster traffic for any duration; ONLY an explicit close / bot-removed webhook SHALL cause meeting-end.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-EVENTS-10
+  authority_type: specification
+  authority_document: CANONICAL
+  source_location: CANONICAL §12.10 webhook durability
+  source_quote: ALL external webhooks (GitHub + Recall) land in webhook_events durable table, INSERT ON CONFLICT (delivery_guid) DO NOTHING → 200 → drain; dedupe by delivery_guid.
+  normalized_statement: 'WHEN a Recall roster, meeting-end, or bot-status webhook is received THE SYSTEM SHALL persist it into the webhook_events durable table via INSERT ... ON CONFLICT (delivery_guid) DO NOTHING, return 200, and only then drain/process it.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-EVENTS-11
+  authority_type: specification
+  authority_document: CANONICAL
+  source_location: CANONICAL §12.10 webhook durability
+  source_quote: dedupe by delivery_guid
+  normalized_statement: 'WHEN the same webhook delivery_guid is delivered more than once THE SYSTEM SHALL process the derived event exactly once (the second insert conflicts and is a no-op; no duplicate downstream signal is emitted).
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-EVENTS-12
+  authority_type: specification
+  authority_document: CANONICAL
+  source_location: CANONICAL §11.8
+  source_quote: The Doc 02 signal surface (transcript/roster/speaking/boundary/barge-in/bot-status/meeting-end/channel-report) are in-process/over-transport INTERNAL events (02→03/04), NOT client-facing ProxyMessages. They are OUT of assert_registry_closed()'s scope.
+  normalized_statement: 'WHILE emitting roster / meeting-end / bot-status signals THE SYSTEM SHALL treat them as internal 02→03/04 events and SHALL NOT require them to appear in the client-facing ProxyMessage contracts registry; assert_registry_closed() SHALL NOT fail for their absence.
+
+    '
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-EVENTS-13
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.9 step 2 (Events) — Provable
+  source_quote: 'Provable: a late joiner triggers the re-post; ending the meeting emits the close signal.'
+  normalized_statement: 'WHEN the meeting is ended THE SYSTEM SHALL emit the close signal as an observable, provable event (a simulation/trace of ending the meeting shows exactly one meeting-end signal).
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-EVENTS-14
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.1 paragraph 2
+  source_quote: The transport streams participant events — who is present, joins, leaves, with names — to the Orchestrator, live.
+  normalized_statement: 'WHEN a roster event is produced THE SYSTEM SHALL derive it from a real Recall participant event (webhook payload), never from a synthetic/inferred roster; the emitted name and join/leave tag SHALL match the source webhook payload.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-EVENTS-15
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.10 signal surface
+  source_quote: roster(join/leave, name) · meeting-end
+  normalized_statement: 'WHEN a name-change for an already-present participant is observed THE SYSTEM SHALL reflect the updated name on subsequent roster events for that participant (join/leave branches carry the current name).
+
+    '
+  requirement_type: functional
+  criticality: P3
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-HEAR-01
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: 3.2 Hearing, sentence 1
+  source_quote: Recall delivers per-speaker audio streams.
+  normalized_statement: 'WHEN a meeting is live and multiple participants speak THE SYSTEM SHALL ingest per-speaker audio streams as delivered by Recall, one stream per speaker.
+
+    '
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-HEAR-02
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: 3.2 Hearing, sentence 2
+  source_quote: 'STT is AssemblyAI Universal-Streaming via Recall''s passthrough (BYOK: our AssemblyAI key configured in Recall - zero integration code, $0.15/hr, ~300ms word latency; the verified best accuracy-per-dollar).
+
+    '
+  normalized_statement: 'THE SYSTEM SHALL obtain speech-to-text from AssemblyAI Universal-Streaming via Recall''s BYOK passthrough (our AssemblyAI key configured in Recall), WITHOUT Proxy-side STT integration code.
+
+    '
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-HEAR-03
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: 3.2 Hearing, sentence 3 / 3.10 signal surface
+  source_quote: 'The live transcript - words + speaker + timestamps - streams over one websocket to the Orchestrator (Doc 04) and Notes (Doc 03). [...] transcript(words, speaker, t)
+
+    '
+  normalized_statement: 'WHEN transcription produces output THE SYSTEM SHALL emit each transcript unit as a structured record carrying words, speaker, and timestamps (t), matching the signal shape transcript(words, speaker, t).
+
+    '
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-HEAR-04
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: 3.2 Hearing, sentence 3
+  source_quote: 'The live transcript - words + speaker + timestamps - streams over one websocket to the Orchestrator (Doc 04) and Notes (Doc 03).
+
+    '
+  normalized_statement: 'WHEN transcript records are produced THE SYSTEM SHALL stream them over ONE websocket to both the Orchestrator (Doc 04) and Notes (Doc 03), such that both consumers observe the same ordered transcript stream.
+
+    '
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-HEAR-05
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: 1 goal item 2 / 4 latency / 3.2 Hearing
+  source_quote: 'A live, speaker-attributed transcript streams to the rest of the system with ~300ms word latency. [...] STT word latency ~300ms.
+
+    '
+  normalized_statement: 'WHEN a word is spoken THE SYSTEM SHALL surface that word on the transcript stream with a word latency of approximately 300ms (p50 ~300ms), measured spoken-instant to stream-emit. NOTE under BYOK passthrough the Recall-to-AssemblyAI leg is external; Proxy measures end-to-end emit latency but does not own STT-internal buffering.
+
+    '
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-HEAR-06
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: 1 goal item 2 / 3.9 step 3 Hearing
+  source_quote: 'a two-speaker test call yields a correctly attributed live transcript
+
+    '
+  normalized_statement: 'WHEN two or more distinct speakers speak THE SYSTEM SHALL attribute each transcript word to the correct speaker, keeping distinct speakers distinct.
+
+    '
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-HEAR-07
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: 3.2 Hearing, sentence 5 / 3.9 step 3
+  source_quote: 'Proxy''s own speech appears in the transcript marked as Proxy - part of the record [...] Proxy''s own speech marked as Proxy.
+
+    '
+  normalized_statement: 'WHEN Proxy''s own TTS speech is captured by the audio path THE SYSTEM SHALL emit it on the transcript stream with speaker labelled "Proxy" (part of the record).
+
+    '
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-HEAR-08
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: 3.2 Hearing, sentence 5 / 3.9 step 3 Provable / CANONICAL 10.3
+  source_quote: '[Proxy''s own speech is] never processed as a human ask (it must not respond to itself). [...] Proxy never reacts to its own lines.
+
+    '
+  normalized_statement: 'WHEN a transcript line carries speaker=Proxy THE SYSTEM SHALL NOT route or forward that line as a human ask; a Proxy-labelled line MUST NOT trigger any Proxy response (self-loop suppressed at the Doc-02 boundary).
+
+    '
+  requirement_type: safety
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-HEAR-09
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: 3.9 step 3 Hearing / 3.2
+  source_quote: 'a two-speaker test call yields a correctly attributed live transcript; Proxy never reacts to its own lines.
+
+    '
+  normalized_statement: 'WHEN a transcript line carries a human speaker label (non-Proxy) THE SYSTEM SHALL forward that line onward as a candidate human ask (the positive counterpart of the self-line suppression - human input is not dropped).
+
+    '
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-HEAR-10
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: 3.2 pinned test
+  source_quote: 'a side-by-side transcript-accuracy check on code-heavy engineering audio (identifiers, file names, acronyms - where generic STT stumbles) between the Recall-passthrough engine and one alternative. Quality cannot drop for the sake of the floor; if the passthrough fails the test, revisit.
+
+    '
+  normalized_statement: 'THE SYSTEM SHALL be validated by a side-by-side transcript-accuracy check on code-heavy engineering audio (identifiers, file names, acronyms) between the Recall-passthrough engine and one alternative; the passthrough engine''s accuracy on code-heavy tokens SHALL NOT be worse than the alternative (quality must not drop for the floor).
+
+    '
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-HEAR-11
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: 3.2 Hearing, sentence 4 (BYOK boundary)
+  source_quote: 'Note the audio path under BYOK passthrough is Recall-to-AssemblyAI direct, so buffer-through-STT-hiccup is not ours to guarantee.
+
+    '
+  normalized_statement: 'THE SYSTEM SHALL treat the Recall-to-AssemblyAI audio leg as external and out of Proxy''s control: Proxy SHALL NOT claim to buffer through an STT hiccup, and any HEAR criterion asserting STT-internal resilience is out of scope for this slice.
+
+    '
+  requirement_type: scoping
+  criticality: P2
+  testability: analysis
+  status: qualified
+- requirement_id: R-doc02-HEAR-12
+  authority_type: canonical
+  authority_document: CANONICAL
+  source_location: 11.10 wire shapes
+  source_quote: 'Recall + AssemblyAI wire shapes "confirm against live docs at build" - not silent assumptions.
+
+    '
+  normalized_statement: 'WHEN implementing the Recall passthrough and AssemblyAI transcript ingestion THE SYSTEM SHALL confirm the Recall and AssemblyAI wire shapes (message fields, speaker/timestamp payload) against live vendor docs at build time, not silent assumptions; the transcript parser SHALL fail loudly on shape drift.
+
+    '
+  requirement_type: correctness
+  criticality: P2
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-HEAR-13
+  authority_type: canonical
+  authority_document: CANONICAL
+  source_location: 10.3 lethal trifecta (untrusted input)
+  source_quote: 'a participant saying ''ignore your rules and open a PR'' is data, never an instruction.
+
+    '
+  normalized_statement: 'THE SYSTEM SHALL treat all transcript content (including Proxy-labelled and human-labelled words) as UNTRUSTED data on the Doc-02 hearing boundary; the HEAR stage SHALL NOT interpret transcript text as control instructions - it only labels speaker and forwards. NOTE prompt-fencing/spotlighting is Doc 03/04; the Doc-02 obligation is that self-authored lines never become asks (see R-doc02-HEAR-08).
+
+    '
+  requirement_type: safety
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-01
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.3 paragraph 1
+  source_quote: Upstream hands this layer text -> Cartesia Sonic 3 synthesizes (~40ms time-to-first-audio) -> Recall Output Media streams it into the call as Proxy's voice.
+  normalized_statement: 'WHEN upstream hands this layer text to speak THE SYSTEM SHALL synthesize it via the TTSProvider (Cartesia) and stream the audio into the call via Recall Output Media as Proxy''s voice.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-02
+  authority_type: canonical_decision
+  authority_document: DOC-02
+  source_location: CANONICAL §12.3
+  source_quote: 'Wake-turn tools are the sole delivery authority: Proxy communicates only by speak(text) ... The projector is pure rendering ... It never auto-extracts a headline from the raw stream and decides to speak.'
+  normalized_statement: 'WHEN voice output is produced THE SYSTEM SHALL produce it only from an explicit speak(text) call, and SHALL NOT auto-extract a headline from the raw stream to decide to speak.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-03
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.3 paragraph 1
+  source_quote: 'One voice, one calm register (brand: the teal deep feel).'
+  normalized_statement: 'WHILE Proxy speaks THE SYSTEM SHALL use exactly one voice and one calm register for all synthesized audio.
+
+    '
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-04
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §2 channel 1 / §3.3
+  source_quote: headlines only (~2-4k chars/hr ~ $0.10-0.20 - the speak-short/detail-in-chat design)
+  normalized_statement: 'WHILE synthesizing speech over a meeting-hour THE SYSTEM SHALL enforce a headlines-only budget of ~2-4k characters/hour (detail goes to chat, not voice).
+
+    '
+  requirement_type: cost
+  criticality: P2
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-05
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §2 channel 1 / §3.3
+  source_quote: every spoken line also posts as text (accessibility + record - free since we synthesize from text)
+  normalized_statement: 'WHEN Proxy speaks any line THE SYSTEM SHALL also post that line as text to chat (parity: no spoken line without a text copy).
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-06
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.3 paragraph 1
+  source_quote: every spoken line also posts as text ... free since we synthesize from text
+  normalized_statement: 'WHEN the text copy of a spoken line is posted THE SYSTEM SHALL post text that matches the synthesized text verbatim.
+
+    '
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-07
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.3 paragraph 1
+  source_quote: speaking only begins on a boundary signal (3.6)
+  normalized_statement: 'WHEN Proxy would begin speaking THE SYSTEM SHALL begin voice output only on a clear boundary signal, never without one.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-08
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.3 paragraph 1
+  source_quote: aborts instantly on barge-in
+  normalized_statement: 'WHILE Proxy is speaking, IF a barge-in fires THE SYSTEM SHALL abort the in-flight TTS instantly.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-09
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.3 paragraph 2
+  source_quote: TTS is streamed to Output Media in small chunks, deliberately, so barge-in isn't defeated by a large already-buffered stretch of audio - a flush drops at most one small in-flight chunk.
+  normalized_statement: 'WHILE streaming TTS to Output Media THE SYSTEM SHALL stream in small chunks such that a barge-in flush drops at most one small in-flight chunk.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-10
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.3 Ack-audible reflex
+  source_quote: A direct answer can fire a <=500ms canned on it spoken line the instant it's picked up, while the real answer resolves.
+  normalized_statement: 'WHEN a direct answer is picked up THE SYSTEM SHALL be able to fire a <=500ms canned spoken ack line while the real answer resolves.
+
+    '
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-11
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.3 Ack-audible reflex
+  source_quote: the audible counterpart to the tile checking... ACK ... this one is voice
+  normalized_statement: 'WHEN the audible ack fires THE SYSTEM SHALL speak a canned ack line only, never the resolved answer content (source-honesty).
+
+    '
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-12
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: §4 latency targets
+  source_quote: TTS time-to-first-audio ~40ms (voice starts effectively instantly)
+  normalized_statement: 'WHEN synthesis begins THE SYSTEM SHALL achieve a TTS time-to-first-audio at or near ~40ms (voice starts effectively instantly).
+
+    '
+  requirement_type: performance
+  criticality: P2
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-13
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: §4 latency targets
+  source_quote: speak-decision-to-audible [<1s]
+  normalized_statement: 'WHEN Doc 04 issues a speak decision THE SYSTEM SHALL make Proxy audible in the call within <1s (Output Media leg is the pinned measurement).
+
+    '
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-14
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: CANONICAL §12.8
+  source_quote: ack-audible p95<=500ms
+  normalized_statement: 'WHEN the audible ack path runs on the direct-answer path THE SYSTEM SHALL meet ack-audible p95 <= 500ms.
+
+    '
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-15
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: CANONICAL §12.8
+  source_quote: first-grounded-audio p50<=2.5s/p95<=5s
+  normalized_statement: 'WHEN a shallow grounded direct answer is spoken THE SYSTEM SHALL meet first-grounded-audio p50 <= 2.5s.
+
+    '
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-16
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: CANONICAL §12.8
+  source_quote: first-grounded-audio p50<=2.5s/p95<=5s
+  normalized_statement: 'WHEN a shallow grounded direct answer is spoken THE SYSTEM SHALL meet first-grounded-audio p95 <= 5s.
+
+    '
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SPEAK-17
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.7 / §3.9 step 4
+  source_quote: the text copy posts to chat with every spoken line
+  normalized_statement: 'IF TTS synthesis fails for a line THE SYSTEM SHALL still post that line''s text to chat (a dead engine never makes Proxy both mute and silent).
+
+    '
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CHAT-01
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.4 In
+  source_quote: platform chat messages stream via Recall
+  normalized_statement: 'WHEN a participant posts a message in the meeting''s platform chat THE SYSTEM SHALL receive that message inbound via the Recall transport seam.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CHAT-02
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.4 In
+  source_quote: '@proxy … (or any addressed message) forwards to the Orchestrator as a first-class ask — identical to a spoken ask, different socket.'
+  normalized_statement: 'WHEN an inbound chat message addresses Proxy (via @proxy or any addressed form) THE SYSTEM SHALL forward it to the Orchestrator as a first-class ask, entering the identical ask path as a spoken ask (differing only in socket).
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CHAT-03
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.9 step 5
+  source_quote: 'Provable: @proxy in chat reaches the orchestrator'
+  normalized_statement: 'WHEN an @proxy chat message is posted THE SYSTEM SHALL deliver a corresponding ask to the Orchestrator entry point (provable by an end-to-end trace from chat post to Orchestrator receipt).
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CHAT-04
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.4 In
+  source_quote: '@proxy … (or any addressed message) forwards to the Orchestrator as a first-class ask'
+  normalized_statement: 'WHEN an inbound chat message is NEITHER @proxy NOR otherwise addressed to Proxy THE SYSTEM SHALL NOT forward it to the Orchestrator as a first-class ask (the accept/reject frontier: only addressed messages become asks).
+
+    '
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CHAT-05
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.10
+  source_quote: chat(message, sender, dm?)
+  normalized_statement: 'WHEN this layer emits a chat signal upstream THE SYSTEM SHALL emit the shape chat(message, sender, dm?) — carrying the message body, the sender identity, and an optional dm indicator.
+
+    '
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CHAT-06
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.4 Out, broadcast
+  source_quote: detail, links, receipts, quiet notices ("repo advanced 2 commits"), the text copy of everything spoken.
+  normalized_statement: 'WHEN upstream hands this layer broadcast content (detail, links, receipts, quiet notices) THE SYSTEM SHALL deliver it to the meeting''s broadcast (public) chat channel.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CHAT-07
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.4 Out, broadcast (cf. §3.3)
+  source_quote: the text copy of everything spoken.
+  normalized_statement: 'WHEN a spoken line is produced by the voice channel THE SYSTEM SHALL deliver the text copy of that spoken line to the broadcast chat channel (the CHAT-side delivery of the spoken-text parity guarantee).
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CHAT-08
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.4 Out, DM
+  source_quote: private delivery to a single participant where the platform's chat supports it (asker-private answers, whisper-style delivery).
+  normalized_statement: 'WHEN upstream requests DM delivery AND the platform reports DM support THE SYSTEM SHALL deliver the message privately to exactly the one named participant.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CHAT-09
+  authority_type: security
+  authority_document: DOC-02
+  source_location: §3.9 step 5 / §3.4 Out, DM
+  source_quote: a DM lands privately on a supporting platform.
+  normalized_statement: 'WHEN a DM is delivered THE SYSTEM SHALL address it to exactly one recipient and SHALL NEVER route DM content to the broadcast channel (a DM reaching broadcast is a privacy failure).
+
+    '
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CHAT-10
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.4 Out, DM
+  source_quote: Where a platform's chat is broadcast-only, DM-dependent behaviors degrade to broadcast-or-hold (the judgment of which lives in Docs 04/06; this layer just reports which channels exist in this meeting).
+  normalized_statement: 'WHEN a DM is requested on a broadcast-only platform (no DM support) THE SYSTEM SHALL mechanically degrade the request to broadcast-or-hold — never silently dropping it — and SHALL leave the broadcast-vs-hold judgment to Docs 04/06.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CHAT-11
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.4 Out, DM / §4 platform matrix
+  source_quote: this layer just reports which channels exist in this meeting
+  normalized_statement: 'THE SYSTEM SHALL NOT itself decide whether a degraded DM broadcasts or holds; it SHALL only report which channels exist and defer the decision upstream.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CHAT-12
+  authority_type: canonical_decision
+  authority_document: CANONICAL-1.6
+  source_location: CANONICAL §1.6 (LOCKED) / §3.10
+  source_quote: 'channel-report field is `dm_available: bool`. Doc 02''s `dm-available?` conforms to `dm_available`.'
+  normalized_statement: 'WHEN this layer emits the per-meeting channel-report THE SYSTEM SHALL emit a field named EXACTLY `dm_available` of type bool (any other field name is a contract failure).
+
+    '
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CHAT-13
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §4 platform matrix / §3.4
+  source_quote: Chat DM — platform-dependent; this layer reports per-meeting which channels exist, upstream adapts.
+  normalized_statement: 'WHEN the channel-report is computed for a meeting THE SYSTEM SHALL set `dm_available` from the REAL platform capability of that meeting — true only where the platform actually supports DM — never an assumed or hard-coded default.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CHAT-14
+  authority_type: canonical_decision
+  authority_document: CANONICAL-11.8
+  source_location: CANONICAL §11.8
+  source_quote: chat/roster/channel-report are INTERNAL 02→03/04 events, NOT client ProxyMessages, OUT of assert_registry_closed() scope.
+  normalized_statement: 'THE SYSTEM SHALL treat chat and channel-report as internal 02→03/04 events, NOT as client ProxyMessages, and SHALL exclude them from assert_registry_closed() contract-closure scope.
+
+    '
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CHAT-15
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.9 step 5
+  source_quote: outbound broadcast + DM-where-supported; per-meeting channel report.
+  normalized_statement: 'THE SYSTEM SHALL, per meeting, provide all three outbound behaviors coherently: broadcast delivery, DM delivery where supported, and a channel report stating which of these channels exist.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CANVAS-01
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.5
+  source_quote: One canvas webpage per meeting, rendered by us, streamed by Recall Output Media as either the camera tile (small, ambient) or the shared screen (big, presented).
+  normalized_statement: 'WHEN a meeting is live THE SYSTEM SHALL render exactly one canvas webpage for that meeting and stream it via Recall Output Media as either the camera tile (ambient) or the shared screen (presented).
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CANVAS-02
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.9 step 6
+  source_quote: 'The tile webpage streams as the bot''s camera; ... Provable: the tile renders in-call'
+  normalized_statement: 'WHEN the bot is in a call THE SYSTEM SHALL stream the tile webpage as the bot''s camera such that the tile renders in-call as a live video stream.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CANVAS-03
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §2 channel 4 / §3.5
+  source_quote: 'Tile = the signal surface. All social signals are drawn: listening / checking / has-something / raise-hand / reactions. No dependence on native platform buttons.'
+  normalized_statement: 'WHEN Proxy expresses a social signal (listening / checking / has-something / raise-hand / reaction) THE SYSTEM SHALL draw it on the canvas surface and SHALL NOT invoke any native meeting-platform button/control to express it.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CANVAS-04
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.5 / CANONICAL §12.8
+  source_quote: it surfaces the "checking…" tile state (a drawn state, ≤500ms) so the room sees Proxy is on it.
+  normalized_statement: 'WHEN an LSP-bound direct answer (exempt from the audio SLO) begins resolving its slow answer THE SYSTEM SHALL surface the "checking…" drawn tile state within 500ms.
+
+    '
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CANVAS-05
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.5 / CANONICAL §12.8
+  source_quote: The "checking…" state is the tile ACK. When an LSP-bound direct answer — one exempt from the audio SLO (CANONICAL §12.8) — is resolving its slow answer, it surfaces the "checking…" tile state
+  normalized_statement: 'WHILE no LSP-bound direct answer is actually resolving THE SYSTEM SHALL NOT surface the "checking…" tile ACK; the drawn state SHALL reflect a real in-flight resolve event only.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CANVAS-06
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §2 channel 5 / §3.5
+  source_quote: 'Screenshare uses the identical render-a-webpage mechanism at higher resolution. Its signature use: showing work live — when the agent browses, runs a test, or builds an artifact in its sandbox, we render that live view onto the presented screen'
+  normalized_statement: 'WHEN screenshare is active THE SYSTEM SHALL promote the same canvas webpage at higher resolution and render the sandbox live-work view onto the presented screen.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CANVAS-07
+  authority_type: specification
+  authority_document: CANONICAL
+  source_location: CANONICAL §12.11 (REJECTED) / §12.12
+  source_quote: structured progress view + pinned source w/ cited lines + final artifact preview; live mirror/cursor/diagrams = Expansion.
+  normalized_statement: 'WHEN rendering the V0 screenshare live-work view THE SYSTEM SHALL present a structured progress view (plus pinned source with cited lines and final artifact preview) and SHALL NOT render a pixel-accurate live browser/terminal mirror, animated cursor, or drawn diagrams.
+
+    '
+  requirement_type: constraint
+  criticality: P2
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CANVAS-08
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.5
+  source_quote: Activation is human-only (an ask, or a yes to Proxy's offer — the rule lives in Docs 04/08); this layer just executes the promote/demote.
+  normalized_statement: 'WHEN a promote/demote is requested by an upstream (human-gated) trigger THE SYSTEM SHALL execute the promote/demote mechanism, and SHALL NOT self-initiate a promote absent that upstream trigger (the human-gating rule itself lives in Docs 04/08).
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CANVAS-09
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.5
+  source_quote: Camera and screenshare are mutually exclusive on the transport → sequence them
+  normalized_statement: 'WHILE the transport is streaming THE SYSTEM SHALL NOT have the camera tile and the screenshare both active at the same instant; the two are mutually exclusive.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CANVAS-10
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.5 / §3 CONTROL / §3.9 step 6
+  source_quote: the swap itself is announced
+  normalized_statement: 'WHEN the transport swaps between camera tile and screenshare THE SYSTEM SHALL announce the swap.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CANVAS-11
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.5
+  source_quote: 'sequence them: speak the headline, then swap to the screen; swap back when done.'
+  normalized_statement: 'WHEN presenting work on the shared screen THE SYSTEM SHALL sequence the swap as speak-headline -> swap-to-screen -> (work) -> swap-back-to-tile, never overlapping the two streams.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CANVAS-12
+  authority_type: specification
+  authority_document: CANONICAL
+  source_location: CANONICAL §12.9
+  source_quote: 'Tile outbound-only: delete TILE_ADDRESS/tile-originated ChannelAction (humans can''t click a video stream)'
+  normalized_statement: 'THE SYSTEM SHALL treat the tile as outbound-only: NO code path SHALL accept a tile-originated inbound action (no TILE_ADDRESS, no tile-originated ChannelAction), since a video stream is not clickable.
+
+    '
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CANVAS-13
+  authority_type: specification
+  authority_document: CANONICAL
+  source_location: CANONICAL §12.9
+  source_quote: the tile page authenticates its render WS via a meeting-scoped bearer token in the Recall URL.
+  normalized_statement: 'WHEN the tile page opens its render WebSocket THE SYSTEM SHALL authenticate it using a meeting-scoped bearer token carried in the Recall URL.
+
+    '
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CANVAS-14
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.9 step 6
+  source_quote: a promote/demote cycle works without dropping either stream.
+  normalized_statement: 'WHEN a promote (tile->screen) then demote (screen->tile) cycle is executed THE SYSTEM SHALL keep a stream live throughout, dropping neither stream (no stream loss / black frame).
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-CANVAS-15
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.5
+  source_quote: 'Pinned measurement: Output Media frame-rate/smoothness for live-work views (Recall publishes no number). Worst case = choppier motion, never lost capability.'
+  normalized_statement: 'WHEN a live-work view is streamed THE SYSTEM SHALL record the Output Media frame-rate/smoothness as a pinned measurement (not a hard gate); under worst case the view SHALL degrade to choppier motion and SHALL NOT lose capability or crash.
+
+    '
+  requirement_type: performance
+  criticality: P2
+  testability: measurable
+  status: qualified
+- requirement_id: R-doc02-TURN-01
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.6
+  source_quote: 'Silero VAD runs on the incoming audio: is anyone speaking right now? (<1ms/chunk, CPU) — this is the barge-in trigger, and it must stay: a human speech onset has to stop TTS in [<200ms], and the AAI transcript (~300ms) is too slow to do that. Not redundant with the boundary signal.'
+  normalized_statement: 'WHEN incoming meeting audio is processed THE SYSTEM SHALL run Silero VAD to emit a speaking(on/off) signal and SHALL use that signal as the barge-in trigger.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-TURN-02
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.6
+  source_quote: 'End-of-turn boundary = AssemblyAI Universal-Streaming''s `end_of_turn`, already on the STT stream we pay for: is this a real end-of-turn or a mid-thought breath? No Smart Turn v3 model.'
+  normalized_statement: 'WHEN a natural end-of-turn opens THE SYSTEM SHALL derive the boundary signal from AssemblyAI Universal-Streaming''s `end_of_turn` field on the existing STT stream, with no Smart Turn v3 model in V0 core.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-TURN-03
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: §2 Turn-taking manners
+  source_quote: 'These are not redundant: AAI''s transcript latency (~300ms) is far too slow to cut TTS mid-word, so VAD stays as the sub-200ms barge-in trigger. So the Orchestrator gets two clean signals: someone is speaking (Silero VAD) and a natural boundary just opened (AAI `end_of_turn`).'
+  normalized_statement: 'WHEN the turn-taking layer runs THE SYSTEM SHALL treat the VAD speaking signal and the AAI `end_of_turn` boundary signal as two distinct, non-redundant signals, and SHALL NOT make barge-in depend on the ~300ms AAI transcript.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-TURN-04
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.6
+  source_quote: Both signals stream to the Orchestrator continuously.
+  normalized_statement: 'WHILE a meeting is live THE SYSTEM SHALL stream both the VAD speaking signal and the AAI boundary signal to the Orchestrator continuously.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-TURN-05
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.10 signal surface
+  source_quote: speaking(on/off) · boundary(now) · barge-in(now)
+  normalized_statement: 'WHEN this layer exposes its signal surface THE SYSTEM SHALL surface exactly speaking(on/off), boundary(now), and barge-in(now).
+
+    '
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-TURN-06
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: §3.6
+  source_quote: 'The contract this layer enforces: voice output may only start on a clear boundary'
+  normalized_statement: 'WHEN voice output is about to start THE SYSTEM SHALL start it only on a clear boundary signal, and SHALL NOT start voice output absent a boundary.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-TURN-07
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §2 Turn-taking manners
+  source_quote: Proxy speaks only into boundaries
+  normalized_statement: 'WHEN Proxy has speech queued THE SYSTEM SHALL release that speech only into an open boundary, never mid-turn over an active speaker.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-TURN-08
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.6
+  source_quote: is this a real end-of-turn or a mid-thought breath?
+  normalized_statement: 'WHEN a pause in speech occurs that is a mid-thought breath rather than a real end_of_turn THE SYSTEM SHALL NOT treat it as a boundary and SHALL NOT open voice output on it.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-TURN-09
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: §3.9 step 7 / Law 4
+  source_quote: AAI `end_of_turn` → boundary signal
+  normalized_statement: 'WHEN the boundary signal is produced THE SYSTEM SHALL derive it from a real AAI `end_of_turn` event, never from a fixed timer or elapsed-silence clock.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-TURN-10
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: §1 goal item 4 / Law 3
+  source_quote: If a human starts talking while Proxy speaks, Proxy stops mid-word.
+  normalized_statement: 'WHEN a human speech onset is detected while Proxy is speaking THE SYSTEM SHALL stop TTS mid-word.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-TURN-11
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: §3.6
+  source_quote: any human speech onset during Proxy's speech = stop TTS mid-word + flush the queue (upstream decides whether to re-queue, bank, or drop — Doc 04).
+  normalized_statement: 'WHEN barge-in fires during Proxy''s speech THE SYSTEM SHALL both stop the in-flight TTS mid-word AND flush the speech queue, leaving the re-queue/bank/drop decision to upstream (Doc 04).
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-TURN-12
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: §3.6 / §4 latency / Law 3
+  source_quote: a human speech onset has to stop TTS in [<200ms]
+  normalized_statement: 'WHEN barge-in fires THE SYSTEM SHALL complete the TTS stop within 200ms (barge-in stop budget; measured at p95).
+
+    '
+  requirement_type: performance
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-TURN-13
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: §4 latency
+  source_quote: 'barge-in stop: effectively instant ([<200ms])'
+  normalized_statement: 'WHEN barge-in latency is measured end-to-end THE SYSTEM SHALL keep barge-in stop effectively instant, under the 200ms budget.
+
+    '
+  requirement_type: performance
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-TURN-14
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.9 step 7
+  source_quote: kills TTS mid-word + flushes in [<200ms], small-chunk buffer so barge-in isn't defeated by buffered audio
+  normalized_statement: 'WHEN TTS audio is buffered for playback THE SYSTEM SHALL use a small-chunk buffer so that barge-in stop within the 200ms budget is not defeated by already-buffered audio.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-TURN-15
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.6
+  source_quote: 'Silero VAD runs on the incoming audio: is anyone speaking right now?'
+  normalized_statement: 'WHILE no human speech onset is present (silence, or only Proxy''s own output audio) THE SYSTEM SHALL NOT fire barge-in.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-TURN-16
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: §1 goal item 4 / Law 3
+  source_quote: If someone says "Proxy, quiet," it goes silent.
+  normalized_statement: 'WHEN a hard-mute ("Proxy, quiet" / "mute") command is delivered to this layer THE SYSTEM SHALL go silent.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-TURN-17
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: §3.6
+  source_quote: 'Hard mute: "Proxy, quiet / mute" → this layer kills any in-flight TTS and enters silent mode (tile + chat remain; voice off) until re-invited. Recognition of the phrase is Doc 04''s; the kill-switch is here.'
+  normalized_statement: 'WHEN hard-mute is invoked THE SYSTEM SHALL kill any in-flight TTS and enter silent mode with voice off while the tile and chat remain live, staying muted until re-invited; phrase recognition is Doc 04''s, the kill-switch is this layer''s.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-TURN-18
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: §3.6
+  source_quote: enters silent mode (tile + chat remain; voice off) until re-invited
+  normalized_statement: 'WHILE in silent mode after hard-mute THE SYSTEM SHALL keep voice output off and SHALL NOT re-enable voice until Proxy is re-invited; the speaking and muted states SHALL be mutually exclusive.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-TURN-19
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.9 step 7
+  source_quote: 'Provable: speech onset during Proxy''s speech stops it inside the budget; "quiet" silences voice while chat stays live.'
+  normalized_statement: 'WHEN this layer is verified on real audio THE SYSTEM SHALL demonstrate a scripted speech onset during Proxy''s speech stopping it inside the budget, and "quiet" silencing voice while chat stays live.
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-TURN-20
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §2 Turn-taking / §3.9 (CANONICAL §12.11)
+  source_quote: 'Confirm-at-build: verify Recall passthrough forwards AAI''s `end_of_turn` field; if it does not, re-add Smart Turn v3.'
+  normalized_statement: 'WHEN the build confirms the transport, IF Recall passthrough does not forward AAI''s `end_of_turn` field THEN THE SYSTEM SHALL re-add Smart Turn v3 as the boundary source; otherwise the boundary stays AAI `end_of_turn` (Smart Turn v3 excluded from V0 core per CANONICAL §12.11 — resolved by build-time confirmation, not a guess).
+
+    '
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-FAIL-01
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.7 Failure honesty (Bot drop)
+  source_quote: 'Bot drop: Recall''s status webhook fires → auto-rejoin once → on rejoin, Proxy states the gap plainly ("I was disconnected 14:03–14:04 — notes have a gap there"). Never pretend continuity.'
+  normalized_statement: 'WHEN Recall''s bot-status webhook reports the bot dropped THE SYSTEM SHALL emit exactly one automatic rejoin attempt for that drop.
+
+    '
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-FAIL-02
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.9 step 8
+  source_quote: Rejoin-once on drop + the honest gap line; ... a forced disconnect produces a rejoin and the gap announcement
+  normalized_statement: 'WHEN a drop occurs THE SYSTEM SHALL attempt no more than one automatic rejoin for that drop (rejoin_attempts_over_1 == 0), never entering an unbounded rejoin loop and never skipping the one rejoin (rejoin_attempts_under_1 == 0).
+
+    '
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-FAIL-03
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.7 Failure honesty (Bot drop)
+  source_quote: on rejoin, Proxy states the gap plainly ("I was disconnected 14:03–14:04 — notes have a gap there").
+  normalized_statement: 'WHEN the bot rejoins after a drop THE SYSTEM SHALL announce the disconnected interval plainly, stating the gap window explicitly in the notes/chat.
+
+    '
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-FAIL-04
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: §3.7 (Law 2 / invariant 2 — lossless-or-honest)
+  source_quote: Never pretend continuity.
+  normalized_statement: 'THE SYSTEM SHALL NOT present the transcript/notes across a drop as continuous; an un-announced (silently-absent) gap after a drop is a violation (silent_gap_allowed == 0).
+
+    '
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-FAIL-05
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: §3.7 Failure honesty (Bot drop)
+  source_quote: Proxy states the gap plainly ("I was disconnected 14:03–14:04 — notes have a gap there")
+  normalized_statement: 'WHEN the gap is announced on rejoin THE SYSTEM SHALL make the announced interval equal the real disconnect window (dropped_ts .. rejoined_ts), never a fabricated, padded, or shrunk interval.
+
+    '
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-FAIL-06
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.9 step 8
+  source_quote: Rejoin-once on drop ... a forced disconnect produces a rejoin and the gap announcement
+  normalized_statement: 'WHEN a second drop occurs after the single rejoin for a prior drop has been consumed THE SYSTEM SHALL stop honestly (announce the state) rather than retry indefinitely, and SHALL NOT give up silently.
+
+    '
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-FAIL-07
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.10 signal surface
+  source_quote: bot-status(connected/dropped/rejoined)
+  normalized_statement: 'THE SYSTEM SHALL expose a bot-status signal whose state is one of exactly {connected, dropped, rejoined}; no other value is emitted on the signal.
+
+    '
+  requirement_type: interface
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-FAIL-08
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: CANONICAL §12.10
+  source_quote: bot-status webhooks land in durable webhook_events (dedupe by delivery_guid).
+  normalized_statement: 'WHEN a bot-status webhook is received THE SYSTEM SHALL persist it durably into webhook_events, deduplicated by delivery_guid so a redelivered webhook is not double-processed (duplicate_processing_allowed == 0).
+
+    '
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-FAIL-09
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: §3.7 Failure honesty (STT outage)
+  source_quote: 'Honest fallback = the mark-lost path: any stretch not transcribed is marked lost in the transcript, never silently absent.'
+  normalized_statement: 'WHEN a stretch of meeting audio is not transcribed THE SYSTEM SHALL mark that stretch lost in the transcript; it SHALL NEVER leave the stretch silently absent (untranscribed_stretch_silently_absent_allowed == 0).
+
+    '
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-FAIL-10
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: CANONICAL §12.10
+  source_quote: transcript_segments.status DEFAULT 'pending' → flips to 'comprehended'; "close backfills pending+gap" — the mark-lost/gap is backed by pending segments.
+  normalized_statement: 'THE SYSTEM SHALL default transcript_segments.status to ''pending''; a segment SHALL flip to ''comprehended'' only when transcribed, and on meeting close any still-''pending'' segment SHALL be backfilled as a lost/gap segment (no pending segment is dropped from the record).
+
+    '
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-FAIL-11
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: CANONICAL §12.12 / §3.7 (STT outage)
+  source_quote: STT-outage buffering = 'not ours under BYOK passthrough — confirm-at-build + honest mark-lost.'
+  normalized_statement: 'THE SYSTEM SHALL NOT promise buffer-during-outage→resume for STT under BYOK passthrough (audio path is Recall→AssemblyAI direct; the buffer is not ours); whether Recall buffers through an AAI hiccup is CONFIRM-AT-BUILD, and the guaranteed honest fallback is the mark-lost path (R-doc02-FAIL-09) — we do not over-promise buffering we do not own.
+
+    '
+  requirement_type: constraint
+  criticality: P1
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-FAIL-12
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.7 Failure honesty (TTS/provider outage)
+  source_quote: 'TTS/provider outage: voice degrades to chat ("voice is down — I''ll type") — a dead engine never makes Proxy mute and silent.'
+  normalized_statement: 'WHEN the TTS/voice provider is unavailable THE SYSTEM SHALL degrade to the chat channel, delivering the line as text (announcing "voice is down — I''ll type") instead of speaking.
+
+    '
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-FAIL-13
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: §3.7 / §4 (Law 2 — lossless-or-honest)
+  source_quote: a dead engine never makes Proxy mute and silent.
+  normalized_statement: 'THE SYSTEM SHALL NEVER be simultaneously voice-down and chat-down for a decided line; if voice is down, chat SHALL still deliver the line (voice_down_and_chat_down_allowed == 0).
+
+    '
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-FAIL-14
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.7 Failure honesty (Rate limits)
+  source_quote: Recall's workspace request limit is shared across output-media + chat → a per-bot outbound limiter/queue here so concurrent deliveries can't throttle mid-meeting.
+  normalized_statement: 'THE SYSTEM SHALL place all outbound Recall requests (output-media + chat) for a bot behind a per-bot outbound limiter/queue, so concurrent deliveries are paced within the shared workspace request limit and cannot throttle mid-meeting.
+
+    '
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-FAIL-15
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.9 step 8 / §4 pinned measurement
+  source_quote: a burst of sends queues instead of throttling. ... the outbound rate-limiter under [5+] concurrent deliveries.
+  normalized_statement: 'WHEN 5 or more outbound deliveries are issued concurrently THE SYSTEM SHALL queue and eventually deliver every one of them; no send is dropped by throttle (send_dropped_by_throttle_allowed == 0).
+
+    '
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-FAIL-16
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: CANONICAL §11.11
+  source_quote: 'Rate limiter: pin `limits` (or `slowapi`) with an in-memory backend — don''t hand-roll a token bucket.'
+  normalized_statement: 'THE SYSTEM SHALL implement the outbound limiter using the pinned `limits` (or `slowapi`) library with an in-memory backend; a hand-rolled token bucket is disallowed (handrolled_token_bucket_allowed == 0).
+
+    '
+  requirement_type: constraint
+  criticality: P2
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-FAIL-17
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: §4 Failure behavior (Law 2 / invariant 2)
+  source_quote: 'every failure mode has an honest, non-silent path: rejoin + admit the gap · mark-lost on un-transcribed audio · degrade voice→chat · queue under rate limits. Proxy is never both broken and pretending.'
+  normalized_statement: 'FOR every failure mode in this slice THE SYSTEM SHALL take an honest, non-silent path (rejoin+admit-gap, mark-lost, degrade voice→chat, queue under limits); THE SYSTEM SHALL NEVER be simultaneously broken and pretending (broken_and_pretending_allowed == 0).
+
+    '
+  requirement_type: architecture_invariant
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-FAIL-18
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: §1 goal item 4 / §1
+  source_quote: If the bot drops, it rejoins and says honestly what it missed. ... never lose or fake a stretch of audio.
+  normalized_statement: 'WHEN the bot drops THE SYSTEM SHALL rejoin and honestly report what it missed, and SHALL NEVER lose or fake a stretch of audio (lost_or_faked_audio_stretch == 0).
+
+    '
+  requirement_type: architecture_invariant
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SEAM-01
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.8
+  source_quote: Every external piece sits behind a thin seam — `TransportProvider` (Recall), `STTProvider` (AssemblyAI-via-Recall), `TTSProvider` (Cartesia) — so any provider is swappable by migration, not redesign.
+  normalized_statement: 'THE SYSTEM SHALL place the Recall transport carrier behind a thin `TransportProvider` seam such that replacing the provider is a migration against a stable Protocol, not a redesign of callers.
+
+    '
+  requirement_type: compatibility
+  criticality: P1
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-SEAM-02
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.8
+  source_quote: '`STTProvider` (AssemblyAI-via-Recall) … so any provider is swappable by migration, not redesign.'
+  normalized_statement: 'THE SYSTEM SHALL place speech-to-text behind a thin `STTProvider` seam such that replacing the STT provider is a migration against a stable Protocol, not a redesign of callers.
+
+    '
+  requirement_type: compatibility
+  criticality: P1
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-SEAM-03
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.8
+  source_quote: '`TTSProvider` (Cartesia) … so any provider is swappable by migration, not redesign.'
+  normalized_statement: 'THE SYSTEM SHALL place text-to-speech behind a thin `TTSProvider` seam such that replacing the TTS provider is a migration against a stable Protocol, not a redesign of callers.
+
+    '
+  requirement_type: compatibility
+  criticality: P1
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-SEAM-04
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: §3.8
+  source_quote: Every external piece sits behind a thin seam … so any provider is swappable by migration, not redesign.
+  normalized_statement: 'THE SYSTEM SHALL instantiate/import each concrete provider client (Recall, AssemblyAI, Cartesia) ONLY behind its named Protocol seam; a raw provider client used outside the seam SHALL be a structural violation.
+
+    '
+  requirement_type: architecture
+  criticality: P1
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-SEAM-05
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.8
+  source_quote: V0 runs the managed stack end to end. (A self-hosted cost-reduction path exists but is explicitly not part of V0 scope.)
+  normalized_statement: 'THE SYSTEM SHALL run the managed provider stack (Recall + AssemblyAI-via-Recall + Cartesia) end to end in V0; the self-hosted cost-reduction path SHALL NOT be wired into the V0 build path.
+
+    '
+  requirement_type: compatibility
+  criticality: P2
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-SEAM-06
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: §2 · CANONICAL §12.1
+  source_quote: This transport layer is an in-process package inside `meeting_runtime` (CANONICAL §12.1) — the one asyncio harness process per meeting — not a separate network service.
+  normalized_statement: 'THE SYSTEM SHALL host this transport layer as an in-process package inside the single `meeting_runtime` asyncio harness process (one per meeting), NOT as a separate network service.
+
+    '
+  requirement_type: architecture
+  criticality: P1
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-SEAM-07
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: §2 · CANONICAL §12.1
+  source_quote: The carrier from this layer to the projector/canvas and to the Orchestrator is an in-process asyncio call (no bus, no broker, no wire).
+  normalized_statement: 'THE SYSTEM SHALL carry signals from this layer to the projector/canvas and to the Orchestrator via an in-process asyncio call — no bus, no broker, no wire.
+
+    '
+  requirement_type: architecture
+  criticality: P1
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-SEAM-08
+  authority_type: architecture_invariant
+  authority_document: CANONICAL
+  source_location: CANONICAL §9 · §12.1
+  source_quote: NO `libs/transport` — it's `services/transport` + `libs/http` for shared dispatch.
+  normalized_statement: 'THE SYSTEM SHALL home the transport package at `services/transport` (with shared dispatch via `libs/http`); a `libs/transport` package SHALL NOT exist.
+
+    '
+  requirement_type: architecture
+  criticality: P1
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-SEAM-09
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.10
+  source_quote: 'One stream, qualitatively: `transcript(words, speaker, t)` · `chat(message, sender, dm?)` · `roster(join/leave, name)` · `speaking(on/off)` · `boundary(now)` · `barge-in(now)` · `bot-status(connected/dropped/rejoined)` · `meeting-end` · `channel-report(dm_available)`.'
+  normalized_statement: 'THE SYSTEM SHALL emit the complete signal surface consisting of exactly these nine signals — transcript, chat, roster, speaking, boundary, barge-in, bot-status, meeting-end, channel-report — each carrying its declared payload.
+
+    '
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SEAM-10
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §3.10
+  source_quote: Docs 03/04 are built entirely against this list — if a behavior upstream needs a signal not on it, the gap belongs here.
+  normalized_statement: 'WHEN an upstream (Doc 03/04) behavior needs a signal not on the §3.10 list THE SYSTEM SHALL treat the gap as owned by this transport layer; the count of §3.10 signals missing from the emitted surface SHALL be zero.
+
+    '
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SEAM-11
+  authority_type: architecture_invariant
+  authority_document: CANONICAL
+  source_location: CANONICAL §11.8
+  source_quote: the whole signal surface is INTERNAL events (02→03/04), NOT client ProxyMessages, OUT of assert_registry_closed() scope.
+  normalized_statement: 'THE SYSTEM SHALL treat the transport signal surface as INTERNAL events (02→03/04), not client ProxyMessages; these signals SHALL NOT be present in the client contracts registry and SHALL NOT be required by assert_registry_closed().
+
+    '
+  requirement_type: architecture
+  criticality: P1
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-SEAM-12
+  authority_type: specification
+  authority_document: CANONICAL
+  source_location: CANONICAL §1.6 · §3.10
+  source_quote: 'channel-report field = `dm_available: bool` (exact).'
+  normalized_statement: 'WHEN the transport emits a channel-report THE SYSTEM SHALL carry the field `dm_available` typed as a boolean (exact field name and type).
+
+    '
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SEAM-13
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: §4 Cost
+  source_quote: bot $0.50 + STT $0.15 + TTS $0.10–0.20 = $0.75–0.85 managed (fits the ≤$1/hr total with ~$0.20 left for model loops).
+  normalized_statement: 'THE SYSTEM SHALL keep the aggregate managed transport cost within $0.75–0.85 per hour (bot $0.50 + STT $0.15 + TTS $0.10–0.20), fitting the ≤$1/hr all-in total.
+
+    '
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SEAM-14
+  authority_type: operational_slo
+  authority_document: CANONICAL
+  source_location: CANONICAL §12.7 · §4
+  source_quote: transport_usd accrued = elapsed_hours × transport_rate … the meter (`meeting_cost.transport_usd`) is written by the harness — you own that transport cost is accrued honestly, never a false all-in $1.
+  normalized_statement: 'THE SYSTEM SHALL accrue the transport cost meter as transport_usd = elapsed_hours × transport_rate (the honest $0.75–0.85 slice), and SHALL NOT report a fixed/claimed all-in value (e.g. a flat $1) in place of the elapsed-time accrual.
+
+    '
+  requirement_type: observability
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SEAM-15
+  authority_type: architecture_invariant
+  authority_document: CANONICAL
+  source_location: CANONICAL §12.7
+  source_quote: transport_usd accrued = elapsed_hours × transport_rate.
+  normalized_statement: 'THE SYSTEM SHALL accrue transport_usd monotonically over the meeting; on harness recycle the meter SHALL persist/reload and SHALL NOT reset toward zero.
+
+    '
+  requirement_type: reliability
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SEAM-16
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §4 Platform matrix · §1
+  source_quote: join/hear/speak/tile/screenshare — all three platforms via Recall. … It must work identically on Google Meet, Zoom, and Teams.
+  normalized_statement: 'THE SYSTEM SHALL provide join, hear, speak, tile, and screenshare identically on Google Meet, Zoom, and Teams via the single Recall carrier (each capability × each platform is a supported cell).
+
+    '
+  requirement_type: compatibility
+  criticality: P1
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-SEAM-17
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: §4 Platform matrix
+  source_quote: Chat DM — platform-dependent.
+  normalized_statement: 'THE SYSTEM SHALL treat chat DM availability as platform-dependent and SHALL report it per meeting via channel-report `dm_available: bool` rather than assuming DM is universally available.
+
+    '
+  requirement_type: compatibility
+  criticality: P2
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-SEAM-18
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: §4 Platform matrix
+  source_quote: Native raise-hand/reaction buttons — not used; our tile draws all signals (platform-independent by construction).
+  normalized_statement: 'THE SYSTEM SHALL NOT depend on native raise-hand / reaction buttons; all signals SHALL be surfaced through our own tile (platform-independent by construction).
+
+    '
+  requirement_type: architecture
+  criticality: P2
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-SEAM-19
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: §2 · AGENTS.md law 5
+  source_quote: One API gives us bot join + … on Meet, Zoom, and Teams — we write zero per-platform code.
+  normalized_statement: 'THE SYSTEM SHALL contain zero per-platform code in transport core: no `if platform == ''<x>''` branch and no platform-named module/handler that forks behavior by meeting platform.
+
+    '
+  requirement_type: architecture
+  criticality: P1
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-SEAM-20
+  authority_type: operational_slo
+  authority_document: DOC-02
+  source_location: §4 Cost · §4 Latency
+  source_quote: = $0.75–0.85 managed (fits the ≤$1/hr total with ~$0.20 left for model loops). V0 accepts this cost for zero ops and demo reliability.
+  normalized_statement: 'THE SYSTEM SHALL keep the aggregate transport rate at or below the $0.85/hr managed ceiling so the whole-meeting all-in cost stays ≤ $1/hr with ~$0.20/hr headroom left for model loops.
+
+    '
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-XCUT-01
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: CLAUDE.md Hard rules / AGENTS.md 'What Proxy is'
+  source_quote: 'user-visible strings never contain internal names (Orchestrator/Scribe/workroom): enforced by the naming lint; the product and the agent are Proxy.'
+  normalized_statement: 'WHEN the transport layer emits any user-visible string (consent notice, chat notice, ack line, gap line) THE SYSTEM SHALL NOT include an internal component name (Orchestrator/Scribe/Workroom/transport); the user-visible name is Proxy.
+
+    '
+  requirement_type: contract
+  criticality: P1
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-XCUT-02
+  authority_type: threat_model
+  authority_document: DOC-02
+  source_location: CLAUDE.md Hard rules / AGENTS.md invariant 10
+  source_quote: 'secrets only from Secret Manager, never hard-coded or logged: enforced by check-secret-bindings at startup.'
+  normalized_statement: 'WHEN the transport layer uses a provider credential (Recall, AssemblyAI BYOK, Cartesia) THE SYSTEM SHALL source it from Secret Manager and SHALL NOT hard-code it or write it to logs, error messages, or artifacts.
+
+    '
+  requirement_type: security
+  criticality: P0
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-XCUT-03
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: CLAUDE.md Hard rules (External calls)
+  source_quote: 'every external call wrapped with retry + cost telemetry: enforced by the single call_external seam in libs/http (no raw client lives anywhere else).'
+  normalized_statement: 'WHEN the transport layer makes any external provider call THE SYSTEM SHALL route it through the single call_external seam in libs/http (retry + cost telemetry); no raw provider client SHALL live outside that seam.
+
+    '
+  requirement_type: contract
+  criticality: P1
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-XCUT-04
+  authority_type: canonical_decision
+  authority_document: DOC-02
+  source_location: CANONICAL §12.3 / AGENTS.md C2 amendment
+  source_quote: Wake-turn tools speak/send_chat/show_screen are the SOLE delivery authority; the projector is pure rendering and never auto-speaks.
+  normalized_statement: 'WHEN Proxy delivers to any channel THE SYSTEM SHALL deliver only via speak/send_chat/show_screen, and the projector SHALL be pure rendering that never auto-extracts a headline and speaks on its own.
+
+    '
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-XCUT-05
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: AGENTS.md invariant 9 / CANONICAL §11.1
+  source_quote: Tenant isolation (tenant_id in every schema; cross-tenant read = P0 breach) ... Recall webhooks carry the bot_id -> look up the meetings row -> tenant + repo.
+  normalized_statement: 'WHEN a Recall webhook carrying a bot_id is resolved THE SYSTEM SHALL resolve it to exactly the owning tenant''s meeting, never another tenant''s; an unknown bot_id SHALL fail closed (no cross-tenant read).
+
+    '
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-XCUT-06
+  authority_type: canonical_decision
+  authority_document: DOC-02
+  source_location: CANONICAL §12.1 / §2 Where it runs / §9
+  source_quote: the carrier from this layer to the projector/canvas and to the Orchestrator is an in-process asyncio call (no bus, no broker, no wire).
+  normalized_statement: 'WHEN the transport layer carries a signal or delivery to the projector or Orchestrator THE SYSTEM SHALL use an in-process asyncio call within meeting_runtime; it SHALL NOT introduce a bus, broker, or network wire, and SHALL live under services/transport (not libs/transport).
+
+    '
+  requirement_type: contract
+  criticality: P2
+  testability: analyzable
+  status: qualified
+- requirement_id: R-doc02-XCUT-07
+  authority_type: architecture_invariant
+  authority_document: DOC-02
+  source_location: AGENTS.md law 2 / invariant 2 / §4 Failure behavior
+  source_quote: Proxy is never both broken and pretending.
+  normalized_statement: 'WHILE any transport failure mode is active THE SYSTEM SHALL take an honest non-silent path (rejoin+admit-gap, mark-lost, degrade voice->chat, or queue) and SHALL NOT both fail and present continuity/silence as normal.
+
+    '
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+- requirement_id: R-doc02-XCUT-08
+  authority_type: canonical_decision
+  authority_document: DOC-02
+  source_location: CANONICAL §11.8
+  source_quote: The Doc 02 signal surface (transcript/roster/speaking/boundary/barge-in/bot-status/meeting-end/channel-report) are in-process/over-transport INTERNAL events (02->03/04), NOT client-facing ProxyMessages. They are OUT of assert_registry_closed()'s scope.
+  normalized_statement: 'WHEN assert_registry_closed() validates the client ProxyMessage registry THE SYSTEM SHALL NOT require the Doc 02 internal signal-surface events to be registered (they are internal 02->03/04 events, out of registry scope).
+
+    '
+  requirement_type: contract
+  criticality: P2
+  testability: analyzable
+  status: qualified

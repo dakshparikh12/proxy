@@ -1,0 +1,277 @@
+# SPEAK.criteria.yaml
+# Acceptance criteria for the Doc 02 SPEAKING slice.
+# Oracles: state-machine assertion (boundary-gated, barge-in abort, parity),
+# latency measurement protocol (pinned sample, p50/p95), deterministic string
+# check (ack canned text, verbatim parity). Judge only where no deterministic
+# oracle exists. Numeric thresholds explicit; zeros stated.
+# ID space: AC-SPEAK-##
+
+# --- Core pipeline ------------------------------------------------------------
+- criterion_id: AC-SPEAK-01
+  name: "text handed in is synthesized and streamed to call as Proxy voice"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-SPEAK-01, R-doc02-SPEAK-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "the speaking layer is live with a Cartesia Sonic 3 stub and a Recall Output Media sink"
+    when:  "speak(text) is invoked with a fixed string"
+    then:
+      - "the exact text is submitted to Cartesia and the returned audio is streamed into Output Media"
+      - "no headline is auto-extracted or substituted for the supplied text"
+  primary_oracle: {type: state_machine_assertion, artifact: "trace shows speak(text)->cartesia.synthesize(text)->output_media.write(audio); submitted text byte-equal to input"}
+  thresholds: {substituted_or_extracted_text_allowed: 0}
+  fault_model_refs: [F-SPEAK-TEXT-SUBSTITUTED, F-SPEAK-HEADLINE-AUTO-EXTRACTED]
+  test_ids: [T-SPEAK-01]
+
+# --- One calm voice -----------------------------------------------------------
+- criterion_id: AC-SPEAK-02
+  name: "exactly one voice / one register across all lines"
+  evidence_class: "[contract]"
+  authority_refs: [R-doc02-SPEAK-03]
+  criticality: P2
+  blocking: false
+  behavior:
+    given: "a session that speaks multiple lines"
+    when:  "each synthesis request is inspected"
+    then:
+      - "every request carries the same single configured voice id and register"
+      - "no request varies voice identity or register between lines"
+  primary_oracle: {type: state_machine_assertion, artifact: "assert distinct (voice_id, register) count == 1 across all synthesize calls in the run"}
+  thresholds: {distinct_voice_ids_allowed: 1, distinct_registers_allowed: 1}
+  fault_model_refs: [F-SPEAK-VOICE-VARIED]
+  test_ids: [T-SPEAK-02]
+
+# --- Headlines-only char/hr bound ---------------------------------------------
+- criterion_id: AC-SPEAK-03
+  name: "spoken output stays within headlines-only char/hr envelope"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-SPEAK-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a one-hour representative meeting transcript driving the speak path"
+    when:  "all spoken characters synthesized in the hour are summed"
+    then:
+      - "aggregate synthesized chars/hr is within the ~2-4k design envelope (upper bound 4000)"
+      - "detail-length content is routed to chat, not spoken"
+  primary_oracle: {type: state_machine_assertion, artifact: "sum(len(text)) over synthesize calls in a 1h window; assert <= 4000; per-line length flagged if it exceeds headline cap"}
+  thresholds: {max_chars_per_hour: 4000, headline_char_soft_cap: 240}
+  fault_model_refs: [F-SPEAK-OVER-CHAR-BUDGET, F-SPEAK-DETAIL-SPOKEN]
+  test_ids: [T-SPEAK-03]
+
+# --- Parity: every spoken line has a matching chat text copy ------------------
+- criterion_id: AC-SPEAK-04
+  name: "every spoken line has a matching chat text copy (parity, recall 1.0)"
+  evidence_class: "[contract]"
+  authority_refs: [R-doc02-SPEAK-05, R-doc02-SPEAK-16]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "a session that speaks N lines"
+    when:  "spoken lines are reconciled against chat posts"
+    then:
+      - "for every spoken line there exists exactly one matching chat text copy (recall 1.0)"
+      - "a spoken line with no text copy is a violation (count must be 0)"
+  primary_oracle: {type: state_machine_assertion, artifact: "join spoken_line events to chat_post events by line-id; assert every spoken line has >=1 chat copy; count uncovered == 0"}
+  thresholds: {spoken_without_text_copy_allowed: 0, parity_recall_min: 1.0}
+  fault_model_refs: [F-SPOKEN-LINE-NO-TEXT-COPY]
+  test_ids: [T-SPEAK-04]
+
+# --- Parity: text copy is verbatim the spoken text ----------------------------
+- criterion_id: AC-SPEAK-05
+  name: "chat text copy is verbatim-equal to the synthesized text"
+  evidence_class: "[contract]"
+  authority_refs: [R-doc02-SPEAK-06]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "a spoken line whose exact text was handed to synthesis"
+    when:  "the posted chat copy is compared to the synthesized text"
+    then:
+      - "the chat copy string is byte-equal to the text submitted to Cartesia"
+      - "no paraphrase or altered copy is posted"
+  primary_oracle: {type: deterministic_string_check, artifact: "assert chat_post.text == synthesize.input_text for each line-id"}
+  thresholds: {mismatched_copies_allowed: 0}
+  fault_model_refs: [F-SPEAK-TEXT-COPY-PARAPHRASED]
+  test_ids: [T-SPEAK-05]
+
+# --- Boundary gate (off-state) ------------------------------------------------
+- criterion_id: AC-SPEAK-06
+  name: "speaking begins only on a boundary signal; silent otherwise"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-SPEAK-07]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "a decided line queued to speak"
+    when:  "no boundary signal (§3.6) is present, then a boundary signal arrives"
+    then:
+      - "no audio is emitted while the boundary signal is absent"
+      - "audio begins only after the boundary signal is received"
+  primary_oracle: {type: state_machine_assertion, artifact: "assert first output_media.write timestamp >= boundary_signal timestamp; assert zero writes before boundary"}
+  thresholds: {audio_writes_before_boundary_allowed: 0}
+  fault_model_refs: [F-SPEAK-NO-BOUNDARY-SPOKEN]
+  test_ids: [T-SPEAK-06]
+
+# --- Barge-in abort (speak-side) ----------------------------------------------
+- criterion_id: AC-SPEAK-07
+  name: "barge-in aborts speech instantly; remainder not emitted"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-SPEAK-08]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "a line is mid-stream to Output Media"
+    when:  "a barge-in signal (trigger owned by TURN) is received"
+    then:
+      - "audio output stops immediately and the remainder of the line is not written"
+      - "no further chunks for the aborted line are emitted after the barge-in timestamp"
+  primary_oracle: {type: state_machine_assertion, artifact: "assert no output_media.write for the line after barge-in timestamp; state transitions speaking->aborted"}
+  thresholds: {chunks_emitted_after_bargein_allowed: 0}
+  fault_model_refs: [F-SPEAK-BARGEIN-CONTINUED]
+  test_ids: [T-SPEAK-07]
+
+# --- Small-chunk Output-Media buffer ------------------------------------------
+- criterion_id: AC-SPEAK-08
+  name: "flush drops at most one small in-flight chunk (buffer bounded)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-SPEAK-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "TTS streaming into Output Media in small chunks"
+    when:  "a flush (barge-in-driven) occurs mid-stream"
+    then:
+      - "at most one in-flight chunk is dropped by the flush"
+      - "the pending buffered audio window never exceeds the small-chunk bound (no large pre-buffered stretch)"
+  primary_oracle: {type: state_machine_assertion, artifact: "measure dropped in-flight chunks on flush (assert <=1) and max buffered_audio_ms across run (assert <= chunk bound)"}
+  thresholds: {max_dropped_inflight_chunks_on_flush: 1, max_buffered_audio_ms: 250, max_chunk_ms: 250}
+  fault_model_refs: [F-SPEAK-LARGE-BUFFER-DEFEATS-BARGEIN]
+  test_ids: [T-SPEAK-08]
+
+# --- Ack-audible latency (p95 <= 500ms) ---------------------------------------
+- criterion_id: AC-SPEAK-09
+  name: "audible ack fires within p95 <= 500ms"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc02-SPEAK-10, R-doc02-SPEAK-14]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "a direct-answer request picked up on the speak path"
+    when:  "the audible ack latency (pickup -> ack audible in-call) is sampled over a pinned run"
+    then:
+      - "p95 ack-audible latency <= 500ms"
+      - "a sample at/just-over 500ms p95 fails"
+  primary_oracle: {type: latency_measurement, artifact: "pinned sample n>=100; compute p95 of (ack_audible_ts - pickup_ts); assert p95 <= 500ms"}
+  thresholds: {ack_audible_p95_ms_max: 500, min_samples: 100}
+  fault_model_refs: [F-SPEAK-ACK-TOO-SLOW]
+  test_ids: [T-SPEAK-09]
+
+# --- Ack-audible source-honesty (canned string, not the answer) ---------------
+- criterion_id: AC-SPEAK-10
+  name: "audible ack is a canned string, not the resolved answer"
+  evidence_class: "[contract]"
+  authority_refs: [R-doc02-SPEAK-11]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a direct-answer request that fires the audible ack before the answer resolves"
+    when:  "the ack's spoken text is inspected"
+    then:
+      - "the ack text is drawn from the fixed canned-ack set (e.g. \"on it\") and is independent of the eventual answer content"
+      - "the resolved answer content is never presented as the ack; ack and tile ACK remain separate signals"
+  primary_oracle: {type: deterministic_string_check, artifact: "assert ack.text in CANNED_ACK_SET and ack.text != resolved_answer.text"}
+  thresholds: {faked_answer_as_ack_allowed: 0}
+  fault_model_refs: [F-SPEAK-ACK-FAKES-ANSWER]
+  test_ids: [T-SPEAK-10]
+
+# --- TTS time-to-first-audio (~40ms) ------------------------------------------
+- criterion_id: AC-SPEAK-11
+  name: "Cartesia TTS time-to-first-audio ~40ms"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc02-SPEAK-12]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "text submitted to Cartesia Sonic 3"
+    when:  "time-to-first-audio (submit -> first audio byte) is sampled over a pinned run"
+    then:
+      - "p50 time-to-first-audio is approximately 40ms (bounded below the ceiling)"
+      - "a regression far above the ~40ms band is flagged"
+  primary_oracle: {type: latency_measurement, artifact: "pinned sample; compute p50/p95 of first-audio latency; assert p50 <= 40ms tolerance ceiling"}
+  thresholds: {ttfa_p50_ms_target: 40, ttfa_p95_ms_max: 120, min_samples: 100}
+  fault_model_refs: [F-SPEAK-TTFA-REGRESSION]
+  test_ids: [T-SPEAK-11]
+
+# --- speak-decision-to-audible (< 1s, Output Media leg pinned) ----------------
+- criterion_id: AC-SPEAK-12
+  name: "speak-decision-to-audible < 1s (Output Media leg pinned)"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc02-SPEAK-13]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a decided line released on a boundary"
+    when:  "speak-decision-to-audible latency is measured on the Output Media leg over a pinned run"
+    then:
+      - "latency from speak decision to audible in-call is < 1s"
+      - "a sample at/just-over 1s fails"
+  primary_oracle: {type: latency_measurement, artifact: "pinned sample; measure (audible_ts - decision_ts) on Output Media leg; assert < 1000ms (p95)"}
+  thresholds: {speak_decision_to_audible_ms_max: 1000, min_samples: 100}
+  fault_model_refs: [F-SPEAK-DECISION-TO-AUDIBLE-TOO-SLOW]
+  test_ids: [T-SPEAK-12]
+
+# --- first-grounded-audio SLO (p50<=2.5s / p95<=5s) ---------------------------
+- criterion_id: AC-SPEAK-13
+  name: "first-grounded-audio p50<=2.5s / p95<=5s"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc02-SPEAK-15]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "a direct-answer request on the speak path"
+    when:  "first-grounded-audio latency (pickup -> first grounded-answer audio audible) is sampled over a pinned run"
+    then:
+      - "p50 first-grounded-audio <= 2.5s"
+      - "p95 first-grounded-audio <= 5s; a sample just over either threshold fails"
+  primary_oracle: {type: latency_measurement, artifact: "pinned sample n>=100; compute p50 and p95 of first-grounded-audio latency; assert p50<=2500ms and p95<=5000ms"}
+  thresholds: {first_grounded_audio_p50_ms_max: 2500, first_grounded_audio_p95_ms_max: 5000, min_samples: 100}
+  fault_model_refs: [F-SPEAK-GROUNDED-AUDIO-TOO-SLOW]
+  test_ids: [T-SPEAK-13]
+
+# --- Provable end-to-end "say this" -------------------------------------------
+- criterion_id: AC-SPEAK-14
+  name: "test 'say this' is audible in-call within budget AND appears in chat"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-SPEAK-16, R-doc02-SPEAK-13]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "an end-to-end speak path with Cartesia -> Output Media and chat sink"
+    when:  "a test 'say this' line is issued on a boundary"
+    then:
+      - "audio for the line is audible in-call within the latency budget (< 1s decision-to-audible)"
+      - "the matching text copy appears in chat"
+  primary_oracle: {type: state_machine_assertion, artifact: "assert output_media received audio for line-id within budget AND chat_post exists for same line-id with verbatim text"}
+  thresholds: {audible_within_budget_ms: 1000, missing_chat_copy_allowed: 0}
+  fault_model_refs: [F-SPEAK-SAYTHIS-NOT-PROVABLE]
+  test_ids: [T-SPEAK-14]
+
+# --- Degradation: text posts even when audio leg fails ------------------------
+- criterion_id: AC-SPEAK-15
+  name: "text copy still posts when synthesis/Output-Media leg fails"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc02-SPEAK-17, R-doc02-SPEAK-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a decided line whose text exists before synthesis"
+    when:  "the Cartesia synthesis or Output Media write fails after the line is decided"
+    then:
+      - "the line's text copy is still posted to chat"
+      - "the parity invariant (spoken-or-attempted line has a text copy) holds even under audio-leg failure"
+  primary_oracle: {type: state_machine_assertion, artifact: "inject synth/output-media fault; assert chat_post exists for the decided line-id; text copy count == decided line count"}
+  thresholds: {decided_lines_missing_text_copy_allowed: 0}
+  fault_model_refs: [F-SPEAK-AUDIO-FAIL-NO-TEXT]
+  test_ids: [T-SPEAK-15]

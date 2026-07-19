@@ -1,0 +1,210 @@
+# Requirements — Doc 02 (Voice & Transport) — CANVAS section
+# Scope: the canvas webpage streamed by Recall Output Media as the camera tile
+#        (ambient) OR the shared screen (promoted): surface exists, stream works,
+#        promote/demote, mutual-exclusivity, announced swap, tile outbound-only,
+#        tile ACK <=500ms, frame-rate measurement.
+# Appearance of the drawings (orb/glyphs) is Doc 08 — NOT authored here.
+# Extracted from: DOC-02 §2 (channels 4/5), §3.5 (the canvas), §3 CONTROL,
+#   §3.9 step 6; CANONICAL-DECISIONS §12.8, §12.9, §12.11 (REJECTED), §12.12.
+
+- requirement_id: R-doc02-CANVAS-01
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.5"
+  source_quote: "One canvas webpage per meeting, rendered by us, streamed by Recall Output Media as either the camera tile (small, ambient) or the shared screen (big, presented)."
+  normalized_statement: >
+    WHEN a meeting is live THE SYSTEM SHALL render exactly one canvas webpage for that
+    meeting and stream it via Recall Output Media as either the camera tile (ambient) or
+    the shared screen (presented).
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CANVAS-02
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.9 step 6"
+  source_quote: "The tile webpage streams as the bot's camera; ... Provable: the tile renders in-call"
+  normalized_statement: >
+    WHEN the bot is in a call THE SYSTEM SHALL stream the tile webpage as the bot's camera
+    such that the tile renders in-call as a live video stream.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CANVAS-03
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§2 channel 4 / §3.5"
+  source_quote: "Tile = the signal surface. All social signals are drawn: listening / checking / has-something / raise-hand / reactions. No dependence on native platform buttons."
+  normalized_statement: >
+    WHEN Proxy expresses a social signal (listening / checking / has-something / raise-hand /
+    reaction) THE SYSTEM SHALL draw it on the canvas surface and SHALL NOT invoke any native
+    meeting-platform button/control to express it.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CANVAS-04
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.5 / CANONICAL §12.8"
+  source_quote: "it surfaces the \"checking…\" tile state (a drawn state, ≤500ms) so the room sees Proxy is on it."
+  normalized_statement: >
+    WHEN an LSP-bound direct answer (exempt from the audio SLO) begins resolving its slow
+    answer THE SYSTEM SHALL surface the "checking…" drawn tile state within 500ms.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CANVAS-05
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.5 / CANONICAL §12.8"
+  source_quote: "The \"checking…\" state is the tile ACK. When an LSP-bound direct answer — one exempt from the audio SLO (CANONICAL §12.8) — is resolving its slow answer, it surfaces the \"checking…\" tile state"
+  normalized_statement: >
+    WHILE no LSP-bound direct answer is actually resolving THE SYSTEM SHALL NOT surface the
+    "checking…" tile ACK; the drawn state SHALL reflect a real in-flight resolve event only.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CANVAS-06
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§2 channel 5 / §3.5"
+  source_quote: "Screenshare uses the identical render-a-webpage mechanism at higher resolution. Its signature use: showing work live — when the agent browses, runs a test, or builds an artifact in its sandbox, we render that live view onto the presented screen"
+  normalized_statement: >
+    WHEN screenshare is active THE SYSTEM SHALL promote the same canvas webpage at higher
+    resolution and render the sandbox live-work view onto the presented screen.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CANVAS-07
+  authority_type: specification
+  authority_document: CANONICAL
+  source_location: "CANONICAL §12.11 (REJECTED) / §12.12"
+  source_quote: "structured progress view + pinned source w/ cited lines + final artifact preview; live mirror/cursor/diagrams = Expansion."
+  normalized_statement: >
+    WHEN rendering the V0 screenshare live-work view THE SYSTEM SHALL present a structured
+    progress view (plus pinned source with cited lines and final artifact preview) and SHALL
+    NOT render a pixel-accurate live browser/terminal mirror, animated cursor, or drawn diagrams.
+  requirement_type: constraint
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CANVAS-08
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.5"
+  source_quote: "Activation is human-only (an ask, or a yes to Proxy's offer — the rule lives in Docs 04/08); this layer just executes the promote/demote."
+  normalized_statement: >
+    WHEN a promote/demote is requested by an upstream (human-gated) trigger THE SYSTEM SHALL
+    execute the promote/demote mechanism, and SHALL NOT self-initiate a promote absent that
+    upstream trigger (the human-gating rule itself lives in Docs 04/08).
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CANVAS-09
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.5"
+  source_quote: "Camera and screenshare are mutually exclusive on the transport → sequence them"
+  normalized_statement: >
+    WHILE the transport is streaming THE SYSTEM SHALL NOT have the camera tile and the
+    screenshare both active at the same instant; the two are mutually exclusive.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CANVAS-10
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.5 / §3 CONTROL / §3.9 step 6"
+  source_quote: "the swap itself is announced"
+  normalized_statement: >
+    WHEN the transport swaps between camera tile and screenshare THE SYSTEM SHALL announce
+    the swap.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CANVAS-11
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.5"
+  source_quote: "sequence them: speak the headline, then swap to the screen; swap back when done."
+  normalized_statement: >
+    WHEN presenting work on the shared screen THE SYSTEM SHALL sequence the swap as
+    speak-headline -> swap-to-screen -> (work) -> swap-back-to-tile, never overlapping the
+    two streams.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CANVAS-12
+  authority_type: specification
+  authority_document: CANONICAL
+  source_location: "CANONICAL §12.9"
+  source_quote: "Tile outbound-only: delete TILE_ADDRESS/tile-originated ChannelAction (humans can't click a video stream)"
+  normalized_statement: >
+    THE SYSTEM SHALL treat the tile as outbound-only: NO code path SHALL accept a
+    tile-originated inbound action (no TILE_ADDRESS, no tile-originated ChannelAction),
+    since a video stream is not clickable.
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CANVAS-13
+  authority_type: specification
+  authority_document: CANONICAL
+  source_location: "CANONICAL §12.9"
+  source_quote: "the tile page authenticates its render WS via a meeting-scoped bearer token in the Recall URL."
+  normalized_statement: >
+    WHEN the tile page opens its render WebSocket THE SYSTEM SHALL authenticate it using a
+    meeting-scoped bearer token carried in the Recall URL.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CANVAS-14
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.9 step 6"
+  source_quote: "a promote/demote cycle works without dropping either stream."
+  normalized_statement: >
+    WHEN a promote (tile->screen) then demote (screen->tile) cycle is executed THE SYSTEM
+    SHALL keep a stream live throughout, dropping neither stream (no stream loss / black frame).
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CANVAS-15
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.5"
+  source_quote: "Pinned measurement: Output Media frame-rate/smoothness for live-work views (Recall publishes no number). Worst case = choppier motion, never lost capability."
+  normalized_statement: >
+    WHEN a live-work view is streamed THE SYSTEM SHALL record the Output Media
+    frame-rate/smoothness as a pinned measurement (not a hard gate); under worst case the
+    view SHALL degrade to choppier motion and SHALL NOT lose capability or crash.
+  requirement_type: performance
+  criticality: P2
+  testability: measurable
+  status: qualified

@@ -1,0 +1,224 @@
+# Requirements — Doc 02 Voice & Transport · CHAT section (both directions)
+# Extracted from:
+#   product/v0-spec/02-VOICE-TRANSPORT.md §2 (ch.2/3), §3.4, §3.9 step 5, §3.10, §4
+#   product/v0-spec/CANONICAL-DECISIONS.md §1.6 (LOCKED: dm_available: bool), §11.8
+# Scope: inbound chat (@proxy / addressed messages), outbound broadcast,
+#        outbound DM, DM-degradation, per-meeting channel-report.
+
+# -- Inbound: chat stream in --------------------------------------
+
+- requirement_id: R-doc02-CHAT-01
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.4 In"
+  source_quote: "platform chat messages stream via Recall"
+  normalized_statement: >
+    WHEN a participant posts a message in the meeting's platform chat
+    THE SYSTEM SHALL receive that message inbound via the Recall transport seam.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CHAT-02
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.4 In"
+  source_quote: "@proxy … (or any addressed message) forwards to the Orchestrator as a first-class ask — identical to a spoken ask, different socket."
+  normalized_statement: >
+    WHEN an inbound chat message addresses Proxy (via @proxy or any addressed form)
+    THE SYSTEM SHALL forward it to the Orchestrator as a first-class ask,
+    entering the identical ask path as a spoken ask (differing only in socket).
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CHAT-03
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.9 step 5"
+  source_quote: "Provable: @proxy in chat reaches the orchestrator"
+  normalized_statement: >
+    WHEN an @proxy chat message is posted
+    THE SYSTEM SHALL deliver a corresponding ask to the Orchestrator entry point
+    (provable by an end-to-end trace from chat post to Orchestrator receipt).
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CHAT-04
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.4 In"
+  source_quote: "@proxy … (or any addressed message) forwards to the Orchestrator as a first-class ask"
+  normalized_statement: >
+    WHEN an inbound chat message is NEITHER @proxy NOR otherwise addressed to Proxy
+    THE SYSTEM SHALL NOT forward it to the Orchestrator as a first-class ask
+    (the accept/reject frontier: only addressed messages become asks).
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CHAT-05
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.10"
+  source_quote: "chat(message, sender, dm?)"
+  normalized_statement: >
+    WHEN this layer emits a chat signal upstream
+    THE SYSTEM SHALL emit the shape chat(message, sender, dm?) — carrying the
+    message body, the sender identity, and an optional dm indicator.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# -- Outbound: broadcast ------------------------------------------
+
+- requirement_id: R-doc02-CHAT-06
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.4 Out, broadcast"
+  source_quote: "detail, links, receipts, quiet notices (\"repo advanced 2 commits\"), the text copy of everything spoken."
+  normalized_statement: >
+    WHEN upstream hands this layer broadcast content (detail, links, receipts,
+    quiet notices)
+    THE SYSTEM SHALL deliver it to the meeting's broadcast (public) chat channel.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CHAT-07
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.4 Out, broadcast (cf. §3.3)"
+  source_quote: "the text copy of everything spoken."
+  normalized_statement: >
+    WHEN a spoken line is produced by the voice channel
+    THE SYSTEM SHALL deliver the text copy of that spoken line to the broadcast
+    chat channel (the CHAT-side delivery of the spoken-text parity guarantee).
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# -- Outbound: DM -------------------------------------------------
+
+- requirement_id: R-doc02-CHAT-08
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.4 Out, DM"
+  source_quote: "private delivery to a single participant where the platform's chat supports it (asker-private answers, whisper-style delivery)."
+  normalized_statement: >
+    WHEN upstream requests DM delivery AND the platform reports DM support
+    THE SYSTEM SHALL deliver the message privately to exactly the one named
+    participant.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CHAT-09
+  authority_type: security
+  authority_document: DOC-02
+  source_location: "§3.9 step 5 / §3.4 Out, DM"
+  source_quote: "a DM lands privately on a supporting platform."
+  normalized_statement: >
+    WHEN a DM is delivered
+    THE SYSTEM SHALL address it to exactly one recipient and SHALL NEVER route
+    DM content to the broadcast channel (a DM reaching broadcast is a privacy failure).
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CHAT-10
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.4 Out, DM"
+  source_quote: "Where a platform's chat is broadcast-only, DM-dependent behaviors degrade to broadcast-or-hold (the judgment of which lives in Docs 04/06; this layer just reports which channels exist in this meeting)."
+  normalized_statement: >
+    WHEN a DM is requested on a broadcast-only platform (no DM support)
+    THE SYSTEM SHALL mechanically degrade the request to broadcast-or-hold —
+    never silently dropping it — and SHALL leave the broadcast-vs-hold judgment
+    to Docs 04/06.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CHAT-11
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.4 Out, DM / §4 platform matrix"
+  source_quote: "this layer just reports which channels exist in this meeting"
+  normalized_statement: >
+    THE SYSTEM SHALL NOT itself decide whether a degraded DM broadcasts or holds;
+    it SHALL only report which channels exist and defer the decision upstream.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# -- Per-meeting channel report (LOCKED contract field) -----------
+
+- requirement_id: R-doc02-CHAT-12
+  authority_type: canonical_decision
+  authority_document: CANONICAL-1.6
+  source_location: "CANONICAL §1.6 (LOCKED) / §3.10"
+  source_quote: "channel-report field is `dm_available: bool`. Doc 02's `dm-available?` conforms to `dm_available`."
+  normalized_statement: >
+    WHEN this layer emits the per-meeting channel-report
+    THE SYSTEM SHALL emit a field named EXACTLY `dm_available` of type bool
+    (any other field name is a contract failure).
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CHAT-13
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§4 platform matrix / §3.4"
+  source_quote: "Chat DM — platform-dependent; this layer reports per-meeting which channels exist, upstream adapts."
+  normalized_statement: >
+    WHEN the channel-report is computed for a meeting
+    THE SYSTEM SHALL set `dm_available` from the REAL platform capability of that
+    meeting — true only where the platform actually supports DM — never an assumed
+    or hard-coded default.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CHAT-14
+  authority_type: canonical_decision
+  authority_document: CANONICAL-11.8
+  source_location: "CANONICAL §11.8"
+  source_quote: "chat/roster/channel-report are INTERNAL 02→03/04 events, NOT client ProxyMessages, OUT of assert_registry_closed() scope."
+  normalized_statement: >
+    THE SYSTEM SHALL treat chat and channel-report as internal 02→03/04 events,
+    NOT as client ProxyMessages, and SHALL exclude them from assert_registry_closed()
+    contract-closure scope.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc02-CHAT-15
+  authority_type: specification
+  authority_document: DOC-02
+  source_location: "§3.9 step 5"
+  source_quote: "outbound broadcast + DM-where-supported; per-meeting channel report."
+  normalized_statement: >
+    THE SYSTEM SHALL, per meeting, provide all three outbound behaviors coherently:
+    broadcast delivery, DM delivery where supported, and a channel report stating
+    which of these channels exist.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified

@@ -1,0 +1,337 @@
+# FAIL.criteria.yaml
+# Doc 02 (Voice & Transport) — FAILURE HONESTY / RATE LIMITS acceptance criteria.
+# Law-2 flagship ("lossless-or-honest"): every failure mode has an honest,
+# non-silent path; loss-or-fake possible => P0/blocking.
+# authority_refs resolve to R-doc02-FAIL-## authored in the sidecar
+# FAIL.reqs.yaml (intended name FAIL.requirements.yaml — guard-blocked; see PROGRESS.md).
+# Oracles: deterministic-preferred — fault-injection (forced disconnect / STT hiccup /
+# TTS outage / burst), state-machine assertion (rejoin-once, degrade branch, mark-lost
+# tag), simulation trace, contract-schema (bot-status enum, webhook_events row).
+# Judge only where no deterministic oracle exists (the confirm-at-build STT buffering).
+# Numeric thresholds explicit; zeros stated.
+# ID space: AC-FAIL-##
+criteria:
+
+  # --- Rejoin-once: exactly one auto-rejoin per drop --------------------------
+  - criterion_id: AC-FAIL-01
+    name: "bot drop → exactly one automatic rejoin attempt"
+    evidence_class: "[fault-injection]"
+    authority_refs: [R-doc02-FAIL-01, R-doc02-FAIL-18]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "a live meeting with the transport connected and a Recall status-webhook stub"
+      when:  "a bot-drop status webhook is injected (forced disconnect)"
+      then:
+        - "the system issues exactly one automatic rejoin attempt for that drop"
+        - "no rejoin is issued before the drop signal and no second auto-rejoin is issued for the same drop"
+    primary_oracle: {type: fault_injection, artifact: "inject dropped webhook; count auto rejoin_attempt events for the drop_id; assert == 1"}
+    thresholds: {rejoin_attempts_over_1_allowed: 0, rejoin_attempts_under_1_allowed: 0}
+    fault_model_refs: [F-REJOIN-LOOP, F-REJOIN-ZERO]
+    test_ids: [T-FAIL-01]
+
+  # --- Rejoin-once boundary: not zero, not looping ---------------------------
+  - criterion_id: AC-FAIL-02
+    name: "rejoin is bounded to one — never a loop, never skipped"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-FAIL-02]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "a drop whose rejoin attempt itself fails to connect"
+      when:  "the rejoin-once state machine is driven past the single attempt"
+      then:
+        - "the state machine attempts the rejoin exactly once then transitions to an honest terminal state (not retrying)"
+        - "no unbounded retry loop is entered; attempt count for the drop is capped at 1"
+    primary_oracle: {type: state_machine_assertion, artifact: "drive drop→rejoin(fail); assert attempts==1 and next state in {honest_stop}; assert no attempt>1 transition exists"}
+    thresholds: {rejoin_attempts_over_1_allowed: 0, unbounded_retry_allowed: 0}
+    fault_model_refs: [F-REJOIN-LOOP, F-REJOIN-ZERO]
+    test_ids: [T-FAIL-02]
+
+  # --- Gap announcement on rejoin --------------------------------------------
+  - criterion_id: AC-FAIL-03
+    name: "on rejoin, Proxy states the gap plainly"
+    evidence_class: "[fault-injection]"
+    authority_refs: [R-doc02-FAIL-03]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "a forced disconnect followed by a successful rejoin"
+      when:  "the bot reconnects"
+      then:
+        - "a gap announcement is emitted to notes/chat naming the disconnected interval (e.g. \"I was disconnected 14:03–14:04 — notes have a gap there\")"
+        - "the rejoin does not proceed silently without announcing the gap"
+    primary_oracle: {type: fault_injection, artifact: "inject drop@t0, rejoin@t1; assert a gap-announcement artifact exists carrying an explicit interval field"}
+    thresholds: {rejoin_without_gap_announcement_allowed: 0}
+    fault_model_refs: [F-SILENT-AUDIO-GAP]
+    test_ids: [T-FAIL-03]
+
+  # --- Gap source-honesty: interval matches real disconnect window -----------
+  - criterion_id: AC-FAIL-04
+    name: "announced gap interval equals the real disconnect window"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-FAIL-05]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "a drop at dropped_ts and a rejoin at rejoined_ts with known timestamps"
+      when:  "the announced gap interval is compared to the real disconnect window"
+      then:
+        - "the announced [start,end] equals [dropped_ts, rejoined_ts] within clock tolerance"
+        - "the interval is neither fabricated, padded, nor shrunk to hide loss"
+    primary_oracle: {type: simulation_trace, artifact: "assert announced_interval.start==dropped_ts and .end==rejoined_ts within tolerance_ms"}
+    thresholds: {interval_mismatch_ms_max: 1000, fabricated_interval_allowed: 0}
+    fault_model_refs: [F-FABRICATED-GAP-INTERVAL]
+    test_ids: [T-FAIL-04]
+
+  # --- Never pretend continuity (negative / honesty frontier) ----------------
+  - criterion_id: AC-FAIL-05
+    name: "never pretend continuity — no silently-absent gap"
+    evidence_class: "[fault-injection]"
+    authority_refs: [R-doc02-FAIL-04, R-doc02-FAIL-18]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "a drop that removed a stretch of the meeting from capture"
+      when:  "the post-rejoin transcript/notes across the drop boundary are inspected"
+      then:
+        - "the gap is explicitly marked/announced in the record"
+        - "the record is never presented as continuous across the drop (a silently-absent gap is a violation)"
+    primary_oracle: {type: fault_injection, artifact: "inject drop with real audio loss; scan transcript across boundary; assert a gap/lost marker present; assert no seamless-join"}
+    thresholds: {silent_gap_allowed: 0, pretended_continuity_allowed: 0}
+    fault_model_refs: [F-FAKE-CONTINUITY, F-SILENT-AUDIO-GAP]
+    test_ids: [T-FAIL-05]
+
+  # --- Second drop after rejoin consumed → honest stop -----------------------
+  - criterion_id: AC-FAIL-06
+    name: "second drop after the one rejoin → honest stop, not infinite retry"
+    evidence_class: "[fault-injection]"
+    authority_refs: [R-doc02-FAIL-06]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "a drop that already consumed its single auto-rejoin, then a second drop"
+      when:  "the second drop is injected"
+      then:
+        - "the system announces the state honestly rather than looping rejoin attempts"
+        - "it does not give up silently and does not enter unbounded retry"
+    primary_oracle: {type: fault_injection, artifact: "inject drop→rejoin→drop; assert no further auto-rejoin AND an honest state announcement emitted"}
+    thresholds: {extra_auto_rejoins_allowed: 0, silent_giveup_allowed: 0}
+    fault_model_refs: [F-INFINITE-RETRY, F-SILENT-GIVEUP]
+    test_ids: [T-FAIL-06]
+
+  # --- bot-status enum contract ----------------------------------------------
+  - criterion_id: AC-FAIL-07
+    name: "bot-status signal is exactly {connected,dropped,rejoined}"
+    evidence_class: "[contract]"
+    authority_refs: [R-doc02-FAIL-07]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "the bot-status signal surface"
+      when:  "every emitted bot-status value across a run is validated against the schema"
+      then:
+        - "each value is one of {connected, dropped, rejoined}"
+        - "no out-of-enum status value is ever emitted"
+    primary_oracle: {type: contract_schema, artifact: "validate every bot-status event.value against enum {connected,dropped,rejoined}; assert 0 violations"}
+    thresholds: {out_of_enum_status_allowed: 0}
+    fault_model_refs: [F-BOTSTATUS-ENUM-VIOLATION]
+    test_ids: [T-FAIL-07]
+
+  # --- Durable webhook_events + dedupe by delivery_guid (§12.10) --------------
+  - criterion_id: AC-FAIL-08
+    name: "bot-status webhooks land durably; deduped by delivery_guid"
+    evidence_class: "[contract]"
+    authority_refs: [R-doc02-FAIL-08]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "a bot-status webhook and a redelivery of the same webhook (same delivery_guid)"
+      when:  "both are received"
+      then:
+        - "the first is persisted to durable webhook_events"
+        - "the redelivery is deduped by delivery_guid — exactly one row and one processing, not two"
+    primary_oracle: {type: contract_schema, artifact: "post webhook twice with same delivery_guid; assert count(webhook_events where delivery_guid=X)==1 and processed_effects==1"}
+    thresholds: {duplicate_rows_allowed: 0, duplicate_processing_allowed: 0}
+    fault_model_refs: [F-WEBHOOK-DUP-PROCESS]
+    test_ids: [T-FAIL-08]
+
+  # --- Mark-lost: un-transcribed stretch marked, never silently absent -------
+  - criterion_id: AC-FAIL-09
+    name: "un-transcribed stretch is marked lost, never silently absent"
+    evidence_class: "[fault-injection]"
+    authority_refs: [R-doc02-FAIL-09, R-doc02-FAIL-18]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "an STT hiccup that leaves a stretch of audio un-transcribed"
+      when:  "the transcript covering that stretch is inspected"
+      then:
+        - "the un-transcribed stretch carries an explicit lost/gap marker in the transcript"
+        - "the stretch is never silently absent (no unmarked hole)"
+    primary_oracle: {type: fault_injection, artifact: "inject STT outage over [ta,tb]; assert transcript has a lost-marked segment spanning [ta,tb]; assert no unmarked hole"}
+    thresholds: {untranscribed_stretch_silently_absent_allowed: 0}
+    fault_model_refs: [F-UNTRANSCRIBED-SILENTLY-ABSENT, F-LOST-OR-FAKED-AUDIO]
+    test_ids: [T-FAIL-09]
+
+  # --- pending→comprehended; close backfills pending+gap (§12.10) -------------
+  - criterion_id: AC-FAIL-10
+    name: "transcript_segments default 'pending' → 'comprehended'; close backfills pending as gap"
+    evidence_class: "[contract]"
+    authority_refs: [R-doc02-FAIL-10]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "transcript_segments rows with status DEFAULT 'pending' and a meeting close event"
+      when:  "some segments never transcribe and the meeting closes"
+      then:
+        - "transcribed segments flip 'pending'→'comprehended'; un-transcribed segments remain 'pending'"
+        - "on close, every still-'pending' segment is backfilled as a lost/gap segment — none dropped from the record"
+    primary_oracle: {type: state_machine_assertion, artifact: "assert default status=='pending'; after close assert every pending segment has a corresponding gap/lost backfill; dropped_pending==0"}
+    thresholds: {pending_segment_dropped_on_close_allowed: 0, default_status_not_pending_allowed: 0}
+    fault_model_refs: [F-PENDING-SEGMENT-DROPPED]
+    test_ids: [T-FAIL-10]
+
+  # --- STT buffering not-ours (confirm-at-build) — no over-promise ------------
+  - criterion_id: AC-FAIL-11
+    name: "no promised STT buffer-through under BYOK passthrough; mark-lost is the guarantee"
+    evidence_class: "[analysis]"
+    authority_refs: [R-doc02-FAIL-11]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "the BYOK passthrough audio path Recall→AssemblyAI direct (buffer not ours)"
+      when:  "the code/design is reviewed for what it promises during an STT hiccup"
+      then:
+        - "no buffer-during-outage→resume is asserted as ours; whether Recall buffers through an AAI hiccup is left as a confirm-at-build note"
+        - "the only guaranteed honest fallback exercised is the mark-lost path (AC-FAIL-09)"
+    primary_oracle: {type: judge, artifact: "reviewer confirms no over-promised buffering claim and that mark-lost is the wired fallback; confirm-at-build note present"}
+    thresholds: {overpromised_buffering_claim_allowed: 0}
+    fault_model_refs: [F-OVERPROMISE-BUFFER]
+    test_ids: [T-FAIL-11]
+
+  # --- TTS outage: degrade voice → chat --------------------------------------
+  - criterion_id: AC-FAIL-12
+    name: "TTS/provider outage degrades voice to chat"
+    evidence_class: "[fault-injection]"
+    authority_refs: [R-doc02-FAIL-12]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "a decided line and a TTS/voice provider that is down"
+      when:  "the line is delivered while voice is unavailable"
+      then:
+        - "the line is delivered as text on the chat channel (with a \"voice is down — I'll type\" style notice)"
+        - "the line is not simply dropped because voice is unavailable"
+    primary_oracle: {type: fault_injection, artifact: "inject TTS outage; issue a line; assert chat_post exists for the line and a voice-down notice is present"}
+    thresholds: {line_dropped_on_tts_outage_allowed: 0}
+    fault_model_refs: [F-TTS-DOWN-MUTE]
+    test_ids: [T-FAIL-12]
+
+  # --- Never both broken and mute (honesty frontier) -------------------------
+  - criterion_id: AC-FAIL-13
+    name: "a dead engine never leaves Proxy both mute and silent"
+    evidence_class: "[fault-injection]"
+    authority_refs: [R-doc02-FAIL-13, R-doc02-FAIL-17]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "a decided line with voice down"
+      when:  "delivery is attempted"
+      then:
+        - "chat still delivers the line (voice-down AND chat-down simultaneously is forbidden)"
+        - "there is no state where the line is neither spoken nor typed"
+    primary_oracle: {type: fault_injection, artifact: "inject voice-down; assert NOT(voice_delivered==false AND chat_delivered==false) for the line"}
+    thresholds: {voice_down_and_chat_down_allowed: 0}
+    fault_model_refs: [F-BOTH-BROKEN-AND-MUTE]
+    test_ids: [T-FAIL-13]
+
+  # --- Rate limiter: per-bot outbound queue, no mid-meeting throttle ----------
+  - criterion_id: AC-FAIL-14
+    name: "outbound requests pace through a per-bot limiter/queue"
+    evidence_class: "[fault-injection]"
+    authority_refs: [R-doc02-FAIL-14]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "output-media and chat sends sharing one workspace request limit, behind a per-bot outbound limiter"
+      when:  "concurrent output-media + chat deliveries are issued near the shared limit"
+      then:
+        - "sends are paced through the per-bot queue within the shared workspace limit"
+        - "no send is rejected/throttled mid-meeting by the shared limit"
+    primary_oracle: {type: fault_injection, artifact: "issue mixed output-media+chat sends near limit; assert all paced through limiter and 0 throttle-rejections observed"}
+    thresholds: {throttle_rejections_allowed: 0}
+    fault_model_refs: [F-THROTTLE-MID-MEETING]
+    test_ids: [T-FAIL-14]
+
+  # --- Rate limiter under 5+ concurrent deliveries (pinned) ------------------
+  - criterion_id: AC-FAIL-15
+    name: "5+ concurrent deliveries queue and all deliver; none dropped by throttle"
+    evidence_class: "[fault-injection]"
+    authority_refs: [R-doc02-FAIL-15]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "the per-bot outbound limiter and a burst of N>=5 concurrent deliveries (pinned measurement)"
+      when:  "the burst is submitted at once"
+      then:
+        - "all N deliveries are queued and eventually delivered (delivered_count == N)"
+        - "no delivery is dropped by throttle; the burst queues instead of throttling"
+    primary_oracle: {type: fault_injection, artifact: "submit N>=5 concurrent sends; assert delivered_count==N and dropped_by_throttle==0; observe queue depth>0"}
+    thresholds: {concurrent_deliveries_min: 5, send_dropped_by_throttle_allowed: 0, undelivered_allowed: 0}
+    fault_model_refs: [F-SEND-DROPPED-BY-THROTTLE]
+    test_ids: [T-FAIL-15]
+
+  # --- Rate limiter uses pinned lib, not hand-rolled (§11.11) ----------------
+  - criterion_id: AC-FAIL-16
+    name: "limiter uses pinned `limits`/`slowapi` in-memory backend, not a hand-rolled token bucket"
+    evidence_class: "[contract]"
+    authority_refs: [R-doc02-FAIL-16]
+    criticality: P2
+    blocking: false
+    behavior:
+      given: "the outbound limiter implementation and pinned dependencies"
+      when:  "the limiter source and dependency pins are inspected"
+      then:
+        - "the limiter is built on the pinned `limits` (or `slowapi`) library with an in-memory backend"
+        - "no hand-rolled token-bucket implementation is used"
+    primary_oracle: {type: contract_schema, artifact: "assert limiter imports limits/slowapi with in-memory backend; static scan finds no bespoke token-bucket loop"}
+    thresholds: {handrolled_token_bucket_allowed: 0}
+    fault_model_refs: [F-HANDROLLED-LIMITER]
+    test_ids: [T-FAIL-16]
+
+  # --- Umbrella: never both broken and pretending ----------------------------
+  - criterion_id: AC-FAIL-17
+    name: "every failure mode takes an honest non-silent path — never broken and pretending"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc02-FAIL-17]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "a fault matrix over {drop, STT outage, TTS outage, rate-limit burst}"
+      when:  "each fault is injected in a simulated meeting"
+      then:
+        - "each fault produces its named honest path (rejoin+admit-gap · mark-lost · degrade voice→chat · queue) — a non-silent observable"
+        - "in no case is the system simultaneously broken and presenting normal output (broken-and-pretending forbidden)"
+    primary_oracle: {type: simulation_trace, artifact: "run fault matrix; assert each fault yields its honest-path artifact and NONE yields silent/normal-looking output while broken"}
+    thresholds: {broken_and_pretending_allowed: 0, failure_without_honest_path_allowed: 0}
+    fault_model_refs: [F-BROKEN-AND-PRETENDING]
+    test_ids: [T-FAIL-17]
+
+  # --- Provable end-to-end drop story ----------------------------------------
+  - criterion_id: AC-FAIL-18
+    name: "forced disconnect provably produces rejoin + honest gap; burst provably queues"
+    evidence_class: "[fault-injection]"
+    authority_refs: [R-doc02-FAIL-18, R-doc02-FAIL-01, R-doc02-FAIL-15]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "an end-to-end transport with status-webhook and outbound limiter wired"
+      when:  "a forced disconnect is injected and, separately, a 5+ send burst is issued"
+      then:
+        - "the forced disconnect yields exactly one rejoin and a gap announcement naming the real interval"
+        - "the send burst queues and all deliver (none throttle-dropped) — never losing or faking a stretch of audio"
+    primary_oracle: {type: fault_injection, artifact: "scenario: disconnect→assert(rejoin_count==1 AND gap_announced); burst>=5→assert(delivered==N AND dropped_by_throttle==0)"}
+    thresholds: {rejoin_count_expected: 1, silent_gap_allowed: 0, send_dropped_by_throttle_allowed: 0, lost_or_faked_audio_stretch_allowed: 0}
+    fault_model_refs: [F-LOST-OR-FAKED-AUDIO, F-SILENT-AUDIO-GAP, F-SEND-DROPPED-BY-THROTTLE]
+    test_ids: [T-FAIL-18]
