@@ -3679,3 +3679,6 @@ authority authors `tests/doc02/test_join.py … test_xcut.py` (+ fixtures/simula
 from the sealed `acceptance/doc02/criteria/criteria.yaml`, in the M0…M10 `test_ids` order the locked
 plan (§§1–7) fixes; re-seal bundle+evidence; then re-dispatch this builder. The plan is ready to
 build straight against it. Ending the pass per the mandate.
+
+## ADJUDICATION RESOLVED — proceed with this reading:
+ — The claimed conflict is not a spec contradiction and warrants no spec change: `product/v0-spec/02-VOICE-TRANSPORT.md` §1 states "*this document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately,*" and the sealed `acceptance/doc02/criteria/criteria.yaml` is coherent with it — the builder cites no criterion that conflicts with any spec passage, only `ORCHESTRATION.md:23` (the EVIDENCE phase), which is a pipeline step, not a spec clause. The reading to implement is therefore: the spec and the sealed criteria are sound as written, so the builder must not weaken, guess, or route around them; the block is a pipeline-sequencing gap (the doc02 Phase-3 EVIDENCE `tests/doc02/` red suite was never authored — th
