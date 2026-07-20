@@ -706,10 +706,14 @@ def cli_preflight() -> None:
     """Fail fast BEFORE the night starts: claude CLI present + authenticated, venv, git identity."""
     if shutil.which("claude") is None:
         sys.exit("PRELAUNCH FAIL: `claude` CLI not on PATH.")
-    r = subprocess.run(["claude", "-p", "Reply with exactly: AUTH_OK", "--max-turns", "3"],
+    r = subprocess.run(["claude", "-p", "say hi", "--max-turns", "10"],
                        cwd=ROOT, capture_output=True, text=True, timeout=120)
     combined = (r.stdout or "") + (r.stderr or "")
-    if "AUTH_OK" not in combined:
+    auth_fail_sigs = ["not authenticated", "please log in", "unauthorized", "401", "403",
+                      "invalid api key", "expired", "could not authenticate"]
+    combined_lower = combined.lower()
+    has_auth_error = any(sig in combined_lower for sig in auth_fail_sigs)
+    if r.returncode != 0 or has_auth_error:
         sys.exit("PRELAUNCH FAIL: claude CLI is not authenticated in THIS terminal.\n"
                  "  Fix: run `claude` interactively here, then `/login` (use the Max subscription\n"
                  "  account), exit, and relaunch the orchestrator.\n"
