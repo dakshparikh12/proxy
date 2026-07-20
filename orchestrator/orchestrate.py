@@ -56,6 +56,9 @@ PROTECTED = ("tests/", "harness/", "fixtures/", "criteria/", "acceptance/", "pro
 MAX_PASSES, STALL_LIMIT, PASS_TIMEOUT = 120, 4, 60 * 30   # wall-clock (9h/doc) binds before passes
 MAX_BUILD_SESSIONS = 24            # each is a LONG persistent builder doing many milestones
 BUILD_TIMEOUT, BUILD_TURNS = 60 * 90, 600   # a builder session iterates internally build->test->fix
+P5_PLAN_TIMEOUT = 60 * 25   # the P5 planner is BOUNDED: planning a doc is minutes of work, so a
+#   session that runs past this is hung (the planner subprocess has frozen here for 40+ min with
+#   zero CPU progress). Fail LOUD (return "P5_PLAN_TIMEOUT") rather than freeze the night silently.
 REVIEW_CYCLES, SWEEP_CYCLES = 3, 2   # each pass is cheap now (formal artifacts dropped) so keep the
 #                                      coverage loop generous; both break EARLY once the reviewer
 #                                      approves + the RTM gate passes, so a clean doc costs 1 cycle.
@@ -576,8 +579,58 @@ def merge_sweep_parts(doc: str) -> None:
         log(f"[{doc}] consumed (removed) {p.name}")
 
 
+def _live_bundle_hash(doc: str) -> str:
+    """sha256 over the spec + live acceptance/<doc> tree — byte-identical to the digest seal()
+    records. Used to prove a doc's sealed authority is intact before skipping its rebuild."""
+    spec = ROOT / "product" / "v0-spec" / DOCS[doc]["spec"]
+    h = hashlib.sha256()
+    for p in [spec, *sorted((ROOT / "acceptance" / doc).rglob("*"))]:
+        if p.is_file():
+            h.update(p.read_bytes())
+    return h.hexdigest()
+
+
+def _doc_already_complete(doc: str) -> tuple[bool, str]:
+    """Is this doc fully done, so its entire pipeline (P4 re-seal .. P7.5 sweep) can be skipped?
+
+    True when EITHER the doc already carries its <doc>-done tag (the canonical 'whole run_doc
+    finished' marker, stamped at P8), OR it is sealed AND the live acceptance/<doc> bundle still
+    hashes to the recorded seal AND its accumulated test scope still collects clean. The second
+    branch exists because a prior run can seal+build+verify a doc yet die before P8 stamped the
+    tag (exactly what happened here: P5 hung, so doc00/doc01 are sealed+verified but untagged).
+    Re-planning (P5) or rebuilding an already-sealed+verified doc wastes hours and re-enters the
+    planner subprocess that has hung here before — so prove done cheaply and skip."""
+    if sh(["git", "rev-parse", "-q", "--verify", f"refs/tags/{doc}-done"],
+          capture_output=True).returncode == 0:
+        return True, f"{doc}-done tag present"
+    seal_path = ORCH / "state" / f"{doc}.seal.json"
+    if not seal_path.exists():
+        return False, ""
+    try:
+        recorded = json.loads(seal_path.read_text()).get("authority+bundle_sha256", "")
+    except (ValueError, OSError):
+        return False, ""
+    if not recorded or _live_bundle_hash(doc) != recorded:
+        return False, ""   # sealed but the live bundle drifted — NOT safe to skip; rebuild it
+    scope = test_dirs_upto(doc)
+    if not scope or sh([PY, "-m", "pytest", "--collect-only", "-q", *scope],
+                       capture_output=True, text=True).returncode != 0:
+        return False, ""   # sealed+matching but evidence won't even collect — rebuild it
+    return True, f"sealed {recorded[:12]} matches live bundle + evidence collects clean"
+
+
 def run_doc(doc: str) -> str:
     log(f"########## {doc} ({DOCS[doc]['spec']}) ##########")
+    # WHOLE-DOC SKIP (resume): a fully sealed+verified doc must NOT be re-planned or rebuilt.
+    # Before this guard, run_doc skipped only P1-P3 and still ran P4 re-seal + the P5 planner +
+    # P6 build on every launch — and the P5 planner subprocess has frozen here indefinitely. Skip
+    # the whole doc and stamp its -done tag so the supervisor (which picks the first UNTAGGED doc,
+    # ignoring --from) advances past it instead of restarting on doc00 forever.
+    complete, why = _doc_already_complete(doc)
+    if complete:
+        log(f"[{doc}] SKIP whole doc — {why}; not re-planning or rebuilding")
+        sh(["git", "tag", "-f", f"{doc}-done"])
+        return "DONE"
     sdir = STAGING / doc
     sdir.mkdir(parents=True, exist_ok=True)
 
@@ -633,9 +686,17 @@ def run_doc(doc: str) -> str:
              capture_output=True, text=True)
     if col.returncode != 0:
         return "EVIDENCE_COLLECTION_ERROR:\n" + (col.stdout + col.stderr)[-800:]
-    # P5: plan
+    # P5: plan (BOUNDED — a hung planner subprocess must fail loud, not silently freeze for hours;
+    # mirrors the P6 build_loop timeout+catch. Before this, the call inherited agent()'s 2h default
+    # and an uncaught TimeoutExpired would have crashed the conductor.)
     log(f"[{doc}] P5 plan + planner-review")
-    agent("plan.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]}, max_turns=60, model=SONNET_MODEL)
+    try:
+        agent("plan.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
+              max_turns=60, model=SONNET_MODEL, timeout=P5_PLAN_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        log(f"[{doc}] P5 planner exceeded {P5_PLAN_TIMEOUT // 60}m and was killed — halting this "
+            f"doc cleanly (was an indefinite silent hang before this timeout existed)")
+        return "P5_PLAN_TIMEOUT"
     # P6: build
     result = build_loop(doc)
     if result != "GREEN":

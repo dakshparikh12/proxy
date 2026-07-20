@@ -7,12 +7,24 @@
 #
 # Launch (leave it; it survives conductor restarts):
 #   caffeinate -i bash orchestrator/supervise.sh 2>&1 | tee -a orchestrator/console.log
+# Start from a specific doc (honors an operator's `--from`): pass it as the first arg (or START_DOC=):
+#   caffeinate -i bash orchestrator/supervise.sh doc02 2>&1 | tee -a orchestrator/console.log
+#   The supervisor then never re-selects a doc BEFORE the floor. (It otherwise picks the first
+#   doc lacking a <doc>-done tag, which is why a `--from doc02` typed at the shell was ignored and
+#   every restart rebuilt doc00.) The conductor also skips any doc already sealed+verified.
 # Stop it cleanly:  touch orchestrator/STOP
 set -uo pipefail
 cd "$(dirname "$0")/.."
 DOCS=(doc00 doc01 doc02 doc03 doc04 doc05 doc08 doc09)
 MAX_RESTARTS="${MAX_RESTARTS:-60}"
 STUCK_LIMIT="${STUCK_LIMIT:-4}"     # same doc, no progress, N times in a row => human needed
+# Optional operator start-floor (honors `--from`): `supervise.sh doc02` or START_DOC=doc02.
+# The supervisor never selects a doc before this floor. Default doc00 = original behavior.
+START_FLOOR="${1:-${START_DOC:-doc00}}"
+if ! printf '%s\n' "${DOCS[@]}" | grep -qx "$START_FLOOR"; then
+  echo "[supervisor] START_FLOOR '$START_FLOOR' is not a known doc (${DOCS[*]}) — refusing to guess. Exiting."
+  exit 2
+fi
 i=0; last=""; stuck=0
 
 # Pin this run to the SHA we launched at: a founder push can't silently mutate a live run.
@@ -27,9 +39,15 @@ while : ; do
   [ -f orchestrator/STOP ] && { echo "[supervisor] STOP sentinel — exiting"; break; }
   if done_tag doc09; then echo "[supervisor] ALL DOCS DONE 🎉 — exiting"; break; fi
 
-  start=""
-  for d in "${DOCS[@]}"; do done_tag "$d" || { start="$d"; break; }; done
-  [ -z "$start" ] && { echo "[supervisor] no unfinished doc but doc09 untagged — check state"; break; }
+  # First doc lacking a -done tag AT OR AFTER the start-floor (so an operator's `--from doc02`
+  # is honored across restarts and earlier already-done docs are never re-selected).
+  start=""; seen_floor=0
+  for d in "${DOCS[@]}"; do
+    [ "$d" = "$START_FLOOR" ] && seen_floor=1
+    [ "$seen_floor" -eq 1 ] || continue
+    done_tag "$d" || { start="$d"; break; }
+  done
+  [ -z "$start" ] && { echo "[supervisor] no unfinished doc at/after $START_FLOOR (doc09 untagged?) — check state"; break; }
 
   # "stuck" = restarted on the SAME doc AND no new commits happened (no progress). A doc that
   # simply needs more time (commits growing every restart) is NOT stuck.
