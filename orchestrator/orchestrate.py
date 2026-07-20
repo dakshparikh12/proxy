@@ -19,7 +19,8 @@ Honest deviations for the unattended overnight (documented in LAUNCH-AUTONOMOUS.
   - mypy --strict + bandit are REPORTED per pass, blocking only at doc-end (not per pass),
     so strict-typing minutiae can't stall the loop mid-milestone but can't ship either.
 """
-import argparse, hashlib, json, os, pathlib, re, shutil, subprocess, sys, time
+import argparse, collections, hashlib, json, os, pathlib, re, shutil, signal, subprocess, sys, threading, time
+from typing import NamedTuple
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ORCH = ROOT / "orchestrator"
@@ -39,7 +40,7 @@ OPUS_ESCALATION_STALL_COUNT = 2   # build sessions stalled >= this many times �
 DOCS = {
     "doc00": {"spec": "00-FOUNDATION.md",
               "deps": ["pydantic", "pydantic-settings", "fastapi", "uvicorn", "asyncpg",
-                        "alembic", "structlog", "httpx", "pytest-asyncio"]},
+                        "alembic", "structlog", "httpx", "pytest-asyncio", "sentry-sdk"]},
     "doc01": {"spec": "01-CODE-INTELLIGENCE.md",
               "deps": ["tree-sitter", "networkx", "pytest-timeout"]},
     "doc02": {"spec": "02-VOICE-TRANSPORT.md", "deps": ["websockets"]},
@@ -85,19 +86,202 @@ def sh(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=ROOT, **kw)
 
 
-def agent(prompt_file: str, subs: dict, capture: bool = False, timeout: int = 60 * 120,
-          max_turns: int = 200, model: str | None = None) -> str:
-    """One fresh Claude Code session (guard hooks apply to it). Returns stdout if captured."""
+# ── THE single claude-spawn primitive (every phase goes through run_agent) ───────────────────
+# History: 9 phases each spawned `claude -p` via an ad-hoc subprocess.run(timeout=) and wrapped it
+# in its own try/except TimeoutExpired. That shared primitive had THREE latent defects that made
+# "fix P5, P3 freezes identically" inevitable — the freeze lived in the primitive, not the phases:
+#   1. stdin was inherited (not DEVNULL): a child that reads stdin blocks forever at near-idle CPU.
+#   2. NO process group: subprocess.run's timeout does p.kill() on the DIRECT claude only, so its
+#      MCP/npx/node grandchildren ORPHAN (reparent to pid 1) and accumulate across the 60-restart
+#      supervise loop. (Empirically confirmed: apify's `npm exec` survived a direct-child SIGKILL.)
+#   3. Full ambient MCP loaded every phase (apify/magic/supabase/context7 + a claude.ai connector
+#      fetched over the network): tools the build never uses, but each a startup-latency + live
+#      tool-call-hang + child-process surface. A hung MCP tool call presents as EXACTLY the
+#      observed "near-idle CPU, no log output for many minutes" freeze.
+# run_agent() fixes all three at the source: stdin=DEVNULL, start_new_session (own process group),
+# strict no-MCP, a drain thread so a slow/orphaned writer can't deadlock, and — always, in finally —
+# a whole-process-group kill so NOTHING orphans. It NEVER raises TimeoutExpired; it returns a
+# structured AgentResult so every phase handles timeout the SAME one-line way (`if res.timed_out`).
+NO_MCP = ["--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}']
+
+
+class AgentResult(NamedTuple):
+    returncode: int | None   # claude's exit code (None if we killed it on timeout)
+    stdout: str              # combined stdout+stderr (bounded rolling tail)
+    timed_out: bool          # True iff the wall-clock cap fired and we killed the group
+
+
+def _kill_process_group(p: subprocess.Popen, phase: str) -> int:
+    """Kill the ENTIRE process group led by p (claude + every child it spawned): SIGTERM, brief
+    grace, then SIGKILL. Idempotent + best-effort. Returns how many members were still alive at
+    SIGKILL time (for logging). This is what guarantees no orphaned claude/MCP/tool processes."""
+    try:
+        pgid = os.getpgid(p.pid)
+    except (ProcessLookupError, OSError):
+        return 0
+    def _members() -> list[int]:
+        try:
+            out = subprocess.run(["ps", "-Ao", "pid,pgid"], capture_output=True, text=True).stdout
+        except Exception:
+            return []
+        pids = []
+        for line in out.splitlines()[1:]:
+            f = line.split()
+            if len(f) >= 2 and f[1].isdigit() and int(f[1]) == pgid:
+                pids.append(int(f[0]))
+        return pids
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except (ProcessLookupError, OSError):
+        return 0
+    try:
+        p.wait(timeout=8)   # graceful window for claude to flush + reap its own children
+    except subprocess.TimeoutExpired:
+        pass
+    still = _members()
+    if still:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            pass
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+    return len(still)
+
+
+def run_agent(prompt_file: str, subs: dict, *, timeout: int, max_turns: int,
+              model: str | None = None, phase: str = "") -> AgentResult:
+    """Spawn ONE fresh Claude Code session (guard hooks apply). Bounded, no-MCP, process-group
+    isolated, drained, and ALWAYS group-killed on the way out. Returns AgentResult; never raises
+    TimeoutExpired. `phase` is a short label used in the distinct start/timeout/exit log lines."""
     text = (ORCH / "prompts" / prompt_file).read_text()
     for k, v in subs.items():
         text = text.replace(k, v)
     cmd = ["claude", "-p", text, "--permission-mode", "bypassPermissions",
-           "--max-turns", str(max_turns)]
+           "--max-turns", str(max_turns), *NO_MCP]
     if model:
         cmd += ["--model", model]
-    r = subprocess.run(cmd, cwd=ROOT, timeout=timeout,
-                       capture_output=capture, text=capture)
-    return (r.stdout or "") if capture else ""
+    log(f"[{phase or prompt_file}] spawn claude (model={(model or 'default').split('-')[-1]}, "
+        f"cap={timeout // 60}m, max_turns={max_turns})")
+    buf: collections.deque[str] = collections.deque(maxlen=6000)   # bounded rolling tail
+    p = subprocess.Popen(cmd, cwd=ROOT, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         text=True, bufsize=1, start_new_session=True)
+
+    def _drain() -> None:
+        try:
+            for line in p.stdout:            # keep the pipe empty so the child never blocks on it,
+                buf.append(line)             # and echo live so console.log shows real progress
+                sys.stdout.write(line)
+        except Exception:
+            pass
+    th = threading.Thread(target=_drain, daemon=True)
+    th.start()
+    timed_out = False
+    started = time.time()
+    try:
+        p.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        log(f"[{phase or prompt_file}] *** TIMEOUT after {timeout // 60}m at near-idle — killing "
+            f"process group {_safe_pgid(p)} (claude + all children); nothing left to orphan ***")
+    finally:
+        reaped = _kill_process_group(p, phase)
+        th.join(timeout=5)
+    dt = int(time.time() - started)
+    rc = p.returncode
+    if timed_out:
+        log(f"[{phase or prompt_file}] group killed after {dt}s (reaped {reaped} live members)")
+    elif rc not in (0, None):
+        tail = "".join(buf)[-400:].replace("\n", " ")
+        log(f"[{phase or prompt_file}] claude exited rc={rc} after {dt}s — tail: {tail}")
+    return AgentResult(rc, "".join(buf), timed_out)
+
+
+def _safe_pgid(p: subprocess.Popen) -> int:
+    try:
+        return os.getpgid(p.pid)
+    except (ProcessLookupError, OSError):
+        return -1
+
+
+# Local build-tool bounds — a hung pytest/mypy/etc. would freeze the conductor at near-idle CPU
+# with no output, the SAME symptom class as a hung claude subprocess. Bound them the same way.
+TOOL_TIMEOUT_QUICK  = 60 * 5    # ruff / bandit / collect-only / import checks / coverage gate
+TOOL_TIMEOUT_TYPES  = 60 * 10   # mypy --strict over the whole workspace
+PYTEST_TIMEOUT      = 60 * 20   # a full scoped pytest RUN — bounded so one hung test can't freeze
+DEP_INSTALL_TIMEOUT = 60 * 10   # uv pip install (network-bound)
+
+
+def run_tool(cmd: list[str], *, timeout: int, capture: bool = True) -> subprocess.CompletedProcess:
+    """Run a LOCAL tool (pytest/ruff/mypy/bandit/uv/git) bounded + process-group isolated. On
+    timeout: kill the WHOLE group (no orphaned test subprocesses) and return a synthetic
+    CompletedProcess(returncode=124) with a clear TIMEOUT message (GNU-timeout convention). This is
+    the local-tool sibling of run_agent — together they make EVERY subprocess the conductor spawns
+    bounded, so nothing can silently freeze the run."""
+    p = subprocess.Popen(cmd, cwd=ROOT, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.PIPE if capture else None,
+                         stderr=subprocess.PIPE if capture else None,
+                         text=True, start_new_session=True)
+    try:
+        out, err = p.communicate(timeout=timeout)     # drain-safe (threads); killpg below unblocks it
+        return subprocess.CompletedProcess(cmd, p.returncode, out or "", err or "")
+    except subprocess.TimeoutExpired:
+        _kill_process_group(p, "tool")
+        try:
+            out, err = p.communicate(timeout=5)
+        except Exception:
+            out, err = "", ""
+        msg = f"TOOL TIMEOUT after {timeout // 60}m — killed group: {' '.join(cmd[:5])} …"
+        log(f"[tool] {msg}")
+        return subprocess.CompletedProcess(cmd, 124, out or "", (err or "") + "\n" + msg)
+
+
+def _reap_orphaned_mcp() -> None:
+    """Kill TRULY orphaned MCP/npx helpers (ppid==1) left by a previously hard-killed conductor,
+    before we start — so legacy orphans can't accumulate or interfere. Conservative: only ppid==1
+    (real orphans, reparented to launchd); a live claude/desktop app's children have a live parent
+    and are never touched. (run_agent's no-MCP + group-kill means new runs create none of these.)"""
+    try:
+        out = subprocess.run(["ps", "-Ao", "pid,ppid,command"], capture_output=True, text=True).stdout
+    except Exception:
+        return
+    killed = 0
+    for line in out.splitlines()[1:]:
+        f = line.split(None, 2)
+        if len(f) < 3:
+            continue
+        pid, ppid, cmd = f
+        if ppid == "1" and any(s in cmd for s in (
+                "actors-mcp-server", "context7-mcp", "mcp-server-supabase", "@21st-dev/magic",
+                "@apify/actors-mcp", "@upstash/context7", "npm exec")):
+            try:
+                os.kill(int(pid), signal.SIGKILL); killed += 1
+            except (OSError, ValueError):
+                pass
+    if killed:
+        log(f"[startup] reaped {killed} orphaned MCP helper process(es) from a prior hard-killed run")
+
+
+def _ensure_host_tools_on_path() -> None:
+    """Prepend common host-tool bin dirs to PATH so the build + tests find the binaries the suite
+    shells out to (ripgrep `rg`, `postgres`/`initdb` for testing.postgresql, other homebrew tools).
+    Missing these presents as prior-doc test failures that cascade into spurious deferrals — an
+    environment gap, not a code gap. Setting os.environ here propagates to EVERY subprocess the
+    conductor spawns (claude phases + local tools), so the fix is applied once, centrally."""
+    candidates = [
+        "/opt/homebrew/bin", "/usr/local/bin",                 # homebrew (rg, etc.)
+        "/opt/homebrew/opt/postgresql@16/bin",                 # keg-only postgres 16
+        "/opt/homebrew/opt/postgresql@15/bin", "/opt/homebrew/opt/postgresql@14/bin",
+    ]
+    path = os.environ.get("PATH", "")
+    parts = path.split(os.pathsep)
+    added = [c for c in candidates if os.path.isdir(c) and c not in parts]
+    if added:
+        os.environ["PATH"] = os.pathsep.join(added + parts)
+        log(f"[startup] host-tool PATH augmented with: {added}")
 
 
 def tree_hash(trees=PROTECTED) -> str:
@@ -182,9 +366,9 @@ def ensure_deps(doc: str) -> None:
     deps = [d for d in dict.fromkeys(deps) if re.match(r"^[A-Za-z0-9]", d)]   # dedupe + sane spec only
     if deps:
         log(f"[{doc}] installing test/build deps: {deps}")
-        r = sh(["uv", "pip", "install", "-q", *deps], capture_output=True, text=True)
+        r = run_tool(["uv", "pip", "install", "-q", *deps], timeout=DEP_INSTALL_TIMEOUT)
         if r.returncode != 0:
-            log(f"[{doc}] WARN dep install non-zero (continuing): {r.stderr[-300:]}")
+            log(f"[{doc}] WARN dep install non-zero/timeout (continuing): {r.stderr[-300:]}")
 
 
 def test_dirs_upto(doc: str) -> list[str]:
@@ -206,19 +390,19 @@ def verify(doc: str, blocking_types: bool = False) -> tuple[int, str]:
     scope = test_dirs_upto(doc)
     if not scope:
         return 1, "no test scope for this doc (evidence not promoted?)"
-    def run(cmd):
-        r = sh(cmd, capture_output=True, text=True)
+    def run(cmd, timeout=TOOL_TIMEOUT_QUICK):
+        r = run_tool(cmd, timeout=timeout)          # bounded: rc 124 on timeout (never a silent hang)
         out.append(f"$ {' '.join(cmd)}\n{r.stdout[-1500:]}{r.stderr[-1500:]}")
         return r.returncode
     if dirs and run([PY, "-m", "ruff", "check", *dirs]) != 0:
         return 1, "\n".join(out)
-    mypy_rc = run([PY, "-m", "mypy", "--strict", *dirs]) if dirs else 0
+    mypy_rc = run([PY, "-m", "mypy", "--strict", *dirs], TOOL_TIMEOUT_TYPES) if dirs else 0
     bandit_rc = run([PY, "-m", "bandit", "-q", "-r", *dirs]) if dirs else 0
     desel = [a for t in DESELECTED for a in ("--deselect", t)]
-    col = sh([PY, "-m", "pytest", "--collect-only", "-q", *scope], capture_output=True, text=True)
+    col = run_tool([PY, "-m", "pytest", "--collect-only", "-q", *scope], timeout=TOOL_TIMEOUT_QUICK)
     if re.search(r"^no tests ran|^0 tests|error", col.stdout.splitlines()[-1] if col.stdout else "error"):
         return 1, "ZERO TESTS COLLECTED or collection error — refusing green\n" + col.stdout[-800:]
-    if run([PY, "-m", "pytest", "-q", "-x", "--maxfail=1", *desel, *scope]) != 0:
+    if run([PY, "-m", "pytest", "-q", "-x", "--maxfail=1", *desel, *scope], PYTEST_TIMEOUT) != 0:
         return 1, "\n".join(out)
     if blocking_types and (mypy_rc or bandit_rc):
         return 1, "doc-end gate: mypy/bandit must be clean\n" + "\n".join(out)
@@ -341,8 +525,8 @@ def seal(doc: str) -> str:
 
 
 def coverage_gate(doc: str, base: pathlib.Path) -> bool:
-    r = sh([sys.executable, str(ORCH / "criteria_coverage_gate.py"), doc, "--base", str(base)],
-           capture_output=True, text=True)
+    r = run_tool([sys.executable, str(ORCH / "criteria_coverage_gate.py"), doc, "--base", str(base)],
+                 timeout=TOOL_TIMEOUT_QUICK)
     log(r.stdout[-600:])
     return r.returncode == 0
 
@@ -412,18 +596,22 @@ def new_spec_blocked() -> str | None:
     return None
 
 
-def adjudicate(doc: str, entry: str) -> bool:
-    """Fresh-context ruling on a claimed blocker. True = proceed; False = deferred (recorded).
-    Cache hit: same entry fingerprint → re-apply prior ruling without spawning an LLM session."""
+def adjudicate(doc: str, entry: str) -> tuple[bool, bool]:
+    """Fresh-context ruling on a claimed blocker. Returns (keep_going, timed_out):
+    keep_going=True → continue the build (proceed, or deferred-under-budget); keep_going=False →
+    halt (too many deferrals). timed_out=True → the adjudicator checker blew its bound; the caller
+    halts the doc cleanly for a supervise restart. Cache hit re-applies a prior ruling with no LLM."""
     sig = _entry_sig(entry)
     cache = _load_decisions(doc)
     if sig in cache:
         prior = cache[sig]
         log(f"[{doc}] cached ruling re-applied ({prior['ruling']}) for: {entry[:80]}")
-        return prior["ruling"] == "PROCEED"
+        return prior["ruling"] == "PROCEED", False
     log(f"[{doc}] adjudicating SPEC_BLOCKED: {entry[:120]}")
-    ok, out = independent_check(doc, "adjudicate.md", "ADJUDICATION: PROCEED",
-                                timeout=ADJUDICATE_TIMEOUT)
+    ok, out, timed_out = checked_agent(doc, "adjudicate.md", "ADJUDICATION: PROCEED",
+                                       timeout=ADJUDICATE_TIMEOUT)
+    if timed_out:
+        return False, True                       # no ruling — let the caller emit ADJUDICATE_TIMEOUT
     cache[sig] = {"ruling": "PROCEED" if ok else "DEFER", "entry_prefix": entry.strip()[:120],
                   "decided_at": time.strftime("%F %T")}
     _save_decisions(doc, cache)
@@ -432,7 +620,7 @@ def adjudicate(doc: str, entry: str) -> bool:
         (ROOT / "PROGRESS.md").open("a").write(
             f"\n## ADJUDICATION RESOLVED — proceed with this reading:\n{clar}\n")
         git_commit(f"{doc}: adjudication — proceed with clarified reading")
-        return True
+        return True, False
     m = re.search(r"ADJUDICATION: DEFER\s+(\S+)", out)
     target = m.group(1) if m else ""
     if target:
@@ -443,7 +631,7 @@ def adjudicate(doc: str, entry: str) -> bool:
         f"\nDEFERRED (genuinely spec-blocked, needs founder spec fix): {entry}\n{out[-800:]}\n")
     git_commit(f"{doc}: deferred genuinely-blocked criterion for morning triage")
     log(f"[{doc}] DEFERRED {target or '(unparsed target)'} — night continues; morning triage item")
-    return len(DESELECTED) <= 5   # >5 deferrals = something systemic; halt
+    return len(DESELECTED) <= 5, False           # >5 deferrals = something systemic; halt
 
 
 def commit_count() -> int:
@@ -479,17 +667,16 @@ def build_loop(doc: str) -> str:
         before = commit_count()
         build_model = OPUS_MODEL if stalls >= OPUS_ESCALATION_STALL_COUNT else SONNET_MODEL
         log(f"[{doc}] build session {s} (persistent; iterates internally) [{build_model.split('-')[1]}]")
-        try:
-            agent("build_pass.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
-                  timeout=BUILD_TIMEOUT, max_turns=BUILD_TURNS, model=build_model)
-        except subprocess.TimeoutExpired:
+        res = run_agent("build_pass.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
+                        timeout=BUILD_TIMEOUT, max_turns=BUILD_TURNS, model=build_model,
+                        phase=f"{doc} P6 build#{s}")
+        if res.timed_out:
             log(f"[{doc}] build session {s} hit the {BUILD_TIMEOUT//60}m cap; checking progress")
         if tree_hash() != baseline:
             return "INTEGRITY_VIOLATION"
         if (msg := new_spec_blocked()):
-            try:
-                proceed = adjudicate(doc, msg)
-            except subprocess.TimeoutExpired:
+            proceed, adj_timed_out = adjudicate(doc, msg)
+            if adj_timed_out:
                 log(f"[{doc}] adjudicator exceeded {ADJUDICATE_TIMEOUT // 60}m and was killed — "
                     f"halting doc cleanly (was an unbounded silent hang before this timeout existed)")
                 return "ADJUDICATE_TIMEOUT"
@@ -528,11 +715,9 @@ def build_loop(doc: str) -> str:
         stalls += 1
         if stalls == 1:
             log(f"[{doc}] no progress this session — fresh-context debugger (opus)")
-            try:
-                agent("unstall.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
-                      timeout=BUILD_TIMEOUT, max_turns=200, model=OPUS_MODEL)
-            except subprocess.TimeoutExpired:
-                pass
+            run_agent("unstall.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
+                      timeout=BUILD_TIMEOUT, max_turns=200, model=OPUS_MODEL,
+                      phase=f"{doc} P6 unstall")   # timeout is self-bounded; result checked via commits
             if tree_hash() != baseline:
                 return "INTEGRITY_VIOLATION"
             continue
@@ -555,23 +740,25 @@ def build_loop(doc: str) -> str:
     return "MAX_BUILD_SESSIONS"
 
 
-def independent_check(doc: str, prompt: str, expect: str,
-                      model: str = OPUS_MODEL, timeout: int = 60 * 20) -> tuple[bool, str]:
-    """Verifier / sweep: fresh session, tamper-checked (services+libs hash must not change).
-    Defaults to OPUS_MODEL — all judgment-critical checks (adjudicator, verifier, sweep,
-    criteria review) warrant the strongest available model.
+def checked_agent(doc: str, prompt: str, expect: str, *, timeout: int,
+                  model: str = OPUS_MODEL, max_turns: int = 120) -> tuple[bool, str, bool]:
+    """Fresh-context CHECKER session (criteria-review / adjudicator / verifier / sweep), tamper-
+    checked: services+libs must hash identically before/after — a checker that edits the build is
+    rejected. Runs through the shared run_agent primitive (bounded, no-MCP, process-group killed),
+    so a frozen checker can never hang the night silently. Defaults to OPUS_MODEL — every judgment-
+    critical check warrants the strongest model.
 
-    BOUNDED: the underlying agent() is capped at `timeout` (default 20m; each caller passes its
-    own phase bound). subprocess.TimeoutExpired is intentionally NOT swallowed here — it propagates
-    to the calling phase, which catches it and returns a clear "<PHASE>_TIMEOUT" (P5-style). A
-    frozen checker subprocess must fail loud for supervise.sh, never hang the night silently."""
+    Returns (expect_seen, out_tail, timed_out). The caller turns timed_out into its own distinct
+    '<PHASE>_TIMEOUT' so supervise.sh sees exactly which phase's checker blew its bound."""
     before = tree_hash(("services/", "libs/")) if (ROOT / "services").exists() else ""
-    out = agent(prompt, {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]}, capture=True, max_turns=120,
-                model=model, timeout=timeout)
+    res = run_agent(prompt, {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
+                    timeout=timeout, max_turns=max_turns, model=model, phase=prompt)
     after = tree_hash(("services/", "libs/")) if (ROOT / "services").exists() else ""
+    if res.timed_out:
+        return False, res.stdout[-3000:], True
     if before != after:
-        return False, "TAMPER: check session modified the build"
-    return (expect in out), out[-3000:]
+        return False, "TAMPER: check session modified the build", False
+    return (expect in res.stdout), res.stdout[-3000:], False
 
 
 def merge_sweep_parts(doc: str) -> None:
@@ -613,16 +800,25 @@ def _live_bundle_hash(doc: str) -> str:
     return h.hexdigest()
 
 
+def _doc_own_scope(doc: str) -> list[str]:
+    """Just THIS doc's own test tree (not the accumulated prior-doc scope). doc01's suite is the
+    root tests/test_*.py; every other doc lives under tests/<doc>/."""
+    if doc == "doc01":
+        return [str(p) for p in sorted((ROOT / "tests").glob("test_*.py"))]
+    p = ROOT / "tests" / doc
+    return [f"tests/{doc}"] if p.exists() else []
+
+
 def _doc_already_complete(doc: str) -> tuple[bool, str]:
     """Is this doc fully done, so its entire pipeline (P4 re-seal .. P7.5 sweep) can be skipped?
 
     True when EITHER the doc already carries its <doc>-done tag (the canonical 'whole run_doc
     finished' marker, stamped at P8), OR it is sealed AND the live acceptance/<doc> bundle still
-    hashes to the recorded seal AND its accumulated test scope still collects clean. The second
-    branch exists because a prior run can seal+build+verify a doc yet die before P8 stamped the
-    tag (exactly what happened here: P5 hung, so doc00/doc01 are sealed+verified but untagged).
-    Re-planning (P5) or rebuilding an already-sealed+verified doc wastes hours and re-enters the
-    planner subprocess that has hung here before — so prove done cheaply and skip."""
+    hashes to the recorded seal AND its OWN test scope actually PASSES (modulo the deferred set).
+    The second branch exists because a prior run can seal+build+verify a doc yet die before P8
+    stamped the tag. We require PASSING, not merely collecting: 'Done means proven on real data'
+    (CLAUDE.md) — a sealed doc whose implementation tests fail (e.g. doc02 with its transport
+    package unbuilt) is NOT done and must be rebuilt, never skipped on a collect-only proxy."""
     if sh(["git", "rev-parse", "-q", "--verify", f"refs/tags/{doc}-done"],
           capture_output=True).returncode == 0:
         return True, f"{doc}-done tag present"
@@ -635,11 +831,15 @@ def _doc_already_complete(doc: str) -> tuple[bool, str]:
         return False, ""
     if not recorded or _live_bundle_hash(doc) != recorded:
         return False, ""   # sealed but the live bundle drifted — NOT safe to skip; rebuild it
-    scope = test_dirs_upto(doc)
-    if not scope or sh([PY, "-m", "pytest", "--collect-only", "-q", *scope],
-                       capture_output=True, text=True).returncode != 0:
-        return False, ""   # sealed+matching but evidence won't even collect — rebuild it
-    return True, f"sealed {recorded[:12]} matches live bundle + evidence collects clean"
+    scope = _doc_own_scope(doc)
+    if not scope:
+        return False, ""
+    desel = [a for t in DESELECTED for a in ("--deselect", t)]
+    r = run_tool([PY, "-m", "pytest", "-q", "-p", "no:cacheprovider", *desel, *scope],
+                 timeout=PYTEST_TIMEOUT)
+    if r.returncode != 0:                          # sealed but its own tests don't pass — rebuild it
+        return False, ""
+    return True, f"sealed {recorded[:12]} matches live bundle + own tests pass (modulo deferrals)"
 
 
 def run_doc(doc: str) -> str:
@@ -661,20 +861,14 @@ def run_doc(doc: str) -> str:
     if not (bundle_dir(doc) / "criteria").exists():
         for cycle in range(1, REVIEW_CYCLES + 1):
             log(f"[{doc}] P1 generate criteria (cycle {cycle})")
-            try:
-                agent("gen_criteria.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
-                      model=SONNET_MODEL, timeout=GEN_CRITERIA_TIMEOUT)
-            except subprocess.TimeoutExpired:
-                log(f"[{doc}] P1 gen-criteria exceeded {GEN_CRITERIA_TIMEOUT // 60}m and was killed "
-                    f"— halting doc cleanly for supervise restart")
+            if run_agent("gen_criteria.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
+                         model=SONNET_MODEL, timeout=GEN_CRITERIA_TIMEOUT, max_turns=200,
+                         phase=f"{doc} P1 criteria").timed_out:
                 return "P1_CRITERIA_TIMEOUT"
             log(f"[{doc}] P2 adversarial criteria review")
-            try:
-                ok, out = independent_check(doc, "review_criteria.md", "REVIEW: APPROVED",
-                                            timeout=REVIEW_TIMEOUT)
-            except subprocess.TimeoutExpired:
-                log(f"[{doc}] P2 criteria review exceeded {REVIEW_TIMEOUT // 60}m and was killed "
-                    f"— halting doc cleanly for supervise restart")
+            ok, out, p2_timed_out = checked_agent(doc, "review_criteria.md", "REVIEW: APPROVED",
+                                                  timeout=REVIEW_TIMEOUT)
+            if p2_timed_out:
                 return "P2_REVIEW_TIMEOUT"
             if ok and coverage_gate(doc, sdir / "acceptance" / doc):
                 break
@@ -692,19 +886,16 @@ def run_doc(doc: str) -> str:
                 f"proceeding; sweep is the backstop; morning item saved to evidence/")
     # P3: evidence (tests+fixtures+sims+goldens). Skip on resume if already promoted + collecting
     # clean (a re-run after a conductor-side halt must not waste ~30min regenerating a sealed doc).
-    promoted_ok = bool(test_dirs_upto(doc)) and sh(
+    promoted_ok = bool(test_dirs_upto(doc)) and run_tool(
         [PY, "-m", "pytest", "--collect-only", "-q", *test_dirs_upto(doc)],
-        capture_output=True, text=True).returncode == 0
+        timeout=TOOL_TIMEOUT_QUICK).returncode == 0
     if promoted_ok and (ORCH / "state" / f"{doc}.seal.json").exists():
         log(f"[{doc}] P3 skipped — evidence already promoted + collecting clean (resume)")
     else:
         log(f"[{doc}] P3 generate evidence layer (tests/fixtures/sims/goldens -> staging)")
-        try:
-            agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
-                  model=SONNET_MODEL, timeout=GEN_EVIDENCE_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            log(f"[{doc}] P3 gen-evidence exceeded {GEN_EVIDENCE_TIMEOUT // 60}m and was killed — "
-                f"halting doc cleanly (this is the phase that hung silently 14min+ with no bound)")
+        if run_agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
+                     model=SONNET_MODEL, timeout=GEN_EVIDENCE_TIMEOUT, max_turns=200,
+                     phase=f"{doc} P3 evidence").timed_out:
             return "P3_EVIDENCE_TIMEOUT"
     # P4: gate + promote + seal (THIS process, deterministic)
     # Use the live (already-sealed) bundle for the coverage gate when it has content —
@@ -723,20 +914,16 @@ def run_doc(doc: str) -> str:
     ensure_deps(doc)
     # sanity: evidence must collect. Use pytest's EXIT CODE (0 = collected ok), never a substring
     # match — test names legitimately contain 'error' (e.g. ..._returns_errors_never_throws).
-    col = sh([PY, "-m", "pytest", "--collect-only", "-q", *test_dirs_upto(doc)],
-             capture_output=True, text=True)
+    col = run_tool([PY, "-m", "pytest", "--collect-only", "-q", *test_dirs_upto(doc)],
+                   timeout=TOOL_TIMEOUT_QUICK)
     if col.returncode != 0:
         return "EVIDENCE_COLLECTION_ERROR:\n" + (col.stdout + col.stderr)[-800:]
-    # P5: plan (BOUNDED — a hung planner subprocess must fail loud, not silently freeze for hours;
-    # mirrors the P6 build_loop timeout+catch. Before this, the call inherited agent()'s 2h default
-    # and an uncaught TimeoutExpired would have crashed the conductor.)
+    # P5: plan (BOUNDED via the shared run_agent primitive — a hung planner subprocess fails loud
+    # and its whole process group is killed, never silently freezing for hours as it once did).
     log(f"[{doc}] P5 plan + planner-review")
-    try:
-        agent("plan.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
-              max_turns=60, model=SONNET_MODEL, timeout=P5_PLAN_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        log(f"[{doc}] P5 planner exceeded {P5_PLAN_TIMEOUT // 60}m and was killed — halting this "
-            f"doc cleanly (was an indefinite silent hang before this timeout existed)")
+    if run_agent("plan.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
+                 max_turns=60, model=SONNET_MODEL, timeout=P5_PLAN_TIMEOUT,
+                 phase=f"{doc} P5 plan").timed_out:
         return "P5_PLAN_TIMEOUT"
     # P6: build
     result = build_loop(doc)
@@ -759,12 +946,9 @@ def run_doc(doc: str) -> str:
         log(f"[{doc}] P6.5 SKIPPED (mutmut not installed) — noted honestly")
     # P7: independent verifier
     log(f"[{doc}] P7 independent verification (fresh context, refute)")
-    try:
-        ok, out = independent_check(doc, "verify_doc_prompt.md", "VERDICT: DONE",
-                                    timeout=VERIFY_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        log(f"[{doc}] P7 verifier exceeded {VERIFY_TIMEOUT // 60}m and was killed — "
-            f"halting doc cleanly for supervise restart")
+    ok, out, p7_timed_out = checked_agent(doc, "verify_doc_prompt.md", "VERDICT: DONE",
+                                          timeout=VERIFY_TIMEOUT)
+    if p7_timed_out:
         return "P7_VERIFY_TIMEOUT"
     (ROOT / "evidence").mkdir(exist_ok=True)
     (ROOT / "evidence" / f"{doc}-verdict.md").write_text(out)
@@ -773,12 +957,9 @@ def run_doc(doc: str) -> str:
         # one refute->rebuild cycle, then halt for morning triage
         log(f"[{doc}] verifier refuted — one rebuild cycle")
         if build_loop(doc) == "GREEN":
-            try:
-                ok, out = independent_check(doc, "verify_doc_prompt.md", "VERDICT: DONE",
-                                            timeout=VERIFY_TIMEOUT)
-            except subprocess.TimeoutExpired:
-                log(f"[{doc}] P7 re-verifier exceeded {VERIFY_TIMEOUT // 60}m and was killed — "
-                    f"halting doc cleanly for supervise restart")
+            ok, out, p7_timed_out = checked_agent(doc, "verify_doc_prompt.md", "VERDICT: DONE",
+                                                  timeout=VERIFY_TIMEOUT)
+            if p7_timed_out:
                 return "P7_VERIFY_TIMEOUT"
             (ROOT / "evidence" / f"{doc}-verdict.md").write_text(out)
             git_commit(f"{doc}: re-verification verdict")
@@ -790,26 +971,22 @@ def run_doc(doc: str) -> str:
     # P7.5: completeness sweep
     for cycle in range(1, SWEEP_CYCLES + 1):
         log(f"[{doc}] P7.5 completeness sweep (cycle {cycle})")
-        try:
-            done, out = independent_check(doc, "completeness_sweep.md", "SWEEP: NO GAPS",
-                                          timeout=SWEEP_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            log(f"[{doc}] P7.5 sweep exceeded {SWEEP_TIMEOUT // 60}m and was killed — "
-                f"halting doc cleanly for supervise restart")
+        done, out, sweep_timed_out = checked_agent(doc, "completeness_sweep.md", "SWEEP: NO GAPS",
+                                                   timeout=SWEEP_TIMEOUT)
+        if sweep_timed_out:
             return "P7_5_SWEEP_TIMEOUT"
         (ROOT / "evidence" / f"{doc}-sweep.md").write_text(out)
         git_commit(f"{doc}: completeness sweep {cycle}")
         if done:
             break
         log(f"[{doc}] sweep found gaps — extending criteria + evidence, rebuilding")
-        try:
-            agent("gen_criteria.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
-                  model=SONNET_MODEL, timeout=GEN_CRITERIA_TIMEOUT)
-            agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
-                  model=SONNET_MODEL, timeout=GEN_EVIDENCE_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            log(f"[{doc}] P7.5 gap-closure generation exceeded its bound and was killed — "
-                f"halting doc cleanly for supervise restart")
+        if run_agent("gen_criteria.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
+                     model=SONNET_MODEL, timeout=GEN_CRITERIA_TIMEOUT, max_turns=200,
+                     phase=f"{doc} P7.5 gap-criteria").timed_out:
+            return "P7_5_GAPCLOSURE_TIMEOUT"
+        if run_agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
+                     model=SONNET_MODEL, timeout=GEN_EVIDENCE_TIMEOUT, max_turns=200,
+                     phase=f"{doc} P7.5 gap-evidence").timed_out:
             return "P7_5_GAPCLOSURE_TIMEOUT"
         # Merge sweep-gap-closure addenda (staging parts/) into the existing sealed bundle
         # instead of expecting a complete fresh bundle at staging/acceptance/.
@@ -833,8 +1010,13 @@ def cli_preflight() -> None:
     """Fail fast BEFORE the night starts: claude CLI present + authenticated, venv, git identity."""
     if shutil.which("claude") is None:
         sys.exit("PRELAUNCH FAIL: `claude` CLI not on PATH.")
-    r = subprocess.run(["claude", "-p", "say hi", "--max-turns", "10"],
-                       cwd=ROOT, capture_output=True, text=True, timeout=120)
+    try:
+        r = subprocess.run(["claude", "-p", "say hi", "--max-turns", "10", *NO_MCP],
+                           cwd=ROOT, capture_output=True, text=True, timeout=120,
+                           stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        sys.exit("PRELAUNCH FAIL: `claude -p` did not respond within 120s (network/API stalled). "
+                 "Retry when connectivity is back.")
     combined = (r.stdout or "") + (r.stderr or "")
     auth_fail_sigs = ["not authenticated", "please log in", "unauthorized", "401", "403",
                       "invalid api key", "expired", "could not authenticate"]
@@ -855,6 +1037,8 @@ def main():
     ap.add_argument("--from", dest="start", default="doc00")
     ap.add_argument("--only", default=None)
     args = ap.parse_args()
+    _ensure_host_tools_on_path()   # rg / postgres / homebrew tools the suite shells out to
+    _reap_orphaned_mcp()           # clear any legacy orphaned MCP helpers from a prior hard-killed run
     cli_preflight()
     docs = [args.only] if args.only else ORDER[ORDER.index(args.start):]
     LOG.write_text("")

@@ -17,7 +17,10 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 DOCS=(doc00 doc01 doc02 doc03 doc04 doc05 doc08 doc09)
 MAX_RESTARTS="${MAX_RESTARTS:-60}"
-STUCK_LIMIT="${STUCK_LIMIT:-4}"     # same doc, no progress, N times in a row => human needed
+STUCK_LIMIT="${STUCK_LIMIT:-3}"     # same doc, no NEW commits, N restarts in a row => halt loudly.
+#   The conductor now bounds every subprocess (claude phases + local tools) and kills the whole
+#   process group on timeout, so a "stuck" doc is a genuine content/spec blocker — NOT a technical
+#   hang — worth a couple of clean retries (resume skips sealed work) and then a human.
 # Optional operator start-floor (honors `--from`): `supervise.sh doc02` or START_DOC=doc02.
 # The supervisor never selects a doc before this floor. Default doc00 = original behavior.
 START_FLOOR="${1:-${START_DOC:-doc00}}"
@@ -59,8 +62,17 @@ while : ; do
   fi
   last="$start"; commits_last="$commits_now"
   if [ "$stuck" -ge "$STUCK_LIMIT" ]; then
-    echo "[supervisor] $start failed to advance ${STUCK_LIMIT}x in a row — a real blocker needs a human."
-    echo "[supervisor] Read: orchestrator/run.log · PROGRESS.md · evidence/$start-*.md · git log. Exiting."
+    echo "######################################################################"
+    echo "[supervisor] HALT — $start failed to advance ${STUCK_LIMIT}x in a row with no new commits."
+    echo "[supervisor] Every subprocess is bounded + group-killed, so this is NOT a technical hang:"
+    echo "[supervisor] it is a GENUINE blocker (spec ambiguity / missing credential / real coverage"
+    echo "[supervisor] gap) that needs a human decision. Do not just relaunch — read the evidence:"
+    echo "[supervisor]   • last conductor result + phase:"
+    grep -E '^\[..:..:..\] (==> |\['"$start"'\].*(TIMEOUT|STALL|DEFER|HALT))' orchestrator/run.log | tail -8 | sed 's/^/[supervisor]       /'
+    echo "[supervisor]   • tail of orchestrator/run.log:"
+    tail -25 orchestrator/run.log | sed 's/^/[supervisor]       /'
+    echo "[supervisor]   • also: PROGRESS.md · evidence/$start-*.md · git log --oneline -15"
+    echo "######################################################################"
     break
   fi
 
