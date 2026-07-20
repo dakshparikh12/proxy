@@ -10,3 +10,7 @@ FAILED tests/test_m2_clone.py::test_ac_m2_007_git_blame_resolves_on_blobless_clo
 !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
 1 failed, 193 passed, 2 deselected, 2 warnings in 21.26s
 
+
+DEFERRED (genuinely spec-blocked, needs founder spec fix): **Disposition: NOT SPEC_BLOCKED — proceeded per the adjudicated reading. Full audit of all 155
+API Error: Unable to connect to API (ConnectionRefused)
+
