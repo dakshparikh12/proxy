@@ -158,9 +158,29 @@ def _ensure_local_postgres() -> None:
         return  # best-effort; DB-optional tests skip if this failed
 
 
+def _wire_workspace_src() -> None:
+    """Put every workspace member's ``src`` dir on sys.path so top-level product imports
+    (``import transport`` / ``import contracts`` / …) resolve during the suite regardless of
+    whether the editable install surfaced them. Some venvs — notably uv's plain-path editable
+    ``.pth`` files under the ``_virtualenv`` import hook — do NOT reliably add these, which makes
+    the arbiter flaky/red purely from an import-resolution gap (not a code fault). These are leaf
+    package roots, so there is no shadowing; environment wiring only, no product code."""
+    import sys
+    root = os.path.dirname(os.path.abspath(__file__))
+    for base in ("services", "libs"):
+        base_dir = os.path.join(root, base)
+        if not os.path.isdir(base_dir):
+            continue
+        for member in sorted(os.listdir(base_dir)):
+            src = os.path.join(base_dir, member, "src")
+            if os.path.isdir(src) and src not in sys.path:
+                sys.path.append(src)
+
+
 _wire_control_plane()
 _wire_libs_lint()
 _wire_interpreter_on_path()
+_wire_workspace_src()
 try:
     _ensure_local_postgres()
 except Exception:
