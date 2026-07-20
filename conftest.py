@@ -184,18 +184,6 @@ import pytest  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# Two sealed tests define async consumer coroutines inside an async run()
-# function but never call or schedule them (missing asyncio.create_task).
-# These are test design defects: the coroutine bodies reference
-# carrier.subscribe() and assert non-empty receipt, but the coroutine is
-# never invoked so the body never executes and the lists stay empty.
-# Marking xfail here (not in the sealed test files) so verify.sh exits 0
-# while preserving an honest record of the outstanding gap.
-_CONSUMER_NEVER_STARTED = {
-    "test_one_websocket_fans_to_both_consumers",
-    "test_carrier_fan_out_to_multiple_subscribers",
-}
-
 # test_ac_m2_001 asserts str(path).startswith("/tenants/tenant-A/") — the
 # canonical per-tenant encrypted-volume root.  macOS SIP makes / read-only, so
 # /tenants cannot be created on a dev Mac; the test is correct for Linux CI.
@@ -206,16 +194,6 @@ _PROD_FILESYSTEM_REQUIRED = {
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     for item in items:
-        if item.name in _CONSUMER_NEVER_STARTED:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason=(
-                        "consumer coroutine defined inside run() but never started "
-                        "(missing asyncio.create_task); test design defect, not product bug"
-                    ),
-                    strict=False,
-                )
-            )
         if item.name in _PROD_FILESYSTEM_REQUIRED:
             item.add_marker(
                 pytest.mark.xfail(

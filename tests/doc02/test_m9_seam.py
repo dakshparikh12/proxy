@@ -127,22 +127,35 @@ def test_carrier_fan_out_to_multiple_subscribers():
     received_b = []
 
     async def run():
+        # Register both subscriber queues synchronously BEFORE emit, then SCHEDULE the
+        # consumers (the missing asyncio.create_task) so the fan-out is actually driven.
+        sub_a = carrier.subscribe()
+        sub_b = carrier.subscribe()
+
         async def consume_a():
-            async for sig in carrier.subscribe():
+            async for sig in sub_a:
                 received_a.append(sig)
                 break
 
         async def consume_b():
-            async for sig in carrier.subscribe():
+            async for sig in sub_b:
                 received_b.append(sig)
                 break
+
+        task_a = asyncio.create_task(consume_a())
+        task_b = asyncio.create_task(consume_b())
 
         sig = Boundary(t=1.0)
         await carrier.emit(sig)
         carrier.close()
+        await asyncio.gather(task_a, task_b)
 
     _run(run())
-    assert received_a or received_b  # at least one subscriber received
+    # Genuine fan-out (AC-SEAM-07): the ONE emitted signal reached ALL (both) in-process
+    # subscribers — the same object fanned to each. (Strengthened from the prior `or`,
+    # which a single subscriber could satisfy without any fan-out occurring.)
+    assert received_a and received_b, "signal did not fan out to both subscribers"
+    assert received_a[0] is received_b[0] == Boundary(t=1.0)
 
 
 # ── SEAM-08 ───────────────────────────────────────────────────────────────────

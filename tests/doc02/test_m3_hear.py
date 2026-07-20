@@ -117,19 +117,28 @@ def test_one_websocket_fans_to_both_consumers():
     stage = HearingStage(carrier=carrier)
 
     async def run():
+        # Register both subscriber queues synchronously BEFORE any emit so neither
+        # consumer can miss a signal, then actually SCHEDULE the drains — the missing
+        # asyncio.create_task() that previously left this fan-out never exercised.
+        sub_a = carrier.subscribe()
+        sub_b = carrier.subscribe()
+
         async def drain_a():
-            async for sig in carrier.subscribe():
+            async for sig in sub_a:
                 if isinstance(sig, Transcript):
                     consumer_a.append(sig.words)
                 if len(consumer_a) >= 3:
                     break
 
         async def drain_b():
-            async for sig in carrier.subscribe():
+            async for sig in sub_b:
                 if isinstance(sig, Transcript):
                     consumer_b.append(sig.words)
                 if len(consumer_b) >= 3:
                     break
+
+        task_a = asyncio.create_task(drain_a())
+        task_b = asyncio.create_task(drain_b())
 
         for i, (w, s) in enumerate([("hello", "Alice"), ("world", "Bob"), ("!", "Alice")]):
             msg = {"words": w, "speaker": s, "start": float(i), "end": float(i)+0.5,
@@ -137,6 +146,7 @@ def test_one_websocket_fans_to_both_consumers():
             await stage.ingest_passthrough(msg)
 
         carrier.close()
+        await asyncio.gather(task_a, task_b)
 
     _run(run())
     # Both consumers see the same ordered sequence
