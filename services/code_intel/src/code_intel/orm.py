@@ -23,10 +23,31 @@ def _py_files(clone_path: Path) -> list[Path]:
 
 
 def is_tier1(clone_path: Path) -> bool:
+    """True iff the clone is a Django-ORM stack, detected **structurally** — an actual
+    ``import django`` / ``from django…`` statement in the AST, never a substring scan.
+
+    Law 2 (never a silent wrong-exact): the previous ``"django.db" in text`` scan matched
+    a stray "django" in a comment, docstring, requirements note, or migration history and
+    then labelled ``who_writes`` results ``resolved`` on a repo that is not a Django stack.
+    Comments/strings are absent from the AST, so an import-node check cannot be fooled by
+    prose. SQLAlchemy and Rails ActiveRecord are tier-1 in the spec's support matrix, but
+    their exhaustive write-path detection is **not** implemented in this module — so we do
+    NOT report them ``resolved`` here (a Django-shaped, incomplete write set tagged
+    ``resolved`` would itself be a silent wrong-exact). They fall through to ``lower-bound``,
+    honestly labelled, until real per-ORM write detection lands (§4 tiering / §12.6).
+    """
     for p in _py_files(clone_path):
-        text = p.read_text(encoding="utf-8", errors="replace")
-        if "django.db" in text or "from django" in text:
-            return True
+        try:
+            tree = ast.parse(p.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                if node.module and node.module.split(".")[0] == "django":
+                    return True
+            elif isinstance(node, ast.Import):
+                if any(alias.name.split(".")[0] == "django" for alias in node.names):
+                    return True
     return False
 
 

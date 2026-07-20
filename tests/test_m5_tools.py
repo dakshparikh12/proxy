@@ -144,6 +144,49 @@ def test_ac_m5_006_who_writes_lower_bound_on_non_tier1_orm():
     )
 
 
+def test_ac_m5_006b_who_writes_not_resolved_when_django_only_in_a_comment():
+    """AC-M5-006 (adversarial): a repo whose ONLY 'django' mention is a comment/string is
+    NOT a Django stack and must NEVER be tagged 'resolved' — the silent-wrong-exact Law-2
+    violation. Regression for the substring-scan `is_tier1` that matched prose."""
+    from services.code_intel.mcp_server import CodeIntelMCPServer
+    from tests.fixtures.repos import RepoFixture, build_git_repo
+
+    files = {
+        "app/__init__.py": "",
+        "app/db.py": (
+            "# NOTE: this write-path was ported from django's ORM years ago.\n"
+            '"""We no longer use from django.db import models here."""\n'
+            "import mystery_orm\n"
+            "\n"
+            "\n"
+            "def write_orders(total):\n"
+            "    return mystery_orm.table('orders').insert(total=total)\n"
+        ),
+    }
+    repo, sha = build_git_repo("django-in-comment-only", files)
+    tracked = sorted(files.keys())
+    fixture = RepoFixture(
+        url=str(repo),
+        clone_path=repo,
+        expected_sha=sha,
+        expected_file_list=tracked,
+        all_files=tracked,
+        extra={"orm": "mystery_orm", "tier": "non-tier-1"},
+    )
+    server = CodeIntelMCPServer.from_fixture(fixture)
+
+    result = server.who_writes("orders")
+
+    # The write is found (non-tier-1 path), but it can never be 'resolved'.
+    assert result.writers, "the mystery_orm write against 'orders' should still be surfaced"
+    resolved = [w for w in result.writers if w.confidence == "resolved"]
+    assert resolved == [], (
+        f"'django' appearing only in a comment must not yield a 'resolved' who_writes; got {resolved}"
+    )
+    for w in result.writers:
+        assert w.confidence == "lower-bound"
+
+
 def test_ac_m5_007_shares_table_returns_co_accessing_modules():
     """AC-M5-007: shares_table returns independent modules co-accessing table with correct confidence tier."""
     import json

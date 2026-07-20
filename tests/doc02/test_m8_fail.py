@@ -166,13 +166,9 @@ def test_bot_status_signal_exactly_enum():
         sig = BotStatus(status=status, t=time.monotonic())
         assert sig.status in valid_statuses
 
-    # Invalid status must not be accepted silently
-    try:
-        bad = BotStatus(status="unknown_status", t=0.0)
-        # If construction succeeds, the value must still be constrained
-        assert bad.status in valid_statuses or True  # runtime check sufficient
-    except Exception:
-        pass  # raising on invalid status is also acceptable
+    # Invalid status must NOT be accepted silently: constructing one must raise.
+    with pytest.raises(ValueError):
+        BotStatus(status="unknown_status", t=0.0)
 
 
 # ── FAIL-08 ───────────────────────────────────────────────────────────────────

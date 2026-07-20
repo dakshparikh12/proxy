@@ -158,6 +158,42 @@ def test_consent_gate_blocks_if_notice_fails():
     assert session.can_observe() is False
 
 
+def test_consent_gate_actually_drops_pre_consent_transcript():
+    """AC-JOIN-04 (enforcement, Law 3): the hard gate must DROP records, not merely
+    expose a predicate. Wire ``JoinSession.can_observe`` into the hearing path and prove a
+    pre-consent transcript is neither emitted onto the carrier nor routed as an ask; after
+    consent posts, the identical record flows and routes."""
+    from transport.carrier import SignalCarrier
+    from transport.hearing import HearingStage
+    from transport.join import JoinSession
+
+    session = JoinSession(_OKTransport())
+    carrier = SignalCarrier()
+    asks: list[tuple[str, str]] = []
+    hearing = HearingStage(
+        carrier=carrier,
+        ask_sink=lambda content, sender: asks.append((content, sender)),
+        can_observe=session.can_observe,
+    )
+
+    # Before the consent notice posts, can_observe() is False → the record is dropped.
+    assert session.can_observe() is False
+    _run(hearing.ingest_passthrough(
+        {"words": "what's the p95?", "speaker": "Alice", "start": 0.0, "is_final": True}
+    ))
+    assert hearing.emitted == [], "a pre-consent transcript must not be observed/emitted"
+    assert asks == [], "a pre-consent transcript must not be routed as an ask"
+
+    # After join posts the consent notice, the SAME line flows and routes.
+    _run(session.join("https://meet.google.com/abc"))
+    assert session.can_observe() is True
+    _run(hearing.ingest_passthrough(
+        {"words": "what's the p95?", "speaker": "Alice", "start": 1.0, "is_final": True}
+    ))
+    assert len(hearing.emitted) == 1, "a post-consent transcript must be observed"
+    assert asks == [("what's the p95?", "Alice")], "a post-consent human line must route as an ask"
+
+
 # ── JOIN-05 ───────────────────────────────────────────────────────────────────
 
 def test_consent_notice_content():

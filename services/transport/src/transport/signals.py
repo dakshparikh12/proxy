@@ -53,6 +53,12 @@ class RosterEvent:
     name: str
     participant_id: str
 
+    def __post_init__(self) -> None:
+        # A frozen dataclass does NOT enforce ``Literal`` at runtime; enforce it here so
+        # an out-of-surface kind can never enter the stream silently (§3.1 / Law 2).
+        if self.kind not in ("present", "join", "leave"):
+            raise ValueError(f"invalid roster kind: {self.kind!r}")
+
 
 @dataclass(frozen=True)
 class MeetingMetadata:
@@ -90,6 +96,13 @@ class BotStatus:
 
     status: Literal["connected", "dropped", "rejoined"]
     t: float
+
+    def __post_init__(self) -> None:
+        # bot-status values are exactly {connected, dropped, rejoined} (§3.10, AC-FAIL-07).
+        # A frozen dataclass ignores the ``Literal`` at runtime, so validate explicitly —
+        # an unknown status must NOT be accepted silently.
+        if self.status not in ("connected", "dropped", "rejoined"):
+            raise ValueError(f"invalid bot-status: {self.status!r}")
 
 
 @dataclass(frozen=True)

@@ -13,7 +13,7 @@ repos:
 
       - id: check-secret-bindings
         name: check-secret-bindings
-        entry: python -m services.ops.check_secret_bindings
+        entry: python -m ops.check_secret_bindings
         language: system
         pass_filenames: false
 
@@ -28,7 +28,7 @@ repos:
       # flags and the SDK_LOCAL_TOOLS block-list.
       - id: check-sdk-isolation-triad
         name: check-sdk-isolation-triad
-        entry: python -m services.ops.check_sdk_isolation_triad --require SDK_LOCAL_TOOLS --every query-call
+        entry: python -m ops.check_sdk_isolation_triad --require SDK_LOCAL_TOOLS --every query-call
         language: system
         pass_filenames: false
 
@@ -36,13 +36,13 @@ repos:
       # revived per-meeting GCE-MIG runtime term is intentionally NOT banned.)
       - id: banned-strings
         name: banned-strings
-        entry: python -m services.ops.check_banned_strings
+        entry: python -m ops.check_banned_strings
         language: system
         pass_filenames: false
 
       # field-contract: shared field-contract JSON must match emitters.
       - id: field-contract
         name: field-contract
-        entry: python -m services.ops.check_field_contract
+        entry: python -m ops.check_field_contract
         language: system
         pass_filenames: false

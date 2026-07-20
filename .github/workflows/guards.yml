@@ -38,16 +38,21 @@ jobs:
     name: named guards (required / merge-blocking)
     runs-on: ubuntu-latest
     needs: [fast-checks]
+    # The guard modules live in the uv-workspace members; expose their src dirs so
+    # `python -m ops.<guard>` / `python -m contracts...` resolve without a full
+    # `uv sync` (mirrors conftest's workspace-src wiring for the test harness).
+    env:
+      PYTHONPATH: libs/ops/src:libs/contracts/src:libs/db/src:libs/llm/src:libs/http/src:libs/agentkit/src
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install ruff mypy bandit pytest pydantic pydantic-settings
+      - run: pip install ruff mypy bandit pytest pydantic pydantic-settings alembic structlog sentry-sdk
 
       # check-secret-bindings: Terraform secret map vs deploy config drift gate.
       - name: check-secret-bindings
-        run: python -m services.ops.check_secret_bindings
+        run: python -m ops.check_secret_bindings
 
       # check-migration-order: Alembic single-head vs origin/main. Fails loud on
       # multiple heads relative to main — fail-loud-never-skip, no escape hatch.
@@ -63,19 +68,17 @@ jobs:
       # call site sets the SDK-isolation triad flags AND the SDK_LOCAL_TOOLS
       # block-list — every site, not a manual re-audit.
       - name: check-sdk-isolation-triad
-        run: python -m services.ops.check_sdk_isolation_triad --require SDK_LOCAL_TOOLS --every query-call
+        run: python -m ops.check_sdk_isolation_triad --require SDK_LOCAL_TOOLS --every query-call
 
-      # banned-strings: enumerated dead tokens must never be reintroduced. NOTE:
-      # the revived per-meeting GCE-MIG runtime term (A-007, AC-HOST-005) is
-      # deliberately NOT in this banned set — banning it would collide.
+      # banned-strings: enumerated dead tokens must never be reintroduced. The scan is
+      # AST-based (ops.check_banned_strings) so it flags real usage, not the docstrings
+      # that legitimately say "we do NOT use X". Banned set (kept visible for review):
+      # session_transcripts, ManagedResource, warm pool, TILE_ADDRESS, meeting_cost_entries,
+      # workroom_tasks, close_jobs. NOTE: the revived per-meeting GCE-MIG runtime term
+      # (A-007, AC-HOST-005) is deliberately NOT in this banned set — banning it would collide.
       - name: banned-strings
-        run: |
-          for tok in "session_transcripts" "ManagedResource" "warm pool" "TILE_ADDRESS"; do
-            if git grep -qsF "$tok" -- services libs; then
-              echo "banned dead token reintroduced: $tok"; exit 1
-            fi
-          done
+        run: python -m ops.check_banned_strings
 
-      # field-contract: verify shared field-contract JSON matches emitters.
+      # field-contract: the contracts registry closure (assert_registry_closed).
       - name: field-contract
-        run: python -m services.ops.check_field_contract
+        run: python -m ops.check_field_contract

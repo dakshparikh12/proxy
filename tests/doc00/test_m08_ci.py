@@ -19,6 +19,7 @@ field-contract) and its Cloud Build pipeline, which do not exist yet -> red now.
 """
 
 import re
+import tempfile
 
 import pytest
 
@@ -270,3 +271,41 @@ def test_ci_007_banned_strings_fails_on_dead_token_and_excludes_gce_per_meeting(
         "'GCE-per-meeting'/'GCE per meeting' must be ABSENT from the banned set "
         "(A-007 revived GCE-MIG-one-process-per-meeting for meeting_runtime)"
     )
+
+
+# ── AC-CI-008 ─────────────────────────────────────────────────────────────
+@pytest.mark.contract
+def test_ci_008_named_guard_modules_exist_and_actually_gate():
+    """AC-CI-008: the named guard MODULES exist, import, run clean on this tree, AND
+    fail on an injected violation — an EXECUTED check, not a YAML text-scan. This is the
+    gate a phantom `python -m services.ops.check_*` invocation (wrong module path / no
+    implementation) cannot pass.
+    """
+    from pathlib import Path
+
+    # (1) Every guard module imports and runs clean (0) on the committed tree.
+    from ops import (  # noqa: F401 — import IS the phantom-module check
+        check_banned_strings,
+        check_field_contract,
+        check_sdk_isolation_triad,
+        check_secret_bindings,
+    )
+
+    assert check_field_contract.main([]) == 0, "contracts registry must be closed on this tree"
+    assert check_banned_strings.main([]) == 0, "no banned token may appear in product code"
+    assert check_sdk_isolation_triad.main([]) == 0, "every query() site must carry the triad"
+    assert check_secret_bindings.main([]) == 0
+
+    # (2) The scanners are real gates: an injected violation must be caught, not passed.
+    tmp = Path(tempfile.mkdtemp())
+    svc = tmp / "services" / "x"
+    svc.mkdir(parents=True)
+    (svc / "bad.py").write_text('SQL = "SELECT * FROM session_transcripts WHERE 1=1"\n')
+    assert check_banned_strings.scan(tmp), "banned-strings must flag a real dead-token usage"
+
+    svc2 = tmp / "services" / "y"
+    svc2.mkdir(parents=True)
+    # A bare query() call site with NO triad markers in the module -> must be flagged.
+    (svc2 / "call.py").write_text("def go(prompt):\n    return query(prompt)\n")
+    offenders = check_sdk_isolation_triad.query_sites_missing_triad(tmp)
+    assert offenders, "check-sdk-isolation-triad must flag a query() site missing the triad"

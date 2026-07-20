@@ -54,23 +54,24 @@ def test_inbound_chat_streams_via_recall():
 
     criterion_id: AC-CHAT-01
     """
-    from transport.chat import ChatChannel
     from transport.signals import ChatMessage
     channel, t, asks, _, carrier = _make_channel()
 
-    emitted = []
-    async def run():
-        async for sig in carrier.subscribe():
-            if isinstance(sig, ChatMessage):
-                emitted.append(sig)
-            break
+    async def scenario():
+        # subscribe() registers the consumer queue synchronously, so the emit that
+        # inbound() performs is captured — then we drain exactly one signal.
+        stream = carrier.subscribe()
+        outcome = await channel.inbound(ChatMessage(message="hello", sender="Alice"))
+        received = await anext(stream)
+        return outcome, received
 
-    async def drive():
-        await channel.inbound(ChatMessage(message="hello", sender="Alice"))
+    outcome, received = _run(scenario())
 
-    _run(drive())
-    # Signal emitted to carrier
-    assert True  # structural: inbound method exists and routes
+    # The inbound line must actually surface as a chat() signal on the carrier (AC-CHAT-01),
+    # not merely "the method exists".
+    assert outcome.signalled is True
+    assert isinstance(received, ChatMessage)
+    assert received.message == "hello" and received.sender == "Alice"
 
 
 # ── CHAT-02 ──────────────────────────────────────────────────────────────────
