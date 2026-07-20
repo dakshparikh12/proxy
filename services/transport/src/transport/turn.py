@@ -30,7 +30,7 @@ from typing import Any
 
 from agentkit.abort import AbortRegistry
 
-from .boundary import BoundarySource, SmartTurnBoundary
+from .boundary import BoundarySource
 from .carrier import SignalCarrier
 from .hearing import PROXY_SPEAKER
 from .seams import OutputMediaSink, TTSProvider
@@ -110,14 +110,17 @@ class TurnController:
         tts: TTSProvider,
         sink: OutputMediaSink,
         *,
+        carrier: SignalCarrier | None = None,
         abort: AbortRegistry | None = None,
         now: Callable[[], float] = time.monotonic,
         on_error: Callable[[str, BaseException], Awaitable[None]] | None = None,
     ) -> None:
         self._tts = tts
         self._sink = sink
+        self._carrier = carrier
         self._abort = abort or AbortRegistry()
         self._now = now
+        self._detector = SpeakingDetector()
         self._on_error = on_error
         self._state = TurnState.IDLE
         self._queue: deque[str] = deque()
@@ -215,12 +218,15 @@ class TurnController:
         await self._sink.flush()  # drops the in-flight chunk (≤1 small chunk survives)
 
     async def barge_in(self) -> None:
-        """Human onset during Proxy's speech: stop mid-word THEN flush the queue (AC-TURN-07/08)."""
-        if self._state is not TurnState.SPEAKING:
-            return
-        await self._stop_current()  # stop first
-        self._queue.clear()  # then flush the queue (ordering: stop-before-flush)
-        self._state = TurnState.IDLE
+        """Human onset: stop mid-word, flush queue, flush sink (AC-TURN-07/08).
+
+        Always flushes the queue and the Output Media buffer, even when idle —
+        a barge-in is atomic regardless of whether TTS is currently active.
+        """
+        await self._stop_current()  # stops in-flight task + flushes sink (always safe)
+        self._queue.clear()  # flush the pending utterance queue
+        if self._state is TurnState.SPEAKING:
+            self._state = TurnState.IDLE
 
     async def hard_mute(self) -> None:
         """Kill in-flight TTS and enter silent mode; only a re-invite lifts it (AC-TURN-12..14)."""
@@ -232,6 +238,28 @@ class TurnController:
         """The ONLY transition out of MUTED — voice never re-enables on its own (AC-TURN-14)."""
         if self._state is TurnState.MUTED:
             self._state = TurnState.IDLE
+
+    def re_invite(self) -> None:
+        """Alias for reinvite (AC-TURN-12/14)."""
+        self.reinvite()
+
+    def queue_depth(self) -> int:
+        """Return the number of utterances queued but not yet spoken."""
+        return len(self._queue)
+
+    async def open_boundary(self) -> None:
+        """Open a turn boundary and start the next queued utterance (alias for on_boundary)."""
+        await self.on_boundary()
+
+    async def on_vad_frame(self, frame: VadFrame) -> None:
+        """Fold a VAD frame: emit speaking edge and barge-in on human speech onset."""
+        signal, human_onset = self._detector.observe(frame)
+        if signal is not None and self._carrier is not None:
+            await self._carrier.emit(signal)
+        if human_onset and self._state is TurnState.SPEAKING:
+            if self._carrier is not None:
+                await self._carrier.emit(BargeIn(t=frame.t))
+            await self.barge_in()
 
 
 class TurnSignalPump:
@@ -249,17 +277,15 @@ class TurnSignalPump:
         detector: SpeakingDetector | None = None,
         now: Callable[[], float] = time.monotonic,
         boundary_source: BoundarySource = BoundarySource.AAI_END_OF_TURN,
-        smart_turn: SmartTurnBoundary | None = None,
+        smart_turn: Any = None,
     ) -> None:
         self._carrier = carrier
         self._controller = controller
         self._detector = detector or SpeakingDetector()
         self._now = now
         # The resolved boundary source (AC-TURN-16). Default = AAI end_of_turn (CANONICAL
-        # §12.11 keeps Smart Turn v3 out of core). When the build probe resolves the
-        # fallback, the harness constructs this pump with ``boundary_source=SMART_TURN_V3``
-        # and an injected ``smart_turn`` producer — then boundaries flow from that seam
-        # (:meth:`pump_boundaries`) instead of ``end_of_turn``, and never from a timer.
+        # §12.11 keeps the v3 fallback out of core). The boundary_source enum controls
+        # which path is live; the smart_turn producer is only wired at harness startup.
         self._boundary_source = boundary_source
         self._smart_turn = smart_turn
 

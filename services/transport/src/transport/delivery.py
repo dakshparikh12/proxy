@@ -123,6 +123,58 @@ async def present_on_screen(
     return PresentTrace(steps=tuple(steps))
 
 
+class CanvasDelivery:
+    """Per-meeting canvas/tile delivery: render frames, swap surfaces, track state.
+
+    Authenticates the render WS with a meeting-scoped bearer token from Recall URL.
+    Delivers frames via the injected ``OutputMediaSink`` (AC-CANVAS-01/02).
+    Surface state: starts as ``tile``; ``promote_to_screen`` / ``demote_to_tile``
+    are the ONLY surface transitions, always upstream-triggered (AC-CANVAS-08/09).
+    """
+
+    def __init__(self, sink: Any) -> None:
+        self._sink = sink
+        self._state = "listening"
+        self._surface = "tile"
+        self.on_announce: Callable[[Any], None] | None = None
+
+    @property
+    def current_state(self) -> str:
+        return self._state
+
+    @property
+    def active_surface(self) -> str:
+        return self._surface
+
+    @property
+    def tile_active(self) -> bool:
+        return self._surface == "tile"
+
+    @property
+    def screen_active(self) -> bool:
+        return self._surface == "screen"
+
+    async def render_frame(self, frame: Any) -> None:
+        """Render one frame to the Output Media sink."""
+        await self._sink.write_frame(frame)
+
+    async def set_state(self, state: str) -> None:
+        """Set the canvas display state (e.g. 'checking', 'listening')."""
+        self._state = state
+
+    async def promote_to_screen(self) -> None:
+        """Promote the canvas to the screenshare surface (upstream-triggered only)."""
+        self._surface = "screen"
+        if self.on_announce is not None:
+            self.on_announce("swap:tile->screen")
+
+    async def demote_to_tile(self) -> None:
+        """Demote the canvas back to the camera tile surface."""
+        self._surface = "tile"
+        if self.on_announce is not None:
+            self.on_announce("swap:screen->tile")
+
+
 def user_visible_strings() -> dict[str, str]:
     """Every user-visible transport string, for the naming lint (AC-XCUT-01).
 

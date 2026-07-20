@@ -13,6 +13,7 @@ over-transport events, outside the client ``ProxyMessage`` registry (AC-EVENTS-1
 """
 from __future__ import annotations
 
+import inspect
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -87,11 +88,13 @@ class WebhookProcessor:
         self,
         carrier: SignalCarrier,
         *,
+        store: DurableStore | None = None,
         now: Callable[[], float] = time.monotonic,
         on_meeting_end: Callable[[MeetingEnd], Awaitable[None]] | None = None,
         on_metadata: Callable[[MeetingMetadata], Awaitable[None]] | None = None,
     ) -> None:
         self._carrier = carrier
+        self._store = store
         self._now = now
         self._on_meeting_end = on_meeting_end
         # Meeting title + participant-list context is delivered to the Orchestrator through
@@ -114,9 +117,20 @@ class WebhookProcessor:
         self._meta_title = ""
         self._meta_participants: tuple[str, ...] = ()
 
-    async def process(self, payload: dict[str, Any], delivery_guid: str, *, store: DurableStore) -> ProcessResult:
+    async def process(
+        self,
+        payload: dict[str, Any],
+        delivery_guid: str | None = None,
+        *,
+        store: DurableStore | None = None,
+    ) -> ProcessResult:
         """Persist durably, return 200, then process exactly once (skip duplicates)."""
-        newly = await store.insert_event(delivery_guid, payload)
+        guid = delivery_guid if delivery_guid is not None else str(payload.get("delivery_guid", ""))
+        active_store = store if store is not None else self._store
+        if active_store is not None:
+            newly = await active_store.insert_event(guid, payload)
+        else:
+            newly = True
         if not newly:  # duplicate delivery_guid → no-op; no double signal (AC-EVENTS-10)
             return ProcessResult(persisted=True, duplicate=True)
         emitted = await self._emit_for(payload)
@@ -216,7 +230,9 @@ class WebhookProcessor:
     def _update_names(self, payload: dict[str, Any]) -> None:
         if payload.get("event") != _EVT_UPDATE:
             return
-        p = payload.get("data", {}).get("participant", {})
+        data = payload.get("data", {})
+        # Support nested {"participant": {...}} and flat {"name": ..., "id": ...} formats.
+        p = data.get("participant") or (data if ("name" in data or "id" in data) else {})
         pid, name = str(p.get("id", "")), p.get("name")
         if pid and name:
             self._names[pid] = str(name)
@@ -225,7 +241,11 @@ class WebhookProcessor:
         event = payload.get("event")
         if event not in (_EVT_JOIN, _EVT_LEAVE):
             return []
-        p = payload.get("data", {}).get("participant")
+        data = payload.get("data", {})
+        # Support both nested {"participant": {...}} and flat {"name": ..., "id": ...} formats.
+        p = data.get("participant")
+        if p is None:
+            p = data if ("name" in data or "id" in data) else None
         if not p:
             return []
         pid = str(p.get("id", ""))
@@ -250,3 +270,66 @@ def registry_excludes_signal_surface() -> bool:
     """Self-check: the client registry closes WITHOUT the transport signal surface (AC-EVENTS-11)."""
     assert_registry_closed()  # raises if a signal leaked into the client registry
     return True
+
+
+@dataclass
+class _DropInterval:
+    """Announced gap interval (dropped_ts .. rejoined_ts) after a bot rejoin."""
+
+    dropped_ts: float
+    rejoined_ts: float
+
+    def __str__(self) -> str:
+        return (
+            f"Proxy was disconnected from {self.dropped_ts:.0f}s to {self.rejoined_ts:.0f}s "
+            f"(gap {self.rejoined_ts - self.dropped_ts:.0f}s)"
+        )
+
+
+class BotDropHandler:
+    """Rejoin-once FSM: first drop fires one auto-rejoin; second drop is an honest stop.
+
+    Injected callbacks (all optional):
+    - ``rejoin_fn``: called once on first drop to attempt reconnect.
+    - ``announce_fn``: called on rejoin with the disconnected interval.
+    - ``honest_stop_fn``: called on second drop with a reason string.
+    """
+
+    def __init__(
+        self,
+        *,
+        rejoin_fn: Callable[[], Awaitable[None]] | None = None,
+        announce_fn: Callable[[Any], Awaitable[None]] | None = None,
+        honest_stop_fn: Callable[[str], Awaitable[None]] | None = None,
+    ) -> None:
+        self._rejoin_fn = rejoin_fn
+        self._announce_fn = announce_fn
+        self._honest_stop_fn = honest_stop_fn
+        self._rejoin_attempted = False  # set on first drop; second drop fires honest_stop
+        self._rejoined_once = False     # set by on_rejoin
+        self._drops: dict[str, float] = {}
+
+    async def on_drop(self, *, drop_id: str, dropped_ts: float) -> None:
+        """Handle a bot-drop event; auto-rejoin on first drop, honest stop on second."""
+        self._drops[drop_id] = dropped_ts
+        if not self._rejoin_attempted:
+            self._rejoin_attempted = True
+            if self._rejoin_fn is not None:
+                result = self._rejoin_fn()
+                if inspect.isawaitable(result):
+                    await result
+        else:
+            if self._honest_stop_fn is not None:
+                result = self._honest_stop_fn("second_drop")
+                if inspect.isawaitable(result):
+                    await result
+
+    async def on_rejoin(self, *, drop_id: str, rejoined_ts: float) -> None:
+        """Record a successful rejoin and announce the disconnected interval."""
+        self._rejoined_once = True
+        if self._announce_fn is not None:
+            dropped_ts = self._drops.get(drop_id, rejoined_ts)
+            interval = _DropInterval(dropped_ts=dropped_ts, rejoined_ts=rejoined_ts)
+            result = self._announce_fn(interval)
+            if inspect.isawaitable(result):
+                await result

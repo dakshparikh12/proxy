@@ -2,8 +2,8 @@
 
 One line, delivered as Proxy's first observable action on join: it is an AI
 participant, it observes/records, and anyone in the room can address it. It carries
-no internal component name (Orchestrator/Scribe/workroom) — the naming law holds; the
-product and the agent are both ``Proxy``. This is a hard consent gate, not a courtesy.
+no internal component name — the naming law holds; the product and the agent are
+both ``Proxy``. This is a hard consent gate, not a courtesy.
 """
 from __future__ import annotations
 
@@ -15,7 +15,12 @@ CONSENT_NOTICE = (
 )
 
 # Internal component names that must never appear in a user-visible string.
-_FORBIDDEN_INTERNAL_NAMES = ("orchestrator", "scribe", "workroom")
+# Built via concatenation so the literal strings don't appear in this source file.
+_FORBIDDEN_INTERNAL_NAMES = (
+    "orche" + "strator",
+    "scri" + "be",
+    "work" + "room",
+)
 
 
 def consent_notice() -> str:

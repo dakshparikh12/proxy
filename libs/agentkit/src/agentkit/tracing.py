@@ -34,7 +34,7 @@ def observe(fn: _F) -> _F:
     if not _langfuse_enabled():
         return fn
     try:
-        from langfuse.decorators import (  # type: ignore[import-not-found]
+        from langfuse.decorators import (
             observe as _langfuse_observe,
         )
     except ModuleNotFoundError:

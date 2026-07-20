@@ -3,7 +3,7 @@
 Chat is a first-class socket, not a lesser sibling of voice. Inbound, every platform
 chat line arrives ONLY through the Recall transport seam (``chat_events``) and is
 re-emitted upstream as a ``chat(message, sender, dm?)`` signal; a line addressed to
-Proxy is forwarded to the injected ask-sink (Doc 04) as an ask **identical in shape**
+Proxy is forwarded to the injected ask_sink (Doc 04) as an ask **identical in shape**
 to a spoken ask, differing solely in its recorded ``socket`` field — chat vs voice
 (AC-CHAT-01..05/16). A line addressed to nobody is reported as a signal but never
 enters the ask path (AC-CHAT-04).
@@ -30,9 +30,10 @@ situational judgment and drops nothing (AC-CHAT-10/11).
 """
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from contracts.channels import ChannelReport
 
@@ -53,7 +54,7 @@ _PROXY_MENTION = "@proxy"
 
 @dataclass(frozen=True)
 class Ask:
-    """A first-class ask handed to the ask-sink — the SAME shape for chat and voice.
+    """A first-class ask handed to the ask_sink — the SAME shape for chat and voice.
 
     ``socket`` is the only field that records the origin; a chat ask is never tagged as
     a lesser/secondary class (AC-CHAT-02/03). ``from_chat`` / ``from_voice`` build the
@@ -138,8 +139,8 @@ class ChatChannel:
         carrier: SignalCarrier,
         bot_id: str,
         *,
-        ask_sink: Callable[[Ask], Awaitable[None]],
-        degrade_hook: Callable[[DegradeRequest], Awaitable[None]],
+        ask_sink: Callable[[Ask], Any],
+        degrade_hook: Callable[[DegradeRequest], Any],
         recognizer: Callable[[str], bool] | None = None,
     ) -> None:
         self._transport = transport
@@ -162,6 +163,10 @@ class ChatChannel:
         """
         return has_proxy_token(message) or self._recognizer(message)
 
+    async def inbound(self, msg: ChatMessage) -> InboundOutcome:
+        """Alias for dispatch_inbound (AC-CHAT-01)."""
+        return await self.dispatch_inbound(msg)
+
     async def dispatch_inbound(self, msg: ChatMessage) -> InboundOutcome:
         """Report one inbound line as a chat() signal; forward it as an ask iff addressed."""
         # Every inbound line surfaces upstream as a chat(message, sender, dm?) signal
@@ -175,7 +180,9 @@ class ChatChannel:
         # Addressed: forward as a first-class ask, identical in shape to a spoken ask,
         # differing only in socket (AC-CHAT-02/03/16).
         ask = Ask.from_chat(content=msg.message, sender=msg.sender)
-        await self._ask_sink(ask)
+        result = self._ask_sink(ask)
+        if asyncio.isfuture(result) or asyncio.iscoroutine(result):
+            await result
         return InboundOutcome(signalled=True, forwarded=ask)
 
     async def pump_inbound(self) -> None:
@@ -192,6 +199,10 @@ class ChatChannel:
         """
         await self._transport.post_chat(self._bot_id, text, pinned=pinned)
 
+    async def send_dm(self, message: str = "", participant_id: str = "") -> DmResult:
+        """Deliver a private DM; accepts positional or keyword args (AC-CHAT-08/09)."""
+        return await self.send_direct(participant_id, message)
+
     async def send_direct(self, participant_id: str, message: str) -> DmResult:
         """Deliver a private line to EXACTLY one recipient, or mechanically degrade.
 
@@ -205,7 +216,9 @@ class ChatChannel:
             await self._transport.send_dm(self._bot_id, message, participant_id)
             return DmResult(recipient=participant_id, degraded=False)
         # Broadcast-only: report + delegate. No broadcast-vs-hold judgment here.
-        await self._degrade_hook(DegradeRequest(participant_id=participant_id, message=message))
+        result = self._degrade_hook(DegradeRequest(participant_id=participant_id, message=message))
+        if asyncio.isfuture(result) or asyncio.iscoroutine(result):
+            await result
         return DmResult(recipient=None, degraded=True)
 
     def channel_report(self) -> ChannelReport:

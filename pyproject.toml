@@ -46,6 +46,11 @@ module = [
     # ``limits`` (+ optional ``slowapi``) back the doc02 outbound rate gate (AC-FAIL-16),
     # provisioned on the meeting_runtime estate; ships no type stubs.
     "limits", "limits.*", "slowapi", "slowapi.*",
+    # Optional observability / AI SDK deps that ship no stubs.
+    "langfuse", "langfuse.*", "sentry_sdk", "sentry_sdk.*", "structlog", "structlog.*",
+    "httpx", "httpx.*", "anthropic", "anthropic.*",
+    "fastapi", "fastapi.*", "starlette", "starlette.*",
+    "cryptography", "cryptography.*",
 ]
 ignore_missing_imports = true
 
@@ -68,3 +73,14 @@ norecursedirs = ["harness", ".venv", "node_modules", "fixtures"]
 # __init__.py); the default prepend import mode collides on the shared basenames.
 # importlib mode imports each by full path — no sys.path games, no collision.
 addopts = "--import-mode=importlib"
+
+[dependency-groups]
+dev = [
+    "bandit>=1.9.4",
+    "httpx>=0.28.1",
+    "mypy>=2.3.0",
+    "psycopg>=3.3.4",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.15.22",
+]

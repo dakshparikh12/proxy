@@ -40,9 +40,16 @@ class CanvasFrame:
 
     ``surface`` names which output the same canvas is promoted onto; the two are
     mutually exclusive on the transport (§3.5) — never an inbound presented screen.
+    ``data`` is the frame payload (alias: ``payload``); ``seq`` is the monotonic sequence.
     """
 
-    payload: bytes
-    width: int
-    height: int
+    data: bytes = b""
+    width: int = 0
+    height: int = 0
+    seq: int = 0
     surface: str = "tile"
+
+    @property
+    def payload(self) -> bytes:
+        """Backward-compat alias for ``data``."""
+        return self.data

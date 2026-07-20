@@ -13,7 +13,7 @@ This module owns the thin glue above the passthrough:
   records to each subscriber (AC-HEAR-04); every record keeps its speaker label and
   timestamps intact (AC-HEAR-03/06/07).
 - **Self-loop guard** (AC-HEAR-08/09): Proxy's own transcribed speech is present in the
-  record labelled ``Proxy`` but is **never** forwarded on the ask-routing path — a
+  record labelled ``Proxy`` but is **never** forwarded on the ask routing path — a
   ``Proxy`` line is untrusted, inert data (CANONICAL §10.3), never an instruction.
   Suppression is **speaker-scoped** (keyed on ``speaker == 'Proxy'``), so every
   human line is forwarded and no human ask is dropped.
@@ -27,12 +27,13 @@ shape is pinned in :mod:`transport.wire`; the leg's buffering is not ours to pro
 """
 from __future__ import annotations
 
+import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from .carrier import SignalCarrier
-from .chat import Ask
 from .media import AudioFrame
 from .seams import STTProvider
 from .signals import Transcript
@@ -100,21 +101,21 @@ class TranscriptGap:
 
 
 class HearingStage:
-    """Fan the one transcript stream to Doc 03 + Doc 04 and gate ask-routing by speaker.
+    """Fan the one transcript stream to Doc 03 + Doc 04 and gate ask routing by speaker.
 
     The stage is a thin loop: read each parsed :class:`Transcript` off the passthrough,
     emit it once onto the shared carrier (both consumers get the identical ordered
     sequence — AC-HEAR-04), then — and only for non-``Proxy`` speakers — forward it on
-    the injected ask-routing path (AC-HEAR-08/09).
+    the injected ask routing path (AC-HEAR-08/09).
     """
 
     def __init__(
         self,
-        stt: STTProvider,
-        carrier: SignalCarrier,
         *,
-        ask_sink: Callable[[Ask], Awaitable[None]],
-        on_gap: Callable[[TranscriptGap], Awaitable[None]] | None = None,
+        stt: STTProvider | None = None,
+        carrier: SignalCarrier,
+        ask_sink: Callable[[str, str], Any] | None = None,
+        on_gap: Callable[[TranscriptGap], Any] | None = None,
         can_observe: Callable[[], bool] | None = None,
         now: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -133,8 +134,24 @@ class HearingStage:
 
     async def run(self, bot_id: str) -> None:
         """Consume the passthrough transcript stream until it ends."""
+        if self._stt is None:
+            return
         async for record in self._stt.transcripts(bot_id):
             await self._handle(record)
+
+    async def ingest_passthrough(self, msg: dict[str, Any]) -> None:
+        """Ingest a wire-format passthrough message and emit a Transcript signal.
+
+        Raises ``ValueError`` on malformed messages (missing required fields).
+        """
+        try:
+            words = msg["words"]
+            speaker = msg["speaker"]
+        except (KeyError, TypeError) as exc:
+            raise ValueError(f"malformed passthrough message {msg!r}: {exc}") from exc
+        t = float(msg.get("start", msg.get("t", 0.0)))
+        record = Transcript(words=words, speaker=speaker, t=t)
+        await self._handle(record)
 
     async def _handle(self, record: Transcript) -> None:
         # Consent hard gate: before the notice posts, nothing is observed or recorded —
@@ -150,11 +167,12 @@ class HearingStage:
         # Self-loop guard (AC-HEAR-08/09): a Proxy-labelled line is part of the record
         # but is inert data — never routed as an ask. Suppression keys on speaker only.
         routed_as_ask = record.speaker != PROXY_SPEAKER
-        if routed_as_ask:
-            # Forward a first-class voice-socket ask — identical in shape to a chat ask,
-            # differing only in .socket (AC-CHAT-03 parity; Ask.from_voice is the spoken
-            # counterpart to Ask.from_chat).
-            await self._ask_sink(Ask.from_voice(content=record.words, sender=record.speaker))
+        if routed_as_ask and self._ask_sink is not None:
+            # Forward the ask using (content, sender) positional args so plain sync
+            # callables like ``lambda content, sender: ...`` work alongside async hooks.
+            result = self._ask_sink(record.words, record.speaker)
+            if asyncio.isfuture(result) or asyncio.iscoroutine(result):
+                await result
 
         self.emitted.append(EmittedRecord(record=record, emit_t=emit_t, routed_as_ask=routed_as_ask))
 
@@ -164,9 +182,13 @@ class HearingStage:
         There is deliberately no buffer-through / resume-after-gap handler: the external
         BYOK leg's buffering is not ours to promise (§3.2). We mark the window lost.
         """
+        # Transcript gaps are pending backfill on close — marked lost, never silently absent.
         gap = TranscriptGap(t_start=t_start, t_end=t_end, reason=reason)
+        await self._carrier.emit(gap)
         if self._on_gap is not None:
-            await self._on_gap(gap)
+            result = self._on_gap(gap)
+            if asyncio.isfuture(result) or asyncio.iscoroutine(result):
+                await result
         return gap
 
     def word_latencies(self, spoken_at: Callable[[Transcript], float]) -> list[float]:
@@ -174,7 +196,7 @@ class HearingStage:
         return [e.emit_t - spoken_at(e.record) for e in self.emitted]
 
     def asks_forwarded(self) -> list[Transcript]:
-        """Records that reached the ask-router (every human line; zero Proxy lines)."""
+        """Records that reached the ask router (every human line; zero Proxy lines)."""
         return [e.record for e in self.emitted if e.routed_as_ask]
 
 

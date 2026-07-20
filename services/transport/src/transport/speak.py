@@ -91,8 +91,14 @@ class SpeakOrchestrator:
 
         self._account(text)
         # Boundary-gated synth of the EXACT text via the turn-core (AC-SPEAK-01/06/07/08).
-        self._controller.enqueue(text)
-        return SpeakOutcome(text=text, spoken=True, chat_copy_posted=True)
+        # If the audio leg fails (TTS/Output-Media outage), the chat copy already posted —
+        # so the line is never silently dropped (AC-SPEAK-15 / AC-FAIL-20).
+        try:
+            self._controller.enqueue(text)
+            spoken = True
+        except Exception:  # noqa: BLE001 — audio fault: chat copy already posted above
+            spoken = False
+        return SpeakOutcome(text=text, spoken=spoken, chat_copy_posted=True)
 
     async def audible_ack(self) -> SpeakOutcome:
         """Fire a canned audible ack (§3.3) — distinct from the answer (AC-SPEAK-10).

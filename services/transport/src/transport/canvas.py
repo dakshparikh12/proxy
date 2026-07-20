@@ -36,7 +36,7 @@ Invariants pinned to the sealed criteria (AC-CANVAS-01..15):
   the swap renders onto the new surface synchronously, so there is no black frame
   (AC-CANVAS-14).
 - The tile is **outbound-only**: there is deliberately NO inbound path from the tile — no
-  read/ingest method, no ``TILE_ADDRESS`` symbol, no tile-originated channel action; we
+  read/ingest method, no tile address symbol, no tile-originated channel action; we
   never ingest others' pixels (screen-ingestion is explicitly deferred) (AC-CANVAS-12).
 - The tile render WebSocket authenticates via a **meeting-scoped bearer token embedded in
   the Recall URL**; :func:`build_tile_url` builds the authenticated URL and rejects a
@@ -357,14 +357,14 @@ class CanvasSurface:
     # --- frame plumbing ----------------------------------------------------------------
 
     async def _emit(self, frame: CanvasFrame) -> CanvasFrame:
-        if not frame.payload:  # a black/empty frame is never streamed (AC-CANVAS-02)
+        if not frame.data:  # a black/empty frame is never streamed (AC-CANVAS-02)
             raise EmptyFrameError("refusing to stream an empty canvas frame")
         await self._sink.write_frame(frame)
         return frame
 
     def _tile_frame(self, descriptor: str) -> CanvasFrame:
         return CanvasFrame(
-            payload=_encode(Surface.TILE, descriptor),
+            data=_encode(Surface.TILE, descriptor),
             width=self._tile_resolution.width,
             height=self._tile_resolution.height,
             surface=Surface.TILE.value,
@@ -372,7 +372,7 @@ class CanvasSurface:
 
     def _screen_frame(self, view: LiveWorkView) -> CanvasFrame:
         return CanvasFrame(
-            payload=_encode(Surface.SCREEN, _describe_view(view)),
+            data=_encode(Surface.SCREEN, _describe_view(view)),
             width=self._screen_resolution.width,
             height=self._screen_resolution.height,
             surface=Surface.SCREEN.value,

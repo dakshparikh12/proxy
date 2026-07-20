@@ -29,9 +29,9 @@ class CartesiaTTS:
 
     def __init__(
         self,
-        call_external: CallExternal,
+        call_external: CallExternal | None = None,
         *,
-        api_key: str,
+        api_key: str | None = None,
         chunk_ms: int | None = None,
         voice_id: str = _DEFAULT_VOICE_ID,
         register: str = _DEFAULT_REGISTER,
@@ -55,7 +55,10 @@ class CartesiaTTS:
         return self._stream(text)
 
     async def _stream(self, text: str) -> AsyncIterator[AudioChunk]:
-        outcome = await self._call_external(
+        call_external = self._call_external
+        if call_external is None:
+            return
+        outcome = await call_external(
             lambda: self._synth(text),
             service="cartesia",
             unit_cost_usd=0.0,
