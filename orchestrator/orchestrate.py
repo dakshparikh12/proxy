@@ -960,30 +960,36 @@ def run_doc(doc: str) -> str:
         log(f"[{doc}] P6.5 mutation gate")
     else:
         log(f"[{doc}] P6.5 SKIPPED (mutmut not installed) — noted honestly")
-    # P7: independent verifier
-    log(f"[{doc}] P7 independent verification (fresh context, refute)")
-    ok, out, p7_timed_out = checked_agent(doc, "verify_doc_prompt.md", "VERDICT: DONE",
-                                          timeout=VERIFY_TIMEOUT)
-    if p7_timed_out:
-        return "P7_VERIFY_TIMEOUT"
+    # P7: verification ladder (Task 3) — the SINGLE verification system (replaces the old whole-doc
+    # refute). Its reality/negative tiers ARE the fresh-context refutation, per-criterion; its
+    # mechanical tiers (lint/unit/integration) are the objective gate, run in parallel with zero
+    # agent cost. The runner persists evidence/<doc>-ladder.json and exits: 0=ladder-complete,
+    # 1=a rung is RED (genuine defect), 2=no defect but reality/e2e await founder cassettes.
     (ROOT / "evidence").mkdir(exist_ok=True)
-    (ROOT / "evidence" / f"{doc}-verdict.md").write_text(out)
-    git_commit(f"{doc}: independent verification verdict")
-    if not ok:
-        # one refute->rebuild cycle, then halt for morning triage
-        log(f"[{doc}] verifier refuted — one rebuild cycle")
+    log(f"[{doc}] P7 verification ladder (mechanical tiers + fresh-context reality/negative critics)")
+    r = run_tool([PY, str(ORCH / "ladder_runner.py"), doc], timeout=VERIFY_TIMEOUT)
+    log(r.stdout[-1500:])
+    git_commit(f"{doc}: verification-ladder run (evidence/{doc}-ladder.json)")
+    if r.returncode == 1:
+        # A rung is RED — genuine defect. One rebuild cycle re-running only failed tiers, then halt.
+        log(f"[{doc}] ladder RED — one rebuild cycle, then re-climb")
         if build_loop(doc) == "GREEN":
-            ok, out, p7_timed_out = checked_agent(doc, "verify_doc_prompt.md", "VERDICT: DONE",
-                                                  timeout=VERIFY_TIMEOUT)
-            if p7_timed_out:
-                return "P7_VERIFY_TIMEOUT"
-            (ROOT / "evidence" / f"{doc}-verdict.md").write_text(out)
-            git_commit(f"{doc}: re-verification verdict")
-    if not ok:
-        note_exception(doc, "VERIFICATION_REFUTED",
-                       f"Independent verifier could not confirm DONE after a rebuild. Its specific "
-                       f"refutations are in evidence/{doc}-verdict.md. The tests are green; the "
-                       f"verifier's semantic concerns are flagged as unverified debt. Proceeding.")
+            r = run_tool([PY, str(ORCH / "ladder_runner.py"), doc, "--force"], timeout=VERIFY_TIMEOUT)
+            log(r.stdout[-1500:])
+            git_commit(f"{doc}: verification-ladder re-run after rebuild")
+        if r.returncode == 1:
+            note_exception(doc, "LADDER_RED",
+                           f"A verification-ladder rung is RED after a rebuild — the specific red "
+                           f"(criterion, tier) rows are in evidence/{doc}-ladder.json. Genuine "
+                           f"defect (or spec problem); halting for founder review, not looping.")
+            return "LADDER_RED"
+    elif r.returncode == 2:
+        # No defect, but reality/e2e rungs await founder-recorded cassettes — an honest, visible
+        # incomplete state (NOT a silent skip, NOT a failure). The pipeline proceeds; the pending
+        # rungs turn green with no code change once cassettes are recorded (tests/cassettes/RECORDING.md).
+        note_exception(doc, "LADDER_PENDING_CASSETTES",
+                       f"Mechanical tiers green; reality/e2e rungs for {doc} await founder-recorded "
+                       f"cassettes (see evidence/{doc}-ladder.json + tests/cassettes/RECORDING.md).")
     # P7.5: completeness sweep
     for cycle in range(1, SWEEP_CYCLES + 1):
         log(f"[{doc}] P7.5 completeness sweep (cycle {cycle})")
