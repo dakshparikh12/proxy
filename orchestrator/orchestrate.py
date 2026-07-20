@@ -542,6 +542,19 @@ def ladder_gate(doc: str, base: pathlib.Path) -> bool:
     return r.returncode == 0
 
 
+def extraction_gate(doc: str) -> tuple[bool, str]:
+    """Independent extraction-count gate (Task 5). A FRESH-context agent recounts the spec's distinct
+    normative obligations with NO bundle access; HALT on material (>10%) disagreement with the
+    bundle's requirement count. Runs ONCE per doc after generation. Opus (completeness is the
+    highest-stakes judgment). Returns (ok, reason); writes evidence/<doc>-extraction-count.md."""
+    sys.path.insert(0, str(ORCH))
+    from extraction_count_gate import run_extraction_gate
+    res = run_extraction_gate(doc)   # same process → uses run_agent (proper isolation), no nested tool
+    log(f"[{doc}] extraction-count: bundle={res['bundle_requirement_count']} "
+        f"independent={res['independent_count']} verdict={res['verdict']} — {res['reason']}")
+    return (not res["halt"]), res["reason"]
+
+
 # DESELECTED (deferred/genuinely-blocked criteria) is persisted to disk so a conductor
 # restart re-loads the morning-triage backlog instead of re-discovering it from scratch:
 # load on start (if present), write on every append.
@@ -927,6 +940,17 @@ def run_doc(doc: str) -> str:
     digest = seal(doc)
     git_commit(f"{doc}: promote + seal arbiter (bundle+evidence) [{digest[:12]}]")
     log(f"[{doc}] P4 sealed {digest[:12]}")
+    # P4.5: independent extraction-count gate (Task 5) — BEFORE the build, so a bundle that silently
+    # under/over-extracted the spec HALTS for founder review here, not after a wasted build. This is
+    # the completeness check the old auto-closing P7.5 sweep used to approximate; unlike the sweep it
+    # does NOT regenerate — a material gap means a human must look at WHAT is different.
+    ok_xc, xc_reason = extraction_gate(doc)
+    if not ok_xc:
+        note_exception(doc, "EXTRACTION_COUNT_HALT",
+                       f"Independent spec recount materially disagrees with the bundle's requirement "
+                       f"count: {xc_reason} See evidence/{doc}-extraction-count.md. Halting for "
+                       f"founder review — not auto-regenerating.")
+        return "EXTRACTION_COUNT_HALT"
     ensure_deps(doc)
     # sanity: evidence must collect. Use pytest's EXIT CODE (0 = collected ok), never a substring
     # match — test names legitimately contain 'error' (e.g. ..._returns_errors_never_throws).
@@ -990,41 +1014,13 @@ def run_doc(doc: str) -> str:
         note_exception(doc, "LADDER_PENDING_CASSETTES",
                        f"Mechanical tiers green; reality/e2e rungs for {doc} await founder-recorded "
                        f"cassettes (see evidence/{doc}-ladder.json + tests/cassettes/RECORDING.md).")
-    # P7.5: completeness sweep
-    for cycle in range(1, SWEEP_CYCLES + 1):
-        log(f"[{doc}] P7.5 completeness sweep (cycle {cycle})")
-        done, out, sweep_timed_out = checked_agent(doc, "completeness_sweep.md", "SWEEP: NO GAPS",
-                                                   timeout=SWEEP_TIMEOUT)
-        if sweep_timed_out:
-            return "P7_5_SWEEP_TIMEOUT"
-        (ROOT / "evidence" / f"{doc}-sweep.md").write_text(out)
-        git_commit(f"{doc}: completeness sweep {cycle}")
-        if done:
-            break
-        log(f"[{doc}] sweep found gaps — extending criteria + evidence, rebuilding")
-        if run_agent("gen_criteria.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
-                     model=SONNET_MODEL, timeout=GEN_CRITERIA_TIMEOUT, max_turns=200,
-                     phase=f"{doc} P7.5 gap-criteria").timed_out:
-            return "P7_5_GAPCLOSURE_TIMEOUT"
-        if run_agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
-                     model=SONNET_MODEL, timeout=GEN_EVIDENCE_TIMEOUT, max_turns=200,
-                     phase=f"{doc} P7.5 gap-evidence").timed_out:
-            return "P7_5_GAPCLOSURE_TIMEOUT"
-        # Merge sweep-gap-closure addenda (staging parts/) into the existing sealed bundle
-        # instead of expecting a complete fresh bundle at staging/acceptance/.
-        merge_sweep_parts(doc)
-        sealed = bundle_dir(doc)
-        if not coverage_gate(doc, sealed):
-            return "COVERAGE_GATE_FAILED_POST_SWEEP"
-        if not ladder_gate(doc, sealed):
-            return "LADDER_GATE_FAILED_POST_SWEEP"
-        promote(doc); seal(doc); git_commit(f"{doc}: sweep-extended arbiter re-sealed")
-        if build_loop(doc) != "GREEN":
-            return "BUILD_FAILED_POST_SWEEP"
-    else:
-        note_exception(doc, "SWEEP_RESIDUAL_GAPS",
-                       f"Completeness sweep still reported uncovered spec behaviors after "
-                       f"{SWEEP_CYCLES} cycles (evidence/{doc}-sweep.md). Proceeding; extend later.")
+    # P7.5: completeness is now covered WITHOUT a second, conflicting verification system:
+    #   - COUNT completeness (did the bundle capture the whole spec?) — the P4.5 extraction-count gate,
+    #     which HALTS for founder review on a material gap rather than silently auto-regenerating.
+    #   - BEHAVIORAL completeness (does each criterion's real boundary actually hold?) — the P7 ladder's
+    #     fresh-context reality/negative critics, per criterion.
+    # The old auto-closing completeness_sweep loop is retired: it was a parallel verification path that
+    # regenerated the bundle behind the founder's back — exactly what Task 5 replaces with a halt.
     # P8: cross-doc regression (verify() already runs the accumulated scope) + advance
     sh(["git", "tag", "-f", f"{doc}-done"])
     return "DONE"
