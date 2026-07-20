@@ -1,0 +1,24 @@
+{
+  "_comment": "Declarative task-type -> model-tier routing for the whole pipeline (Task 7, the Superpowers pattern as CONFIG, not the plugin). Changing which model a task runs on is a one-line edit here — never a code change. `tiers` names the concrete model id per tier; `routes` maps each pipeline task-type to a tier; `default` is used for any unrouted task-type.",
+  "tiers": {
+    "sonnet": "claude-sonnet-4-6",
+    "opus": "claude-opus-4-8",
+    "haiku": "claude-haiku-4-5"
+  },
+  "routes": {
+    "criteria-generation": "sonnet",
+    "evidence-generation": "sonnet",
+    "spec-generation": "sonnet",
+    "planning": "sonnet",
+    "mechanical-build": "sonnet",
+    "reality-critic": "sonnet",
+    "negative-critic": "sonnet",
+
+    "adversarial-review": "opus",
+    "adjudication": "opus",
+    "build-unstall": "opus",
+    "extraction-count-audit": "opus",
+    "final-whole-doc-review": "opus"
+  },
+  "default": "sonnet"
+}

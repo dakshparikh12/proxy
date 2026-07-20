@@ -26,15 +26,20 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 ORCH = ROOT / "orchestrator"
 STAGING = ROOT / "staging"
 PY = str(ROOT / ".venv" / "bin" / "python")
+sys.path.insert(0, str(ORCH))
+from model_routing import model_for, tier  # noqa: E402  (single source for every model choice)
 LOG = ORCH / "run.log"
 ALLOW_PULL = ORCH / "state" / "ALLOW_PULL"   # present ONLY between docs: the supervisor may
 #   fast-forward monitoring-side fixes then. Absent while a doc builds => the run is pinned to
 #   its launch SHA and no founder push can mutate it mid-doc.
 
-# Model tiering: SONNET for routine builder passes; OPUS for all judgment-critical paths
-# (adjudicator, verifier, sweep, criteria review) and for builder sessions that have stalled.
-SONNET_MODEL = "claude-sonnet-4-6"
-OPUS_MODEL = "claude-opus-4-6"
+# Model tiering is CONFIG, not code (Task 7): every choice resolves through model_for()/tier()
+# reading orchestrator/model-routing.json. SONNET for routine builder/generation passes; OPUS for
+# judgment-critical paths (adjudicator, criteria review, extraction-count audit, whole-doc review)
+# and for stalled builder sessions. Re-tiering any task is a one-line JSON edit. These two constants
+# remain as the tier ids (config-driven) for the build-escalation + checked_agent defaults below.
+SONNET_MODEL = tier("sonnet")
+OPUS_MODEL = tier("opus")
 OPUS_ESCALATION_STALL_COUNT = 2   # build sessions stalled >= this many times → escalate to Opus
 
 DOCS = {
@@ -689,7 +694,8 @@ def build_loop(doc: str) -> str:
         if time.time() - start + 1800 > 9 * 3600:
             return "WALL_CLOCK"
         before = commit_count()
-        build_model = OPUS_MODEL if stalls >= OPUS_ESCALATION_STALL_COUNT else SONNET_MODEL
+        build_model = (model_for("build-unstall") if stalls >= OPUS_ESCALATION_STALL_COUNT
+                       else model_for("mechanical-build"))
         log(f"[{doc}] build session {s} (persistent; iterates internally) [{build_model.split('-')[1]}]")
         res = run_agent("build_pass.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
                         timeout=BUILD_TIMEOUT, max_turns=BUILD_TURNS, model=build_model,
@@ -740,7 +746,7 @@ def build_loop(doc: str) -> str:
         if stalls == 1:
             log(f"[{doc}] no progress this session — fresh-context debugger (opus)")
             run_agent("unstall.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
-                      timeout=BUILD_TIMEOUT, max_turns=200, model=OPUS_MODEL,
+                      timeout=BUILD_TIMEOUT, max_turns=200, model=model_for("build-unstall"),
                       phase=f"{doc} P6 unstall")   # timeout is self-bounded; result checked via commits
             if tree_hash() != baseline:
                 return "INTEGRITY_VIOLATION"
@@ -886,8 +892,8 @@ def run_doc(doc: str) -> str:
         for cycle in range(1, REVIEW_CYCLES + 1):
             log(f"[{doc}] P1 generate criteria (cycle {cycle})")
             if run_agent("gen_criteria.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
-                         model=SONNET_MODEL, timeout=GEN_CRITERIA_TIMEOUT, max_turns=200,
-                         phase=f"{doc} P1 criteria").timed_out:
+                         model=model_for("criteria-generation"), timeout=GEN_CRITERIA_TIMEOUT,
+                         max_turns=200, phase=f"{doc} P1 criteria").timed_out:
                 return "P1_CRITERIA_TIMEOUT"
             log(f"[{doc}] P2 adversarial criteria review")
             ok, out, p2_timed_out = checked_agent(doc, "review_criteria.md", "REVIEW: APPROVED",
@@ -921,8 +927,8 @@ def run_doc(doc: str) -> str:
     else:
         log(f"[{doc}] P3 generate evidence layer (tests/fixtures/sims/goldens -> staging)")
         if run_agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
-                     model=SONNET_MODEL, timeout=GEN_EVIDENCE_TIMEOUT, max_turns=200,
-                     phase=f"{doc} P3 evidence").timed_out:
+                     model=model_for("evidence-generation"), timeout=GEN_EVIDENCE_TIMEOUT,
+                     max_turns=200, phase=f"{doc} P3 evidence").timed_out:
             return "P3_EVIDENCE_TIMEOUT"
     # P4: gate + promote + seal (THIS process, deterministic)
     # Use the live (already-sealed) bundle for the coverage gate when it has content —
@@ -962,7 +968,7 @@ def run_doc(doc: str) -> str:
     # and its whole process group is killed, never silently freezing for hours as it once did).
     log(f"[{doc}] P5 plan + planner-review")
     if run_agent("plan.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
-                 max_turns=60, model=SONNET_MODEL, timeout=P5_PLAN_TIMEOUT,
+                 max_turns=60, model=model_for("planning"), timeout=P5_PLAN_TIMEOUT,
                  phase=f"{doc} P5 plan").timed_out:
         return "P5_PLAN_TIMEOUT"
     # P6: build
