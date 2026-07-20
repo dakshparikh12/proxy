@@ -73,6 +73,14 @@ norecursedirs = ["harness", ".venv", "node_modules", "fixtures"]
 # __init__.py); the default prepend import mode collides on the shared basenames.
 # importlib mode imports each by full path — no sys.path games, no collision.
 addopts = "--import-mode=importlib"
+# Verification-ladder tiers (GENERATOR.md §8.4). `reality`/`negative`/`e2e` are the
+# cassette-backed tiers driven through the real call_external seam via vcrpy; the
+# ladder-runner selects tests by these markers. `vcr` is registered by pytest-recording.
+markers = [
+    "reality: seam-exercise vs a recorded real vendor response (vcrpy cassette)",
+    "negative: dependency errors/times out/returns garbage -> honest degradation (negative cassette / real fault)",
+    "e2e: golden-path end-to-end over recorded real vendor traffic (--record-mode=none in CI)",
+]
 
 [dependency-groups]
 dev = [
@@ -82,5 +90,7 @@ dev = [
     "psycopg>=3.3.4",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "pytest-recording>=0.13.4",
     "ruff>=0.15.22",
+    "vcrpy>=8.3.0",
 ]

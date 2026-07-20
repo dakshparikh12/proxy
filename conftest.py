@@ -29,7 +29,16 @@ import time
 
 
 def _wire_control_plane() -> None:
+    import sys
+
     root = os.path.dirname(os.path.abspath(__file__))
+    # Ensure the repo root is importable BEFORE `import services`. Under `--import-mode=importlib`
+    # pytest does not insert rootdir onto sys.path the way `python -m pytest` does (cwd on path), so
+    # the bare namespace-package import below fails under a plain `pytest` / `uv run pytest` entry
+    # point. Inserting root here makes `import services` resolve regardless of how pytest was
+    # launched — same import-resolution-gap hardening as _wire_workspace_src(); no product code.
+    if root not in sys.path:
+        sys.path.insert(0, root)
     harness_src = os.path.join(root, "services", "harness", "src")
     if not os.path.isdir(harness_src):
         return
