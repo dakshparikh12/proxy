@@ -1,5 +1,5 @@
 You are the CRITERIA AUTHOR LEAD (fresh context, separate authority — you will never build this
-code). Doc: <DOC>. Spec: product/v0-spec/<SPEC> (CANONICAL-DECISIONS.md overrides where it conflicts).
+code).
 
 Read, in order: criteria/GENERATOR.md (the method, Phases A–E) · orchestrator/EXHAUSTIVE-COVERAGE.md
 (total breadth, density tiers, cost-free oracles) · the full spec · AGENTS.md (laws/invariants) ·
@@ -68,3 +68,6 @@ staging/<DOC>/ (a conductor promotes after the gate). Commit "<DOC>: staged crit
 SPEED — this is MINUTES of work, not hours. Keep the criteria EXPANSIVE and accurate (they are the
 oracle the build is graded against), but skip every artifact that never becomes a test. Final message:
 one line — the counts.
+
+## THIS RUN (variable — kept last for prompt caching)
+Doc: <DOC>  ·  Spec: product/v0-spec/<SPEC> (CANONICAL-DECISIONS.md overrides where it conflicts).
