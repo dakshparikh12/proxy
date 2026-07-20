@@ -59,6 +59,17 @@ BUILD_TIMEOUT, BUILD_TURNS = 60 * 90, 600   # a builder session iterates interna
 P5_PLAN_TIMEOUT = 60 * 25   # the P5 planner is BOUNDED: planning a doc is minutes of work, so a
 #   session that runs past this is hung (the planner subprocess has frozen here for 40+ min with
 #   zero CPU progress). Fail LOUD (return "P5_PLAN_TIMEOUT") rather than freeze the night silently.
+# EVERY other claude-spawning phase is bounded the SAME way (P5 was not special — P3 hung identically:
+#   14min+ of zero log output at near-idle CPU with no bound at all). Each phase below caps its
+#   subprocess and, on subprocess.TimeoutExpired, returns/logs a clear "<PHASE>_TIMEOUT" so main()
+#   exits non-DONE and supervise.sh relaunches — the resume logic then skips already-sealed work.
+#   Sized to the work each phase does: generation-heavy phases get planning-weight; narrow rulings less.
+GEN_CRITERIA_TIMEOUT = 60 * 15   # P1 + sweep gap-closure: derive a criteria bundle from one spec
+GEN_EVIDENCE_TIMEOUT = 60 * 25   # P3 + sweep gap-closure: heaviest generator (tests+fixtures+sims+goldens)
+REVIEW_TIMEOUT       = 60 * 15   # P2: fresh-context adversarial criteria review (read one bundle + judge)
+VERIFY_TIMEOUT       = 60 * 20   # P7: fresh-context independent verifier (refute the whole built doc)
+SWEEP_TIMEOUT        = 60 * 20   # P7.5: fresh-context completeness sweep (spec behaviors vs criteria)
+ADJUDICATE_TIMEOUT   = 60 * 10   # a single yes/no ruling on ONE claimed blocker — narrow, so tightest
 REVIEW_CYCLES, SWEEP_CYCLES = 3, 2   # each pass is cheap now (formal artifacts dropped) so keep the
 #                                      coverage loop generous; both break EARLY once the reviewer
 #                                      approves + the RTM gate passes, so a clean doc costs 1 cycle.
@@ -411,7 +422,8 @@ def adjudicate(doc: str, entry: str) -> bool:
         log(f"[{doc}] cached ruling re-applied ({prior['ruling']}) for: {entry[:80]}")
         return prior["ruling"] == "PROCEED"
     log(f"[{doc}] adjudicating SPEC_BLOCKED: {entry[:120]}")
-    ok, out = independent_check(doc, "adjudicate.md", "ADJUDICATION: PROCEED")
+    ok, out = independent_check(doc, "adjudicate.md", "ADJUDICATION: PROCEED",
+                                timeout=ADJUDICATE_TIMEOUT)
     cache[sig] = {"ruling": "PROCEED" if ok else "DEFER", "entry_prefix": entry.strip()[:120],
                   "decided_at": time.strftime("%F %T")}
     _save_decisions(doc, cache)
@@ -475,7 +487,13 @@ def build_loop(doc: str) -> str:
         if tree_hash() != baseline:
             return "INTEGRITY_VIOLATION"
         if (msg := new_spec_blocked()):
-            if not adjudicate(doc, msg):
+            try:
+                proceed = adjudicate(doc, msg)
+            except subprocess.TimeoutExpired:
+                log(f"[{doc}] adjudicator exceeded {ADJUDICATE_TIMEOUT // 60}m and was killed — "
+                    f"halting doc cleanly (was an unbounded silent hang before this timeout existed)")
+                return "ADJUDICATE_TIMEOUT"
+            if not proceed:
                 return "TOO_MANY_DEFERRALS"
             # Adjudicator ruled PROCEED — the builder is NOT spec-blocked.  Rather than
             # spawning another expensive build session that will re-derive the same
@@ -538,13 +556,18 @@ def build_loop(doc: str) -> str:
 
 
 def independent_check(doc: str, prompt: str, expect: str,
-                      model: str = OPUS_MODEL) -> tuple[bool, str]:
+                      model: str = OPUS_MODEL, timeout: int = 60 * 20) -> tuple[bool, str]:
     """Verifier / sweep: fresh session, tamper-checked (services+libs hash must not change).
     Defaults to OPUS_MODEL — all judgment-critical checks (adjudicator, verifier, sweep,
-    criteria review) warrant the strongest available model."""
+    criteria review) warrant the strongest available model.
+
+    BOUNDED: the underlying agent() is capped at `timeout` (default 20m; each caller passes its
+    own phase bound). subprocess.TimeoutExpired is intentionally NOT swallowed here — it propagates
+    to the calling phase, which catches it and returns a clear "<PHASE>_TIMEOUT" (P5-style). A
+    frozen checker subprocess must fail loud for supervise.sh, never hang the night silently."""
     before = tree_hash(("services/", "libs/")) if (ROOT / "services").exists() else ""
     out = agent(prompt, {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]}, capture=True, max_turns=120,
-                model=model)
+                model=model, timeout=timeout)
     after = tree_hash(("services/", "libs/")) if (ROOT / "services").exists() else ""
     if before != after:
         return False, "TAMPER: check session modified the build"
@@ -638,9 +661,21 @@ def run_doc(doc: str) -> str:
     if not (bundle_dir(doc) / "criteria").exists():
         for cycle in range(1, REVIEW_CYCLES + 1):
             log(f"[{doc}] P1 generate criteria (cycle {cycle})")
-            agent("gen_criteria.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]}, model=SONNET_MODEL)
+            try:
+                agent("gen_criteria.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
+                      model=SONNET_MODEL, timeout=GEN_CRITERIA_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                log(f"[{doc}] P1 gen-criteria exceeded {GEN_CRITERIA_TIMEOUT // 60}m and was killed "
+                    f"— halting doc cleanly for supervise restart")
+                return "P1_CRITERIA_TIMEOUT"
             log(f"[{doc}] P2 adversarial criteria review")
-            ok, out = independent_check(doc, "review_criteria.md", "REVIEW: APPROVED")
+            try:
+                ok, out = independent_check(doc, "review_criteria.md", "REVIEW: APPROVED",
+                                            timeout=REVIEW_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                log(f"[{doc}] P2 criteria review exceeded {REVIEW_TIMEOUT // 60}m and was killed "
+                    f"— halting doc cleanly for supervise restart")
+                return "P2_REVIEW_TIMEOUT"
             if ok and coverage_gate(doc, sdir / "acceptance" / doc):
                 break
             (sdir / "review-gaps.md").write_text(out)
@@ -664,7 +699,13 @@ def run_doc(doc: str) -> str:
         log(f"[{doc}] P3 skipped — evidence already promoted + collecting clean (resume)")
     else:
         log(f"[{doc}] P3 generate evidence layer (tests/fixtures/sims/goldens -> staging)")
-        agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]}, model=SONNET_MODEL)
+        try:
+            agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
+                  model=SONNET_MODEL, timeout=GEN_EVIDENCE_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            log(f"[{doc}] P3 gen-evidence exceeded {GEN_EVIDENCE_TIMEOUT // 60}m and was killed — "
+                f"halting doc cleanly (this is the phase that hung silently 14min+ with no bound)")
+            return "P3_EVIDENCE_TIMEOUT"
     # P4: gate + promote + seal (THIS process, deterministic)
     # Use the live (already-sealed) bundle for the coverage gate when it has content —
     # staging may be a stale leftover from the original build run and must NOT shadow
@@ -718,7 +759,13 @@ def run_doc(doc: str) -> str:
         log(f"[{doc}] P6.5 SKIPPED (mutmut not installed) — noted honestly")
     # P7: independent verifier
     log(f"[{doc}] P7 independent verification (fresh context, refute)")
-    ok, out = independent_check(doc, "verify_doc_prompt.md", "VERDICT: DONE")
+    try:
+        ok, out = independent_check(doc, "verify_doc_prompt.md", "VERDICT: DONE",
+                                    timeout=VERIFY_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        log(f"[{doc}] P7 verifier exceeded {VERIFY_TIMEOUT // 60}m and was killed — "
+            f"halting doc cleanly for supervise restart")
+        return "P7_VERIFY_TIMEOUT"
     (ROOT / "evidence").mkdir(exist_ok=True)
     (ROOT / "evidence" / f"{doc}-verdict.md").write_text(out)
     git_commit(f"{doc}: independent verification verdict")
@@ -726,7 +773,13 @@ def run_doc(doc: str) -> str:
         # one refute->rebuild cycle, then halt for morning triage
         log(f"[{doc}] verifier refuted — one rebuild cycle")
         if build_loop(doc) == "GREEN":
-            ok, out = independent_check(doc, "verify_doc_prompt.md", "VERDICT: DONE")
+            try:
+                ok, out = independent_check(doc, "verify_doc_prompt.md", "VERDICT: DONE",
+                                            timeout=VERIFY_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                log(f"[{doc}] P7 re-verifier exceeded {VERIFY_TIMEOUT // 60}m and was killed — "
+                    f"halting doc cleanly for supervise restart")
+                return "P7_VERIFY_TIMEOUT"
             (ROOT / "evidence" / f"{doc}-verdict.md").write_text(out)
             git_commit(f"{doc}: re-verification verdict")
     if not ok:
@@ -737,14 +790,27 @@ def run_doc(doc: str) -> str:
     # P7.5: completeness sweep
     for cycle in range(1, SWEEP_CYCLES + 1):
         log(f"[{doc}] P7.5 completeness sweep (cycle {cycle})")
-        done, out = independent_check(doc, "completeness_sweep.md", "SWEEP: NO GAPS")
+        try:
+            done, out = independent_check(doc, "completeness_sweep.md", "SWEEP: NO GAPS",
+                                          timeout=SWEEP_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            log(f"[{doc}] P7.5 sweep exceeded {SWEEP_TIMEOUT // 60}m and was killed — "
+                f"halting doc cleanly for supervise restart")
+            return "P7_5_SWEEP_TIMEOUT"
         (ROOT / "evidence" / f"{doc}-sweep.md").write_text(out)
         git_commit(f"{doc}: completeness sweep {cycle}")
         if done:
             break
         log(f"[{doc}] sweep found gaps — extending criteria + evidence, rebuilding")
-        agent("gen_criteria.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]}, model=SONNET_MODEL)
-        agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]}, model=SONNET_MODEL)
+        try:
+            agent("gen_criteria.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
+                  model=SONNET_MODEL, timeout=GEN_CRITERIA_TIMEOUT)
+            agent("gen_evidence.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
+                  model=SONNET_MODEL, timeout=GEN_EVIDENCE_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            log(f"[{doc}] P7.5 gap-closure generation exceeded its bound and was killed — "
+                f"halting doc cleanly for supervise restart")
+            return "P7_5_GAPCLOSURE_TIMEOUT"
         # Merge sweep-gap-closure addenda (staging parts/) into the existing sealed bundle
         # instead of expecting a complete fresh bundle at staging/acceptance/.
         merge_sweep_parts(doc)
