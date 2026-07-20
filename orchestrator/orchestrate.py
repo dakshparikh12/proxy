@@ -531,6 +531,17 @@ def coverage_gate(doc: str, base: pathlib.Path) -> bool:
     return r.returncode == 0
 
 
+def ladder_gate(doc: str, base: pathlib.Path) -> bool:
+    """Verification-ladder schema gate (GENERATOR.md §8.4). MECHANICAL — pure subprocess, no agent.
+    Fails the seal unless every criterion carries a well-formed ladder + dependency_class, every
+    non-null class has its -NEG pair, e2e is golden-path-only, and dependency_manifest.yaml is
+    consistent. Runs next to the RTM coverage gate in P4."""
+    r = run_tool([sys.executable, str(ORCH / "ladder_schema_gate.py"), doc, "--base", str(base)],
+                 timeout=TOOL_TIMEOUT_QUICK)
+    log(r.stdout[-900:])
+    return r.returncode == 0
+
+
 # DESELECTED (deferred/genuinely-blocked criteria) is persisted to disk so a conductor
 # restart re-loads the morning-triage backlog instead of re-discovering it from scratch:
 # load on start (if present), write on every append.
@@ -870,7 +881,8 @@ def run_doc(doc: str) -> str:
                                                   timeout=REVIEW_TIMEOUT)
             if p2_timed_out:
                 return "P2_REVIEW_TIMEOUT"
-            if ok and coverage_gate(doc, sdir / "acceptance" / doc):
+            if ok and coverage_gate(doc, sdir / "acceptance" / doc) \
+                    and ladder_gate(doc, sdir / "acceptance" / doc):
                 break
             (sdir / "review-gaps.md").write_text(out)
         else:
@@ -880,6 +892,8 @@ def run_doc(doc: str) -> str:
             # proceeding on a FAILED coverage gate is never allowed.)
             if not coverage_gate(doc, sdir / "acceptance" / doc):
                 return "COVERAGE_GATE_FAILED_AFTER_REVIEW_CYCLES"
+            if not ladder_gate(doc, sdir / "acceptance" / doc):
+                return "LADDER_GATE_FAILED_AFTER_REVIEW_CYCLES"
             (ROOT / "evidence").mkdir(exist_ok=True)
             shutil.copy2(sdir / "review-gaps.md", ROOT / "evidence" / f"{doc}-review-gaps-outstanding.md")
             log(f"[{doc}] WARN review gaps outstanding after {REVIEW_CYCLES} cycles — gate passed, "
@@ -907,6 +921,8 @@ def run_doc(doc: str) -> str:
     base = live if (live / "requirements" / "requirements.yaml").exists() else staged
     if not coverage_gate(doc, base):
         return "COVERAGE_GATE_FAILED"
+    if not ladder_gate(doc, base):
+        return "LADDER_GATE_FAILED"
     promote(doc)
     digest = seal(doc)
     git_commit(f"{doc}: promote + seal arbiter (bundle+evidence) [{digest[:12]}]")
@@ -994,6 +1010,8 @@ def run_doc(doc: str) -> str:
         sealed = bundle_dir(doc)
         if not coverage_gate(doc, sealed):
             return "COVERAGE_GATE_FAILED_POST_SWEEP"
+        if not ladder_gate(doc, sealed):
+            return "LADDER_GATE_FAILED_POST_SWEEP"
         promote(doc); seal(doc); git_commit(f"{doc}: sweep-extended arbiter re-sealed")
         if build_loop(doc) != "GREEN":
             return "BUILD_FAILED_POST_SWEEP"

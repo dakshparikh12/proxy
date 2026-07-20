@@ -127,6 +127,11 @@ The generator SHALL spend the greatest verification budget on:
 - high-cost or high-latency paths;
 - known historically fragile behavior.
 
+Verification depth is made **explicit and structural**, not left to the tester's discretion: every
+criterion carries a `verification_ladder` derived from its `dependency_class` (§8.4). A criterion that
+rests on a real external vendor is not "verified" until the real request is driven through the real
+seam against a recorded response — the deepest rungs are mandatory for exactly the risky paths above.
+
 ### 1.6 Evidence is exact and reproducible
 
 Every result SHALL be tied to:
@@ -625,11 +630,53 @@ fault_model_refs:
   - F-OMIT-CROSS-LANGUAGE-EDGE
   - F-FABRICATE-DYNAMIC-ABSENCE
 
+# --- verification ladder (§8.4): how deeply this criterion is verified ---
+dependency_class: null            # null | vendor:recall | db:postgres | fs:git | ...  (ambiguous -> non-null)
+mock_boundary: null               # REQUIRED non-empty string iff dependency_class is non-null
+golden_path: false                # true only for the doc's handful of core end-to-end criteria (§8.4.2)
+verification_ladder:              # rungs derived from dependency_class + golden_path (§8.4)
+  - {tier: lint}                  # always
+  - {tier: unit}                  # always
+  # - {tier: integration}         # add iff local real dep (db:/fs:/gcs:) or real local integration path
+  # - {tier: reality}             # add iff dependency_class is vendor:*  (cassette-backed seam exercise)
+  # - {tier: negative}            # carried by the paired AC-...-NEG criterion iff dependency_class non-null
+  # - {tier: e2e}                 # add iff golden_path
+
 protocol_ref: PROTO-DETERMINISTIC-01
 required_evidence:
   - junit:T-FIXTURE-118
   - schema:T-CONTRACT-044
   - eval:T-REALREPO-031
+```
+
+A `vendor:cartesia` criterion and its mandatory negative pair (§8.4.1) look like:
+
+```yaml
+- criterion_id: AC-SPEAK-07
+  name: Cartesia TTS synthesis returns playable audio for a spoken line
+  authority_refs: [R-doc02-SPEAK-03]
+  dependency_class: vendor:cartesia
+  mock_boundary: >
+    may mock the Cartesia HTTP response body via a vcrpy cassette at the call_external/transport
+    layer; MUST NOT replace the call_external seam or CartesiaTTS request construction with Mock().
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}     # drive CartesiaTTS._synth through real call_external vs tests/cassettes/cartesia_tts.yaml
+    - {tier: e2e}         # golden path
+- criterion_id: AC-SPEAK-07-NEG
+  name: Speaking degrades honestly when Cartesia errors/times out/returns garbage
+  authority_refs: [R-doc02-SPEAK-03]
+  dependency_class: vendor:cartesia
+  mock_boundary: >
+    negative cassette only (recorded 5xx / timeout / truncated body) at the call_external layer;
+    MUST NOT replace the seam — the real error path must execute.
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}    # drive the seam against tests/cassettes/cartesia_tts_error.yaml; assert honest failure
 ```
 
 ### 8.3 Human-readable rendering
@@ -651,6 +698,89 @@ Thresholds: recall 1.0; false positives 0; invalid citations 0
 Required evidence: T-FIXTURE-118, T-CONTRACT-044, T-REALREPO-031
 Mandatory faults detected: omitted cross-language edge; fabricated absence
 ```
+
+### 8.4 The verification ladder (dependency_class, mock_boundary, tiers)
+
+Every criterion carries an **explicit, structured** statement of how deeply it is verified.
+This replaces the old implicit "a test exists, therefore it's checked" convention that let a
+real-vendor boundary sit entirely behind stubs while its tests stayed green. Three fields:
+
+**`dependency_class`** — the single real external system/dependency this criterion's behavior
+actually rests on, or `null` if it rests on nothing outside the process. Inferred (model judgment,
+never a hard-coded table — Law 4) from the requirement's `source_quote`/`normalized_statement` and
+the spec's stated external integrations. Vocabulary is open; the doc's integrations name the values:
+`vendor:recall`, `vendor:assemblyai`, `vendor:cartesia`, `db:postgres`, `fs:git`, `gcs:objects`, …
+The `vendor:` prefix marks a **network** vendor (needs a cassette); `db:`/`fs:`/`gcs:` mark **local**
+real dependencies (real Postgres / real clone / real bucket — no cassette).
+
+> **Ambiguity rule (mandatory, non-negotiable): when it is unclear whether a criterion depends on a
+> real external system, `dependency_class` MUST be set to the plausible non-null value, never `null`.**
+> A non-null class only ever *adds* rungs. Erring toward `null` hides an unverified boundary; erring
+> toward non-null costs a cassette we may not yet have (recorded honestly as pending). Always err up.
+
+**`mock_boundary`** — REQUIRED (a non-empty string) whenever `dependency_class` is non-null; omitted
+when it is `null`. States exactly what a test may and may not replace. For the Proxy seam architecture
+the canonical rule is:
+
+    may mock the vendor HTTP response body via a vcrpy cassette at the call_external/transport
+    layer; MUST NOT replace the call_external seam, the request construction, or the client object
+    with Mock() — the real request must be built and driven through the real seam at least once.
+
+**`verification_ladder`** — an ordered list of `{tier: <name>}`. A criterion is verified only when
+**every** rung in its ladder is green, bottom to top, no rung skipped. Rung presence is derived from
+`dependency_class` and golden-path status, never chosen freely:
+
+| tier | present when | what it proves | cost |
+|---|---|---|---|
+| `lint` | **always** | code references the *real* thing it claims — real import/seam/class names, not a stub shape (static grep/AST) | mechanical, $0 |
+| `unit` | **always** | the existing in-process unit tier | mechanical, $0 |
+| `integration` | `dependency_class` is a **local** real dep (`db:`/`fs:`/`gcs:`) *or* the behavior has a real local integration path (real Postgres, real clone, real asyncio — never a network vendor) | the behavior works against the real *local* substrate | mechanical, $0 |
+| `reality` | `dependency_class` is a **`vendor:`** class | the emitted request is **accepted by the real vendor** and the **real response parses** — driven through the real `call_external` seam against a recorded cassette (a fully-stubbed seam cannot produce a valid cassette, which is what makes this catch the bug class *structurally*, not by convention) | fresh-context critic + cassette |
+| `negative` | `dependency_class` is **non-null** (vendor **and** local) — the paired negative criterion (§8.4.1) carries it | the system behaves correctly when the dependency **errors / times out / returns malformed data** | fresh-context critic |
+| `e2e` | criterion is one of the doc's **golden-path** set (§8.4.2) — a *handful*, not every criterion | the doc's core user-facing promise end-to-end over recorded real vendor traffic (`--record-mode=none` in CI) | cassette |
+
+`reality`, `negative`, and `e2e` are the only tiers that spend a model call; `lint`/`unit`/
+`integration` are pure subprocess execution and MUST NOT route through an agent.
+
+#### 8.4.1 Every non-null dependency_class gets a paired negative criterion (not optional)
+
+For **every** criterion whose `dependency_class` is non-null, the generator SHALL emit a paired
+criterion `AC-<...>-NEG` against the **same** authority requirement(s), whose behavior is "the
+dependency errors, times out, or returns malformed/garbage data, and the system degrades correctly
+(honest failure, no silent proceed, no corruption)". The negative criterion's ladder terminates in
+the `negative` tier. For `vendor:` classes the negative rung drives the seam against a **negative
+cassette** (recorded 5xx / timeout / truncated body); for local classes it drives a **real fault**
+(Postgres refuses the connection, the clone target is missing). This is a hard generation obligation,
+not polish — a green positive path with no proven failure path is an unproven criterion.
+
+#### 8.4.2 Golden-path criteria (the only ones that get `e2e`)
+
+Each doc names a small set — its **core end-to-end promise**, typically one per major section, on the
+order of 3–7 total for a doc of doc02's size — as golden-path criteria. Only these carry the `e2e`
+tier. Choose the criteria a founder would point at to say "this is the product working"; do not
+inflate the set (every criterion being e2e defeats the point and the cost model). Golden-path
+membership is recorded both on the criterion (`golden_path: true`) and in `dependency_manifest.yaml`.
+
+#### 8.4.3 `dependency_manifest.yaml` — one per doc
+
+Alongside `requirements.yaml` and `criteria.yaml`, the generator SHALL emit
+`acceptance/<doc>/dependency_manifest.yaml`: for **every** real external dependency the spec requires,
+its `dependency_class`, whether it is `vendor` or `local`, the real seam/object that must be exercised,
+the `mock_boundary` rule, the cassette glob (for vendors), the list of criteria that depend on it, and
+which of those are golden-path. It is the doc's single source of truth for "what is real here and how
+may a test touch it." The deterministic schema gate (§8.4.4) verifies the manifest is consistent with
+the criteria (no criterion cites a class absent from the manifest; no manifest class lists a criterion
+that does not carry it).
+
+#### 8.4.4 Enforcement (mechanical, no agent)
+
+`orchestrator/ladder_schema_gate.py` is the guard for this section and runs at seal time next to the
+RTM coverage gate. It fails the seal unless, deterministically: every criterion has a non-empty
+`verification_ladder` and a `dependency_class` key; `mock_boundary` is present iff `dependency_class`
+is non-null; ladder rungs match the derivation table above for that class/golden-path; every non-null
+`dependency_class` criterion has its `AC-…-NEG` pair; `e2e` appears only on golden-path criteria; and
+`dependency_manifest.yaml` exists and is bidirectionally consistent with the criteria. It parses YAML
+directly (no pyyaml dep), like the coverage gate, and spawns **no** agent.
 
 ---
 

@@ -31,3 +31,36 @@
   thresholds: {some_violation_allowed: 0}  # numbers; zeros explicit
   fault_model_refs: [F-SOME-FAULT]
   test_ids: [T-M1-001]
+  # --- verification ladder (GENERATOR.md §8.4) — MANDATORY on every criterion ---
+  dependency_class: null                   # null | vendor:recall|assemblyai|cartesia | db:postgres | fs:git | ...  (ambiguous -> non-null)
+  mock_boundary: null                      # REQUIRED non-empty string iff dependency_class non-null
+  golden_path: false                       # true only for the doc's handful of core end-to-end criteria
+  verification_ladder:                     # rungs DERIVED from dependency_class + golden_path (do not free-choose)
+    - {tier: lint}                         # always
+    - {tier: unit}                         # always
+    # - {tier: integration}                # iff local real dep (db:/fs:/gcs:)
+    # - {tier: reality}                    # iff dependency_class is vendor:*  (cassette-backed seam exercise)
+    # - {tier: e2e}                        # iff golden_path
+
+# EVERY non-null dependency_class criterion REQUIRES a paired negative criterion:
+- criterion_id: AC-M1-001-NEG
+  name: "<same behavior> degrades honestly when <dependency> errors/times out/returns garbage"
+  authority_refs: [R-DOC0X-3.1-01]         # SAME requirement(s) as its positive pair
+  dependency_class: vendor:recall
+  mock_boundary: "negative cassette / real fault only; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# --- dependency_manifest.yaml : one per doc (acceptance/<DOC>/dependency_manifest.yaml) ---
+# doc: doc0X
+# dependencies:
+#   - dependency_class: vendor:recall
+#     kind: vendor                         # vendor|local
+#     seam: transport.external.call_external
+#     mock_boundary: "cassette at call_external layer; MUST NOT replace the seam"
+#     cassette: tests/cassettes/recall_*.yaml
+#     criteria: [AC-JOIN-01, AC-JOIN-01-NEG, ...]
+#     golden_path_criteria: [AC-JOIN-01]

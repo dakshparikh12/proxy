@@ -31,9 +31,31 @@ edit — not a rewrite. Then jump to "FINISH".
    shapes, off-state, negative frontier) — plus a dedupe. Do NOT author a separate fault-model
    document; fault coverage lives inside criteria.yaml.
 
+## VERIFICATION LADDER — mandatory on every criterion (GENERATOR.md §8.4)
+Every criterion you emit MUST carry: `dependency_class` (the one real external system its behavior
+rests on, or `null`), `mock_boundary` (non-empty string iff dependency_class is non-null),
+`golden_path` (true only for the doc's handful of core end-to-end criteria), and a
+`verification_ladder` list whose rungs are DERIVED from those two — do not choose rungs freely; read
+the §8.4 table. Hard obligations, not polish:
+- **Ambiguous → non-null.** If it is unclear whether a criterion touches a real vendor/DB/FS, set the
+  plausible non-null class, never `null`. A non-null class only adds rigor. Always err up.
+- **Infer the class from the spec** (source_quote + the spec's stated integrations): Proxy vendors are
+  `vendor:recall` / `vendor:assemblyai` / `vendor:cartesia`; local reals are `db:postgres` / `fs:git` /
+  `gcs:objects`. Vendor classes get the `reality` rung (cassette-backed seam exercise); local classes
+  get `integration` (real Postgres/clone). `mock_boundary` is the canonical seam rule (§8.4).
+- **Every non-null class gets a paired `AC-<...>-NEG` criterion** against the SAME requirement(s):
+  "the dependency errors/times out/returns malformed data, and the system degrades honestly." Its
+  ladder terminates in the `negative` rung. This is required for EVERY non-null criterion — do not skip.
+- **Golden path = a handful** (≈3–7 for a doc02-size doc), the doc's core promise; only these get `e2e`.
+- **Also emit `acceptance/<DOC>/dependency_manifest.yaml`** (§8.4.3): every real external dependency,
+  its class + kind (vendor|local) + seam + mock_boundary + cassette glob + the criteria that depend on
+  it + which are golden-path. The ladder schema gate fails the seal unless the manifest is consistent
+  with the criteria.
+
 ## Both modes then FINISH
-The bundle is ONLY requirements/requirements.yaml + criteria/criteria.yaml — nothing else. The coverage
-gate + seal read only these two, and NOTHING downstream reads the old formal-assurance artifacts
+The bundle is requirements/requirements.yaml + criteria/criteria.yaml + dependency_manifest.yaml —
+nothing else. The coverage gate, the ladder schema gate, and the seal read only these, and NOTHING
+downstream reads the old formal-assurance artifacts
 (fault-model, dispositions, ambiguities, protocols, estates, system-model, assurance-limits,
 authority-index). They never touched the code and cost ~⅓ of gen time, so they are DROPPED. Every
 criterion has deterministic-preferred oracles + numeric thresholds (zeros explicit); a calibrated judge
