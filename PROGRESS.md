@@ -1125,12 +1125,14 @@ for this doc, per the build harness's own scope rule ("doc01 = tests/test_m*.py;
 
 ## doc00 plan
 
-*Planner (fresh context, 2026-07-18). Spec: `product/v0-spec/00-FOUNDATION.md` + `CANONICAL-DECISIONS.md`.
-Sealed arbiter: `acceptance/doc00/` (read-only) — **the builder may not edit `acceptance/`, `tests/`,
-`fixtures/`, or `harness/`.** Authored per `orchestrator/skills/writing-plans.md`; independently re-derived
-against the **v3 re-sealed** bundle; `planner-reviewer` deltas folded below.*
+*Planner (fresh context, 2026-07-18; planner-reviewer blocking defects folded 2026-07-19). Spec:
+`product/v0-spec/00-FOUNDATION.md` + `CANONICAL-DECISIONS.md`. Sealed arbiter: `acceptance/doc00/`
+(read-only) — **the builder may not edit `acceptance/`, `tests/`, `fixtures/`, or `harness/`.**
+Authored per `orchestrator/skills/writing-plans.md`; re-derived against the **sweep-extended re-seal**
+bundle (157 criteria = v3 + 2 patch criteria AC-CMP-017 + AC-SUB-038); 4 blocking planner-reviewer
+defects folded (import-namespace seam mechanism; I-1 dispatcher clarity; check_meeting_budget home).*
 
-### 0 · Status: the bundle is CLEAN — 0 SPEC_BLOCKED, 155/155 buildable-to-green
+### 0 · Status: the bundle is CLEAN — 0 SPEC_BLOCKED, 157/157 buildable-to-green
 
 `harness/verify.sh` is the sole code arbiter: `ruff` (over `services libs src` where present **+ `tests`**)
 → `mypy --strict` (over `services libs src` where present) → `bandit -r src` → `pytest -q -x --maxfail=1`.
@@ -1141,13 +1143,15 @@ which criteria go green, matching the pre-authored test-file order"). Each miles
 its exit gate = that file green with every earlier file still green. verify.sh refuses green on zero collected
 tests.
 
-**Coverage (RTM re-derived against `criteria/criteria.yaml`): 155 criteria, 155/155 mapped to a test file, 0
-dangling, 0 uncovered.** Per-prefix: CMP 16 · REPO 9 · HOST 14 · SUB 37 · BOOT 7 · CFG 11 · IAC 6 · DOCK 4 ·
-CI 7 · DB 4 · REG 6 · OBS 10 · CON 4 · INV 13 · BLD 3 · TEN 4 (= 155). **24 P0 criteria** (R2 12 · R3 3 ·
-R4 9 — §2). The 17 test files hold **167 test functions** (16·9·14·37·7·11·6·4·7·4·6·10·4·13·3·4·12);
+**Coverage (RTM re-derived against `criteria/criteria.yaml`): 157 criteria, 157/157 mapped to a test file, 0
+dangling, 0 uncovered.** Per-prefix: CMP 17 · REPO 9 · HOST 14 · SUB 38 · BOOT 7 · CFG 11 · IAC 6 · DOCK 4 ·
+CI 7 · DB 4 · REG 6 · OBS 10 · CON 4 · INV 13 · BLD 3 · TEN 4 (= 157). **24 P0 criteria** (R2 12 · R3 3 ·
+R4 9 — §2). The 17 test files hold **169 test functions** (17·9·14·38·7·11·6·4·7·4·6·10·4·13·3·4·12);
 `test_w_workflows.py` (M17) adds **0 new criteria** — it re-exercises existing ones as end-to-end chains.
-`manifest.yaml counts.criteria:154` is stale-by-one (bookkeeping drift from the 2nd adversarial +5-criteria
-review; `criteria.yaml`'s 155 is source-of-truth) — flag for the conductor, not a coverage gap.
+`manifest.yaml counts.criteria:154` is stale (bookkeeping drift; `criteria.yaml`'s 157 is source-of-truth)
+— flag for the conductor, not a coverage gap. Two patch criteria added in sweep-extended re-seal:
+**AC-CMP-017** (MaterialChangeKind 7-member StrEnum, goes green at M1) · **AC-SUB-038** (`db.bump_activity`
+on every heartbeat tick, goes green at M4).
 
 **No SPEC_BLOCKED.** A prior plan generation carried a four-item block register (SB-1 reg_002 · SB-2 ten_001
 · SB-3 obs_006 · SB-4 inv_010) — four sealed-test bugs the 40+-session build log had converged on. **All four
@@ -1198,9 +1202,10 @@ consumes:
   `/internal/reconcile`). M14/AC-INV-010 (`test_m13_inv.py:560`) calls it **sync, multi-kwarg, NOT awaited** —
   `run_reconcile_sweep(conn=conn, tenant=offboard, gcs=gcs, reason="offboard")` — for the immediate offboard
   DELETE of that tenant's rows + `gcs.delete_prefix`. A naïve `async def run_reconcile_sweep(db)` goes RED at
-  M14 (un-awaited coroutine; DELETE never runs). Satisfy both with a **non-`async def` dispatcher**: `tenant`/
-  `gcs` kwargs present → run the sync offboard-DELETE and return; else return the coroutine for `(db)`. Part of
-  the seam inventory. Alternate M14 home is `services.harness.reconcile` (`test_m13_inv.py:499`) — pick the
+  M14 (un-awaited coroutine; DELETE never runs). Satisfy both with a **sync `def` dispatcher (never
+  `async def`)**: `tenant`/`gcs` kwargs present → execute the offboard-DELETE synchronously and
+  `return None`; else `return _async_impl(db)` where `_async_impl` is an `async def` — caller
+  `await`s the returned coroutine object. Part of the seam inventory. Alternate M14 home is `services.harness.reconcile` (`test_m13_inv.py:499`) — pick the
   AGENTS.md-canonical `libs.ops` home and re-export.
   **⚠ mypy `--strict` trap (CR-7-1): a non-`async def` returning `Coroutine[...] | None` reds the product's
   OWN `await run_reconcile_sweep(db)` call sites.** `verify.sh` type-checks `libs/` under `--strict` (tests
@@ -1214,10 +1219,11 @@ consumes:
 - **`libs.lint`** (naming law, M13 · AC-CON-002) — a namespace-exposure seam of the **same class as
   `control_plane` (§3); pin it or a builder mis-homes it.** `test_m12_con.py:118` imports via
   `("libs.lint.naming","libs.lint","libs.naming_lint")` and calls an entrypoint in
-  `("check_user_visible_strings","lint_user_visible","run","check")` as `fn(dict)->exit_code`. Root
-  `conftest.py:43-60` (`_wire_libs_lint`) extends `libs.__path__` to **`libs/ops/src` only if
-  `libs/ops/src/lint/` exists** — and **AC-REPO-007 forbids a 7th `libs/` dir** — so the **sole
-  conftest-supported home is `libs/ops/src/lint/`** (single-concern, inside `libs/ops`), exposed at
+  `("check_user_visible_strings","lint_user_visible","run","check")` as `fn(dict)->exit_code`.
+  `libs/ops/__init__.py` must extend `libs.__path__` to include `libs/ops/src` at import time (same
+  pattern as `services/harness/__init__.py`'s `__path__` extension for `src/harness`) — and
+  **AC-REPO-007 forbids a 7th `libs/` dir** — so the **sole valid home is `libs/ops/src/lint/`**
+  (single-concern, inside `libs/ops`), exposed at
   `libs.lint`/`libs.lint.naming`. Entrypoint `check_user_visible_strings(strings: dict) -> int` (0 clean;
   non-zero if any user-visible value contains Orchestrator/Scribe/workroom). **Never a `libs/lint/` dir**
   (reds the already-green `test_m01_repo`/AC-REPO-007 under `-x`) and **never under `services/`** (passes the
@@ -1227,8 +1233,9 @@ consumes:
   check_meeting_budget, complete_signin, resolve_session (:1078), invite_proxy, resolve_bot_id (:1125),
   record_seam_cost (:1178)}` · `services.workroom.{recover_task, propose_change, accept_draft}` ·
   `services.scribe.{record_scribe_cost (:1177), apply_note_delta (:1238)}` (the full Scribe surface — build it
-  at M4 or M4 goes red). **`check_meeting_budget` is dual-homed** (M4 `services.harness` + M12 `libs.ops.cost`):
-  define **once** in `libs.ops.cost`, re-export from `services.harness` — never two definitions.
+  at M4 or M4 goes red). `check_meeting_budget` must be importable from `services.harness` (existing
+  product: `services/harness/src/harness/budget.py`, re-exported by `services/harness/__init__.py`);
+  no `libs.ops.cost` mandate — do not move it or add a second definition.
 - **Concrete API the M17 workflows pin** (must exist by M17):
   `services.control_plane.{webhooks,accept,authz}` (exposed via package config, not a 6th `services/` dir — §3)
   + the M4 harness/workroom/scribe surface above.
@@ -1260,10 +1267,13 @@ dirs. Jointly satisfiable but not naïvely: choose a package build-config (hatch
 package-dir mapping under uv) so (a) `import libs.contracts` / `import services.harness.emit` resolve; (b) the
 `control_plane` deployable-assembly code lives **inside the five allowed packages** yet is exposed at
 `services.control_plane.*` via package config, never as a 6th `services/` dir; (c) each member still presents
-`src/<pkg>/` with one root `uv.lock`. **The home is `services/harness/src/control_plane/` specifically** — root
-`conftest.py:31-40` (`_wire_control_plane`) extends `services.__path__` to `services/harness/src` only, so
-`import services.control_plane` resolves only from there; any other home fails the M17
-`services.control_plane.*` imports.
+`src/<pkg>/` with one root `uv.lock`. **The home is `services/harness/src/control_plane/` specifically** — `services/harness/__init__.py`
+must extend `__path__` to cover BOTH `src/harness` AND `src/` (the parent directory of `control_plane/`)
+so that `import services.control_plane` resolves to `services/harness/src/control_plane/`. The existing
+`__path__` extension in `services/harness/__init__.py` covers only `src/harness`; the builder must add a
+second entry for `src/` (same `_os.path.join` pattern). Any other home fails the M17
+`services.control_plane.*` imports. Builder gate: `python -c "from services.control_plane.webhooks import
+ingest"` succeeds.
 
 **M1 exit gate includes a walking-skeleton import proof run inside the `uv`-synced venv (`.venv/bin/python`),
 NOT bare repo-root** — `conftest` puts repo-root on `sys.path` where `services/control_plane/` does not exist,
@@ -1318,11 +1328,13 @@ flag/base class/defensive branch a criterion doesn't demand** (V0 has zero runti
 
 ### 7 · Milestones (each: goal · criteria · exit gate = its test file green, all earlier green)
 
-- **M1 — Contract seam + walking skeleton (`test_m00_cmp`, 16).** Minimal uv workspace hosting
+- **M1 — Contract seam + walking skeleton (`test_m00_cmp`, 17).** Minimal uv workspace hosting
   `libs/{contracts,agentkit,http}`; every §2 wire type; `AgentChunk`/`ChunkType` per-variant metadata;
   `stream_deltas` (one def, one call site in `BehaviorRunner.run`, delta-izing incl. double-application
   corruption — AC-CMP-015); typed `BehaviorConfig` (no YAML); single-def `dispatch()`/`AbortRegistry`/
-  `resume_with_fallback` stubs. **Resolve R1/§3 first.** *Criteria:* AC-CMP-001..016.
+  `resume_with_fallback` stubs; **`MaterialChangeKind` 7-member `StrEnum`** with exactly
+  `{claim-landed-checkable, decision-forming, decision-final, contradiction, action-item, question-open,
+  question-closed}` (AC-CMP-017). **Resolve R1/§3 first.** *Criteria:* AC-CMP-001..017.
 - **M2 — Repo skeleton (`test_m01_repo`, 9).** `services/`=5, `libs/`=6, `apps/{connect,tile}` Vite/pnpm
   (excluded from uv), src-layout everywhere, one `requires-python`, one root `uv.lock`, explicit deps,
   Dockerfile `uv sync --package <svc> --no-editable`, no god-package. *Criteria:* AC-REPO-001..009.
@@ -1332,7 +1344,7 @@ flag/base class/defensive branch a criterion doesn't demand** (V0 has zero runti
   volume); one PG15 private-IP via Auth-Proxy Unix socket; GCS Object-Versioning; no k8s/mesh/multi-region/GPU.
   **Build the per-tenant envelope-key crypto-shred (AC-HOST-013/014) first;** direct-answer path touches no
   E2B/Workroom (AC-HOST-007). *Criteria:* AC-HOST-001..014 (AC-HOST-005 owned solely here).
-- **M4 — Durable substrate (`test_m03_sub`, 37; R2).** `libs/ops` + `libs/db` + Alembic (build-ahead).
+- **M4 — Durable substrate (`test_m03_sub`, 38; R2).** `libs/ops` + `libs/db` + Alembic (build-ahead).
   `operation_runs` canonical 12 columns + partial-unique index + status domain; `with_operation_run` heartbeat;
   fencing (rowcount-0 → `is_owner=False` → emit-frontier refuses all five verbs, AC-SUB-035); atomic
   `claim_meeting` + `created_by` owner-id (AC-SUB-036 — the enabler M12's AC-OBS-007 affinity reads); lazy +
@@ -1340,7 +1352,10 @@ flag/base class/defensive branch a criterion doesn't demand** (V0 has zero runti
   token-gated `run_reconcile_sweep` (**I-1 dispatcher, §1**); `webhook_events` dedupe→200→drain (**no
   `meeting_events` bus**); `meeting_cost` persisted + reload-not-reset; `staged_drafts` persisted at creation
   (survives teardown); identity/tenancy `{tenants,users,repos,meetings,sessions}`; restart-not-resume. **A-009
-  FK edges here.** Build the full M4 hard-import surface (§1) or the file reds. *Criteria:* AC-SUB-001..037.
+  FK edges here.** **AC-SUB-038:** `Database.bump_activity(scope_id: str) -> None` is an async leaf on
+  `Database` (no libs.db→libs.ops import cycle); the heartbeat loop calls it on every tick; the test spy
+  asserts `call_count == heartbeat_tick_count`. Build the full M4 hard-import surface (§1) or the file reds.
+  *Criteria:* AC-SUB-001..038.
 - **M5 — Server boot (`test_m04_boot`, 7).** Fail-fast settings (names the missing key; boot-key set per §4);
   ordered lifespan (tracing→pool→Database→`provisioner_ready`→reaper→routers); reaper before routers; EPIPE
   tolerated / unknown crashes; parallel graceful shutdown; three Claude SDK auth modes. *Criteria:*
@@ -1376,7 +1391,8 @@ flag/base class/defensive branch a criterion doesn't demand** (V0 has zero runti
 - **M13 — Constitution (`test_m12_con`, 4).** Root `CLAUDE.md`: every hard rule names its guard; no internal
   names in user strings (product=Proxy) — enforced by the **naming lint homed at `libs/ops/src/lint/`, exposed
   as `libs.lint.naming`, entrypoint `check_user_visible_strings(dict)->int`** (§1 `libs.lint` seam; the dir
-  must exist so `conftest._wire_libs_lint` extends `libs.__path__`; never a `libs/lint/` dir — AC-REPO-007);
+  must exist so `libs/ops/__init__.py` extends `libs.__path__` at import time; never a `libs/lint/` dir —
+  AC-REPO-007);
   tool handlers return errors never throw; external calls wrapped retry+telemetry. *Criteria:* AC-CON-001..004.
 - **M14 — Consolidated invariants (`test_m13_inv`, 13; R4).** Two honest cost meters (**A-006**); pre-dispatch
   estimate gate; **lethal-trifecta** (no transcript→side-effect without a click); transcript fenced untrusted;
@@ -1421,9 +1437,9 @@ machinery · `resume_with_fallback` arity (Doc 04/05) · any runtime feature fla
 
 All 17 milestones (M1–M17) hand off to `subagent-driven-build` in the forced order. **No stop-and-escalate —
 the v3 re-seal cleared all four former sealed defects (§0); every criterion is buildable-to-green.** Finish
-line = **155/155 criteria green, 167/167 test functions green, ruff/mypy --strict/bandit clean, 0 SPEC_BLOCKED.**
+line = **157/157 criteria green, 169/169 test functions green, ruff/mypy --strict/bandit clean, 0 SPEC_BLOCKED.**
 Two bookkeeping items are routed to the conductor (no builder action): `manifest.yaml counts.criteria:154`
-stale-by-one vs the 155 in `criteria.yaml`; and the trailing `## ADJUDICATION`/`## SPEC_BLOCKED` build-history
+stale vs the 157 in `criteria.yaml`; and the trailing `## ADJUDICATION`/`## SPEC_BLOCKED` build-history
 blocks (pre-v3-re-seal, now void) should be pruned so a top-to-bottom reader isn't whipsawed.
 
 ## ADJUDICATION RESOLVED — proceed with this reading:
