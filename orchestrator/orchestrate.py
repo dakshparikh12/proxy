@@ -706,7 +706,7 @@ def cli_preflight() -> None:
     """Fail fast BEFORE the night starts: claude CLI present + authenticated, venv, git identity."""
     if shutil.which("claude") is None:
         sys.exit("PRELAUNCH FAIL: `claude` CLI not on PATH.")
-    r = subprocess.run(["claude", "-p", "Reply with exactly: AUTH_OK", "--max-turns", "1"],
+    r = subprocess.run(["claude", "-p", "Reply with exactly: AUTH_OK", "--max-turns", "3"],
                        cwd=ROOT, capture_output=True, text=True, timeout=120)
     combined = (r.stdout or "") + (r.stderr or "")
     if "AUTH_OK" not in combined:

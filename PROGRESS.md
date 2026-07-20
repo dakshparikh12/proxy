@@ -1,6 +1,6 @@
 ## doc02 plan
 
-**Date:** 2026-07-19  **Status:** LOCKED (planner-reviewer critique folded in)
+**Date:** 2026-07-19  **Status:** LOCKED (planner-reviewer critique folded in, rev 2)
 
 ---
 
@@ -124,7 +124,8 @@ CREATE TABLE webhook_events (
 
 1. `speak(text)` → Cartesia Sonic 3 (exact input text, no auto-extracted headline) → Output Media audio. One voice, one calm register.
 2. Chat text copy posted verbatim with every decided line — even if TTS/Output-Media leg fails after line decided.
-3. Headlines-only budget: ≤4000 chars/hr, per-line soft cap 240 chars.
+3. **Detail-routing (AC-SPEAK-18):** when upstream emits content marked as *detail* (not to be spoken — headline vs. detail judgment is Doc 04's), this layer routes it to broadcast chat. `broadcast_posts` must contain the detail payload regardless of whether the headline was successfully audible. The plumbing obligation is Doc 02's; the judgment is never Doc 02's.
+4. Headlines-only budget: ≤4000 chars/hr, per-line soft cap 240 chars.
 4. Audible ack: canned string (e.g. "on it") fires ≤p95 500ms from pickup; distinct from resolved answer content.
 5. TTS time-to-first-audio: p50 ~40ms, p95 ≤120ms (Cartesia Sonic 3 pinned measurement).
 6. **First-grounded-text latency (CANONICAL §12.8)**: instrument pickup-to-first-grounded-answer-text-emitted on shallow direct-answer path (p50≤2s, p95≤4s). Record tool+turn count per sample; exclude LSP-bound and multi-pass samples.
@@ -133,13 +134,13 @@ CREATE TABLE webhook_events (
 9. Small-chunk Output Media buffer: max buffered audio ≤250ms (barge-in defeat prevention).
 10. _Stub wired in M4; proven in M7_: AC-SPEAK-06 (boundary gate; stub = always-True), AC-SPEAK-07 (barge-in abort; stub = no-op), AC-SPEAK-19 (ack suppressed when boundary False), AC-SPEAK-20 (tile ACK during boundary suppression).
 
-**Criteria** (proven in M4): AC-SPEAK-01, AC-SPEAK-02, AC-SPEAK-03, AC-SPEAK-04, AC-SPEAK-05, AC-SPEAK-08, AC-SPEAK-09, AC-SPEAK-10, AC-SPEAK-11, AC-SPEAK-12, AC-SPEAK-13, AC-SPEAK-14, AC-SPEAK-15, AC-SPEAK-16, AC-SPEAK-17, AC-SPEAK-18 (16 criteria; AC-SPEAK-06/07/19/20 deferred to M7)
+**Criteria** (proven in M4): AC-SPEAK-01, AC-SPEAK-02, AC-SPEAK-03, AC-SPEAK-04, AC-SPEAK-05, AC-SPEAK-08, AC-SPEAK-09, AC-SPEAK-10, AC-SPEAK-11, AC-SPEAK-12, AC-SPEAK-13, AC-SPEAK-14, AC-SPEAK-15, AC-SPEAK-16, AC-SPEAK-17, AC-SPEAK-18 (16 criteria; AC-SPEAK-06/07/19/20 deferred to M7; AC-FAIL-19/AC-FAIL-20 fault-path lines run through this same text-copy mechanism — M8 explicitly verifies byte-equal parity on those paths)
 
 ---
 
 #### M5 — Chat: inbound + outbound + channel report
 
-1. Inbound: platform chat via Recall → `@proxy` → first-class ask identical in shape to spoken ask (source socket differs only). Non-addressed chat NOT forwarded.
+1. Inbound: Doc 02 forwards ALL inbound chat messages from Recall to the Doc 04 routing boundary without pre-filtering. Doc 04's recognizer determines which messages are addressed to Proxy (covering both `@proxy` prefix and direct-address patterns such as "Proxy, can you…" — AC-CHAT-16). Non-addressed determination is Doc 04's, never Doc 02's; Doc 02's only filter is structural (not empty, not system-generated bot echo).
 2. `chat(message, sender, dm?)` signal shape validated.
 3. Broadcast delivery: detail, links, receipts, quiet notices. Spoken-line text copies to broadcast.
 4. DM: exactly one recipient, never leaks to broadcast channel.
@@ -162,7 +163,8 @@ CREATE TABLE webhook_events (
 7. Tile outbound-only: no `TILE_ADDRESS`, no tile-originated `ChannelAction` type or handler.
 8. Tile render WS authenticates via meeting-scoped bearer token in Recall URL. Cross-meeting token rejected.
 9. Promote/demote cycle: stream stays live throughout (≥1 active surface at every instant; zero stream drops or black frames).
-10. Frame-rate/smoothness: pinned measurement recorded (not a hard gate).
+10. **No self-initiation (AC-CANVAS-08):** static check — zero promote transitions exist without a preceding upstream trigger. No auto-promote call or self-initiate code path anywhere in the canvas module; every promote requires an explicit upstream instruction.
+11. Frame-rate/smoothness: pinned measurement recorded (not a hard gate).
 
 **Criteria**: AC-CANVAS-01 through AC-CANVAS-15 (15 criteria)
 
