@@ -1,6 +1,6 @@
 ## doc02 plan
 
-**Date:** 2026-07-19  **Status:** LOCKED (planner-reviewer critique folded in, rev 2)
+**Date:** 2026-07-20  **Status:** LOCKED (planner-reviewer critique folded in)
 
 ---
 
@@ -50,7 +50,7 @@ CREATE TABLE webhook_events (
 
 4. **Rejoin-once FSM correctness (M8)** — `_rejoin_consumed: bool` per drop event, set atomically when rejoin is issued. Gap interval uses Recall carrier timestamps (`dropped_at`, `rejoined_at`), not local `time.time()`. _Risk_: double-emit of rejoin signal. _Mitigation_: flag set before the rejoin API call; second drop → honest-stop.
 
-5. **Confirm-at-build: AAI `end_of_turn` forwarding (M0 gate)** — Probe live Recall + AAI passthrough to confirm `end_of_turn` field is present on websocket messages. If absent: wire Smart Turn v3 as boundary source instead. This is a branch gate: wrong boundary source invalidates the entire TURN design.
+5. **Confirm-at-build: AAI `end_of_turn` forwarding (M0 gate)** — Probe live Recall + AAI passthrough to confirm `end_of_turn` field is present on websocket messages. If absent: insert an explicit unblocking step (wire Smart Turn v3 into M3 HEAR design) before M1 starts — M1 cannot begin until the boundary source is decided. Wrong boundary source invalidates the entire TURN design.
 
 ---
 
@@ -61,12 +61,13 @@ CREATE TABLE webhook_events (
 *No production feature code. Pure contracts, DB schema, and live-API confirmation.*
 
 1. Fetch live Recall.ai docs: bot-join webhook payloads, per-speaker audio format, Output Media protocol, chat in/out, roster/status webhook shapes. Record in `services/transport/WIRE_SHAPES.md`.
-2. Fetch live AssemblyAI Universal-Streaming docs: message fields (`words`, `speaker`, timestamps, `end_of_turn`). **Confirm `end_of_turn` is forwarded by Recall passthrough.** Record. If absent → note Smart Turn v3 fallback.
-3. Define `TransportProvider`, `STTProvider`, `TTSProvider` Protocols in `seams.py` (no concrete provider imports; callers depend only on these).
-4. Define internal signal dataclasses in `signals.py` (not ProxyMessages; not in `libs/contracts`). Field `dm_available: bool` LOCKED per CANONICAL §1.6.
-5. Alembic migrations: `webhook_events` (CANONICAL §12.10 DDL verbatim, including `sha text` and all `NOT NULL`), `meetings.recall_bot_id`, `transcript_segments.status DEFAULT 'pending'`.
-6. Verify `assert_registry_closed()` passes with all doc02 internal signals absent from client registry.
-7. Record no-buffer-through-STT-hiccup confirm-at-build note in module docstring (CANONICAL §12.12).
+2. Fetch live AssemblyAI Universal-Streaming docs: message fields (`words`, `speaker`, timestamps, `end_of_turn`). **Confirm `end_of_turn` is forwarded by Recall passthrough.** Record. **If absent: insert a Smart Turn v3 unblocking step (wire ST v3 as boundary source into the M3 HEAR design) before M1 starts. M1 cannot begin until the boundary source is resolved.**
+3. Commit `services/transport/WIRE_SHAPES.md` as the primary oracle artifact for AC-HEAR-12 ("schema provenance recorded as evidence") and AC-TURN-16 ("build probe"). Both criteria cite this file as their evidence anchor.
+4. Define `TransportProvider`, `STTProvider`, `TTSProvider` Protocols in `seams.py` (no concrete provider imports; callers depend only on these).
+5. Define internal signal dataclasses in `signals.py` (not ProxyMessages; not in `libs/contracts`). Field `dm_available: bool` LOCKED per CANONICAL §1.6.
+6. Alembic migrations: `webhook_events` (CANONICAL §12.10 DDL verbatim, including `sha text` and all `NOT NULL`), `meetings.recall_bot_id`, `transcript_segments.status DEFAULT 'pending'`.
+7. Verify `assert_registry_closed()` passes with all doc02 internal signals absent from client registry.
+8. Record no-buffer-through-STT-hiccup confirm-at-build note in module docstring (CANONICAL §12.12).
 
 **Criteria turned green (early-gate proofs; re-proven formally at section milestone):** AC-SEAM-01, AC-SEAM-02, AC-SEAM-03, AC-EVENTS-11, AC-CHAT-12, AC-CHAT-14, AC-HEAR-12, AC-TURN-16, AC-FAIL-11
 
@@ -82,7 +83,7 @@ CREATE TABLE webhook_events (
 6. Hard-removal → `END_BOT` terminal (not mute/pause).
 7. Objection → audible defer-to-organizer (not continue).
 8. All three platforms (Meet, Zoom, Teams) reach `IN_MEETING` + notice-posted through the same Recall seam.
-9. **Transport cost accrual**: export rate constants (`BOT_RATE_USD_HR`, `STT_RATE_USD_HR`, `TTS_RATE_USD_HR`); wire `transport_usd = elapsed_hours(started_at, now()) × sum(rates)` updated on heartbeat; unit-test: drive elapsed clock → assert `transport_usd` tracks formula; simulate recycle → assert `transport_usd_after ≥ transport_usd_before` (monotonic, not reset to 0 per CANONICAL §3).
+9. **Transport cost accrual**: export rate constants (`BOT_RATE_USD_HR`, `STT_RATE_USD_HR`, `TTS_RATE_USD_HR`); wire `transport_usd = elapsed_hours(started_at, now()) × sum(rates)` updated on heartbeat; unit-test: drive elapsed clock → assert `transport_usd` tracks formula.
 10. Calendar-invite path (P2): same FSM, same gates.
 
 **Criteria**: AC-JOIN-01 through AC-JOIN-17 (17 criteria)
@@ -126,13 +127,13 @@ CREATE TABLE webhook_events (
 2. Chat text copy posted verbatim with every decided line — even if TTS/Output-Media leg fails after line decided.
 3. **Detail-routing (AC-SPEAK-18):** when upstream emits content marked as *detail* (not to be spoken — headline vs. detail judgment is Doc 04's), this layer routes it to broadcast chat. `broadcast_posts` must contain the detail payload regardless of whether the headline was successfully audible. The plumbing obligation is Doc 02's; the judgment is never Doc 02's.
 4. Headlines-only budget: ≤4000 chars/hr, per-line soft cap 240 chars.
-4. Audible ack: canned string (e.g. "on it") fires ≤p95 500ms from pickup; distinct from resolved answer content.
-5. TTS time-to-first-audio: p50 ~40ms, p95 ≤120ms (Cartesia Sonic 3 pinned measurement).
-6. **First-grounded-text latency (CANONICAL §12.8)**: instrument pickup-to-first-grounded-answer-text-emitted on shallow direct-answer path (p50≤2s, p95≤4s). Record tool+turn count per sample; exclude LSP-bound and multi-pass samples.
-7. First-grounded-audio (shallow direct-answer population only): p50≤2.5s, p95≤5s.
-8. Speak-decision-to-audible: <1s p95 on Output Media leg (pinned measurement).
-9. Small-chunk Output Media buffer: max buffered audio ≤250ms (barge-in defeat prevention).
-10. _Stub wired in M4; proven in M7_: AC-SPEAK-06 (boundary gate; stub = always-True), AC-SPEAK-07 (barge-in abort; stub = no-op), AC-SPEAK-19 (ack suppressed when boundary False), AC-SPEAK-20 (tile ACK during boundary suppression).
+5. Audible ack: canned string (e.g. "on it") fires p95 ≤500ms from pickup; distinct from resolved answer content.
+6. TTS time-to-first-audio: p50 ~40ms, p95 ≤120ms (Cartesia Sonic 3 pinned measurement).
+7. **First-grounded-text latency (CANONICAL §12.8)**: instrument pickup-to-first-grounded-answer-text-emitted on shallow direct-answer path (p50≤2s, p95≤4s). Record tool+turn count per sample; exclude LSP-bound and multi-pass samples.
+8. First-grounded-audio (shallow direct-answer population only): p50≤2.5s, p95≤5s.
+9. Speak-decision-to-audible: p95 <1s on Output Media leg (pinned measurement).
+10. Small-chunk Output Media buffer: max buffered audio ≤250ms (barge-in defeat prevention).
+11. _Stub wired in M4; proven in M7_: AC-SPEAK-06 (boundary gate; stub = always-True), AC-SPEAK-07 (barge-in abort; stub = no-op), AC-SPEAK-19 (ack suppressed when boundary False), AC-SPEAK-20 (tile ACK during boundary suppression).
 
 **Criteria** (proven in M4): AC-SPEAK-01, AC-SPEAK-02, AC-SPEAK-03, AC-SPEAK-04, AC-SPEAK-05, AC-SPEAK-08, AC-SPEAK-09, AC-SPEAK-10, AC-SPEAK-11, AC-SPEAK-12, AC-SPEAK-13, AC-SPEAK-14, AC-SPEAK-15, AC-SPEAK-16, AC-SPEAK-17, AC-SPEAK-18 (16 criteria; AC-SPEAK-06/07/19/20 deferred to M7; AC-FAIL-19/AC-FAIL-20 fault-path lines run through this same text-copy mechanism — M8 explicitly verifies byte-equal parity on those paths)
 
@@ -172,6 +173,8 @@ CREATE TABLE webhook_events (
 
 #### M7 — Turn-taking + barge-in + mute *(RISKY: barge-in atomicity + <200ms kill path)*
 
+**Prerequisite: M6 must be complete** — the tile ACK draw path (M6 step 3) is required to prove AC-SPEAK-20 (boundary-independent ack falls back to tile ACK when no boundary opens in budget).
+
 1. Silero VAD on incoming audio → `speaking(on/off)` signal → barge-in trigger. Sourced from VAD onset, NOT AAI transcript (~300ms too slow).
 2. `boundary(now)` from AAI `end_of_turn` field on STT stream (confirmed M0; Smart Turn v3 fallback if not forwarded). Never from fixed timer or elapsed-silence clock.
 3. Both signals stream continuously to Orchestrator.
@@ -179,40 +182,45 @@ CREATE TABLE webhook_events (
 5. Voice output gate: TTS start requires `boundary==True`. Mid-thought breath (no `end_of_turn`) does NOT open gate.
 6. **Barge-in path**: VAD onset → `asyncio.cancel()` TTS streaming coroutine + `queue.clear()` → silence within 200ms p95. Small-chunk buffer (≤250ms max) ensures residual playout cannot exceed budget. Barge-in does NOT fire on Proxy's own output audio or silence.
 7. Barge-in stops mid-word (not end-of-utterance); speech queue flushed atomically (stop → flush, then upstream decides re-queue/bank/drop).
-8. Hard-mute kill-switch (Doc 04 sends trigger): kills in-flight TTS → `MUTED` state (voice off, tile+chat on). Voice stays off until re-invite. Speaking and muted states mutually exclusive.
-9. Real-audio provability: scripted onset during Proxy speech stops within budget; "quiet" silences voice with chat live.
-10. Wire real boundary/barge-in signals into M4 SPEAK module, proving the four deferred SPEAK criteria now that real signals are connected: AC-SPEAK-06 (voice starts only on boundary), AC-SPEAK-07 (barge-in aborts speech mid-word), AC-SPEAK-19 (ack suppressed when boundary False), AC-SPEAK-20 (tile ACK during boundary suppression).
+8. **AC-TURN-17 measurement** (zero-regression threshold): (a) baseline: measure barge-in stop latency p95 on a normal in-flight TTS line (no ack in flight); record as baseline_p95. (b) ack-in-flight: repeat measurement with an audible ack mid-stream; assert ack-in-flight_p95 ≤ baseline_p95 (regression_ms_max = 0 per AC-TURN-17). In-flight audible ack must be barge-able and must never increase the stop latency.
+9. Hard-mute kill-switch (Doc 04 sends trigger): kills in-flight TTS → `MUTED` state (voice off, tile+chat on). Voice stays off until re-invite. Speaking and muted states mutually exclusive.
+10. Real-audio provability: scripted onset during Proxy speech stops within budget; "quiet" silences voice with chat live.
+11. Wire real boundary/barge-in signals into M4 SPEAK module, proving the four deferred SPEAK criteria now that real signals are connected: AC-SPEAK-06 (voice starts only on boundary), AC-SPEAK-07 (barge-in aborts speech mid-word), AC-SPEAK-19 (ack suppressed when boundary False), AC-SPEAK-20 (tile ACK during boundary suppression).
 
 **Criteria**: AC-TURN-01 through AC-TURN-17 (17 criteria) + AC-SPEAK-06, AC-SPEAK-07, AC-SPEAK-19, AC-SPEAK-20 (4 deferred from M4) = 21 criteria proven in M7
 
 ---
 
-#### M8 — Failure + limits *(risky: rejoin-once FSM, mark-lost path)*
+#### M8 — Failure + limits *(risky: rejoin-once FSM, mark-lost path, recycle-monotonicity)*
 
 1. Bot drop → `_rejoin_consumed: bool` flag (set before rejoin API call) → exactly one auto-rejoin → gap announcement `[dropped_at, rejoined_at]` from Recall carrier timestamps (not local clock).
 2. Second drop after consumed rejoin → honest-stop (not infinite retry, not silent give-up).
 3. `bot-status` signal enum exactly `{connected, dropped, rejoined}`.
 4. STT hiccup: `transcript_segments.status DEFAULT 'pending'`; un-transcribed segment stays pending; close backfills pending as gap/lost (never dropped). No buffer-through claim (BYOK).
-5. TTS outage → degrade voice to chat with "voice is down" notice. Dead engine: never both mute and silent.
+5. TTS outage → degrade voice to chat with "voice is down" notice. Dead engine: never both mute and silent. Rejoin gap line and voice-down notice keep byte-equal text-copy parity (AC-FAIL-19, AC-FAIL-20).
 6. Per-bot outbound rate limiter via `limits` library (in-memory backend; zero hand-rolled token bucket).
 7. 5+ concurrent sends: all queued, all delivered, zero throttle-drops.
-8. Fault matrix: all four faults (drop, STT outage, TTS outage, rate-limit burst) produce their named honest-path observable; none broken-and-pretending.
+8. **AC-FAIL-18 combined end-to-end scenario**: run BOTH a forced-disconnect→rejoin→gap-announcement AND a 5+ burst→queue→all-deliver in ONE end-to-end simulation; verify both oracles in a single trace. This is a combined integration run, not two separate unit tests.
+9. **AC-SEAM-15 recycle-monotonicity simulation**: simulate a bot-drop→harness-recycle sequence; reload `transport_usd` from the DB row on reclaim; assert `transport_usd_after ≥ transport_usd_before`. Cost must never reset to 0 after recycle. (Recycle is exercised naturally in the M8 failure harness — this criterion belongs here, not in M9's static pass.)
+10. Fault matrix: all four faults (drop, STT outage, TTS outage, rate-limit burst) produce their named honest-path observable; none broken-and-pretending.
 
-**Criteria**: AC-FAIL-01 through AC-FAIL-20 (20 criteria)
+**Criteria**: AC-FAIL-01 through AC-FAIL-20 (20 criteria) + AC-SEAM-15 (recycle-monotonicity; moved from M9) = 21 criteria
 
 ---
 
 #### M9 — Seam conformance + cross-cutting (static analysis pass)
 
+*Per-milestone gate (all milestones): scan `uv.lock` after every `uv sync` for Pipecat/LiveKit-class names. M9 is the formal criterion gate for AC-SEAM-21, but the enforcement is ongoing.*
+
 1. Static: `TransportProvider`, `STTProvider`, `TTSProvider` Protocols exist. Concrete Recall/AAI/Cartesia imports confined to their impl modules; no raw client imports in callers.
-2. No Pipecat/LiveKit dependency in the package.
+2. No Pipecat/LiveKit dependency in the workspace — `uv.lock` scan (AC-SEAM-21).
 3. V0 concrete impls only; migration paths documented (OSS swap seams named, not built).
 4. Naming law: zero internal component names (Orchestrator/Scribe/workroom) in any user-visible string, signal name, or consent notice text.
-5. Transport cost accrual (AC-SEAM-13/14/15): simulate elapsed clock with multiple values → assert `transport_usd` tracks `elapsed_hours × rate` formula; assert recycle does not reset to 0; assert managed rate card sums $0.75–$0.85/hr.
-6. XCUT criteria: signal surface completeness, signal-shape conformance at every boundary, law-traceability, lethal-trifecta safety (transcript content treated as untrusted data; self-authored lines never become asks).
-7. `assert_registry_closed()` green with all doc02 internal signals absent.
+5. Transport cost accrual rate constants (AC-SEAM-13/14): simulate elapsed clock with multiple values → assert `transport_usd` tracks `elapsed_hours × rate_sum` formula; assert managed rate card sums $0.75–$0.85/hr; assert rate constants ARE the accrual constants, not a derived sum (AC-SEAM-22). *(AC-SEAM-15 recycle-monotonicity is proven in M8.)*
+6. Platform matrix parity (AC-SEAM-16/17): join/hear/speak/tile/screenshare on all 3 platforms; zero per-platform code in transport core.
+7. XCUT criteria: signal surface completeness (all 9 signals present and named per §3.10), signal-shape conformance at every boundary, delivery verbs return typed errors never throw (AC-XCUT-11), lethal-trifecta safety (transcript content treated as untrusted data; self-authored lines never become asks), `assert_registry_closed()` green.
 
-**Criteria**: AC-SEAM-04 through AC-SEAM-22 (19 remaining SEAM criteria), AC-XCUT-01 through AC-XCUT-11 (11 criteria) = 30 criteria
+**Criteria**: AC-SEAM-04..14, AC-SEAM-16..22 (18 criteria) + AC-XCUT-01..11 (11 criteria) = 29 criteria
 
 ---
 
@@ -228,11 +236,11 @@ CREATE TABLE webhook_events (
 | M5 | AC-CHAT-01..16 | 16 |
 | M6 | AC-CANVAS-01..15 | 15 |
 | M7 | AC-TURN-01..17, AC-SPEAK-06..07, 19..20 | 21 |
-| M8 | AC-FAIL-01..20 | 20 |
-| M9 | AC-SEAM-04..22, AC-XCUT-01..11 | 30 |
+| M8 | AC-FAIL-01..20, AC-SEAM-15 | 21 |
+| M9 | AC-SEAM-04..14, 16..22, AC-XCUT-01..11 | 29 |
 | **Raw total** | | **170** |
 
-6 criteria counted in M0 and again at their section milestone: AC-EVENTS-11 (M0+M2), AC-CHAT-12 (M0+M5), AC-CHAT-14 (M0+M5), AC-HEAR-12 (M0+M3), AC-TURN-16 (M0+M7), AC-FAIL-11 (M0+M8). M0 gives an early-gate proof; each is formally green at its section milestone. **Net unique: 164 ✓**
+6 criteria double-counted in M0 and their section milestone: AC-EVENTS-11 (M0+M2), AC-CHAT-12 (M0+M5), AC-CHAT-14 (M0+M5), AC-HEAR-12 (M0+M3), AC-TURN-16 (M0+M7), AC-FAIL-11 (M0+M8). AC-SEAM-15 counted once (in M8; moved from M9). **Net unique: 164 ✓**
 
 ---
 
