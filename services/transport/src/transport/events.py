@@ -54,30 +54,51 @@ class ProcessResult:
     emitted: list[Signal] = field(default_factory=list)
 
 
+def _as_dict(value: Any) -> dict[str, Any]:
+    """Return ``value`` when it is a dict, else an empty dict.
+
+    A malformed or partial webhook delivery (a null ``data``, a scalar where an
+    object was expected) must degrade to 'no fields' rather than raising and
+    crashing ingest — the spec's 'honest about malformed' stance. This keeps the
+    parsers total functions over any JSON payload.
+    """
+    return value if isinstance(value, dict) else {}
+
+
 def is_bot_removed(payload: dict[str, Any]) -> bool:
     """True for an explicit bot-removed webhook (dedicated event or a terminal bot-status).
 
     A removal is terminal — the bot is out of the call for good — unlike a transient
     ``dropped`` that rejoins; it closes the meeting exactly like a meeting-end (§3.1).
     """
+    payload = _as_dict(payload)
     event = payload.get("event")
     if event == _EVT_BOT_REMOVED:
         return True
     if event == _EVT_BOT_STATUS:
-        return payload.get("data", {}).get("status") in _REMOVED_BOT_STATUS
+        return _as_dict(payload.get("data")).get("status") in _REMOVED_BOT_STATUS
     return False
 
 
 def is_meeting_end(payload: dict[str, Any]) -> bool:
     """True ONLY for an explicit meeting-closed OR bot-removed webhook — never inferred
     from silence (AC-EVENTS-06/07; R-doc02-EVENTS-07: "meeting closes / bot removed")."""
+    payload = _as_dict(payload)
     return payload.get("event") == _EVT_MEETING_END or is_bot_removed(payload)
 
 
 def meeting_metadata(payload: dict[str, Any]) -> MeetingMetadata:
-    """Title + participant list passed through verbatim from the source (AC-EVENTS-05)."""
-    data = payload.get("data", {})
-    parts = tuple(p.get("name", "") for p in data.get("participants", []))
+    """Title + participant list passed through verbatim from the source (AC-EVENTS-05).
+
+    Defensive against malformed deliveries: a non-object ``data``, a non-list
+    ``participants``, or non-object participant entries degrade to empty fields
+    rather than raising, and all names are coerced to ``str``.
+    """
+    data = _as_dict(_as_dict(payload).get("data"))
+    raw_parts = data.get("participants", [])
+    if not isinstance(raw_parts, (list, tuple)):
+        raw_parts = []
+    parts = tuple(str(_as_dict(p).get("name", "")) for p in raw_parts)
     return MeetingMetadata(title=str(data.get("title", "")), participants=parts)
 
 
