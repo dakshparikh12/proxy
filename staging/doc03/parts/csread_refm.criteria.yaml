@@ -1,0 +1,624 @@
+# csread_refm.criteria.yaml — Doc 03 (Notes / Scribe)
+# §3.3.1 Cross-service notes read path  (AC-CSREAD-NN)
+# §3.4   Referent matcher               (AC-REFM-NN)
+#
+# Oracles: deterministic-preferred (static-analysis / state-machine /
+#          simulation-trace / latency). Judge only where no deterministic oracle exists.
+#
+# Dependency classes:
+#   db:postgres  — note_deltas fold; /internal/notes endpoint
+#   db:sqlite    — graph_nodes corpus for lookup_referent
+#   null         — pure local logic, no external dependency
+#
+# NEG criteria pair every non-null dependency criterion (as required by rules).
+
+criteria:
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # §3.3.1 — Cross-service notes read path
+  # ────────────────────────────────────────────────────────────────────────────
+
+  - criterion_id: AC-CSREAD-01
+    name: "notes_ref equals meeting_id — never a separate opaque handle"
+    evidence_class: "[static]"
+    authority_refs: [R-doc03-CSREAD-01]
+    criticality: P0
+    blocking: true
+    dependency_class: null
+    behavior:
+      given: "The wake-turn bundle construction code"
+      when: "Static analysis inspects every place notes_ref is set and the bundle is assembled"
+      then:
+        - "notes_ref is assigned the meeting_id value with no transformation"
+        - "No code path assigns notes_ref a separate opaque handle, a UUID not equal to meeting_id, or an object reference"
+        - "The bundle carries notes_ref (not the notes object) at the field that a downstream consumer reads"
+    primary_oracle:
+      type: static_analysis
+      artifact: >
+        AST scan: assert every assignment `notes_ref = X` has X equal to meeting_id;
+        assert 0 occurrences of the notes object being serialised into the bundle field
+        that carries notes_ref; assert bundle schema field is typed as a ref (str), not
+        an object
+    thresholds:
+      notes_ref_not_meeting_id_occurrences_allowed: 0
+      inline_notes_object_in_bundle_allowed: 0
+    fault_model_refs: [F-CSREAD-NOTES-REF-NOT-MEETING-ID]
+    test_ids: [T-CSREAD-01]
+
+  - criterion_id: AC-CSREAD-02
+    name: "CONTRACT is fold-from-note_deltas, not NOTES_CACHE (structural)"
+    evidence_class: "[static]"
+    authority_refs: [R-doc03-CSREAD-02, R-doc03-CSREAD-06]
+    criticality: P0
+    blocking: true
+    dependency_class: db:postgres
+    behavior:
+      given: "The /internal/notes/{meeting_id} handler and the /m/{meeting_id} handler"
+      when: "Static analysis traces every code path that produces the notes response"
+      then:
+        - "Each handler contains a path that reads note_deltas from Postgres and applies the left-fold in id-ascending order"
+        - "No handler is wired to return NOTES_CACHE as the sole code path (the cache path, if present, must be conditional)"
+        - "The fold function called from both handlers is the same canonical fold symbol"
+    primary_oracle:
+      type: static_analysis
+      artifact: >
+        AST/grep: assert each response handler calls the canonical fold function on
+        note_deltas; assert NOTES_CACHE read is guarded by a conditional (not
+        unconditional); assert both handlers reference the same fold symbol
+    thresholds:
+      handlers_with_no_postgres_fold_path_allowed: 0
+      unconditional_notes_cache_returns_allowed: 0
+      divergent_fold_symbols_allowed: 0
+    fault_model_refs: [F-CSREAD-CACHE-AS-CONTRACT]
+    test_ids: [T-CSREAD-02]
+
+  - criterion_id: AC-CSREAD-02-NEG
+    name: "NEG: /internal/notes returns 503 when Postgres is unavailable (fold-path dependency)"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-CSREAD-02, R-doc03-CSREAD-03]
+    criticality: P1
+    blocking: true
+    dependency_class: db:postgres
+    behavior:
+      given: "A known meeting_id and a simulated Postgres outage (connection refused)"
+      when: "GET /internal/notes/{meeting_id} is called while Postgres is unavailable"
+      then:
+        - "The endpoint does NOT return HTTP 200 with stale or fabricated notes"
+        - "The endpoint returns an error status (5xx) that signals the dependency failure"
+        - "No silent fallback to an empty notes object occurs"
+    primary_oracle:
+      type: simulation_trace
+      artifact: >
+        simulate Postgres connection refusal; assert HTTP status >= 500; assert response
+        body is not a valid notes object; assert 0 silent empty-object returns
+    thresholds:
+      silent_fallback_to_empty_notes_allowed: 0
+      fabricated_200_during_postgres_outage_allowed: 0
+    fault_model_refs: [F-CSREAD-POSTGRES-OUTAGE-SILENT-FALLBACK]
+    test_ids: [T-CSREAD-02-NEG]
+
+  - criterion_id: AC-CSREAD-03
+    name: "GET /internal/notes/{meeting_id} → 200 for known, 404 for unknown (golden path)"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-CSREAD-03]
+    criticality: P1
+    blocking: true
+    dependency_class: db:postgres
+    golden_path: true
+    behavior:
+      given: "The /internal/notes/{meeting_id} endpoint with a valid internal bearer token"
+      when: >
+        (a) meeting_id is known (note_deltas rows exist) and
+        (b) meeting_id is unknown (no rows exist)
+      then:
+        - "Case (a): HTTP 200 with the notes object as valid JSON is returned"
+        - "Case (b): HTTP 404 is returned; no 200 with an empty object is returned for unknown meetings"
+        - "No other 2xx status code is returned in either case"
+    primary_oracle:
+      type: simulation_trace
+      artifact: >
+        POST two requests; assert response_code==200 and valid_notes_json for known meeting;
+        assert response_code==404 for unknown meeting; assert 0 unexpected 2xx codes
+    thresholds:
+      incorrect_status_for_known_meeting_allowed: 0
+      empty_200_for_unknown_meeting_allowed: 0
+    fault_model_refs: [F-CSREAD-WRONG-STATUS-CODE]
+    test_ids: [T-CSREAD-03]
+
+  - criterion_id: AC-CSREAD-03-NEG
+    name: "NEG: valid internal token required; missing token → 401/403"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-CSREAD-05]
+    criticality: P0
+    blocking: true
+    dependency_class: null
+    behavior:
+      given: "GET /internal/notes/{meeting_id} for a known meeting"
+      when: "The request carries no Authorization header (no token)"
+      then:
+        - "The endpoint returns HTTP 401 or 403"
+        - "No notes data is returned to the unauthenticated caller"
+    primary_oracle:
+      type: simulation_trace
+      artifact: >
+        send GET without Authorization header; assert status in {401, 403};
+        assert response body contains no notes object
+    thresholds:
+      unauthenticated_200_allowed: 0
+    fault_model_refs: [F-CSREAD-UNAUTH-ACCESS]
+    test_ids: [T-CSREAD-03-NEG]
+
+  - criterion_id: AC-CSREAD-04
+    name: "Endpoint is mounted outside the auth wall (route-group check)"
+    evidence_class: "[static]"
+    authority_refs: [R-doc03-CSREAD-04]
+    criticality: P0
+    blocking: true
+    dependency_class: null
+    behavior:
+      given: "The router/ASGI mount configuration for /internal/notes/{meeting_id}"
+      when: "Static analysis inspects route registration and middleware application"
+      then:
+        - "/internal/notes/{meeting_id} is registered in the same route group as /internal/reconcile"
+        - "No user-session-auth middleware wraps this route"
+        - "The user-auth wall middleware is applied only to routes outside the /internal/* group"
+    primary_oracle:
+      type: static_analysis
+      artifact: >
+        AST/grep: assert /internal/notes is registered in the /internal route group
+        alongside /internal/reconcile; assert 0 user-session middleware decorators or
+        dependencies on this route; assert user-auth middleware scope excludes /internal/*
+    thresholds:
+      user_auth_middleware_on_internal_notes_allowed: 0
+      route_outside_internal_group_allowed: 0
+    fault_model_refs: [F-CSREAD-ROUTE-INSIDE-AUTH-WALL]
+    test_ids: [T-CSREAD-04]
+
+  - criterion_id: AC-CSREAD-05
+    name: "User session cookie is rejected; only internal bearer token is accepted"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-CSREAD-05]
+    criticality: P0
+    blocking: true
+    dependency_class: null
+    behavior:
+      given: "GET /internal/notes/{meeting_id} for a known meeting"
+      when: >
+        (a) the request carries only a valid user session cookie (no internal bearer token)
+        (b) the request carries the correct internal bearer token (no cookie)
+      then:
+        - "Case (a): HTTP 401 or 403 is returned; session-cookie-only access is denied"
+        - "Case (b): HTTP 200 with the notes object is returned"
+    primary_oracle:
+      type: simulation_trace
+      artifact: >
+        case (a): send request with Cookie: session=<valid_session> only; assert status
+        in {401, 403}; case (b): send with Authorization: Bearer <internal_token>; assert
+        status==200
+    thresholds:
+      session_cookie_access_granted_allowed: 0
+    fault_model_refs: [F-CSREAD-SESSION-COOKIE-ACCEPTED]
+    test_ids: [T-CSREAD-05]
+
+  - criterion_id: AC-CSREAD-06
+    name: "NOTES_CACHE serve is conditional optimization, not the contract path"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-CSREAD-07]
+    criticality: P1
+    blocking: true
+    dependency_class: db:postgres
+    behavior:
+      given: >
+        A harness host where NOTES_CACHE[meeting_id] is populated AND a harness host
+        where NOTES_CACHE[meeting_id] is absent (cold start or evicted)
+      when: "GET /internal/notes/{meeting_id} is called in each state"
+      then:
+        - "In both states the response is a valid notes object (HTTP 200)"
+        - "The response bytes from the cold-cache path are identical to a fresh fold from note_deltas"
+        - "The cache path, if taken, returns bytes identical to what the fold would produce (no divergence)"
+    primary_oracle:
+      type: simulation_trace
+      artifact: >
+        run twice: first with NOTES_CACHE evicted, then with it populated; assert both
+        return HTTP 200; assert both response bodies are byte-equal to the direct
+        note_deltas fold; assert 0 divergence between cache-hit and fold-from-db paths
+    thresholds:
+      cold_cache_failures_allowed: 0
+      cache_vs_fold_divergence_allowed: 0
+    fault_model_refs: [F-CSREAD-CACHE-DIVERGENCE]
+    test_ids: [T-CSREAD-06]
+
+  - criterion_id: AC-CSREAD-07
+    name: "Doc 05 bundle handling calls GET /internal/notes; never reads object inline"
+    evidence_class: "[static]"
+    authority_refs: [R-doc03-CSREAD-08]
+    criticality: P1
+    blocking: true
+    dependency_class: null
+    behavior:
+      given: "The Doc 05 bundle-handling code that resolves notes_ref"
+      when: "Static analysis traces every path that reads the notes content from the bundle"
+      then:
+        - "notes_ref resolution is achieved by an HTTP call to GET /internal/notes/{meeting_id}"
+        - "No code path reads a notes object directly from the bundle payload"
+        - "No code path extracts or deserialises a notes object from the notes_ref field"
+    primary_oracle:
+      type: static_analysis
+      artifact: >
+        AST/grep: assert 0 code paths that deserialise a notes object from the bundle
+        notes_ref field; assert the resolution path contains an HTTP GET to
+        /internal/notes/{meeting_id}; assert the function that resolves notes_ref does
+        not accept an already-materialised notes object
+    thresholds:
+      inline_notes_object_reads_from_bundle_allowed: 0
+    fault_model_refs: [F-CSREAD-INLINE-NOTES-IN-BUNDLE]
+    test_ids: [T-CSREAD-07]
+
+  - criterion_id: AC-CSREAD-08
+    name: "GET /m/{meeting_id} user surface folds from note_deltas, never NOTES_CACHE"
+    evidence_class: "[static]"
+    authority_refs: [R-doc03-CSREAD-09]
+    criticality: P1
+    blocking: true
+    dependency_class: db:postgres
+    behavior:
+      given: "The authenticated GET /m/{meeting_id} route handler"
+      when: "Static analysis traces the data path that produces the notes content in the response"
+      then:
+        - "The handler calls the canonical note_deltas fold function (same symbol as /internal/notes)"
+        - "No unconditional NOTES_CACHE read is present on this handler's response path"
+    primary_oracle:
+      type: static_analysis
+      artifact: >
+        AST/grep: assert /m/{meeting_id} handler calls the canonical fold symbol;
+        assert 0 unconditional NOTES_CACHE reads on the /m/ response path
+    thresholds:
+      unconditional_notes_cache_on_m_handler_allowed: 0
+    fault_model_refs: [F-CSREAD-M-HANDLER-FROM-CACHE]
+    test_ids: [T-CSREAD-08]
+
+  - criterion_id: AC-CSREAD-08-NEG
+    name: "NEG: /m/{meeting_id} returns error (not stale cache) when Postgres unavailable"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-CSREAD-09]
+    criticality: P1
+    blocking: true
+    dependency_class: db:postgres
+    behavior:
+      given: "GET /m/{meeting_id} with Postgres connection simulated as unavailable"
+      when: "The user surface is called while the database is down"
+      then:
+        - "The response is not HTTP 200 with a stale or empty notes object"
+        - "The response signals the error (5xx or appropriate error page)"
+    primary_oracle:
+      type: simulation_trace
+      artifact: >
+        simulate Postgres down; assert /m/ response is not HTTP 200 with notes content;
+        assert 0 stale-cache reads returned as fresh
+    thresholds:
+      stale_cache_returned_as_fresh_allowed: 0
+    fault_model_refs: [F-CSREAD-M-HANDLER-STALE-ON-DB-DOWN]
+    test_ids: [T-CSREAD-08-NEG]
+
+  - criterion_id: AC-CSREAD-09
+    name: "Freshness flag is present in every HTTP 200 from /internal/notes"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-CSREAD-10]
+    criticality: P1
+    blocking: true
+    dependency_class: db:postgres
+    behavior:
+      given: "A known meeting with note_deltas rows and a valid internal bearer token"
+      when: "GET /internal/notes/{meeting_id} returns HTTP 200"
+      then:
+        - "The JSON response body contains the freshness flag field (as defined in §3.8)"
+        - "The freshness flag field is not null, not missing, and not an empty string"
+    primary_oracle:
+      type: simulation_trace
+      artifact: >
+        call GET /internal/notes/{meeting_id}; parse JSON; assert
+        'freshness_flag' key exists and value is not null/empty; assert the field is
+        present in every 200 response across multiple meetings
+    thresholds:
+      missing_freshness_flag_in_200_allowed: 0
+    fault_model_refs: [F-CSREAD-MISSING-FRESHNESS-FLAG]
+    test_ids: [T-CSREAD-09]
+
+  - criterion_id: AC-CSREAD-09-NEG
+    name: "NEG: freshness flag reflects Postgres-fold lag, not stale clock"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-CSREAD-10]
+    criticality: P1
+    blocking: true
+    dependency_class: db:postgres
+    behavior:
+      given: "A meeting where new note_deltas have been written since the last NOTES_CACHE build"
+      when: "GET /internal/notes/{meeting_id} folds from Postgres (not cache)"
+      then:
+        - "The freshness flag reflects the Postgres-fold timestamp, not a stale cached timestamp"
+        - "Serving NOTES_CACHE does not result in a freshness flag that lags behind the actual fold"
+    primary_oracle:
+      type: simulation_trace
+      artifact: >
+        insert note_delta after last cache build; call endpoint; assert freshness_flag
+        timestamp is at or after the new delta's created_at; assert 0 freshness_flag
+        values older than the most recent delta
+    thresholds:
+      stale_freshness_flag_occurrences_allowed: 0
+    fault_model_refs: [F-CSREAD-STALE-FRESHNESS-FLAG]
+    test_ids: [T-CSREAD-09-NEG]
+
+  - criterion_id: AC-CSREAD-10
+    name: "Fold is byte-identical across all callers for the same note_deltas state"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-CSREAD-11]
+    criticality: P0
+    blocking: true
+    dependency_class: db:postgres
+    behavior:
+      given: "A meeting with a fixed set of note_deltas rows (no new writes during the test)"
+      when: "The notes object is produced by (a) /internal/notes, (b) /m/{meeting_id}, and (c) direct fold call"
+      then:
+        - "All three outputs are byte-identical JSON"
+        - "No ordering non-determinism or random insertion order produces a different output"
+    primary_oracle:
+      type: simulation_trace
+      artifact: >
+        freeze note_deltas; call all three paths; assert bytes(a)==bytes(b)==bytes(c);
+        repeat 10 times to detect non-determinism; assert 0 differing outputs
+    thresholds:
+      fold_non_determinism_occurrences_allowed: 0
+      cross_caller_divergence_allowed: 0
+    fault_model_refs: [F-CSREAD-FOLD-NON-DETERMINISTIC]
+    test_ids: [T-CSREAD-10]
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # §3.4 — Referent matcher (deterministic, no LLM)
+  # ────────────────────────────────────────────────────────────────────────────
+
+  - criterion_id: AC-REFM-01
+    name: "lookup_referent makes no LLM call (structural)"
+    evidence_class: "[static]"
+    authority_refs: [R-doc03-REFM-01, R-doc03-REFM-03]
+    criticality: P0
+    blocking: true
+    dependency_class: null
+    behavior:
+      given: "The lookup_referent function body and its full call graph"
+      when: "Static analysis traverses every code path reachable from lookup_referent"
+      then:
+        - "No anthropic.messages.create call, no openai.chat.completions call, and no equivalent LLM API call appears on any reachable path"
+        - "No call_external seam (libs/http) is invoked from lookup_referent"
+        - "The function is pure local computation over the graph_nodes / overview corpus"
+    primary_oracle:
+      type: static_analysis
+      artifact: >
+        call-graph scan from lookup_referent: assert 0 calls to any LLM API
+        (anthropic/openai/etc.), 0 calls to call_external; assert all reachable
+        functions are local string/rank operations
+    thresholds:
+      llm_calls_from_lookup_referent_allowed: 0
+      external_http_calls_from_lookup_referent_allowed: 0
+    fault_model_refs: [F-REFM-LLM-CALL-IN-LOOKUP]
+    test_ids: [T-REFM-01]
+
+  - criterion_id: AC-REFM-02
+    name: "lookup_referent returns node_id | area | None — no other type"
+    evidence_class: "[static]"
+    authority_refs: [R-doc03-REFM-02]
+    criticality: P0
+    blocking: true
+    dependency_class: db:sqlite
+    behavior:
+      given: "The lookup_referent function signature and return-type annotations"
+      when: "Static analysis inspects the return type and every return statement"
+      then:
+        - "The return type is annotated as Union[str, None] or equivalent (node_id | area | None)"
+        - "Every return statement returns one of: a string (node_id or area), or None"
+        - "No boolean, object, list, or dict is ever returned"
+    primary_oracle:
+      type: static_analysis
+      artifact: >
+        mypy --strict on lookup_referent: assert return type is Optional[str];
+        AST scan: assert every return stmt returns a str literal/variable or None;
+        assert 0 non-str/None returns
+    thresholds:
+      invalid_return_types_allowed: 0
+    fault_model_refs: [F-REFM-WRONG-RETURN-TYPE]
+    test_ids: [T-REFM-02]
+
+  - criterion_id: AC-REFM-02-NEG
+    name: "NEG: lookup_referent returns None gracefully when graph_nodes is empty/unavailable"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-REFM-02, R-doc03-REFM-05]
+    criticality: P1
+    blocking: true
+    dependency_class: db:sqlite
+    behavior:
+      given: "A graph_nodes corpus that is empty (no rows) or the SQLite file is absent"
+      when: "lookup_referent is called with any term"
+      then:
+        - "lookup_referent returns None for every term (honest unbound)"
+        - "No exception is raised and no fabricated node_id is returned"
+        - "The caller receives None and records the referent as plain/unbound"
+    primary_oracle:
+      type: simulation_trace
+      artifact: >
+        call lookup_referent with empty / missing graph_nodes; assert return value is
+        None for every input; assert 0 exceptions raised; assert 0 fabricated node_ids
+    thresholds:
+      exceptions_on_empty_corpus_allowed: 0
+      fabricated_bindings_on_empty_corpus_allowed: 0
+    fault_model_refs: [F-REFM-EXCEPTION-ON-EMPTY-CORPUS]
+    test_ids: [T-REFM-02-NEG]
+
+  - criterion_id: AC-REFM-03
+    name: "Search corpus is limited to overview areas + graph_nodes only"
+    evidence_class: "[static]"
+    authority_refs: [R-doc03-REFM-04]
+    criticality: P1
+    blocking: true
+    dependency_class: db:sqlite
+    behavior:
+      given: "The lookup_referent implementation and its data-access paths"
+      when: "Static analysis traces every data source read inside lookup_referent"
+      then:
+        - "The only data sources accessed are: (a) the core overview areas data structure, and (b) graph_nodes (area names, file names, key symbols)"
+        - "No full-codebase scan, no git tree walk, no external index, and no other table is read"
+    primary_oracle:
+      type: static_analysis
+      artifact: >
+        AST/grep: trace all DB/file reads reachable from lookup_referent; assert reads
+        are scoped to graph_nodes table and the overview areas structure; assert 0 reads
+        from other tables, git trees, or external APIs
+    thresholds:
+      out_of_scope_data_sources_allowed: 0
+    fault_model_refs: [F-REFM-SCOPE-VIOLATION]
+    test_ids: [T-REFM-03]
+
+  - criterion_id: AC-REFM-03-NEG
+    name: "NEG: lookup_referent corpus isolation — other tables absent from query plan"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-REFM-04]
+    criticality: P1
+    blocking: true
+    dependency_class: db:sqlite
+    behavior:
+      given: "A SQLite database with graph_nodes and additional unrelated tables"
+      when: "lookup_referent is called with a term that could naively match an unrelated table"
+      then:
+        - "No query is issued to an unrelated table"
+        - "The match result is derived solely from graph_nodes and overview areas"
+    primary_oracle:
+      type: simulation_trace
+      artifact: >
+        enable SQLite query logging; call lookup_referent; assert 0 queries to tables
+        other than graph_nodes; assert 0 full-table scans on non-graph_nodes tables
+    thresholds:
+      queries_to_out_of_scope_tables_allowed: 0
+    fault_model_refs: [F-REFM-CROSS-TABLE-QUERY]
+    test_ids: [T-REFM-03-NEG]
+
+  - criterion_id: AC-REFM-04
+    name: "Known term binds to the correct real node (positive match)"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-REFM-02, R-doc03-REFM-04]
+    criticality: P1
+    blocking: true
+    dependency_class: db:sqlite
+    behavior:
+      given: >
+        A graph_nodes corpus containing an area named "payments/checkout" and a file
+        named "checkout.py"
+      when: "lookup_referent('checkout') is called"
+      then:
+        - "The return value is a non-None string that identifies the real 'payments/checkout' area or the checkout.py file node"
+        - "The returned node_id or area exists in graph_nodes or the overview areas (real, not fabricated)"
+    primary_oracle:
+      type: simulation_trace
+      artifact: >
+        seed graph_nodes with payments/checkout area; call lookup_referent('checkout');
+        assert result is not None; assert result in {known_area_ids, known_node_ids};
+        assert 0 fabricated IDs
+    thresholds:
+      fabricated_node_ids_allowed: 0
+    fault_model_refs: [F-REFM-FABRICATED-BINDING]
+    test_ids: [T-REFM-04]
+
+  - criterion_id: AC-REFM-05
+    name: "Unmatched term returns None, stored as plain unbound referent (no fabrication)"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-REFM-05]
+    criticality: P0
+    blocking: true
+    dependency_class: null
+    behavior:
+      given: "A graph_nodes corpus that contains no entry matching a nonsense term"
+      when: "lookup_referent('xqzjflk_nonsense_abc123') is called"
+      then:
+        - "lookup_referent returns None"
+        - "The notes entry for this candidate is recorded as a plain referent (named but unbound)"
+        - "No fabricated node_id, no invented area name, and no empty-string stand-in is recorded"
+    primary_oracle:
+      type: simulation_trace
+      artifact: >
+        call lookup_referent with a nonsense term guaranteed absent from the corpus;
+        assert return value is None; assert the notes entry carries bound=False/None;
+        assert 0 fabricated binding values
+    thresholds:
+      fabricated_bindings_on_no_match_allowed: 0
+      empty_string_bindings_allowed: 0
+    fault_model_refs: [F-REFM-FABRICATED-BINDING-ON-MISS]
+    test_ids: [T-REFM-05]
+
+  - criterion_id: AC-REFM-06
+    name: "Bound referent is carried forward in the notes entry to the Workroom"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-REFM-06]
+    criticality: P1
+    blocking: true
+    dependency_class: null
+    behavior:
+      given: "A referent candidate where lookup_referent returns a real node_id"
+      when: "The note delta is applied and the notes object is folded then read back via /internal/notes"
+      then:
+        - "The notes entry for that referent contains the node_id in the binding field"
+        - "The binding is not stripped, nulled, or lost during the fold or storage"
+    primary_oracle:
+      type: simulation_trace
+      artifact: >
+        emit a delta with a bound referent (node_id='X'); apply delta; call
+        /internal/notes; parse response; assert referent entry has binding=='X';
+        assert 0 stripped/null bindings
+    thresholds:
+      stripped_bindings_in_folded_notes_allowed: 0
+    fault_model_refs: [F-REFM-BINDING-STRIPPED-IN-FOLD]
+    test_ids: [T-REFM-06]
+
+  - criterion_id: AC-REFM-07
+    name: "No LLM-based referent resolution exists in V0 codebase (Expansion scope guard)"
+    evidence_class: "[static]"
+    authority_refs: [R-doc03-REFM-07]
+    criticality: P1
+    blocking: true
+    dependency_class: null
+    behavior:
+      given: "The entire V0 codebase"
+      when: "Static analysis searches for any agentic or LLM-based referent resolution path"
+      then:
+        - "No code path exists that calls an LLM to resolve a referent in V0"
+        - "No feature flag, conditional import, or dead-code path exists that would activate LLM-based referent resolution in the V0 configuration"
+    primary_oracle:
+      type: static_analysis
+      artifact: >
+        grep/AST scan: assert 0 functions named or documented as 'agentic referent',
+        'llm_referent', or equivalent; assert 0 calls to LLM APIs on any code path
+        reachable from the referent-resolution flow; assert 0 TODO/feature-flag stubs
+        that gate LLM referent code in V0
+    thresholds:
+      llm_referent_code_paths_in_v0_allowed: 0
+    fault_model_refs: [F-REFM-LLM-REFERENT-OVERBUILD]
+    test_ids: [T-REFM-07]
+
+  - criterion_id: AC-REFM-08
+    name: "lookup_referent is deterministic for the same term and corpus state"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-REFM-01]
+    criticality: P0
+    blocking: true
+    dependency_class: null
+    behavior:
+      given: "A fixed graph_nodes corpus (no writes during the test)"
+      when: "lookup_referent is called 100 times with the same term"
+      then:
+        - "All 100 calls return the same value (str or None)"
+        - "No non-determinism (e.g., random ranking tiebreaks, hash-randomised order) causes different returns"
+    primary_oracle:
+      type: simulation_trace
+      artifact: >
+        freeze graph_nodes; call lookup_referent('checkout') 100 times; assert all
+        return values are identical; assert 0 differing results
+    thresholds:
+      non_deterministic_returns_allowed: 0
+    fault_model_refs: [F-REFM-NON-DETERMINISTIC]
+    test_ids: [T-REFM-08]
