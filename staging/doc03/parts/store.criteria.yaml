@@ -1,0 +1,648 @@
+# store.criteria.yaml — Doc 03 (Notes / Scribe) — §3.3 The notes object (dual storage plane)
+# Acceptance criteria. Infrastructure slice: all criteria require real Postgres or real GCS.
+# ID scheme: AC-STORE-NN. authority_refs point at R-doc03-STORE-NN in store.requirements.yaml.
+#
+# dependency_class conventions:
+#   db:postgres  → real Postgres via Cloud SQL Auth-Proxy or test container; MUST NOT replace asyncpg with in-memory mock
+#   gcs:objects  → real GCS bucket or testcontainers-equivalent; MUST NOT replace storage client with Mock()
+#
+# golden_path: false for all (storage is infrastructure, not end-to-end user path)
+
+# ── transcript_segments schema ────────────────────────────────────────────────
+
+- criterion_id: AC-STORE-01
+  name: "transcript_segments.status DEFAULT is 'pending' (not 'comprehended')"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-01]
+  criticality: P0
+  blocking: true
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or test container; MUST NOT replace asyncpg with an in-memory mock"
+  golden_path: false
+  behavior:
+    given: "A live Postgres schema with transcript_segments applied via Alembic"
+    when:  "A row is inserted into transcript_segments without specifying status"
+    then:
+      - "The inserted row has status='pending' as read back from the database"
+      - "The column is NOT NULL and the default is exactly 'pending', not 'comprehended' or 'gap'"
+  primary_oracle:
+    type: db_column_default_assertion
+    artifact: "INSERT a row omitting status; SELECT status FROM transcript_segments WHERE id=<new>; assert == 'pending'"
+  thresholds:
+    wrong_default_allowed: 0
+    null_default_allowed: 0
+  fault_model_refs: [F-WRONG-STATUS-DEFAULT]
+  test_ids: [T-STORE-01]
+  verification_ladder: [lint, unit, integration]
+
+- criterion_id: AC-STORE-01-NEG
+  name: "NEG: 'comprehended' or 'gap' status is NOT the default for new rows"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-01]
+  criticality: P0
+  blocking: true
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or test container; MUST NOT replace asyncpg with an in-memory mock"
+  golden_path: false
+  behavior:
+    given: "A live Postgres schema with transcript_segments applied via Alembic"
+    when:  "A row is inserted without specifying status and then read back"
+    then:
+      - "The row does NOT have status='comprehended' and does NOT have status='gap'"
+      - "If the column default were changed to 'comprehended', this test would catch it"
+  primary_oracle:
+    type: db_negative_assertion
+    artifact: "INSERT without status; SELECT status; assert != 'comprehended' AND != 'gap'"
+  thresholds:
+    wrong_status_on_insert_allowed: 0
+  fault_model_refs: [F-WRONG-STATUS-DEFAULT]
+  test_ids: [T-STORE-01-NEG]
+  verification_ladder: [integration, negative]
+
+# ── note_deltas UNIQUE INDEX / ON CONFLICT DO NOTHING ─────────────────────────
+
+- criterion_id: AC-STORE-02
+  name: "note_deltas UNIQUE INDEX (meeting_id, window_start_s, entry_id, op) — duplicate silently discarded"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-02]
+  criticality: P0
+  blocking: true
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or test container; MUST NOT replace asyncpg with an in-memory mock"
+  golden_path: false
+  behavior:
+    given: "A live Postgres schema with note_deltas and its UNIQUE INDEX applied"
+    when:  "The same (meeting_id, window_start_s, entry_id, op) tuple is inserted twice"
+    then:
+      - "The first insert succeeds and produces one row"
+      - "The second insert is silently discarded (ON CONFLICT DO NOTHING); no exception is raised"
+      - "Exactly one row exists for that composite key after both inserts"
+  primary_oracle:
+    type: db_conflict_assertion
+    artifact: "INSERT same tuple twice; assert row count == 1; assert no exception raised on second insert"
+  thresholds:
+    duplicate_rows_allowed: 0
+    exceptions_on_duplicate_allowed: 0
+  fault_model_refs: [F-DUPLICATE-DELTA-ROW]
+  test_ids: [T-STORE-02]
+  verification_ladder: [lint, unit, integration]
+
+- criterion_id: AC-STORE-02-NEG
+  name: "NEG: inserting a DISTINCT (op) for same (meeting_id, window_start_s, entry_id) is NOT rejected"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-02]
+  criticality: P1
+  blocking: false
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or test container; MUST NOT replace asyncpg with an in-memory mock"
+  golden_path: false
+  behavior:
+    given: "A row exists for (meeting_id=M, window_start_s=W, entry_id=E, op='add')"
+    when:  "A row is inserted with (meeting_id=M, window_start_s=W, entry_id=E, op='patch') — op differs"
+    then:
+      - "The second insert succeeds (op is part of the unique key, so different op is a new row)"
+      - "Two rows exist: one with op='add' and one with op='patch'"
+  primary_oracle:
+    type: db_conflict_negative_assertion
+    artifact: "INSERT 'add'; INSERT 'patch' (same meeting/window/entry); assert count==2, no conflict"
+  thresholds:
+    valid_inserts_rejected_allowed: 0
+  fault_model_refs: [F-OVER-BROAD-CONFLICT-GUARD]
+  test_ids: [T-STORE-02-NEG]
+  verification_ladder: [integration, negative]
+
+# ── meeting_id is UUID in all app tables ──────────────────────────────────────
+
+- criterion_id: AC-STORE-03
+  name: "meeting_id column is uuid type in transcript_segments AND note_deltas"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-03]
+  criticality: P0
+  blocking: true
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or test container; MUST NOT replace asyncpg with an in-memory mock"
+  golden_path: false
+  behavior:
+    given: "A live Postgres schema with both tables applied via Alembic"
+    when:  "The information_schema is queried for meeting_id column data types"
+    then:
+      - "transcript_segments.meeting_id has data_type='uuid'"
+      - "note_deltas.meeting_id has data_type='uuid'"
+      - "Neither column is text, varchar, or bigint"
+  primary_oracle:
+    type: schema_introspection_assertion
+    artifact: "SELECT data_type FROM information_schema.columns WHERE table_name IN ('transcript_segments','note_deltas') AND column_name='meeting_id'; assert both == 'uuid'"
+  thresholds:
+    non_uuid_meeting_id_columns_allowed: 0
+  fault_model_refs: [F-MEETING-ID-WRONG-TYPE]
+  test_ids: [T-STORE-03]
+  verification_ladder: [lint, unit, integration]
+
+- criterion_id: AC-STORE-03-NEG
+  name: "NEG: inserting a non-UUID string as meeting_id is rejected by Postgres"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-03]
+  criticality: P1
+  blocking: false
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or test container; MUST NOT replace asyncpg with an in-memory mock"
+  golden_path: false
+  behavior:
+    given: "A live Postgres schema with note_deltas (meeting_id uuid NOT NULL)"
+    when:  "An INSERT is attempted with meeting_id set to a plain string ('not-a-uuid')"
+    then:
+      - "Postgres rejects the insert with a type-cast or invalid_text_representation error"
+      - "No row is persisted with a non-UUID meeting_id"
+  primary_oracle:
+    type: db_type_rejection_assertion
+    artifact: "Attempt INSERT with meeting_id='not-a-uuid'; assert asyncpg raises PostgresError (invalid_text_representation)"
+  thresholds:
+    non_uuid_rows_persisted_allowed: 0
+  fault_model_refs: [F-MEETING-ID-WRONG-TYPE]
+  test_ids: [T-STORE-03-NEG]
+  verification_ladder: [integration, negative]
+
+# ── asyncpg via Cloud SQL Auth-Proxy Unix socket, no ORM ─────────────────────
+
+- criterion_id: AC-STORE-04
+  name: "asyncpg is the only DB driver; no ORM import exists on the live plane"
+  evidence_class: "[lint+unit]"
+  authority_refs: [R-doc03-STORE-04]
+  criticality: P1
+  blocking: true
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or test container; MUST NOT replace asyncpg with an in-memory mock"
+  golden_path: false
+  behavior:
+    given: "The Notes service source tree"
+    when:  "A static import/grep audit is run over all Python files in the live-plane modules"
+    then:
+      - "Zero imports of sqlalchemy, tortoise, peewee, or any ORM package exist in NotesRepository or TranscriptRepository"
+      - "asyncpg is imported and used as the sole driver for all Postgres interactions"
+  primary_oracle:
+    type: static_import_audit
+    artifact: "grep -rE 'import sqlalchemy|from sqlalchemy|import tortoise|from tortoise|import peewee' notes_repo/ transcript_repo/ → expect zero matches; grep -rE 'import asyncpg|from asyncpg' → expect at least one match"
+  thresholds:
+    orm_imports_allowed: 0
+    asyncpg_usage_required: 1
+  fault_model_refs: [F-ORM-ON-LIVE-PLANE]
+  test_ids: [T-STORE-04]
+  verification_ladder: [lint, unit, integration]
+
+# ── NOTES_CACHE deterministic left-fold ───────────────────────────────────────
+
+- criterion_id: AC-STORE-05
+  name: "NOTES_CACHE is deterministic left-fold of note_deltas in id order"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-06, R-doc03-STORE-07]
+  criticality: P0
+  blocking: true
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or test container; MUST NOT replace asyncpg with an in-memory mock"
+  golden_path: false
+  behavior:
+    given: >
+      A meeting with a known, ordered sequence of note_deltas rows in Postgres
+      (mix of 'add', 'patch', 'close' ops); the golden cache state for that sequence
+      is pre-computed
+    when:  "NOTES_CACHE is rebuilt from scratch by replaying note_deltas in ascending id order"
+    then:
+      - "The resulting cache state matches the golden exactly (deterministic)"
+      - "Replaying the same sequence a second time produces the identical state"
+      - "Reordering the same deltas by a different key (e.g., created_at) produces a divergent state, proving id-order is the correctness axis"
+  primary_oracle:
+    type: deterministic_left_fold_assertion
+    artifact: "Replay fixture deltas in id order twice; assert both runs == golden; replay in created_at order; assert != golden (order-sensitivity proof)"
+  thresholds:
+    non_deterministic_runs_allowed: 0
+    id_order_violations_allowed: 0
+  fault_model_refs: [F-NONDETERMINISTIC-CACHE]
+  test_ids: [T-STORE-05]
+  verification_ladder: [lint, unit, integration]
+
+- criterion_id: AC-STORE-05-NEG
+  name: "NEG: replaying deltas out of id order DOES corrupt the cache (proves ordering is load-bearing)"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-06]
+  criticality: P1
+  blocking: false
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or test container; MUST NOT replace asyncpg with an in-memory mock"
+  golden_path: false
+  behavior:
+    given: >
+      A sequence of note_deltas where an 'add' with entry_id=E precedes a 'patch' for E
+      (id=1 is 'add', id=2 is 'patch')
+    when:  "The deltas are replayed in reverse order (id=2 before id=1)"
+    then:
+      - "The cache state does NOT match the golden (patch before add produces a different or error state)"
+      - "This demonstrates the left-fold must be in id order to be correct"
+  primary_oracle:
+    type: deterministic_left_fold_negative_assertion
+    artifact: "Replay deltas reversed; assert result != golden; document divergence as evidence that id-order is required"
+  thresholds: {}
+  fault_model_refs: [F-NONDETERMINISTIC-CACHE]
+  test_ids: [T-STORE-05-NEG]
+  verification_ladder: [integration, negative]
+
+# ── Single-writer per meeting ─────────────────────────────────────────────────
+
+- criterion_id: AC-STORE-06
+  name: "Single-writer discipline: concurrent writers per meeting_id are serialized"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-07]
+  criticality: P0
+  blocking: true
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or test container; MUST NOT replace asyncpg with an in-memory mock"
+  golden_path: false
+  behavior:
+    given: "A meeting_id with an active NOTES_CACHE writer task"
+    when:  "A second concurrent write attempt is made for the same meeting_id"
+    then:
+      - "The second write is queued or rejected, not applied concurrently"
+      - "After both writes complete, the cache state reflects a serial application of both deltas"
+      - "No partial interleave between the two writes occurs"
+  primary_oracle:
+    type: concurrency_serialization_assertion
+    artifact: "Launch two concurrent applier coroutines for same meeting_id with non-commuting deltas; assert final state matches one of the two valid serial orderings, not a corrupt interleave"
+  thresholds:
+    interleaved_write_states_allowed: 0
+  fault_model_refs: [F-CONCURRENT-WRITER]
+  test_ids: [T-STORE-06]
+  verification_ladder: [lint, unit, integration]
+
+# ── Boot reaper: correct JOIN, no meetings.last_heartbeat_at ─────────────────
+
+- criterion_id: AC-STORE-07
+  name: "Boot reaper JOINs operation_runs on scope_id=meeting_id::text; does NOT use meetings.last_heartbeat_at"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-09, R-doc03-STORE-10, R-doc03-STORE-11]
+  criticality: P0
+  blocking: true
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or test container; MUST NOT replace asyncpg with an in-memory mock"
+  golden_path: false
+  behavior:
+    given: >
+      A Postgres database with a meetings row (meeting_id=M) and a corresponding
+      operation_runs row (scope_id=M::text, status='interrupted')
+    when:  "The boot reaper runs"
+    then:
+      - "The reaper identifies meeting M as stale via the operation_runs JOIN"
+      - "The meetings row for M has its status set to 'interrupted'"
+      - "The reaper SQL does NOT reference meetings.last_heartbeat_at (a column that does not exist)"
+  primary_oracle:
+    type: integration_plus_static_assertion
+    artifact: "Run reaper against fixture; assert M.status='interrupted'; grep reaper SQL for last_heartbeat_at → expect zero matches on the meetings table join; confirm operation_runs.last_heartbeat_at is used"
+  thresholds:
+    meetings_last_heartbeat_at_references_allowed: 0
+    meetings_not_marked_interrupted_allowed: 0
+  fault_model_refs: [F-WRONG-HEARTBEAT-COLUMN, F-REAPER-MISSES-STALE-MEETING]
+  test_ids: [T-STORE-07]
+  verification_ladder: [lint, unit, integration]
+
+- criterion_id: AC-STORE-07-NEG
+  name: "NEG: reaper does NOT mark a meeting interrupted when its operation_runs row is 'running' and fresh"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-11]
+  criticality: P1
+  blocking: false
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or test container; MUST NOT replace asyncpg with an in-memory mock"
+  golden_path: false
+  behavior:
+    given: >
+      A meetings row (meeting_id=M) with a joined operation_runs row that has
+      status='running' and last_heartbeat_at within the freshness threshold (not stale)
+    when:  "The boot reaper runs"
+    then:
+      - "Meeting M is NOT marked interrupted"
+      - "The reaper leaves the 'running' and fresh meeting untouched"
+  primary_oracle:
+    type: db_negative_assertion
+    artifact: "Seed running+fresh meeting; run reaper; SELECT status FROM meetings WHERE id=M; assert != 'interrupted'"
+  thresholds:
+    live_meetings_incorrectly_interrupted_allowed: 0
+  fault_model_refs: [F-REAPER-KILLS-LIVE-MEETING]
+  test_ids: [T-STORE-07-NEG]
+  verification_ladder: [integration, negative]
+
+- criterion_id: AC-STORE-08
+  name: "Boot reaper marks meeting 'interrupted' when operation_runs row is running-but-stale"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-11]
+  criticality: P0
+  blocking: true
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or test container; MUST NOT replace asyncpg with an in-memory mock"
+  golden_path: false
+  behavior:
+    given: >
+      A meetings row (meeting_id=M) with a joined operation_runs row that has
+      status='running' but last_heartbeat_at is older than the staleness threshold
+    when:  "The boot reaper runs"
+    then:
+      - "Meeting M is marked interrupted (status='interrupted')"
+      - "The reaper correctly identifies a running-but-stale row as equivalent to interrupted"
+  primary_oracle:
+    type: db_state_transition_assertion
+    artifact: "Seed running+stale meeting (heartbeat in past beyond threshold); run reaper; assert M.status='interrupted'"
+  thresholds:
+    stale_meetings_not_reaped_allowed: 0
+  fault_model_refs: [F-REAPER-MISSES-STALE-MEETING]
+  test_ids: [T-STORE-08]
+  verification_ladder: [lint, unit, integration]
+
+# ── GCS bucket-level Object Versioning is ON ──────────────────────────────────
+
+- criterion_id: AC-STORE-09
+  name: "GCS bucket has native Object Versioning enabled at the bucket level"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-12]
+  criticality: P0
+  blocking: true
+  dependency_class: gcs:objects
+  mock_boundary: "real GCS bucket or testcontainers-equivalent; MUST NOT replace storage client with Mock()"
+  golden_path: false
+  behavior:
+    given: "The finalized-notes GCS bucket provisioned for the Notes service"
+    when:  "The bucket's versioning metadata is inspected via the GCS API"
+    then:
+      - "bucket.versioning_enabled is True"
+      - "Object Versioning is set at the bucket level, not per-object"
+  primary_oracle:
+    type: gcs_bucket_metadata_assertion
+    artifact: "storage.Client().get_bucket(NOTES_BUCKET).versioning_enabled; assert is True"
+  thresholds:
+    buckets_without_versioning_allowed: 0
+  fault_model_refs: [F-VERSIONING-OFF]
+  test_ids: [T-STORE-09]
+  verification_ladder: [lint, unit, integration]
+
+- criterion_id: AC-STORE-09-NEG
+  name: "NEG: disabling bucket versioning causes prior generations to be unrecoverable (guard)"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-12, R-doc03-STORE-17]
+  criticality: P1
+  blocking: false
+  dependency_class: gcs:objects
+  mock_boundary: "real GCS bucket or testcontainers-equivalent; MUST NOT replace storage client with Mock()"
+  golden_path: false
+  behavior:
+    given: "A bucket with versioning disabled (simulated misconfiguration)"
+    when:  "A finalized notes object is overwritten"
+    then:
+      - "list_notes_versions returns only one generation (prior versions are gone)"
+      - "This confirms versioning must be ON for list/read_notes_version to function"
+  primary_oracle:
+    type: gcs_versioning_negative_assertion
+    artifact: "Write object twice on no-versioning bucket; list_generations → expect count==1; confirm the guard is needed"
+  thresholds: {}
+  fault_model_refs: [F-VERSIONING-OFF]
+  test_ids: [T-STORE-09-NEG]
+  verification_ladder: [integration, negative]
+
+# ── write_finalized_notes if_generation_match=0 (create-only) ─────────────────
+
+- criterion_id: AC-STORE-10
+  name: "write_finalized_notes with if_generation_match=0 creates-only; second write raises NotesGenerationConflictError"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-13, R-doc03-STORE-14, R-doc03-STORE-15]
+  criticality: P0
+  blocking: true
+  dependency_class: gcs:objects
+  mock_boundary: "real GCS bucket or testcontainers-equivalent; MUST NOT replace storage client with Mock()"
+  golden_path: false
+  behavior:
+    given: "A GCS bucket with Object Versioning ON; no finalized notes object yet exists for meeting M"
+    when: >
+      write_finalized_notes is called with if_generation_match=0 (create-only) for
+      meeting M once, then called again for meeting M with if_generation_match=0
+    then:
+      - "The first call succeeds and creates the object (generation > 0)"
+      - "The second call raises NotesGenerationConflictError (GCS returns HTTP 412)"
+      - "No other exception type is raised on the second call"
+      - "The object after both calls still holds the content written by the first call"
+  primary_oracle:
+    type: gcs_precondition_assertion
+    artifact: "First write: assert no exception; verify object exists. Second write: assert raises NotesGenerationConflictError; assert object.generation unchanged"
+  thresholds:
+    silent_overwrites_allowed: 0
+    wrong_exception_type_on_412_allowed: 0
+  fault_model_refs: [F-DOUBLE-WRITE-CLOSE, F-412-NOT-RAISED]
+  test_ids: [T-STORE-10]
+  verification_ladder: [lint, unit, integration]
+
+- criterion_id: AC-STORE-10-NEG
+  name: "NEG: write_finalized_notes with if_generation_match=None (unconditional) does NOT raise on overwrite"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-13]
+  criticality: P1
+  blocking: false
+  dependency_class: gcs:objects
+  mock_boundary: "real GCS bucket or testcontainers-equivalent; MUST NOT replace storage client with Mock()"
+  golden_path: false
+  behavior:
+    given: "A finalized notes object already exists for meeting M"
+    when:  "write_finalized_notes is called with if_generation_match=None (unconditional)"
+    then:
+      - "The call succeeds without raising NotesGenerationConflictError"
+      - "The object is overwritten with the new content"
+      - "GCS assigns a new generation to the overwritten object"
+  primary_oracle:
+    type: gcs_unconditional_write_assertion
+    artifact: "Write once; then write again with if_generation_match=None; assert no exception; assert new content readable"
+  thresholds:
+    false_conflict_errors_allowed: 0
+  fault_model_refs: [F-UNCONDITIONAL-WRITE-BLOCKED]
+  test_ids: [T-STORE-10-NEG]
+  verification_ladder: [integration, negative]
+
+# ── Generation stored as str/int, never float ─────────────────────────────────
+
+- criterion_id: AC-STORE-11
+  name: "GCS generation values stored and passed as str or int, NEVER float"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-STORE-16]
+  criticality: P0
+  blocking: true
+  dependency_class: gcs:objects
+  mock_boundary: "real GCS bucket or testcontainers-equivalent; MUST NOT replace storage client with Mock()"
+  golden_path: false
+  behavior:
+    given: >
+      A finalized notes object written to GCS; the GCS API returns a generation value
+      (uint64, e.g. 1719000000000000 — a value that would be corrupted by float conversion)
+    when:  "The generation is read and stored by the Notes service for use in subsequent writes"
+    then:
+      - "The generation is stored as str or int, preserving its exact value"
+      - "type(generation) is not float at any point in the call path"
+      - "The stored generation, when passed back to GCS as if_generation_match=<gen>, matches the server's generation exactly"
+  primary_oracle:
+    type: type_assertion_plus_roundtrip
+    artifact: "Read blob.generation; assert isinstance(gen, (int, str)) and not isinstance(gen, float); use gen as if_generation_match in a subsequent write; confirm GCS accepts it (no mismatch)"
+  thresholds:
+    float_generation_values_allowed: 0
+    generation_roundtrip_mismatches_allowed: 0
+  fault_model_refs: [F-FLOAT-GENERATION-CORRUPTION]
+  test_ids: [T-STORE-11]
+  verification_ladder: [lint, unit, integration]
+
+- criterion_id: AC-STORE-11-NEG
+  name: "NEG: float-rounded generation causes GCS 412 on exact-match write (proves float is wrong)"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-16]
+  criticality: P1
+  blocking: false
+  dependency_class: gcs:objects
+  mock_boundary: "real GCS bucket or testcontainers-equivalent; MUST NOT replace storage client with Mock()"
+  golden_path: false
+  behavior:
+    given: "A generation value >= 2^53 that is altered by float rounding (e.g., 9007199254740993 → 9007199254740992.0)"
+    when:  "The float-rounded value is passed as if_generation_match to a GCS write"
+    then:
+      - "GCS returns HTTP 412 (PreconditionFailed) because the rounded value != actual generation"
+      - "This confirms that float storage corrupts generations above 2^53"
+  primary_oracle:
+    type: gcs_float_corruption_negative_assertion
+    artifact: "Simulate with a generation=9007199254740993; convert to float; assert float(gen) != gen; confirm GCS rejects the rounded value"
+  thresholds: {}
+  fault_model_refs: [F-FLOAT-GENERATION-CORRUPTION]
+  test_ids: [T-STORE-11-NEG]
+  verification_ladder: [integration, negative]
+
+# ── list_notes_versions / read_notes_version ──────────────────────────────────
+
+- criterion_id: AC-STORE-12
+  name: "list_notes_versions returns all prior generations; read_notes_version restores any by generation"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-17]
+  criticality: P1
+  blocking: true
+  dependency_class: gcs:objects
+  mock_boundary: "real GCS bucket or testcontainers-equivalent; MUST NOT replace storage client with Mock()"
+  golden_path: false
+  behavior:
+    given: "A finalized notes object for meeting M written three times (three distinct generations G1, G2, G3)"
+    when: >
+      list_notes_versions(meeting_id=M) is called, then
+      read_notes_version(meeting_id=M, generation=G1) is called
+    then:
+      - "list_notes_versions returns all three generations [G1, G2, G3] in order"
+      - "read_notes_version(generation=G1) returns the content written in the first write, not the latest"
+      - "read_notes_version(generation=G3) returns the content of the third (latest) write"
+  primary_oracle:
+    type: gcs_version_history_assertion
+    artifact: "Write M three times; list_notes_versions → assert len==3; read G1 → assert content==write1_content; read G3 → assert content==write3_content"
+  thresholds:
+    missing_generations_in_list_allowed: 0
+    wrong_content_on_read_by_generation_allowed: 0
+  fault_model_refs: [F-VERSION-HISTORY-LOST]
+  test_ids: [T-STORE-12]
+  verification_ladder: [lint, unit, integration]
+
+# ── Raw transcript persistence (append-only archive) ─────────────────────────
+
+- criterion_id: AC-STORE-13
+  name: "transcript_segments rows are never deleted during or after a meeting"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-18, R-doc03-STORE-05]
+  criticality: P0
+  blocking: true
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or test container; MUST NOT replace asyncpg with an in-memory mock"
+  golden_path: false
+  behavior:
+    given: "A meeting M with N transcript_segments rows inserted over its lifetime"
+    when:  "The meeting ends (close pass runs, finalized notes written) and post-meeting cleanup executes"
+    then:
+      - "All N transcript_segments rows for meeting M still exist in Postgres after close"
+      - "No DELETE or TRUNCATE against transcript_segments is executed as part of meeting lifecycle"
+      - "The row count for meeting M in transcript_segments equals N before and after close"
+  primary_oracle:
+    type: db_row_count_assertion
+    artifact: "Record count before close; run close pass; record count after; assert after_count == before_count; grep meeting-lifecycle code for DELETE/TRUNCATE on transcript_segments → expect zero"
+  thresholds:
+    deleted_transcript_rows_allowed: 0
+  fault_model_refs: [F-TRANSCRIPT-DELETED]
+  test_ids: [T-STORE-13]
+  verification_ladder: [lint, unit, integration]
+
+- criterion_id: AC-STORE-13-NEG
+  name: "NEG: Orchestrator Tier-3 replay FAILS if transcript_segments are absent (proves archive is load-bearing)"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-08, R-doc03-STORE-18]
+  criticality: P1
+  blocking: false
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or test container; MUST NOT replace asyncpg with an in-memory mock"
+  golden_path: false
+  behavior:
+    given: "A meeting M whose transcript_segments have been artificially deleted (simulated corruption)"
+    when:  "Orchestrator Tier-3 session recovery attempts to replay transcript + note-delta plane for M"
+    then:
+      - "The recovery fails or returns an incomplete context (missing transcript data)"
+      - "This proves that transcript_segments must not be deleted for Tier-3 recovery to work"
+  primary_oracle:
+    type: negative_replay_assertion
+    artifact: "Delete transcript_segments for M; run Tier-3 replay; assert result is incomplete or raises; document as evidence that archive is load-bearing"
+  thresholds: {}
+  fault_model_refs: [F-TRANSCRIPT-DELETED]
+  test_ids: [T-STORE-13-NEG]
+  verification_ladder: [integration, negative]
+
+# ── Image grounding via GCS + v4 signed URL ───────────────────────────────────
+
+- criterion_id: AC-STORE-14
+  name: "Screenshared image uploaded to GCS and passed to Claude API as v4 signed URL (expiry=10min, method=GET)"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-STORE-19, R-doc03-STORE-20]
+  criticality: P0
+  blocking: true
+  dependency_class: gcs:objects
+  mock_boundary: "real GCS bucket or testcontainers-equivalent; MUST NOT replace storage client with Mock()"
+  golden_path: false
+  behavior:
+    given: "A screenshared slide image captured during a live meeting"
+    when:  "The image grounding path processes the image"
+    then:
+      - "The image is uploaded to GCS as a blob (not held in memory or sent inline)"
+      - "A signed URL is generated via blob.generate_signed_url(version='v4', expiration=timedelta(minutes=10), method='GET')"
+      - "The Claude API call receives the signed URL (not base64-encoded image bytes)"
+      - "The signed URL expires in exactly 10 minutes (expiration=timedelta(minutes=10))"
+  primary_oracle:
+    type: gcs_upload_plus_signed_url_assertion
+    artifact: "Intercept image grounding path; assert blob exists in GCS; assert signed URL uses version=v4, expiration=600s, method=GET; assert Claude API payload contains URL not base64"
+  thresholds:
+    base64_image_payloads_allowed: 0
+    signed_url_wrong_version_allowed: 0
+    signed_url_wrong_expiry_allowed: 0
+    signed_url_wrong_method_allowed: 0
+  fault_model_refs: [F-IMAGE-INLINE-BASE64, F-SIGNED-URL-WRONG-PARAMS]
+  test_ids: [T-STORE-14]
+  verification_ladder: [lint, unit, integration]
+
+- criterion_id: AC-STORE-14-NEG
+  name: "NEG: inline base64 image is NEVER passed to Claude API for screenshared content"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-STORE-19]
+  criticality: P0
+  blocking: true
+  dependency_class: gcs:objects
+  mock_boundary: "real GCS bucket or testcontainers-equivalent; MUST NOT replace storage client with Mock()"
+  golden_path: false
+  behavior:
+    given: "A screenshared image of any size"
+    when:  "The image grounding path runs end-to-end"
+    then:
+      - "The Claude API payload does NOT contain a 'type: image_url' with a data URI (data:image/...) or any base64-encoded bytes for the screenshare"
+      - "A static grep audit finds zero base64 encoding of images in the grounding code path"
+  primary_oracle:
+    type: static_plus_integration_negative_assertion
+    artifact: "grep image-grounding code for 'base64' in Claude API payload construction → expect zero; integration test: inspect Claude call payload; assert no data: URI present for screenshare"
+  thresholds:
+    base64_payloads_in_grounding_allowed: 0
+  fault_model_refs: [F-IMAGE-INLINE-BASE64]
+  test_ids: [T-STORE-14-NEG]
+  verification_ladder: [lint, unit, integration, negative]
