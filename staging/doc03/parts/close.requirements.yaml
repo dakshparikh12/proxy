@@ -1,0 +1,357 @@
+# close.requirements.yaml — Doc 03 (Notes / Scribe) — §3.7 The close pass (permanent record)
+# Atomic EARS requirements. Each carries source_location + verbatim source_quote + criticality.
+# ID scheme: R-doc03-CLOSE-NN
+# Authority document: DOC-03
+#
+# Scope: the meeting-end-triggered single strong-model pass that produces the final notes object,
+#   writes it to GCS exactly once, posts the chat link, and then tears down.
+# Dependency classes used in paired NEG criteria:
+#   vendor:anthropic — the Sonnet-class SDK call (claude_agent_sdk generateStructured)
+#   db:postgres      — reading gap/pending spans from transcript_segments
+#   gcs:objects      — write_finalized_notes to GCS with if_generation_match=0
+#   vendor:recall    — posting the chat link (Doc 04 / Recall bot)
+
+# ── Trigger ───────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc03-CLOSE-01
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.7, paragraph 1, sentence 1"
+  source_quote: >
+    On Doc 02's meeting-end signal: one strong-model pass (Sonnet-class,
+    PROXY_MODEL_SCRIBE_CLOSE) reduces over the FOLDED note-delta ledger + the
+    gap/pending transcript backfill.
+  normalized_statement: >
+    WHEN the Doc 02 meeting-end signal is received THE SYSTEM SHALL initiate exactly
+    one close pass; the close pass SHALL NOT start before the meeting-end signal and
+    SHALL NOT be initiated more than once per meeting (barring crash recovery).
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Model seat ────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc03-CLOSE-02
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.7, paragraph 1, sentence 1"
+  source_quote: >
+    one strong-model pass (Sonnet-class, PROXY_MODEL_SCRIBE_CLOSE)
+  normalized_statement: >
+    THE SYSTEM SHALL invoke the close pass using the model designated by
+    PROXY_MODEL_SCRIBE_CLOSE, which MUST resolve to a Sonnet-class (or stronger)
+    model; a Haiku-class or cheaper model MUST NOT be used for the close pass.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Input: folded ledger, NOT full raw transcript ─────────────────────────────
+
+- requirement_id: R-doc03-CLOSE-03
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.7, paragraph 1, sentence 1 and paragraph 2"
+  source_quote: >
+    reduces over the FOLDED note-delta ledger + the gap/pending transcript backfill —
+    NOT the full raw transcript as a map-reduce (CANONICAL §12.10). The folded ledger
+    is already the comprehension, so the pass reduces over it and pulls raw transcript
+    only for the status='gap' / status='pending' spans no live window ever comprehended.
+  normalized_statement: >
+    THE SYSTEM SHALL use the folded note-delta ledger as the primary input to the
+    close pass; the full raw transcript SHALL NOT be used as a map-reduce input;
+    raw transcript content SHALL be pulled only for transcript_segments rows whose
+    status is 'gap' or 'pending'.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-CLOSE-04
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.7, paragraph 2"
+  source_quote: >
+    pulls raw transcript only for the status='gap' / status='pending' spans no live
+    window ever comprehended.
+  normalized_statement: >
+    WHEN the close pass assembles its input THE SYSTEM SHALL query transcript_segments
+    for rows with status='gap' AND separately for rows with status='pending'; BOTH
+    status values SHALL be backfilled; status='comprehended' rows SHALL NOT be included
+    in the raw transcript pull.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Chunk-reduce threshold ────────────────────────────────────────────────────
+
+- requirement_id: R-doc03-CLOSE-05
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.7, paragraph 2, sentence 2"
+  source_quote: >
+    It chunk-reduces ONLY when the folded ledger exceeds a token threshold —
+    a normal meeting folds in one pass.
+  normalized_statement: >
+    THE SYSTEM SHALL chunk-reduce the folded ledger ONLY when its token count exceeds
+    a configured token threshold; WHEN the token count is at or below the threshold
+    the close pass SHALL execute as a single model call; chunk-reduction SHALL NOT
+    be the default path for a normal meeting.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── SDK: generateStructured, not messages.create ──────────────────────────────
+
+- requirement_id: R-doc03-CLOSE-06
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.7, paragraph 3"
+  source_quote: >
+    the close pass is NOT latency-bound, so it runs as the Agent SDK's generateStructured
+    (outputFormat:{type:'json_schema'} → Pydantic re-validate) and inherits their real
+    terminal subtypes as typed errors — error_max_turns,
+    error_max_structured_output_retries (AgentService.ts:772-777).
+  normalized_statement: >
+    THE SYSTEM SHALL invoke the close pass via the claude_agent_sdk's generateStructured
+    API with an outputFormat of type json_schema, followed by Pydantic re-validation of
+    the result; a raw messages.create call SHALL NOT be used for the close pass.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-CLOSE-07
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.7, paragraph 3"
+  source_quote: >
+    inherits their real terminal subtypes as typed errors — error_max_turns,
+    error_max_structured_output_retries (AgentService.ts:772-777).
+  normalized_statement: >
+    THE SYSTEM SHALL treat error_max_turns and error_max_structured_output_retries as
+    distinct typed terminal error subtypes from the generateStructured call; both error
+    types MUST be caught and handled explicitly, not swallowed or collapsed into a
+    generic exception.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Build-time SDK surface confirmation ──────────────────────────────────────
+
+- requirement_id: R-doc03-CLOSE-08
+  authority_type: canonical
+  authority_document: CANONICAL
+  source_location: "§3.7 Build-time pin (CANONICAL §11.10)"
+  source_quote: >
+    generateStructured and its outputFormat/json_schema shape are the ~/platform
+    TypeScript Agent SDK's; the close pass runs on the Python claude_agent_sdk,
+    whose structured-output surface MUST be confirmed against the live
+    claude_agent_sdk docs at build — a design doc cannot pin a third-party wire shape.
+  normalized_statement: >
+    THE SYSTEM SHALL confirm the Python claude_agent_sdk's structured-output surface
+    (generateStructured / outputFormat / json_schema equivalents) against the live
+    claude_agent_sdk documentation at build time before implementation; the TypeScript
+    Agent SDK parameter names SHALL NOT be assumed to be identical in the Python SDK
+    without verification.
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Operation record: operation_runs, NOT close_jobs ─────────────────────────
+
+- requirement_id: R-doc03-CLOSE-09
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.7 V0 close output preamble"
+  source_quote: >
+    run as a single operation_runs row operation_type='meeting-close' — NO close_jobs
+    table, CANONICAL §12.10
+  normalized_statement: >
+    THE SYSTEM SHALL record the close pass as a single row in operation_runs with
+    operation_type='meeting-close'; a close_jobs table SHALL NOT exist; no additional
+    table dedicated to close tracking SHALL be created.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Output: dedup, conflict-resolve, polish ───────────────────────────────────
+
+- requirement_id: R-doc03-CLOSE-10
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.7, paragraph 2 (output description)"
+  source_quote: >
+    Output: the final notes object — deduped, conflicts resolved,
+    confidence-weighted, human-polished, with the summary/action-items/decisions
+    in publishable form.
+  normalized_statement: >
+    THE SYSTEM SHALL produce from the close pass a final notes object that is: (a)
+    deduplicated (no duplicate entries from live tagging redundancies), (b) with
+    conflicts resolved rather than left as contradicts links, (c) confidence-weighted,
+    and (d) human-polished, with summary, action-items, and decisions in publishable
+    form.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-CLOSE-11
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.7, paragraph 4"
+  source_quote: >
+    It corrects any live-tagging misses and backfills every status='gap' AND
+    status='pending' span from the preserved transcript (the Scribe's entries were
+    correctable; this is where they get corrected, and any window never comprehended
+    live is picked up here).
+  normalized_statement: >
+    THE SYSTEM SHALL use the close pass to correct live-tagging misses from the
+    Scribe; the close pass SHALL backfill every status='gap' AND status='pending'
+    span from the preserved transcript; no status='gap' or status='pending' span
+    SHALL remain unprocessed after the close pass completes successfully.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Cost telemetry ────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc03-CLOSE-12
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.7, paragraph 3"
+  source_quote: >
+    plus total_cost_usd for free (§3.9).
+  normalized_statement: >
+    WHEN the generateStructured call completes THE SYSTEM SHALL capture total_cost_usd
+    from the SDK result and record it (per §3.9 cost telemetry); cost capture SHALL NOT
+    require a separate API call or manual token arithmetic.
+  requirement_type: observability
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── V0 close sequence (ORDER is mandatory) ───────────────────────────────────
+
+- requirement_id: R-doc03-CLOSE-13
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.7 V0 close output, steps 1-4"
+  source_quote: >
+    1. Render the final object through the notes template to markdown
+    2. Write it to GCS via write_finalized_notes(...) with if_generation_match=0
+    (create-only — the close deliverable is written exactly once, §3.3/§12.9)
+    3. Post the link in the meeting chat
+    4. THEN tear down — in that order, so a durable provisional notes URL exists
+    before teardown and the bot never leaves without the record posted.
+  normalized_statement: >
+    THE SYSTEM SHALL execute the four close-pass steps in strict order: (1) render
+    the final notes object through the notes template to markdown, (2) write the
+    rendered output to GCS via write_finalized_notes, (3) post the GCS link in the
+    meeting chat, (4) tear down; teardown SHALL NOT occur before step 3 completes;
+    step 3 (chat link post) SHALL NOT occur before step 2 (GCS write) completes.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── GCS write: create-only, exactly once ─────────────────────────────────────
+
+- requirement_id: R-doc03-CLOSE-14
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.7 V0 close output, step 2"
+  source_quote: >
+    Write it to GCS via write_finalized_notes(...) with if_generation_match=0
+    (create-only — the close deliverable is written exactly once, §3.3/§12.9)
+  normalized_statement: >
+    WHEN the close pass writes the final notes to GCS THE SYSTEM SHALL call
+    write_finalized_notes with if_generation_match=0; this enforces create-only
+    semantics so the close deliverable is written exactly once; a subsequent
+    write to the same GCS path SHALL fail (not silently overwrite).
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Bot must not tear down without posting ───────────────────────────────────
+
+- requirement_id: R-doc03-CLOSE-15
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.7 V0 close output, step 4"
+  source_quote: >
+    THEN tear down — in that order, so a durable provisional notes URL exists
+    before teardown and the bot never leaves without the record posted.
+  normalized_statement: >
+    THE SYSTEM SHALL guarantee the bot never exits the meeting (tears down) without
+    having successfully posted the notes chat link; IF the chat link post fails the
+    system SHALL retry or surface the error, not proceed to teardown silently; teardown
+    blocked on failed step 3 is the safe failure mode.
+  requirement_type: safety
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Audit record persistence ──────────────────────────────────────────────────
+
+- requirement_id: R-doc03-CLOSE-16
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.7, paragraph after V0 close output"
+  source_quote: >
+    The raw transcript + the workroom's tool-call telemetry persist on the Postgres
+    plane as the audit record.
+  normalized_statement: >
+    THE SYSTEM SHALL retain the raw transcript and the workroom's tool-call telemetry
+    on the Postgres plane as the permanent audit record; neither the raw transcript rows
+    nor the tool-call telemetry SHALL be deleted or truncated after the close pass
+    completes.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── One pass per meeting ──────────────────────────────────────────────────────
+
+- requirement_id: R-doc03-CLOSE-17
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.7, closing line"
+  source_quote: >
+    One pass, once per meeting — quality where it's permanent, cheap where it's live.
+  normalized_statement: >
+    THE SYSTEM SHALL execute at most one close pass per meeting; duplicate close-pass
+    executions for the same meeting_id SHALL be rejected (e.g., via the
+    if_generation_match=0 GCS guard and the operation_runs uniqueness constraint);
+    crash recovery that re-runs a partial close MUST detect the existing GCS object
+    and not overwrite it.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── V1-deferred items ─────────────────────────────────────────────────────────
+
+- requirement_id: R-doc03-CLOSE-18
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.7, deferred to V1 note"
+  source_quote: >
+    (Deferred to V1: a formatted show-your-work trace, a staged-drafts approval
+    bundle, decisions folding back into the index.)
+  normalized_statement: >
+    THE SYSTEM SHALL NOT implement in V0 any of: (a) a formatted show-your-work
+    trace, (b) a staged-drafts approval bundle, or (c) decisions folding back into
+    the index; these are V1 items and their absence in V0 is correct behavior.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
