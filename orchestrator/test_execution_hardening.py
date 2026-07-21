@@ -82,7 +82,9 @@ def test_every_phase_timeout_returns_a_distinct_code_not_an_exception():
     src = (ORCH / "orchestrate.py").read_text()
     # The phase bodies use `.timed_out` / checked_agent's timed_out flag, not try/except on spawn.
     assert "except subprocess.TimeoutExpired" not in src.split("def run_tool", 1)[0] or True
+    # Post-verification-ladder architecture: P7 is the bounded ladder_runner (returns LADDER_RED on a
+    # genuine defect, not a *_TIMEOUT), and the auto-closing P7.5 sweep is retired. The distinct
+    # timeout codes that must still exist are the agent-spawning generation/planning/ruling phases.
     for code in ("P1_CRITERIA_TIMEOUT", "P2_REVIEW_TIMEOUT", "P3_EVIDENCE_TIMEOUT",
-                 "P5_PLAN_TIMEOUT", "P7_VERIFY_TIMEOUT", "P7_5_SWEEP_TIMEOUT",
-                 "ADJUDICATE_TIMEOUT"):
+                 "P5_PLAN_TIMEOUT", "ADJUDICATE_TIMEOUT"):
         assert code in src, f"distinct timeout code {code} missing"

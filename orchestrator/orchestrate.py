@@ -1051,30 +1051,95 @@ def run_doc(doc: str) -> str:
     return "DONE"
 
 
-def cli_preflight() -> None:
-    """Fail fast BEFORE the night starts: claude CLI present + authenticated, venv, git identity."""
-    if shutil.which("claude") is None:
-        sys.exit("PRELAUNCH FAIL: `claude` CLI not on PATH.")
+# Distinct preflight exit codes so supervise.sh tells a TRANSIENT stop (back off, keep the run alive)
+# from a GENUINE auth stop (a human must /login — no point retrying). NOT 0/1 (generic).
+PREFLIGHT_EXIT_AUTH = 3       # claude not authenticated / venv missing — needs a human, hard-halt fast
+PREFLIGHT_EXIT_NETWORK = 4    # transient API/network degradation — pause + back off, resume-safe
+
+# A genuine "you must log in / your key is bad" signature. Kept narrow so normal probe chatter can't
+# spuriously match. Everything else non-zero is TRANSIENT (retryable) — the exact opposite of the old
+# `returncode != 0 => not authenticated` misclassification that caused the 2026-07-21 restart loop.
+_AUTH_FAIL_SIGS = ("not authenticated", "please log in", "please run /login", "unauthorized",
+                   "401", "403", "invalid api key", "expired", "could not authenticate",
+                   "authentication_error", "credentials")
+
+
+def _classify_preflight(returncode: int, combined: str) -> str:
+    """Pure classifier for a `claude -p` probe result: 'ok' | 'auth' | 'transient'.
+
+    'auth'      — a real auth signature is present (rc irrelevant): a human must /login. Hard-halt.
+    'ok'        — rc==0 and no auth signature: the CLI is authenticated and working.
+    'transient' — rc!=0 with NO auth signature (e.g. 'Reached max turns', ConnectionRefused,
+                  overloaded/5xx, an unknown non-zero): a network/API blip, NOT a login problem.
+                  Fail SAFE toward transient so a degraded API is retried, never mistaken for a
+                  fatal auth failure (the root cause of the silent restart loop)."""
+    low = combined.lower()
+    if any(sig in low for sig in _AUTH_FAIL_SIGS):
+        return "auth"
+    if returncode == 0:
+        return "ok"
+    return "transient"
+
+
+def _preflight_die(code: int, msg: str) -> None:
+    """Exit preflight LOUDLY: write the real reason to run.log (the founder's canonical log) AND
+    stderr, then exit with a distinct code. The old path sys.exit()'d to stderr only, which is why
+    run.log showed a bare stack of '[startup] host-tool PATH augmented' with no reason."""
+    full = "PRELAUNCH FAIL: " + msg
     try:
-        r = subprocess.run(["claude", "-p", "say hi", "--max-turns", "10", *NO_MCP],
-                           cwd=ROOT, capture_output=True, text=True, timeout=120,
-                           stdin=subprocess.DEVNULL)
-    except subprocess.TimeoutExpired:
-        sys.exit("PRELAUNCH FAIL: `claude -p` did not respond within 120s (network/API stalled). "
-                 "Retry when connectivity is back.")
-    combined = (r.stdout or "") + (r.stderr or "")
-    auth_fail_sigs = ["not authenticated", "please log in", "unauthorized", "401", "403",
-                      "invalid api key", "expired", "could not authenticate"]
-    combined_lower = combined.lower()
-    has_auth_error = any(sig in combined_lower for sig in auth_fail_sigs)
-    if r.returncode != 0 or has_auth_error:
-        sys.exit("PRELAUNCH FAIL: claude CLI is not authenticated in THIS terminal.\n"
-                 "  Fix: run `claude` interactively here, then `/login` (use the Max subscription\n"
-                 "  account), exit, and relaunch the orchestrator.\n"
-                 f"  CLI said: {combined.strip()[:200]}")
-    if not pathlib.Path(PY).exists():
-        sys.exit("PRELAUNCH FAIL: .venv missing — run `uv venv --python 3.12` + install test deps.")
-    print("PRELAUNCH OK: claude authenticated, venv present.")
+        line = f"[{time.strftime('%H:%M:%S')}] [startup] {full}"
+        LOG.open("a").write(line + "\n")
+    except Exception:
+        pass
+    print(full, file=sys.stderr, flush=True)
+    sys.exit(code)
+
+
+def cli_preflight(attempts: int = 3) -> None:
+    """Fail fast BEFORE the night starts: claude CLI present + authenticated + venv.
+
+    A TRANSIENT probe failure (network/API degraded) is RETRIED with backoff — a blip recovers in
+    seconds — and only after `attempts` genuine transient failures does it exit PREFLIGHT_EXIT_NETWORK
+    (a resume-safe pause, not a broken run). A real auth failure exits PREFLIGHT_EXIT_AUTH immediately
+    (retrying a login problem is pointless). Every outcome is logged to run.log."""
+    if shutil.which("claude") is None:
+        _preflight_die(PREFLIGHT_EXIT_AUTH, "`claude` CLI not on PATH.")
+    last = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            r = subprocess.run(["claude", "-p", "say hi", "--max-turns", "10", *NO_MCP],
+                               cwd=ROOT, capture_output=True, text=True, timeout=120,
+                               stdin=subprocess.DEVNULL)
+        except subprocess.TimeoutExpired:
+            verdict, last = "transient", "`claude -p` did not respond within 120s (network/API stalled)"
+        else:
+            combined = (r.stdout or "") + (r.stderr or "")
+            verdict = _classify_preflight(r.returncode, combined)
+            last = combined.strip()[:200] or f"(rc={r.returncode}, no output)"
+        if verdict == "ok":
+            if not pathlib.Path(PY).exists():
+                _preflight_die(PREFLIGHT_EXIT_AUTH,
+                               ".venv missing — run `uv venv --python 3.12` + install test deps.")
+            if attempt > 1:
+                log(f"[startup] PRELAUNCH recovered on attempt {attempt} after a transient blip")
+            log("[startup] PRELAUNCH OK: claude authenticated, venv present.")
+            return
+        if verdict == "auth":
+            _preflight_die(PREFLIGHT_EXIT_AUTH,
+                           "claude CLI is NOT authenticated in THIS terminal.\n"
+                           "  Fix: run `claude` interactively here, then `/login` (Max subscription\n"
+                           "  account), exit, and relaunch. This is a human step — not retryable.\n"
+                           f"  CLI said: {last}")
+        # transient — log the REAL reason to run.log every time, then back off and retry
+        if attempt < attempts:
+            backoff = min(30, 5 * attempt)
+            log(f"[startup] PRELAUNCH transient failure (attempt {attempt}/{attempts}): {last} "
+                f"— NOT an auth problem; retrying in {backoff}s")
+            time.sleep(backoff)
+    _preflight_die(PREFLIGHT_EXIT_NETWORK,
+                   f"claude -p probe failed {attempts}x with a TRANSIENT error (network/API degraded), "
+                   f"NOT auth. Last: {last}. The run is paused, not broken — the supervisor will "
+                   f"back off and it resumes automatically when connectivity returns.")
 
 
 def main():
