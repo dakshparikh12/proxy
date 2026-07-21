@@ -265,6 +265,13 @@ def test_coal_07_token_overflow_cuts_on_turn_and_rolls_never_widens() -> None:
     total_before = sum(s.token_count for s in segments)
     total_after = sum(w.token_count for w in windows)
     assert total_after == total_before  # nothing dropped, all rolled
+    # AC-COAL-07 turn/segment-alignment: all three spans are one speaker (one turn), so the
+    # finest available boundary is the transcript-segment boundary. The cut must land on a
+    # WHOLE-segment sum at/before the 1200 cap (1000 = seg1+seg2), never mid-segment, and be
+    # marked as a cap cut — this is the real observable the oracle's 'turn boundary' means
+    # once a single turn exceeds the cap.
+    assert windows[0].boundary_type == BoundaryType.TOKEN_CAP
+    assert windows[0].token_count == 1000  # cut at the seg2/seg3 boundary (<=1200), not mid-segment
 
 
 def test_coal_07_single_oversized_segment_is_split_at_the_cap() -> None:

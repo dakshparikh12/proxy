@@ -7,7 +7,7 @@ SKIP it — never fake a pass on a stubbed DB.
 
 The oracles below are written against the production ``scribe.apply_delta`` seam
 (``services/scribe/src/scribe/notes.py``: the note-delta append AND the
-``pending -> comprehended`` flip in ONE transaction) so they run verbatim the moment
+``pending -> comprehended`` flip in ONE transaction) so they are integration-tier PLACEHOLDERS to be authored against the real Postgres seam (apply_note_delta(db, segment_id, delta)) once a database is available
 a real Postgres is available. Two structural (static) checks that do NOT need a live
 DB run unconditionally: the single-writer-per-meeting invariant is enforced by the
 serial pipeline's shape, and the pipeline calls the applier exactly once per window.
