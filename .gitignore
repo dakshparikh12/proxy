@@ -44,9 +44,12 @@ state/
 fixtures/estates/**/clone/
 proxy.bundle
 
-# Orchestrator runtime logs (grow continuously; never commit)
+# Orchestrator runtime logs (grow continuously; never commit). watchdog.log is written continuously
+# by a live watchdog, so tracking it would (a) create endless spurious diffs and (b) make
+# preflight.sh's "git status clean" gate fail whenever the watchdog is running.
 orchestrator/run.log
 orchestrator/console.log
+orchestrator/watchdog.log
 
 # Orchestrator run-pinning markers (purely local; must never be committed/pushed,
 # or a pull would carry another run's pin/permission state)

@@ -1,5 +1,0 @@
-[watchdog] started 2026-07-21 02:34:46 — poll 240s, stall=15m of console silence, ntfy=ntfy.sh/proxy-overnight-8f3k
-[watchdog] started 2026-07-21 02:35:34 — poll 240s, stall=15m of console silence, ntfy=ntfy.sh/proxy-overnight-8f3k
-[watchdog] 2026-07-21 02:39:34 alive — console fresh; last: [02:39:25] [startup] host-tool PATH augmented with: ['/opt/homebrew/opt/postgresql@16/bin'
-[watchdog] 2026-07-21 02:43:35 PING: Proxy build HALTED — needs a human: [supervisor] HALT — doc03 failed to advance 3x in a row with no new commits.
-[watchdog] exiting 2026-07-21 02:43:35
