@@ -1,0 +1,605 @@
+# event_corr.criteria.yaml — Doc 03 (Notes / Scribe) — §3.5 Event Emitter + §3.6 Live Corrections
+# Acceptance criteria (EARS-structured, oracle-annotated).
+# ID scheme: AC-EVENT-NN / AC-CORR-NN
+# Authority document: DOC-03
+#
+# NEG criteria (negative frontier) are required for every criterion whose requirement
+# carries dependency_class: db:postgres. In-process/null-dependency criteria are
+# positive only unless the spec text provides an explicit negative frontier.
+#
+# golden_path: false for all.
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §3.5 EVENT EMITTER — ACCEPTANCE CRITERIA
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── All seven material-change event types emitted ─────────────────────────────
+
+- criterion_id: AC-EVENT-01
+  name: "All seven material-change event types fire on corresponding deltas"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-EVENT-01, R-doc03-EVENT-02, R-doc03-EVENT-03, R-doc03-EVENT-04, R-doc03-EVENT-05, R-doc03-EVENT-06, R-doc03-EVENT-07, R-doc03-EVENT-08]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "The event emitter wired to a mock Doc 04 sink, with seven distinct synthetic deltas each matching one material-change type"
+    when:  "Each delta is applied in sequence"
+    then:
+      - "Exactly one claim-landed event is emitted for the claim-landed delta"
+      - "Exactly one decision-forming event is emitted for the decision-forming delta"
+      - "Exactly one decision-final event is emitted for the decision-final delta"
+      - "Exactly one contradiction-detected event is emitted for the contradiction-detected delta"
+      - "Exactly one action-item-created event is emitted for the action-item-created delta"
+      - "Exactly one question-opened event is emitted for the question-opened delta"
+      - "Exactly one question-closed event is emitted for the question-closed delta"
+      - "No event other than these seven types is emitted during the run"
+  primary_oracle: {type: state_machine_assertion, artifact: "assert emitted_events == [claim-landed, decision-forming, decision-final, contradiction-detected, action-item-created, question-opened, question-closed] each count == 1"}
+  thresholds: {events_missing_allowed: 0, unexpected_event_types_allowed: 0}
+  fault_model_refs: [F-EVENT-NOT-EMITTED, F-EVENT-WRONG-TYPE]
+  test_ids: [T-EVENT-01]
+
+# ── Event payload: entry + focused context slice ──────────────────────────────
+
+- criterion_id: AC-EVENT-02
+  name: "Every emitted event carries the triggering entry and a focused context slice"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-EVENT-09]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "The event emitter with a known entry and known surrounding notes state"
+    when:  "A material-change delta is applied, producing a claim-landed event"
+    then:
+      - "The emitted event payload contains the full triggering entry (all fields match the committed delta)"
+      - "The emitted event payload contains a focused context slice (non-empty, scoped to relevant surrounding notes, not the full meeting context)"
+      - "A payload with a missing entry field or empty context slice is not emitted as complete"
+  primary_oracle: {type: contract_schema, artifact: "schema-check: event.entry != null, event.context_slice != null and len > 0 and != full_meeting_context"}
+  thresholds: {events_missing_entry_allowed: 0, events_missing_context_slice_allowed: 0}
+  fault_model_refs: [F-EVENT-MISSING-PAYLOAD]
+  test_ids: [T-EVENT-02]
+
+# ── Chitchat deltas: zero events ──────────────────────────────────────────────
+
+- criterion_id: AC-EVENT-03
+  name: "Chitchat delta emits zero events (negative frontier)"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-EVENT-10]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "The event emitter with a mock Doc 04 sink and a delta classified as chitchat"
+    when:  "The chitchat delta is applied"
+    then:
+      - "Zero events of any type are emitted to the Doc 04 sink"
+      - "The sink's event count remains unchanged after the chitchat delta"
+  primary_oracle: {type: simulation_trace, artifact: "assert len(emitted_events after chitchat delta) == 0"}
+  thresholds: {events_emitted_for_chitchat_allowed: 0}
+  fault_model_refs: [F-CHITCHAT-EMITS-EVENT]
+  test_ids: [T-EVENT-03]
+
+# ── Running-context updates: zero events ──────────────────────────────────────
+
+- criterion_id: AC-EVENT-04
+  name: "Running-context update delta emits zero events (negative frontier)"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-EVENT-11]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "The event emitter with a mock Doc 04 sink and a delta classified as a running-context update"
+    when:  "The running-context update delta is applied"
+    then:
+      - "Zero events of any type are emitted to the Doc 04 sink"
+      - "The sink's event count remains unchanged after the running-context update"
+  primary_oracle: {type: simulation_trace, artifact: "assert len(emitted_events after running-context delta) == 0"}
+  thresholds: {events_emitted_for_running_context_allowed: 0}
+  fault_model_refs: [F-RUNNING-CONTEXT-EMITS-EVENT]
+  test_ids: [T-EVENT-04]
+
+# ── Scribe emits no speech, holds no delivery authority ───────────────────────
+
+- criterion_id: AC-EVENT-05
+  name: "Scribe/emitter produces no speech acts and touches no room-delivery path"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-EVENT-12, R-doc03-EVENT-13]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "A full Scribe+emitter run over N applied deltas, including material-change deltas, with all room-delivery surfaces mocked (speak, send_chat, show_screen)"
+    when:  "All N deltas are processed"
+    then:
+      - "speak() is never called from within the Scribe or emitter layer"
+      - "send_chat() is never called from within the Scribe or emitter layer"
+      - "show_screen() is never called from within the Scribe or emitter layer"
+      - "All room-audible and room-visible output is zero from this layer"
+  primary_oracle: {type: state_machine_assertion, artifact: "mock call-count assertions: speak.call_count == 0, send_chat.call_count == 0, show_screen.call_count == 0 after N deltas"}
+  thresholds: {speech_acts_from_scribe_allowed: 0, room_delivery_calls_from_scribe_allowed: 0}
+  fault_model_refs: [F-SCRIBE-SPEAKS]
+  test_ids: [T-EVENT-05]
+
+# ── Chat record lines: deterministic formatter, not a wake, not model-generated
+
+- criterion_id: AC-EVENT-06
+  name: "Chat record line is deterministic-formatter output, never a Proxy wake or model call"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-EVENT-14, R-doc03-EVENT-15, R-doc03-EVENT-16]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "A decision-final event with a committed note-delta, chat record posting enabled, the deterministic formatter callable, and Proxy's wake-turn path and LLM call path both mocked"
+    when:  "The chat record line is produced"
+    then:
+      - "The line is produced by the deterministic formatter keyed on the committed note-delta"
+      - "The formatter is called with the same committed delta twice and produces byte-identical output both times (determinism check)"
+      - "Proxy's wake-turn path is never invoked (mock call count == 0)"
+      - "No LLM/model call is made for the chat record line (LLM mock call count == 0)"
+  primary_oracle: {type: state_machine_assertion, artifact: "assert formatter_output == deterministic_format(committed_delta); assert wake_mock.call_count == 0; assert llm_mock.call_count == 0; assert formatter(delta) == formatter(delta)"}
+  thresholds: {chat_lines_from_proxy_wake_allowed: 0, chat_lines_from_model_call_allowed: 0, formatter_nondeterminism_allowed: 0}
+  fault_model_refs: [F-CHAT-LINE-VIA-WAKE, F-CHAT-LINE-MODEL-GENERATED]
+  test_ids: [T-EVENT-06]
+
+# ── Chat record line: action-item-created variant ─────────────────────────────
+
+- criterion_id: AC-EVENT-07
+  name: "action-item-created event may produce a chat record line via deterministic formatter"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-EVENT-15, R-doc03-EVENT-16]
+  criticality: P2
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "An action-item-created event with a committed note-delta, chat record posting enabled, Proxy's wake-turn path mocked"
+    when:  "The chat record line is produced"
+    then:
+      - "The line follows the format keyed on the committed note-delta (e.g., '☐ Action: <assignee> — <task>')"
+      - "Proxy's wake-turn path is never invoked (mock call count == 0)"
+      - "No LLM/model call is made"
+  primary_oracle: {type: state_machine_assertion, artifact: "assert formatter_output matches action-item format template; wake_mock.call_count == 0; llm_mock.call_count == 0"}
+  thresholds: {chat_lines_from_proxy_wake_allowed: 0, chat_lines_from_model_call_allowed: 0}
+  fault_model_refs: [F-CHAT-LINE-VIA-WAKE, F-CHAT-LINE-MODEL-GENERATED]
+  test_ids: [T-EVENT-07]
+
+# ── Chat record line: dedupe by meeting_revision ──────────────────────────────
+
+- criterion_id: AC-EVENT-08
+  name: "Re-fold of same committed delta at same meeting_revision emits no duplicate chat line"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-EVENT-17]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "A decision-final committed delta with meeting_revision R, chat record posting enabled, the chat record line already posted once for revision R"
+    when:  "The same delta is folded again (re-fold scenario) triggering a second potential chat record post"
+    then:
+      - "No second chat record line is posted (dedupe suppresses it)"
+      - "Total chat line post count for meeting_revision R remains exactly 1"
+  primary_oracle: {type: simulation_trace, artifact: "assert chat_post_count(meeting_revision=R) == 1 after two folds of the same delta"}
+  thresholds: {duplicate_chat_lines_per_revision_allowed: 0}
+  fault_model_refs: [F-CHAT-LINE-DUPLICATE]
+  test_ids: [T-EVENT-08]
+
+# ── Chat record line: disable toggle honored ──────────────────────────────────
+
+- criterion_id: AC-EVENT-09
+  name: "Disable toggle suppresses all chat record line posts"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-EVENT-18]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "The room's chat record posting disable toggle is active"
+    when:  "Multiple decision-final and action-item-created events are emitted"
+    then:
+      - "Zero chat record lines are posted to the meeting chat"
+      - "The formatter may still be callable but its output is not sent"
+  primary_oracle: {type: simulation_trace, artifact: "assert chat_post_count == 0 across all decision-final and action-item-created events when toggle==disabled"}
+  thresholds: {chat_lines_posted_when_disabled_allowed: 0}
+  fault_model_refs: [F-CHAT-LINE-IGNORES-TOGGLE]
+  test_ids: [T-EVENT-09]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §3.6 LIVE CORRECTIONS — ACCEPTANCE CRITERIA
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Immediate, attributed, superseded-not-erased ──────────────────────────────
+
+- criterion_id: AC-CORR-01
+  name: "Correction is applied immediately, attributed, and prior value kept superseded"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CORR-01, R-doc03-CORR-02, R-doc03-CORR-03]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "An entry E with value V0 persisted in Postgres; a correction arrives from Doc 04 from corrector 'Sam' at timestamp T"
+    when:  "The correction patch sets E's value to V1"
+    then:
+      - "The patch is applied immediately (within the same pipeline step, not deferred)"
+      - "E's current value in Postgres is V1"
+      - "A superseded record for E with value V0 exists in Postgres (not deleted, not overwritten)"
+      - "The correction record carries corrector == 'Sam' and timestamp == T"
+  primary_oracle: {type: contract_schema, artifact: "assert db: current_value(E)==V1; assert superseded_value(E)==V0 exists; assert correction.corrector=='Sam' and correction.ts==T"}
+  thresholds: {prior_value_erased_allowed: 0, correction_missing_attribution_allowed: 0, patch_applied_deferred_allowed: 0}
+  fault_model_refs: [F-CORR-SILENT-OVERWRITE, F-CORR-MISSING-ATTRIBUTION]
+  test_ids: [T-CORR-01]
+
+- criterion_id: AC-CORR-01-NEG
+  name: "NEG: Correction without attribution fields is rejected / flagged incomplete"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-CORR-02]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "A correction patch that is missing either the corrector identity or the correction timestamp"
+    when:  "The correction is submitted to the apply path"
+    then:
+      - "The correction is not committed to Postgres as a complete record"
+      - "An error or incomplete-correction marker is raised; the entry is not silently patched with a dangling attribution"
+  primary_oracle: {type: state_machine_assertion, artifact: "assert correction with missing corrector or ts raises AttributionError or equivalent; no partial record written"}
+  thresholds: {incomplete_corrections_committed_allowed: 0}
+  fault_model_refs: [F-CORR-MISSING-ATTRIBUTION]
+  test_ids: [T-CORR-01-NEG]
+
+# ── Prior value queryable after correction ────────────────────────────────────
+
+- criterion_id: AC-CORR-02
+  name: "Prior value remains queryable in superseded state after correction (audit trail)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CORR-03]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "Entry E with original value V0 in Postgres"
+    when:  "A correction changes E's value to V1, then a second correction changes it to V2"
+    then:
+      - "V0 and V1 are both queryable as superseded records in Postgres"
+      - "V2 is the current value"
+      - "No intermediate value has been deleted; the full correction chain is intact"
+  primary_oracle: {type: contract_schema, artifact: "assert query(superseded records for E) returns [V0, V1]; assert current_value(E)==V2"}
+  thresholds: {superseded_values_deleted_allowed: 0}
+  fault_model_refs: [F-CORR-SILENT-OVERWRITE]
+  test_ids: [T-CORR-02]
+
+- criterion_id: AC-CORR-02-NEG
+  name: "NEG: Correction that deletes the prior value instead of superseding it is rejected"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-CORR-03]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "Entry E with value V0"
+    when:  "An apply path attempts to overwrite V0 in place (UPDATE without supersede write) to set V1"
+    then:
+      - "The in-place overwrite is blocked by the data model / apply logic"
+      - "V0 cannot be queried because it was not written to the superseded table — this state is detected as a violation"
+  primary_oracle: {type: state_machine_assertion, artifact: "after in-place overwrite attempt: assert superseded_count(E) == 0 triggers violation alert; correction path requires INSERT supersede before UPDATE current"}
+  thresholds: {in_place_overwrites_undetected_allowed: 0}
+  fault_model_refs: [F-CORR-SILENT-OVERWRITE]
+  test_ids: [T-CORR-02-NEG]
+
+# ── Correction sticks: next Scribe call sees corrected notes ──────────────────
+
+- criterion_id: AC-CORR-03
+  name: "Next Scribe call sees corrected entry in its notes prefix"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CORR-04]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "Entry E with value V0; a correction applied that sets E to V1; the Scribe micro-call pipeline ready to invoke"
+    when:  "The next Scribe micro-call is invoked after the correction is committed"
+    then:
+      - "The Scribe's notes prefix (Segment B / rolling context) contains E with value V1"
+      - "V0 does not appear as the current value in the notes prefix"
+      - "The correction is durable: running the Scribe again on the subsequent window still shows V1"
+  primary_oracle: {type: simulation_trace, artifact: "inspect Scribe message array prefix after correction: assert E.current_value == V1 in Segment B; assert V0 not in current notes prefix"}
+  thresholds: {scribe_calls_seeing_stale_value_allowed: 0}
+  fault_model_refs: [F-CORR-REVERT-ON-SCRIBE]
+  test_ids: [T-CORR-03]
+
+- criterion_id: AC-CORR-03-NEG
+  name: "NEG: Scribe call sees stale (pre-correction) value if correction not committed to Postgres"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-CORR-04]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "Entry E with value V0; a correction to V1 that fails to commit to Postgres (simulated write failure)"
+    when:  "The next Scribe micro-call is invoked"
+    then:
+      - "The Scribe's notes prefix reflects V0 (the uncommitted correction did not stick)"
+      - "V1 does not appear as the current value in the prefix"
+  primary_oracle: {type: simulation_trace, artifact: "assert Scribe prefix shows V0 when correction Postgres commit was forced to fail; V1 absent from current notes prefix"}
+  thresholds: {}
+  fault_model_refs: [F-CORR-UNCOMMITTED-STICKS]
+  test_ids: [T-CORR-03-NEG]
+
+# ── Ordinary corrections: silent-immediate, no gate ──────────────────────────
+
+- criterion_id: AC-CORR-04
+  name: "Firmness bump applies silently with no spoken confirmation"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-CORR-05, R-doc03-CORR-06]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "An entry with a non-final, non-irreversible state; a correction that bumps its firmness level; Doc 02 speech path mocked"
+    when:  "The correction is applied"
+    then:
+      - "The patch is committed to Postgres immediately"
+      - "Doc 02 speech path is never called (speak mock call count == 0)"
+      - "No gate-check logic is invoked"
+  primary_oracle: {type: state_machine_assertion, artifact: "assert speak_mock.call_count == 0; assert entry.firmness == new_firmness in db; assert gate_check_invoked == False"}
+  thresholds: {spoken_confirms_for_firmness_bump_allowed: 0, gate_checks_for_firmness_bump_allowed: 0}
+  fault_model_refs: [F-CORR-ORDINARY-GATE-FIRES]
+  test_ids: [T-CORR-04]
+
+- criterion_id: AC-CORR-04-NEG
+  name: "NEG: Ordinary corrections that fail Postgres write do not emit a false spoken confirm"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-CORR-05]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "An ordinary correction (firmness bump) where the Postgres write fails"
+    when:  "The correction apply path runs"
+    then:
+      - "No spoken confirmation is emitted (there is nothing to confirm)"
+      - "No false success state is propagated"
+  primary_oracle: {type: state_machine_assertion, artifact: "assert speak_mock.call_count == 0 when Postgres write raises; assert no success state emitted"}
+  thresholds: {false_confirms_on_write_failure_allowed: 0}
+  fault_model_refs: [F-CORR-FALSE-CONFIRM]
+  test_ids: [T-CORR-04-NEG]
+
+- criterion_id: AC-CORR-05
+  name: "Action-item tweak applies silently with no spoken confirmation"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-CORR-05, R-doc03-CORR-07]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "An action-item entry; a correction that changes the assignee or wording (not closing it); Doc 02 speech path mocked"
+    when:  "The correction is applied"
+    then:
+      - "The patch is committed to Postgres immediately"
+      - "Doc 02 speech path is never called (speak mock call count == 0)"
+  primary_oracle: {type: state_machine_assertion, artifact: "assert speak_mock.call_count == 0; assert action_item.assignee or wording == corrected_value in db"}
+  thresholds: {spoken_confirms_for_action_tweak_allowed: 0}
+  fault_model_refs: [F-CORR-ORDINARY-GATE-FIRES]
+  test_ids: [T-CORR-05]
+
+- criterion_id: AC-CORR-05-NEG
+  name: "NEG: Tweak that also sets Decision.status=final is NOT treated as ordinary"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-CORR-07, R-doc03-CORR-10]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "An action-item correction that combines a wording tweak WITH setting Decision.status=final in the same patch"
+    when:  "The correction is evaluated"
+    then:
+      - "The correction is classified as high-stakes (not ordinary) due to the Decision.status=final component"
+      - "The spoken-confirm gate fires"
+      - "The silent-immediate path is NOT taken"
+  primary_oracle: {type: state_machine_assertion, artifact: "assert gate_check_invoked == True; assert speak_mock.call_count >= 1 for this correction"}
+  thresholds: {high_stakes_misclassified_as_ordinary_allowed: 0}
+  fault_model_refs: [F-CORR-HIGH-STAKES-SILENT]
+  test_ids: [T-CORR-05-NEG]
+
+- criterion_id: AC-CORR-06
+  name: "Forming-decision lean applies silently with no spoken confirmation"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-CORR-05, R-doc03-CORR-08]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "A decision entry in forming state; a correction that updates its lean (not finalizing it); Doc 02 speech path mocked"
+    when:  "The correction is applied"
+    then:
+      - "The patch is committed to Postgres immediately"
+      - "Doc 02 speech path is never called (speak mock call count == 0)"
+      - "Decision.status remains forming in Postgres"
+  primary_oracle: {type: state_machine_assertion, artifact: "assert speak_mock.call_count == 0; assert decision.status == 'forming' in db after patch"}
+  thresholds: {spoken_confirms_for_forming_lean_allowed: 0}
+  fault_model_refs: [F-CORR-ORDINARY-GATE-FIRES]
+  test_ids: [T-CORR-06]
+
+- criterion_id: AC-CORR-07
+  name: "Open-question edit applies silently with no spoken confirmation"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-CORR-05, R-doc03-CORR-09]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "An open question entry; a correction that updates its wording or context (not closing it); Doc 02 speech path mocked"
+    when:  "The correction is applied"
+    then:
+      - "The patch is committed to Postgres immediately"
+      - "Doc 02 speech path is never called (speak mock call count == 0)"
+      - "The question remains open in Postgres"
+  primary_oracle: {type: state_machine_assertion, artifact: "assert speak_mock.call_count == 0; assert question.status == 'open' in db after patch"}
+  thresholds: {spoken_confirms_for_open_question_edit_allowed: 0}
+  fault_model_refs: [F-CORR-ORDINARY-GATE-FIRES]
+  test_ids: [T-CORR-07]
+
+# ── High-stakes gate: Decision.status=final trigger ───────────────────────────
+
+- criterion_id: AC-CORR-08
+  name: "Correction that sets Decision.status=final triggers gate and spoken confirm"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CORR-10, R-doc03-CORR-13, R-doc03-CORR-14, R-doc03-CORR-15, R-doc03-CORR-16]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "A decision entry in forming state; a spoken correction 'Proxy, we decided Friday, not Monday' that sets Decision.status=final; Doc 02 speech path mocked; Postgres write available"
+    when:  "The correction is processed"
+    then:
+      - "The patch is applied immediately (Decision.status=final committed to Postgres before the spoken confirm)"
+      - "The prior value is kept as a superseded record in Postgres"
+      - "Exactly one spoken acknowledgement line is emitted via Doc 02's speech path"
+      - "The acknowledgement is emitted after the patch is committed (patch-first ordering)"
+      - "Pipeline processing is not blocked waiting for any human response"
+  primary_oracle: {type: simulation_trace, artifact: "trace ordering: assert db_commit(decision.status=final) happens-before speak_call; assert speak_mock.call_count == 1; assert superseded_value exists"}
+  thresholds: {spoken_confirm_emitted_before_db_commit_allowed: 0, spoken_confirms_per_high_stakes_correction: 1, patch_deferred_pending_approval_allowed: 0}
+  fault_model_refs: [F-CORR-HIGH-STAKES-SILENT, F-CORR-BLOCKING-CONFIRM]
+  test_ids: [T-CORR-08]
+
+- criterion_id: AC-CORR-08-NEG
+  name: "NEG: Decision.status=final correction with Postgres failure does not emit a false spoken confirm"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-CORR-10, R-doc03-CORR-13]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "A correction that sets Decision.status=final; Postgres write is forced to fail"
+    when:  "The correction is processed"
+    then:
+      - "No spoken confirmation is emitted (the patch did not commit)"
+      - "No false-positive success state is propagated"
+  primary_oracle: {type: state_machine_assertion, artifact: "assert speak_mock.call_count == 0 when Postgres write raises; no success event emitted"}
+  thresholds: {false_confirms_on_write_failure_allowed: 0}
+  fault_model_refs: [F-CORR-FALSE-CONFIRM]
+  test_ids: [T-CORR-08-NEG]
+
+# ── High-stakes gate: Reversibility=irreversible trigger ─────────────────────
+
+- criterion_id: AC-CORR-09
+  name: "Correction that sets Reversibility=irreversible triggers gate and spoken confirm"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CORR-11, R-doc03-CORR-13, R-doc03-CORR-14, R-doc03-CORR-15, R-doc03-CORR-16]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "An entry with Reversibility != irreversible; a correction that sets Reversibility=irreversible; Doc 02 speech path mocked; Postgres write available"
+    when:  "The correction is processed"
+    then:
+      - "The patch is committed to Postgres immediately (Reversibility=irreversible written)"
+      - "The prior reversibility value is kept as a superseded record"
+      - "Exactly one spoken acknowledgement line is emitted via Doc 02's speech path"
+      - "The acknowledgement is emitted after the patch is committed"
+      - "No blocking approval prompt is issued"
+  primary_oracle: {type: simulation_trace, artifact: "assert db_commit(reversibility=irreversible) happens-before speak_call; assert speak_mock.call_count == 1; assert superseded_value exists"}
+  thresholds: {spoken_confirms_per_high_stakes_correction: 1, patch_deferred_pending_approval_allowed: 0}
+  fault_model_refs: [F-CORR-HIGH-STAKES-SILENT, F-CORR-BLOCKING-CONFIRM]
+  test_ids: [T-CORR-09]
+
+- criterion_id: AC-CORR-09-NEG
+  name: "NEG: Reversibility=irreversible correction with Postgres failure emits no spoken confirm"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-CORR-11, R-doc03-CORR-13]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "A correction that sets Reversibility=irreversible; Postgres write is forced to fail"
+    when:  "The correction is processed"
+    then:
+      - "No spoken confirmation is emitted"
+      - "No false success state is propagated"
+  primary_oracle: {type: state_machine_assertion, artifact: "assert speak_mock.call_count == 0 when Postgres write raises; no success event emitted"}
+  thresholds: {false_confirms_on_write_failure_allowed: 0}
+  fault_model_refs: [F-CORR-FALSE-CONFIRM]
+  test_ids: [T-CORR-09-NEG]
+
+# ── High-stakes gate: closes/finalizes entry already final/irreversible ───────
+
+- criterion_id: AC-CORR-10
+  name: "Correction that closes/finalizes an already-final/irreversible entry triggers gate"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CORR-12, R-doc03-CORR-13, R-doc03-CORR-14, R-doc03-CORR-15, R-doc03-CORR-16]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "An entry E that already carries Decision.status=final; a correction that closes/re-finalizes E (e.g., confirming or updating the final state); Doc 02 speech path mocked"
+    when:  "The correction is processed"
+    then:
+      - "The patch is applied immediately (committed to Postgres)"
+      - "Exactly one spoken acknowledgement line is emitted"
+      - "The gate fires for this case even though the entry was already in a high-stakes state"
+  primary_oracle: {type: simulation_trace, artifact: "assert speak_mock.call_count == 1; assert db commit occurs; gate_check_invoked == True"}
+  thresholds: {high_stakes_misclassified_as_ordinary_allowed: 0, spoken_confirms_per_high_stakes_correction: 1}
+  fault_model_refs: [F-CORR-HIGH-STAKES-SILENT]
+  test_ids: [T-CORR-10]
+
+- criterion_id: AC-CORR-10-NEG
+  name: "NEG: Closing an already-closed-final entry still triggers gate (not double-suppressed)"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-CORR-12]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "Entry E with Decision.status=final already committed; a second correction that closes E again"
+    when:  "The second correction is processed"
+    then:
+      - "The gate still fires (the entry's final/irreversible status is itself the trigger condition)"
+      - "The silent-immediate path is NOT taken simply because the entry was already final"
+      - "Spoken confirm is emitted"
+  primary_oracle: {type: state_machine_assertion, artifact: "assert gate_check_invoked == True for second correction; speak_mock.call_count == 1"}
+  thresholds: {high_stakes_misclassified_as_ordinary_allowed: 0}
+  fault_model_refs: [F-CORR-HIGH-STAKES-SILENT]
+  test_ids: [T-CORR-10-NEG]
+
+# ── Confirm is an audible receipt, not a blocking approval ────────────────────
+
+- criterion_id: AC-CORR-11
+  name: "Spoken confirm is a receipt: pipeline continues without waiting for human response"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CORR-15]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "A high-stakes correction that has committed its patch and emitted the spoken acknowledgement; no participant response arrives within a test window"
+    when:  "The pipeline continues processing after the acknowledgement is emitted"
+    then:
+      - "Pipeline processing resumes immediately after the acknowledge emit; no wait state or approval-pending state is entered"
+      - "Subsequent deltas are processed without dependency on any human acknowledgement of the spoken confirm"
+  primary_oracle: {type: simulation_trace, artifact: "assert next_delta_processed_timestamp - acknowledge_emit_timestamp < pipeline_step_budget_ms; assert no approval_pending state in pipeline state machine"}
+  thresholds: {pipeline_blocked_pending_human_ack_allowed: 0}
+  fault_model_refs: [F-CORR-BLOCKING-CONFIRM]
+  test_ids: [T-CORR-11]
+
+# ── Gate scope: notes corrections only, not world-touching actions ────────────
+
+- criterion_id: AC-CORR-12
+  name: "Gate does not interfere with world-touching action approval paths"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-CORR-17]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  behavior:
+    given: "A world-touching action (e.g., a calendar invite creation) that requires a human click per Law 3; the notes-corrections gate active"
+    when:  "The world-touching action request is processed"
+    then:
+      - "The notes-corrections gate is not invoked for the world-touching action"
+      - "The human-click approval path for the world-touching action is unaffected and still fires"
+      - "No spoken-confirm from the notes-corrections gate is emitted for this action"
+  primary_oracle: {type: state_machine_assertion, artifact: "assert notes_gate_invoked == False for world_touching_action; assert human_click_approval_path_invoked == True; assert speak_mock.call_count == 0 from notes gate"}
+  thresholds: {world_touching_actions_routed_through_notes_gate_allowed: 0}
+  fault_model_refs: [F-CORR-GATE-SCOPE-EXCEEDED]
+  test_ids: [T-CORR-12]

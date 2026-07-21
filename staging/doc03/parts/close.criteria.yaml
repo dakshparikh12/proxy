@@ -1,0 +1,734 @@
+# close.criteria.yaml — Doc 03 (Notes / Scribe) — §3.7 The close pass (permanent record)
+# Acceptance criteria for the meeting-end-triggered close pass.
+# ID scheme: AC-CLOSE-NN
+# Authority: DOC-03 §3.7
+#
+# dependency_class values:
+#   vendor:anthropic — Sonnet-class SDK (generateStructured via claude_agent_sdk)
+#   db:postgres      — reading gap/pending spans from transcript_segments
+#   gcs:objects      — write_finalized_notes with if_generation_match=0
+#   vendor:recall    — posting chat link (via Doc 04 / Recall bot)
+#
+# mock_boundary rules (MANDATORY, per section brief):
+#   vendor:anthropic : cassette at call_external seam; MUST NOT replace the anthropic SDK with Mock()
+#   gcs:objects      : real GCS bucket or equivalent; MUST NOT replace storage client with Mock()
+#   db:postgres      : real Postgres; MUST NOT mock asyncpg
+#   vendor:recall    : cassette at call_external seam; MUST NOT replace the Recall client with Mock()
+
+# ── Golden path — end-to-end close pass ──────────────────────────────────────
+
+- criterion_id: AC-CLOSE-01
+  name: "Golden path: meeting-end triggers close pass producing final notes in GCS with chat link posted before teardown"
+  golden_path: true
+  evidence_class: "[eval]"
+  authority_refs:
+    - R-doc03-CLOSE-01
+    - R-doc03-CLOSE-02
+    - R-doc03-CLOSE-03
+    - R-doc03-CLOSE-06
+    - R-doc03-CLOSE-13
+    - R-doc03-CLOSE-14
+    - R-doc03-CLOSE-15
+  dependency_class: [vendor:anthropic, db:postgres, gcs:objects, vendor:recall]
+  mock_boundary:
+    vendor_anthropic: "cassette at call_external seam; MUST NOT replace the anthropic SDK with Mock()"
+    gcs_objects: "real GCS bucket or equivalent; MUST NOT replace storage client with Mock()"
+    db_postgres: "real Postgres; MUST NOT mock asyncpg"
+    vendor_recall: "cassette at call_external seam; MUST NOT replace the Recall client with Mock()"
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A meeting with a populated note-delta ledger (folded), transcript_segments rows
+      (including at least one status='pending' and one status='gap'), all below the
+      chunk-reduce token threshold; PROXY_MODEL_SCRIBE_CLOSE is set to a Sonnet-class model.
+    when: "The Doc 02 meeting-end signal is received"
+    then:
+      - "Exactly one generateStructured call is made to the Sonnet-class model (PROXY_MODEL_SCRIBE_CLOSE)"
+      - "The call input includes the folded ledger and the raw content of all status='gap' and status='pending' transcript segments"
+      - "The call input does NOT include full raw transcript for status='comprehended' segments"
+      - "The resulting final notes object is deduplicated, conflicts resolved, in publishable form"
+      - "Step 1: the final object is rendered through the notes template to markdown"
+      - "Step 2: write_finalized_notes is called with if_generation_match=0 and succeeds; the GCS object is created"
+      - "Step 3: the GCS notes link is posted in the meeting chat BEFORE teardown begins"
+      - "Step 4: teardown proceeds only after the chat link post confirms success"
+      - "One operation_runs row exists with operation_type='meeting-close' for the meeting"
+      - "total_cost_usd is recorded from the generateStructured result"
+      - "Teardown does not occur without the chat link having been posted"
+  primary_oracle:
+    type: integration_trace
+    artifact: >
+      end-to-end trace showing: (1) meeting-end signal timestamp, (2) generateStructured
+      invocation with correct model and input composition, (3) GCS object creation event
+      with if_generation_match=0, (4) chat link post event, (5) teardown event — ordered
+      and all present
+  thresholds:
+    gcs_writes_per_meeting: 1
+    chat_link_posts_before_teardown: 1
+    close_passes_per_meeting: 1
+    comprehended_segments_in_input: 0
+  fault_model_refs:
+    - F-CLOSE-TEARDOWN-BEFORE-LINK
+    - F-CLOSE-FULL-TRANSCRIPT-MAP-REDUCE
+    - F-CLOSE-WRONG-MODEL
+  test_ids: [T-CLOSE-01]
+
+# ── Trigger: meeting-end signal initiates the close pass ─────────────────────
+
+- criterion_id: AC-CLOSE-02
+  name: "Meeting-end signal is the sole trigger for the close pass"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CLOSE-01]
+  dependency_class: []
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A meeting is in progress; the close pass has not been initiated"
+    when: "The Doc 02 meeting-end signal is received"
+    then:
+      - "The close pass is initiated exactly once in response to the signal"
+      - "Prior to receiving the meeting-end signal, no close pass was initiated"
+      - "The close pass is not initiated more than once for the same meeting"
+  primary_oracle:
+    type: simulation_trace
+    artifact: >
+      simulation trace showing close-pass initiation event timestamped after
+      meeting-end signal and never before; count of close-pass initiations == 1
+  thresholds:
+    close_pass_initiations_per_meeting: 1
+  test_ids: [T-CLOSE-02]
+
+- criterion_id: AC-CLOSE-02-NEG
+  name: "NEG: close pass is NOT triggered by silence, inactivity, or absence of transcript traffic"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CLOSE-01]
+  dependency_class: []
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A meeting is in progress with a long silence (no transcript events for 10 minutes)"
+    when: "No meeting-end signal has been received"
+    then:
+      - "No close pass is initiated"
+      - "The system continues waiting for the explicit meeting-end signal"
+  primary_oracle:
+    type: simulation_trace
+    artifact: "trace showing zero close-pass initiation events during the silence window"
+  thresholds:
+    close_pass_initiations_during_silence: 0
+  test_ids: [T-CLOSE-02-NEG]
+
+# ── Model seat: Sonnet-class, NOT Haiku ───────────────────────────────────────
+
+- criterion_id: AC-CLOSE-03
+  name: "Close pass uses PROXY_MODEL_SCRIBE_CLOSE (Sonnet-class), never Haiku"
+  evidence_class: "[eval]"
+  authority_refs: [R-doc03-CLOSE-02]
+  dependency_class: [vendor:anthropic]
+  mock_boundary:
+    vendor_anthropic: "cassette at call_external seam; MUST NOT replace the anthropic SDK with Mock()"
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "PROXY_MODEL_SCRIBE_CLOSE is set to a Sonnet-class model identifier"
+    when: "The close pass invokes the model"
+    then:
+      - "The model identifier sent in the API request matches PROXY_MODEL_SCRIBE_CLOSE"
+      - "The model identifier does NOT resolve to claude-haiku or any Haiku-class model"
+  primary_oracle:
+    type: cassette_assertion
+    artifact: >
+      cassette recorded at call_external seam: assert request.model == env['PROXY_MODEL_SCRIBE_CLOSE']
+      and 'haiku' not in request.model.lower()
+  test_ids: [T-CLOSE-03]
+
+- criterion_id: AC-CLOSE-03-NEG
+  name: "NEG: close pass fails fast when PROXY_MODEL_SCRIBE_CLOSE resolves to a Haiku-class model"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CLOSE-02]
+  dependency_class: []
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "PROXY_MODEL_SCRIBE_CLOSE is misconfigured to a Haiku-class model"
+    when: "The close pass starts"
+    then:
+      - "The system raises a configuration error before invoking the model"
+      - "The close pass does not proceed with a Haiku-class model"
+  primary_oracle:
+    type: exception_assertion
+    artifact: "assert ConfigurationError raised before any SDK call when model tier check fails"
+  test_ids: [T-CLOSE-03-NEG]
+
+# ── Input: folded ledger, not full raw transcript ─────────────────────────────
+
+- criterion_id: AC-CLOSE-04
+  name: "Close pass reduces over the folded ledger, NOT the full raw transcript"
+  evidence_class: "[eval]"
+  authority_refs: [R-doc03-CLOSE-03]
+  dependency_class: [vendor:anthropic, db:postgres]
+  mock_boundary:
+    vendor_anthropic: "cassette at call_external seam; MUST NOT replace the anthropic SDK with Mock()"
+    db_postgres: "real Postgres; MUST NOT mock asyncpg"
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A meeting with: (a) 50 transcript_segments rows with status='comprehended',
+      (b) 3 rows with status='gap', (c) 2 rows with status='pending',
+      (d) a populated folded note-delta ledger below the chunk-reduce threshold.
+    when: "The close pass assembles its input"
+    then:
+      - "The primary input is the folded ledger"
+      - "Raw transcript content is fetched only for the 3 'gap' and 2 'pending' rows (5 total)"
+      - "No raw transcript content for the 50 'comprehended' rows is included in the model call"
+      - "The model call does not constitute a full-transcript map-reduce"
+  primary_oracle:
+    type: cassette_assertion
+    artifact: >
+      cassette at call_external seam: assert prompt contains folded-ledger block;
+      assert prompt contains exactly 5 raw-transcript spans (gap+pending);
+      assert no comprehended-segment raw text appears in the prompt
+  thresholds:
+    comprehended_segments_in_prompt: 0
+    gap_pending_segments_fetched: 5
+  test_ids: [T-CLOSE-04]
+
+- criterion_id: AC-CLOSE-04-NEG
+  name: "NEG: close pass reads gap/pending spans from Postgres (fails if DB unavailable)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CLOSE-04]
+  dependency_class: [db:postgres]
+  mock_boundary:
+    db_postgres: "real Postgres; MUST NOT mock asyncpg"
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A meeting with status='gap' transcript_segments rows; Postgres is
+      unreachable at the moment the close pass runs.
+    when: "The close pass attempts to fetch gap/pending spans"
+    then:
+      - "The close pass surfaces a database connectivity error"
+      - "It does NOT silently skip the gap/pending backfill and proceed with an incomplete input"
+      - "The operation_runs row is marked failed, not succeeded"
+  primary_oracle:
+    type: exception_assertion
+    artifact: >
+      assert DatabaseConnectionError (or equivalent) is surfaced;
+      assert operation_runs row status == 'failed' not 'succeeded'
+  test_ids: [T-CLOSE-04-NEG]
+
+# ── Chunk-reduce only above token threshold ───────────────────────────────────
+
+- criterion_id: AC-CLOSE-05
+  name: "Chunk-reduce is skipped when the folded ledger is below the token threshold"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CLOSE-05]
+  dependency_class: []
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A folded note-delta ledger whose token count is below the configured chunk-reduce threshold"
+    when: "The close pass runs"
+    then:
+      - "Exactly one model call is made (no chunking)"
+      - "No map-reduce loop is entered"
+  primary_oracle:
+    type: simulation_trace
+    artifact: "trace asserting model_call_count == 1 and no chunk_reduce_loop_entered event"
+  thresholds:
+    model_calls_for_normal_meeting: 1
+  test_ids: [T-CLOSE-05]
+
+- criterion_id: AC-CLOSE-05B
+  name: "Chunk-reduce IS used when the folded ledger exceeds the token threshold"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CLOSE-05]
+  dependency_class: []
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "A folded note-delta ledger whose token count exceeds the configured chunk-reduce threshold"
+    when: "The close pass runs"
+    then:
+      - "The close pass enters the chunk-reduce path (more than one model call)"
+      - "The result is still a single unified final notes object"
+  primary_oracle:
+    type: simulation_trace
+    artifact: "trace asserting model_call_count > 1 and final output is one merged notes object"
+  test_ids: [T-CLOSE-05B]
+
+# ── SDK: generateStructured, not messages.create ──────────────────────────────
+
+- criterion_id: AC-CLOSE-06
+  name: "Close pass uses generateStructured with json_schema outputFormat, not raw messages.create"
+  evidence_class: "[eval]"
+  authority_refs: [R-doc03-CLOSE-06]
+  dependency_class: [vendor:anthropic]
+  mock_boundary:
+    vendor_anthropic: "cassette at call_external seam; MUST NOT replace the anthropic SDK with Mock()"
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A valid close-pass invocation"
+    when: "The close pass calls the claude_agent_sdk"
+    then:
+      - "The call is made via generateStructured (not messages.create or a raw HTTP call)"
+      - "The outputFormat parameter is set to type json_schema"
+      - "The response is passed through Pydantic re-validation before use"
+  primary_oracle:
+    type: cassette_assertion
+    artifact: >
+      cassette: assert call is generateStructured (not messages.create);
+      assert outputFormat.type == 'json_schema';
+      assert Pydantic model.model_validate called on result
+  test_ids: [T-CLOSE-06]
+
+- criterion_id: AC-CLOSE-06-NEG
+  name: "NEG: error_max_turns and error_max_structured_output_retries are caught as typed errors"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CLOSE-07]
+  dependency_class: [vendor:anthropic]
+  mock_boundary:
+    vendor_anthropic: "cassette at call_external seam; MUST NOT replace the anthropic SDK with Mock()"
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A close-pass invocation where the SDK raises error_max_turns"
+    when: "The generateStructured call terminates with error_max_turns"
+    then:
+      - "The error is caught as the typed error_max_turns terminal subtype"
+      - "It is NOT swallowed or converted to a generic Exception"
+      - "The operation_runs row records the terminal error type explicitly"
+  primary_oracle:
+    type: cassette_assertion
+    artifact: >
+      cassette injecting error_max_turns: assert error_max_turns caught in specific
+      except branch; assert generic Exception catch does not handle it first;
+      assert operation_runs.error_type == 'error_max_turns'
+  test_ids: [T-CLOSE-06-NEG]
+
+- criterion_id: AC-CLOSE-06-NEG2
+  name: "NEG: error_max_structured_output_retries is caught as a distinct typed error"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CLOSE-07]
+  dependency_class: [vendor:anthropic]
+  mock_boundary:
+    vendor_anthropic: "cassette at call_external seam; MUST NOT replace the anthropic SDK with Mock()"
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "A close-pass invocation where the SDK raises error_max_structured_output_retries"
+    when: "The generateStructured call exhausts structured-output retries"
+    then:
+      - "The error is caught as the distinct typed error_max_structured_output_retries subtype"
+      - "It is handled separately from error_max_turns"
+      - "The operation_runs row records error_type == 'error_max_structured_output_retries'"
+  primary_oracle:
+    type: cassette_assertion
+    artifact: >
+      cassette injecting error_max_structured_output_retries: assert distinct except
+      branch; assert operation_runs.error_type == 'error_max_structured_output_retries'
+  test_ids: [T-CLOSE-06-NEG2]
+
+# ── operation_runs, NO close_jobs ─────────────────────────────────────────────
+
+- criterion_id: AC-CLOSE-07
+  name: "Close pass is recorded in operation_runs with operation_type='meeting-close', no close_jobs table"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CLOSE-09]
+  dependency_class: [db:postgres]
+  mock_boundary:
+    db_postgres: "real Postgres; MUST NOT mock asyncpg"
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A completed close pass for a meeting"
+    when: "The database state is inspected after the close pass"
+    then:
+      - "Exactly one row exists in operation_runs with operation_type='meeting-close' for the meeting_id"
+      - "No table named 'close_jobs' exists in the schema"
+      - "No other dedicated close-tracking table exists"
+  primary_oracle:
+    type: db_assertion
+    artifact: >
+      SELECT count(*) FROM operation_runs WHERE meeting_id=$1 AND operation_type='meeting-close' == 1;
+      assert table 'close_jobs' does not exist in information_schema.tables
+  thresholds:
+    operation_runs_rows_per_meeting: 1
+    close_jobs_table_allowed: false
+  test_ids: [T-CLOSE-07]
+
+- criterion_id: AC-CLOSE-07-NEG
+  name: "NEG: second close-pass attempt is rejected; existing operation_runs row prevents duplicate"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CLOSE-17]
+  dependency_class: [db:postgres, gcs:objects]
+  mock_boundary:
+    db_postgres: "real Postgres; MUST NOT mock asyncpg"
+    gcs_objects: "real GCS bucket or equivalent; MUST NOT replace storage client with Mock()"
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A meeting whose close pass has already completed successfully (GCS object exists)"
+    when: "A second close-pass invocation is attempted (e.g., from crash recovery)"
+    then:
+      - "The GCS write fails with a precondition error (if_generation_match=0 rejected because object exists)"
+      - "No second GCS object is created"
+      - "No second operation_runs row with operation_type='meeting-close' is successfully inserted"
+      - "The system does not overwrite the existing finalized notes"
+  primary_oracle:
+    type: integration_assertion
+    artifact: >
+      assert GCS write raises PreconditionFailed (generation mismatch);
+      assert GCS object generation unchanged after second attempt;
+      assert operation_runs count for meeting still == 1
+  test_ids: [T-CLOSE-07-NEG]
+
+# ── GCS write: if_generation_match=0, create-only ────────────────────────────
+
+- criterion_id: AC-CLOSE-08
+  name: "GCS write uses if_generation_match=0 (create-only semantics, exactly once)"
+  evidence_class: "[eval]"
+  authority_refs: [R-doc03-CLOSE-14]
+  dependency_class: [gcs:objects]
+  mock_boundary:
+    gcs_objects: "real GCS bucket or equivalent; MUST NOT replace storage client with Mock()"
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A successful close pass with a rendered markdown output"
+    when: "write_finalized_notes is called"
+    then:
+      - "The GCS request includes if_generation_match=0"
+      - "The write succeeds and creates the GCS object with generation > 0"
+      - "No overwrite of an existing object is possible through this call path"
+  primary_oracle:
+    type: integration_assertion
+    artifact: >
+      inspect GCS request headers/params: assert ifGenerationMatch == 0 (or equivalent);
+      assert GCS object created with non-zero generation after the call
+  test_ids: [T-CLOSE-08]
+
+- criterion_id: AC-CLOSE-08-NEG
+  name: "NEG: GCS write fails (bucket unavailable) — close pass surfaces error, does not post link"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CLOSE-13, R-doc03-CLOSE-14]
+  dependency_class: [gcs:objects]
+  mock_boundary:
+    gcs_objects: "real GCS bucket or equivalent; MUST NOT replace storage client with Mock()"
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "GCS is unavailable when write_finalized_notes is called"
+    when: "Step 2 (GCS write) fails"
+    then:
+      - "Step 3 (chat link post) does NOT proceed"
+      - "Step 4 (teardown) does NOT proceed"
+      - "The system surfaces the storage error and enters an error state"
+      - "The operation_runs row records a failed status"
+  primary_oracle:
+    type: integration_assertion
+    artifact: >
+      assert no chat post event occurs after GCS failure event in the trace;
+      assert no teardown event occurs;
+      assert operation_runs row status == 'failed'
+  fault_model_refs: [F-CLOSE-TEARDOWN-BEFORE-GCS-WRITE]
+  test_ids: [T-CLOSE-08-NEG]
+
+# ── Mandatory order: render → GCS write → chat link → teardown ───────────────
+
+- criterion_id: AC-CLOSE-09
+  name: "Mandatory close sequence order: render then GCS write then chat link then teardown"
+  evidence_class: "[eval]"
+  authority_refs: [R-doc03-CLOSE-13]
+  dependency_class: [gcs:objects, vendor:recall]
+  mock_boundary:
+    gcs_objects: "real GCS bucket or equivalent; MUST NOT replace storage client with Mock()"
+    vendor_recall: "cassette at call_external seam; MUST NOT replace the Recall client with Mock()"
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A successful close pass that produces a final notes object"
+    when: "The V0 close sequence executes"
+    then:
+      - "Event 1 (render) timestamp < Event 2 (GCS write confirm) timestamp"
+      - "Event 2 (GCS write confirm) timestamp < Event 3 (chat link post confirm) timestamp"
+      - "Event 3 (chat link post confirm) timestamp < Event 4 (teardown) timestamp"
+      - "No teardown event precedes or coincides with the chat link post confirm"
+  primary_oracle:
+    type: integration_trace
+    artifact: >
+      ordered event log: render_complete → gcs_write_confirmed → chat_link_posted →
+      teardown_started; assert strict temporal ordering of all four events
+  thresholds:
+    out_of_order_sequence_violations_allowed: 0
+  fault_model_refs: [F-CLOSE-TEARDOWN-BEFORE-LINK]
+  test_ids: [T-CLOSE-09]
+
+# ── Bot never tears down without posting the link ─────────────────────────────
+
+- criterion_id: AC-CLOSE-10
+  name: "Bot never exits the meeting without posting the notes chat link"
+  evidence_class: "[eval]"
+  authority_refs: [R-doc03-CLOSE-15]
+  dependency_class: [vendor:recall]
+  mock_boundary:
+    vendor_recall: "cassette at call_external seam; MUST NOT replace the Recall client with Mock()"
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A close pass where the chat link post fails on the first attempt but succeeds on retry"
+    when: "Step 3 (chat link post) encounters a transient error"
+    then:
+      - "The system retries the chat link post"
+      - "Teardown does NOT occur between the initial failure and the successful retry"
+      - "Only after the chat link post succeeds does teardown proceed"
+  primary_oracle:
+    type: integration_trace
+    artifact: >
+      trace showing: chat_post_attempt_1_failed → chat_post_attempt_2_succeeded →
+      teardown_started; assert no teardown event between attempt_1 and attempt_2
+  fault_model_refs: [F-CLOSE-TEARDOWN-BEFORE-LINK]
+  test_ids: [T-CLOSE-10]
+
+- criterion_id: AC-CLOSE-10-NEG
+  name: "NEG: chat link post fails permanently — teardown is blocked, error surfaced"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CLOSE-15]
+  dependency_class: [vendor:recall]
+  mock_boundary:
+    vendor_recall: "cassette at call_external seam; MUST NOT replace the Recall client with Mock()"
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Step 3 (chat link post) fails permanently (all retries exhausted)"
+    when: "The close pass cannot post the chat link"
+    then:
+      - "Teardown does NOT proceed silently"
+      - "The system surfaces the error (alert or error log at minimum)"
+      - "The operation_runs row is marked failed"
+      - "A human operator can observe the blocked teardown and intervene"
+  primary_oracle:
+    type: integration_assertion
+    artifact: >
+      assert no teardown event after all chat-post retries exhausted;
+      assert error_event emitted with severity >= ERROR;
+      assert operation_runs.status == 'failed'
+  test_ids: [T-CLOSE-10-NEG]
+
+# ── total_cost_usd captured ───────────────────────────────────────────────────
+
+- criterion_id: AC-CLOSE-11
+  name: "total_cost_usd is captured from the generateStructured result"
+  evidence_class: "[eval]"
+  authority_refs: [R-doc03-CLOSE-12]
+  dependency_class: [vendor:anthropic]
+  mock_boundary:
+    vendor_anthropic: "cassette at call_external seam; MUST NOT replace the anthropic SDK with Mock()"
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A completed generateStructured call that returns total_cost_usd in its result"
+    when: "The close pass processes the SDK result"
+    then:
+      - "total_cost_usd is read from the result and recorded (e.g., on the operation_runs row or cost telemetry table)"
+      - "No separate token-counting arithmetic is performed to compute the cost"
+      - "total_cost_usd > 0.0 for a real model call"
+  primary_oracle:
+    type: db_assertion
+    artifact: >
+      SELECT total_cost_usd FROM operation_runs WHERE meeting_id=$1 AND
+      operation_type='meeting-close'; assert value > 0.0
+  test_ids: [T-CLOSE-11]
+
+- criterion_id: AC-CLOSE-11-NEG
+  name: "NEG: cost telemetry is not skipped when total_cost_usd is missing from SDK result"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CLOSE-12]
+  dependency_class: [vendor:anthropic]
+  mock_boundary:
+    vendor_anthropic: "cassette at call_external seam; MUST NOT replace the anthropic SDK with Mock()"
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "A generateStructured result where total_cost_usd field is absent (SDK version mismatch)"
+    when: "The close pass processes the result"
+    then:
+      - "The system logs a warning that cost telemetry is unavailable"
+      - "The absence of total_cost_usd does NOT cause the close pass to crash"
+      - "The operation_runs row records total_cost_usd as NULL or 0.0, not omitted silently"
+  primary_oracle:
+    type: log_assertion
+    artifact: >
+      assert warning logged containing 'total_cost_usd' and 'missing' or 'unavailable';
+      assert operation_runs row exists and close pass completes
+  test_ids: [T-CLOSE-11-NEG]
+
+# ── Close pass dedupes, resolves conflicts, polishes ─────────────────────────
+
+- criterion_id: AC-CLOSE-12
+  name: "Final notes object is deduplicated and conflicts resolved (not left as contradicts links)"
+  evidence_class: "[eval]"
+  authority_refs: [R-doc03-CLOSE-10, R-doc03-CLOSE-11]
+  dependency_class: [vendor:anthropic]
+  mock_boundary:
+    vendor_anthropic: "cassette at call_external seam; MUST NOT replace the anthropic SDK with Mock()"
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A folded ledger containing: (a) two duplicate entries for the same action item,
+      (b) one entry with a contradicts link from a live-tagging miss, (c) one
+      status='gap' span with important content not in the ledger.
+    when: "The close pass runs and produces the final notes object"
+    then:
+      - "The output contains exactly one action item (not two duplicates)"
+      - "The contradicts link is resolved to a definitive entry in the output"
+      - "The gap span content appears in the output (backfilled)"
+      - "The output summary/action-items/decisions are in publishable form"
+  primary_oracle:
+    type: golden_key_comparison
+    artifact: >
+      golden output with deduplicated action items, resolved contradictions, and
+      gap content included; compare against close-pass output using semantic
+      equivalence scorer >= 0.90
+  thresholds:
+    dedup_completeness: 1.0
+    gap_backfill_completeness: 1.0
+    contradicts_links_in_output: 0
+  test_ids: [T-CLOSE-12]
+
+# ── Audit record persists on Postgres ─────────────────────────────────────────
+
+- criterion_id: AC-CLOSE-13
+  name: "Raw transcript and tool-call telemetry persist on Postgres after close pass (audit record)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CLOSE-16]
+  dependency_class: [db:postgres]
+  mock_boundary:
+    db_postgres: "real Postgres; MUST NOT mock asyncpg"
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A meeting whose close pass completed successfully and teardown finished"
+    when: "The database is inspected after teardown"
+    then:
+      - "All transcript_segments rows for the meeting remain in Postgres (none deleted)"
+      - "All tool-call telemetry rows for the meeting remain in Postgres (none deleted)"
+      - "Row counts before teardown == row counts after teardown for both tables"
+  primary_oracle:
+    type: db_assertion
+    artifact: >
+      assert count(transcript_segments WHERE meeting_id=$1) after teardown ==
+      count before teardown; assert count(tool_call_telemetry WHERE meeting_id=$1)
+      after teardown == count before teardown
+  thresholds:
+    transcript_segments_deleted_after_close: 0
+    tool_call_telemetry_deleted_after_close: 0
+  test_ids: [T-CLOSE-13]
+
+- criterion_id: AC-CLOSE-13-NEG
+  name: "NEG: close pass does not attempt to delete or truncate transcript segments"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CLOSE-16]
+  dependency_class: [db:postgres]
+  mock_boundary:
+    db_postgres: "real Postgres; MUST NOT mock asyncpg"
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A close pass that processes the folded ledger and gap/pending spans"
+    when: "The close pass completes"
+    then:
+      - "No DELETE or TRUNCATE statement is executed against transcript_segments for the meeting"
+      - "No DELETE or TRUNCATE statement is executed against note_deltas for the meeting"
+      - "Audit record rows survive the close pass intact"
+  primary_oracle:
+    type: db_audit_log
+    artifact: >
+      pg_audit or statement log: assert no DELETE/TRUNCATE on transcript_segments or
+      note_deltas during the close pass execution window for the meeting_id
+  test_ids: [T-CLOSE-13-NEG]
+
+# ── One close pass per meeting ─────────────────────────────────────────────────
+
+- criterion_id: AC-CLOSE-14
+  name: "Exactly one close pass runs per meeting; crash recovery detects existing GCS object"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CLOSE-17]
+  dependency_class: [db:postgres, gcs:objects]
+  mock_boundary:
+    db_postgres: "real Postgres; MUST NOT mock asyncpg"
+    gcs_objects: "real GCS bucket or equivalent; MUST NOT replace storage client with Mock()"
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A close pass that crashed after writing GCS but before completing teardown; recovery is attempted"
+    when: "The crash-recovery path re-attempts the close pass for the same meeting"
+    then:
+      - "write_finalized_notes raises a precondition error (object already exists, generation != 0)"
+      - "The recovery path detects the existing GCS object and does NOT overwrite it"
+      - "The recovery path uses the existing GCS URL to post the chat link (if not yet posted)"
+      - "No second finalized notes file is created in GCS"
+  primary_oracle:
+    type: integration_assertion
+    artifact: >
+      assert GCS.write raises PreconditionFailed on second attempt;
+      assert GCS object generation unchanged;
+      assert only one finalized notes file exists for the meeting in GCS
+  thresholds:
+    gcs_finalized_notes_objects_per_meeting: 1
+  test_ids: [T-CLOSE-14]
+
+# ── Build-time SDK surface must be confirmed ──────────────────────────────────
+
+- criterion_id: AC-CLOSE-15
+  name: "Python claude_agent_sdk structured-output surface is confirmed against live docs at build time"
+  evidence_class: "[process]"
+  authority_refs: [R-doc03-CLOSE-08]
+  dependency_class: []
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The build step for the close pass component"
+    when: "The build runs"
+    then:
+      - "A build-time check or documented step confirms the Python claude_agent_sdk's generateStructured / outputFormat / json_schema equivalent surface against the live SDK docs"
+      - "The TypeScript Agent SDK names are NOT assumed to be identical in the Python SDK without verification"
+      - "The confirmed SDK surface (method name, parameter names) is recorded in the build evidence"
+  primary_oracle:
+    type: process_assertion
+    artifact: >
+      build evidence document (or inline comment with SDK version + confirmed method name)
+      showing python claude_agent_sdk version pinned + confirmed generateStructured-equivalent
+      name and outputFormat parameter name from live docs at build time
+  test_ids: [T-CLOSE-15]
+
+# ── V1-deferred items absent in V0 ────────────────────────────────────────────
+
+- criterion_id: AC-CLOSE-16
+  name: "V1-deferred items (show-your-work trace, staged-drafts bundle, decisions→index) are absent in V0"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-CLOSE-18]
+  dependency_class: []
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "The V0 close pass implementation"
+    when: "The close pass completes for a meeting"
+    then:
+      - "No show-your-work trace is emitted or stored"
+      - "No staged-drafts approval bundle is produced"
+      - "No decisions-folding-back-into-index operation is performed"
+      - "These absences are correct; their presence would be a V0 over-implementation"
+  primary_oracle:
+    type: code_assertion
+    artifact: >
+      grep for 'show_your_work', 'staged_draft', 'decisions_to_index' in the
+      close-pass implementation; assert zero occurrences; assert no V1 code paths
+      are wired in V0
+  thresholds:
+    v1_features_present_in_v0: 0
+  test_ids: [T-CLOSE-16]

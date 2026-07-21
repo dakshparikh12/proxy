@@ -1,0 +1,395 @@
+# fail_cost.requirements.yaml — Doc 03 (Notes / Scribe) · §3.8 Failure honesty + §3.9 Cost telemetry
+# Atomic EARS requirements. Each carries source_location + verbatim source_quote + criticality.
+# ID scheme: R-doc03-FAIL-NN (§3.8), R-doc03-COST-NN (§3.9)
+# Authority document: DOC-03
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §3.8 FAILURE HONESTY
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc03-FAIL-01
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.8, sentence 1"
+  source_quote: >
+    A failed Scribe call is skipped, not retried (§3.1 — a dropped window is cheap,
+    a stalled meeting is not)
+  normalized_statement: >
+    WHEN a Scribe micro-call fails (any error: API error, timeout, parse failure)
+    THE SYSTEM SHALL skip that window and proceed to the next; THE SYSTEM SHALL NOT
+    retry the failed call; zero additional messages.create calls SHALL be issued
+    for the failed window.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-FAIL-02
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.8, sentence 1"
+  source_quote: >
+    the notes mark the gap ("comprehension gap 14:03–14:05 — transcript preserved")
+    rather than silently missing it
+  normalized_statement: >
+    WHEN a Scribe call is skipped due to failure THE SYSTEM SHALL write a gap record
+    to transcript_segments with status='gap'; the gap record SHALL include the span's
+    start and end timestamps (wall-clock or meeting-relative, e.g. "14:03–14:05") and
+    the literal phrase "transcript preserved"; the failed window SHALL NEVER be silently
+    omitted from the notes without a corresponding gap record.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-FAIL-03
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.8, sentence 1"
+  source_quote: >
+    the raw transcript always has the evidence
+  normalized_statement: >
+    WHEN a Scribe call fails THE SYSTEM SHALL retain the raw transcript segment for
+    the failed window in transcript_segments; the raw transcript bytes SHALL NOT be
+    deleted, truncated, or overwritten as a consequence of the Scribe failure; the
+    segment MUST remain readable after the gap is recorded.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-FAIL-04
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.8, sentence 1"
+  source_quote: >
+    the close pass backfills gaps and any never-comprehended pending spans from
+    ground truth.
+  normalized_statement: >
+    WHEN the close pass runs THE SYSTEM SHALL backfill ALL transcript_segments rows
+    whose status is 'gap' AND ALL rows whose status remains 'pending' (never reached
+    by a live Scribe call); backfill SHALL use the raw transcript as ground truth;
+    no gap or perpetually-pending span SHALL persist after the close pass completes
+    without a backfill attempt.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-FAIL-05
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.8, paragraph 2, sentence 1"
+  source_quote: >
+    If the notes lag (processing backlog), readers see the object's freshness
+    timestamp — never a stale object pretending to be current.
+  normalized_statement: >
+    WHEN the notes object is served to a reader THE SYSTEM SHALL include a freshness
+    timestamp on the notes object reflecting when the object was last updated; a notes
+    object that has not been updated within the lag threshold SHALL NEVER be served
+    without the staleness being apparent from the timestamp; the notes object SHALL
+    NOT misrepresent its own currency.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-FAIL-06
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.8, paragraph 2, sentence 1 (and §4 tunables)"
+  source_quote: >
+    If the notes lag (processing backlog), readers see the object's freshness
+    timestamp — never a stale object pretending to be current.
+  normalized_statement: >
+    WHEN the elapsed time since the notes object was last written exceeds the
+    notes-lag threshold (default: 90 seconds, tunable via §4 configuration)
+    THE SYSTEM SHALL set a freshness_lagging flag (or equivalent staleness indicator)
+    on the /internal/notes response; the flag SHALL be cleared when the lag drops
+    back below the threshold.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-FAIL-07
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.8, paragraph 3, sentence 1"
+  source_quote: >
+    A referent that won't bind stays unbound-but-named.
+  normalized_statement: >
+    WHEN the Scribe or close pass identifies a referent candidate that cannot be
+    resolved to a specific codebase entity (file, function, class) THE SYSTEM SHALL
+    record the referent in the notes as unbound-but-named (preserving the original
+    name as spoken); THE SYSTEM SHALL NOT suppress, rename, or drop the referent
+    because binding failed.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-FAIL-08
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.8, paragraph 3, sentence 2"
+  source_quote: >
+    The notes never fabricate to fill a hole.
+  normalized_statement: >
+    WHEN a gap, an unbound referent, or any other uncertainty exists in the notes
+    THE SYSTEM SHALL NOT generate, infer, or hallucinate content to fill that gap;
+    every entry in the notes object SHALL be traceable to actual observed transcript
+    content or a truthful absence marker; fabricated bindings, invented decisions,
+    or synthesized facts are prohibited.
+  requirement_type: safety
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §3.9 COST TELEMETRY PER MICRO-CALL
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc03-COST-01
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.9, billing multipliers"
+  source_quote: >
+    HAIKU_INPUT  = 1.00 / 1e6
+  normalized_statement: >
+    THE SYSTEM SHALL define the Haiku input token rate as exactly 1.00 / 1e6
+    (1.00e-6 USD per token); this constant SHALL be hard-coded at this exact value
+    and SHALL NOT be read from environment variables, databases, or remote config
+    for the purposes of the scribe_call_cost_usd computation.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COST-02
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.9, billing multipliers"
+  source_quote: >
+    HAIKU_OUTPUT = 5.00 / 1e6
+  normalized_statement: >
+    THE SYSTEM SHALL define the Haiku output token rate as exactly 5.00 / 1e6
+    (5.00e-6 USD per token); this constant SHALL be hard-coded at this exact value
+    and SHALL NOT be read from environment variables, databases, or remote config
+    for the purposes of the scribe_call_cost_usd computation.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COST-03
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.9, billing multipliers"
+  source_quote: >
+    HAIKU_CACHE_WRITE = HAIKU_INPUT * 1.25   # cache_creation: +25% of input
+  normalized_statement: >
+    THE SYSTEM SHALL define the Haiku cache-write rate as exactly HAIKU_INPUT * 1.25;
+    this constant SHALL be derived from HAIKU_INPUT (1.00 / 1e6) to produce 1.25e-6
+    USD per token; the multiplier SHALL be exactly 1.25 with no rounding or
+    approximation.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COST-04
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.9, billing multipliers"
+  source_quote: >
+    HAIKU_CACHE_READ  = HAIKU_INPUT * 0.10   # cache_read:     10% of input
+  normalized_statement: >
+    THE SYSTEM SHALL define the Haiku cache-read rate as exactly HAIKU_INPUT * 0.10;
+    this constant SHALL be derived from HAIKU_INPUT (1.00 / 1e6) to produce 1.00e-7
+    USD per token; the multiplier SHALL be exactly 0.10 with no rounding or
+    approximation.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COST-05
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.9, scribe_call_cost_usd formula"
+  source_quote: >
+    scribe_call_cost_usd(u) = (u.input_tokens * HAIKU_INPUT
+                             + u.output_tokens * HAIKU_OUTPUT
+                             + getattr(u, "cache_creation_input_tokens", 0) * HAIKU_CACHE_WRITE
+                             + getattr(u, "cache_read_input_tokens", 0) * HAIKU_CACHE_READ)
+  normalized_statement: >
+    THE SYSTEM SHALL implement scribe_call_cost_usd(u) using the exact formula:
+    (u.input_tokens * HAIKU_INPUT + u.output_tokens * HAIKU_OUTPUT +
+    getattr(u, "cache_creation_input_tokens", 0) * HAIKU_CACHE_WRITE +
+    getattr(u, "cache_read_input_tokens", 0) * HAIKU_CACHE_READ);
+    the function SHALL use getattr with a default of 0 for both cache token fields
+    so that a usage object lacking those attributes (e.g., non-cache calls) does not
+    raise AttributeError.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COST-06
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.9, record_scribe_cost"
+  source_quote: >
+    MEETING_COST[meeting_id] += total  (in-process cache: hot-path budget reads)
+  normalized_statement: >
+    WHEN record_scribe_cost is called THE SYSTEM SHALL increment the in-process
+    MEETING_COST[meeting_id] accumulator by the total cost computed from
+    scribe_call_cost_usd(u); the update SHALL happen on every successful Scribe call
+    regardless of whether the Postgres write-through succeeds.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COST-07
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.9, record_scribe_cost, WRITE-THROUGH paragraph"
+  source_quote: >
+    WRITE-THROUGH to persisted meeting_cost table (CANONICAL §3): model_usd,
+    cache_read_usd, cache_creation_usd
+    This is critical: crashed orchestrator reloads the meter from Postgres instead
+    of resetting to 0
+  normalized_statement: >
+    WHEN record_scribe_cost is called THE SYSTEM SHALL perform a write-through to
+    the Postgres meeting_cost table persisting model_usd, cache_read_usd, and
+    cache_creation_usd for the meeting_id; after an orchestrator crash and restart
+    THE SYSTEM SHALL reload the accumulated cost from the meeting_cost table rather
+    than resetting to zero; the persisted table is the canonical cost meter.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COST-08
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.9, record_scribe_cost, UPSERT line"
+  source_quote: >
+    UPSERT: ON CONFLICT (meeting_id) DO UPDATE SET model_usd=meeting_cost.model_usd
+    + EXCLUDED.model_usd, ...
+  normalized_statement: >
+    THE SYSTEM SHALL write to the meeting_cost table using an UPSERT with
+    ON CONFLICT (meeting_id) DO UPDATE SET that increments (adds to) the existing
+    model_usd, cache_read_usd, and cache_creation_usd columns; the conflict action
+    SHALL NOT overwrite the existing values with EXCLUDED values directly; a plain
+    INSERT without conflict handling is prohibited.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COST-09
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.9, cache-hit ratio"
+  source_quote: >
+    hit_ratio = cache_read_input_tokens / max(prefix, 1)
+  normalized_statement: >
+    THE SYSTEM SHALL compute the cache-hit ratio as:
+    cache_read_input_tokens / max(cache_read_input_tokens + cache_creation_input_tokens, 1);
+    the max(..., 1) guard SHALL prevent division by zero when both cache token counts
+    are zero (e.g., non-cache calls or the very first call before any prefix is written).
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COST-10
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.9, cache-hit ratio, first-call behavior"
+  source_quote: >
+    First call: cache_creation_input_tokens ≈ prefix size, near-zero hit ratio
+  normalized_statement: >
+    WHEN the Scribe issues the first micro-call of a meeting THE SYSTEM SHALL
+    observe that cache_creation_input_tokens is approximately equal to the full
+    prefix size and cache_read_input_tokens is near zero, producing a near-zero
+    hit ratio; this is the expected behavior for the first call and SHALL NOT trigger
+    an alert condition.
+  requirement_type: observability
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COST-11
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.9, cache-hit ratio, steady-state behavior"
+  source_quote: >
+    Every call after: cache_read_input_tokens ≈ prefix size, hit ratio near 1
+  normalized_statement: >
+    WHEN the Scribe issues the second and all subsequent micro-calls of a meeting
+    THE SYSTEM SHALL observe that cache_read_input_tokens is approximately equal to
+    the full prefix size, producing a hit ratio near 1.0; a hit ratio near 1.0 is
+    the expected steady-state and indicates the prompt cache is functioning correctly.
+  requirement_type: observability
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COST-12
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.9, cache-hit ratio, alert condition"
+  source_quote: >
+    A hit ratio that stays low after the first call means the prefix is NOT
+    byte-identical → ALERT
+  normalized_statement: >
+    WHEN the cache-hit ratio remains below an alert threshold on the second or any
+    subsequent Scribe call within a meeting THE SYSTEM SHALL emit an alert indicating
+    the prefix is not byte-identical; this condition MUST be surfaced as a loggable,
+    monitorable signal (not silently ignored); the alert SHALL distinguish the
+    first-call (expected low ratio) from subsequent-call (pathological low ratio)
+    cases.
+  requirement_type: observability
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COST-13
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.9, final paragraph"
+  source_quote: >
+    The Scribe is a bare anthropic.AsyncAnthropic().messages.create — NOT the
+    provider seam — so it writes DIRECTLY to meeting_cost.
+  normalized_statement: >
+    THE SYSTEM SHALL write cost records from the Scribe path directly to the
+    meeting_cost table, bypassing the provider seam (call_external / libs/http);
+    the cost accumulation path for Scribe calls SHALL NOT route through the shared
+    external-call wrapper used by other components; cost data from Scribe reaches
+    Postgres only via record_scribe_cost.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COST-14
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.9, paragraph 1"
+  source_quote: >
+    Every micro-call captures its usage, and the aggregate feeds the Orchestrator's
+    live meeting budget (Doc 04's checkMeetingBudget()).
+  normalized_statement: >
+    THE SYSTEM SHALL ensure that the cumulative cost persisted in the meeting_cost
+    table for a given meeting_id is readable by Doc 04's checkMeetingBudget()
+    function; checkMeetingBudget() SHALL read the persisted sum from Postgres (not
+    only the in-process MEETING_COST cache) so that budget enforcement survives
+    orchestrator restarts.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified

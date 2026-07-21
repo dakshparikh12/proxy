@@ -1,0 +1,395 @@
+# perf.requirements.yaml — Doc 03 (Notes / Scribe) · §4 Key variables
+# Atomic EARS requirements. Each carries source_location + verbatim source_quote + criticality.
+# ID scheme: R-doc03-PERF-NN
+# Authority document: DOC-03 §4
+
+# ── Cost envelope ─────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc03-PERF-01
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Cost paragraph, sentence 1"
+  source_quote: >
+    Cost (per meeting-hour) — the Scribe envelope, ~$0.15–0.35/hr (light→active) (CANONICAL §12.7):
+    the Scribe on Haiku with the manual prompt-cache breakpoint + coalescing + VAD-gating
+    (~150–250 small calls; each pays full price on only a ~200–400-token window + cache_read
+    at 0.1× on the fat prefix, per §3.9's telemetry)
+  normalized_statement: >
+    THE SYSTEM SHALL maintain a Scribe cost envelope of approximately $0.15–0.35 per
+    meeting-hour (light→active); this SLO SHALL be proven by per-call telemetry from
+    §3.9 — not claimed; the cost derivation SHALL account for ~150–250 small calls per
+    hour, each paying full price on only a ~200–400-token window plus cache_read at 0.1×
+    on the cached prefix.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-PERF-02
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Cost paragraph, sentence 2"
+  source_quote: >
+    the close pass (one Sonnet generateStructured call, ~cents).
+    This is the Scribe line only — one component of §12.7's ~$0.95–1.25/hr listening
+    baseline (transport + Scribe + orch idle).
+  normalized_statement: >
+    THE SYSTEM SHALL record the Scribe cost as a distinct line item within §12.7's
+    total listening baseline of ~$0.95–1.25/hr; the close pass (one Sonnet-class
+    generateStructured call) SHALL be accounted for separately from the per-window
+    Scribe cost; the two cost components SHALL NOT be conflated.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-PERF-03
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Cost paragraph, final sentence"
+  source_quote: >
+    We do NOT widen the coalescer window to shave this — that trades notes freshness
+    for pennies.
+  normalized_statement: >
+    THE SYSTEM SHALL NOT widen the coalescer window beyond its configured cap in order
+    to reduce API call count or cost; notes freshness takes priority over cost reduction;
+    any code path or configuration change that widens the window for cost reasons SHALL
+    be treated as a specification violation.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Accuracy — observed-vs-inferred and firmness labels ──────────────────────
+
+- requirement_id: R-doc03-PERF-04
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Accuracy paragraph, sentence 1"
+  source_quote: >
+    live entries are cheap-model quality but correctable three ways — the Scribe itself
+    patches as understanding firms, humans correct live (3.6), and the close pass
+    re-derives from the raw transcript.
+  normalized_statement: >
+    THE SYSTEM SHALL support three accuracy-correction paths for live entries:
+    (a) the Scribe patches entries as understanding firms across successive windows,
+    (b) humans correct entries live per §3.6, and (c) the close pass re-derives from
+    the raw transcript; all three paths SHALL be available for every entry.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-PERF-05
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Accuracy paragraph, sentence 2"
+  source_quote: >
+    Observed-vs-inferred + firmness labels keep uncertainty visible instead of laundered.
+    The raw transcript is always the ground truth underneath.
+  normalized_statement: >
+    THE SYSTEM SHALL attach observed-vs-inferred and firmness labels to every entry
+    emitted by the Scribe; these labels SHALL NEVER be omitted, defaulted, or suppressed
+    for any reason (including efficiency or output-length reduction); the raw transcript
+    SHALL always be preserved as the ground truth underneath all derived notes.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Latency — real-time shape ────────────────────────────────────────────────
+
+- requirement_id: R-doc03-PERF-06
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Latency paragraph, bullet 1"
+  source_quote: >
+    Per-turn incremental tagging, never batch conversion. The coalescer cuts on the
+    turn boundary; each Scribe call is tiny — a cache_read-served prefix (near-free and
+    fast to process) + one capped window in + a small delta out — ≈ [1–2s] on the
+    cheap model.
+  normalized_statement: >
+    THE SYSTEM SHALL perform per-turn incremental tagging; batch conversion of
+    accumulated windows SHALL NOT occur; each Scribe call round-trip SHALL
+    complete in approximately 1–2 seconds on the designated cheap model, given a
+    cache_read-served prefix and a capped 200–400-token window.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-PERF-07
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Latency paragraph, bullet 2"
+  source_quote: >
+    A concurrent pipeline, not a step. Tagging runs beside the conversation; the notes
+    trail the live meeting by ~one turn + one call ≈ 2–4s typical. A claim spoken at T
+    is a structured entry — and a fired proactive event — by ~T+3s.
+  normalized_statement: >
+    THE SYSTEM SHALL run the notes tagging pipeline concurrently beside the live
+    conversation (not as a sequential blocking step); the notes SHALL trail the live
+    meeting by approximately one turn plus one call, producing a typical comprehension
+    lag of 2–4 seconds; a claim spoken at time T SHALL be a structured entry and have
+    fired any applicable proactive event by approximately T+3 seconds.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-PERF-08
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Latency paragraph, bullet 3"
+  source_quote: >
+    Nothing reflex-speed waits for the notes. Reactive asks ride the raw real-time
+    transcript (Doc 02 → Doc 04, ~300ms) and dispatch immediately. Consumers wanting
+    full coverage read notes + the raw tail (the last few not-yet-comprehended seconds)
+    — no blind spot, ever.
+  normalized_statement: >
+    THE SYSTEM SHALL route reactive asks over the raw real-time transcript (Doc 02 →
+    Doc 04 path, approximately 300ms dispatch) without waiting for notes to be ready;
+    consumers requiring full coverage SHALL read notes plus the raw tail (the
+    not-yet-comprehended seconds); the system SHALL NEVER represent notes alone as
+    complete coverage nor leave a blind spot in the combined notes + raw-tail view.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-PERF-09
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Latency paragraph, bullet 4"
+  source_quote: >
+    That 2–4s comprehension lag is correct for every consumer.
+  normalized_statement: >
+    THE SYSTEM SHALL treat the 2–4 second comprehension lag as the correct and
+    intended latency for all notes consumers; no consumer path SHALL assume or require
+    notes to be available in less than 2 seconds from the time content was spoken;
+    optimizations that undercut this lag are acceptable but none are required.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Duration — bounded growth via patch-in-place ─────────────────────────────
+
+- requirement_id: R-doc03-PERF-10
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Duration paragraph, sentences 1–2"
+  source_quote: >
+    Duration (hours-long meetings): boundedness comes from patch-in-place +
+    one-entry-per-fact + running-context compression. The object grows with content,
+    not time — a 3-hour meeting with one decision produces short notes; a dense
+    1-hour design session produces long ones.
+  normalized_statement: >
+    THE SYSTEM SHALL implement patch-in-place and one-entry-per-fact such that the
+    notes object grows with content, not with elapsed time; a 3-hour meeting with one
+    decision SHALL produce short notes; a dense 1-hour design session SHALL produce
+    longer notes; time alone SHALL NOT cause the object to grow.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-PERF-11
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Duration paragraph, sentence 3"
+  source_quote: >
+    Long is correct when content earns it; the notes are never truncated, only consolidated.
+  normalized_statement: >
+    THE SYSTEM SHALL NEVER truncate notes entries; consolidation (compression of
+    repeated or redundant content into fewer entries) is the only permitted form of
+    reduction; truncation of content that has not been consolidated into another
+    entry SHALL be treated as a specification violation.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Meeting type — universal schema, no branching ────────────────────────────
+
+- requirement_id: R-doc03-PERF-12
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Meeting type paragraph, sentences 1–2"
+  source_quote: >
+    Any meeting type, by construction: nothing branches on meeting type. The schema
+    captures what happens (claims/decisions/actions/questions/context) — a standup,
+    a design review, a customer call, and an incident retro all land in the same fields.
+  normalized_statement: >
+    THE SYSTEM SHALL use a single universal schema for all meeting types; the
+    Scribe pipeline SHALL NOT branch on meeting type at any point — no conditional
+    logic, template selection, or prompt variant based on detected or declared
+    meeting type; a standup, design review, customer call, and incident retro SHALL
+    all produce output in the same schema fields.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-PERF-13
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Meeting type paragraph, sentence 3"
+  source_quote: >
+    Where a meeting has no code referents, the referent field is simply sparse —
+    nothing breaks.
+  normalized_statement: >
+    WHEN a meeting contains no code referents THE SYSTEM SHALL leave the referent
+    field sparse (empty or absent) without error, warning, or fallback behavior;
+    the absence of code referents SHALL NOT cause any failure, schema violation,
+    or degraded behavior in the Scribe or any consumer.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Tunable defaults ──────────────────────────────────────────────────────────
+
+- requirement_id: R-doc03-PERF-14
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Tunable defaults paragraph"
+  source_quote: >
+    coalescer window [30–60s / turn boundary]
+  normalized_statement: >
+    THE SYSTEM SHALL read the coalescer window bounds from configuration
+    (COAL_WINDOW_MIN_S defaulting to 30, COAL_WINDOW_MAX_S defaulting to 60);
+    these values SHALL NOT be hard-coded; the turn-boundary cut rule SHALL apply
+    within these configurable bounds.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-PERF-15
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Tunable defaults paragraph"
+  source_quote: >
+    input-window cap [45s / ~1,200 tokens]
+  normalized_statement: >
+    THE SYSTEM SHALL read the input-window cap from configuration
+    (COAL_WINDOW_CAP_S defaulting to 45, COAL_WINDOW_CAP_TOKENS defaulting to 1200);
+    both limits SHALL be independently configurable and SHALL NOT be hard-coded; the
+    smaller of the two limits SHALL apply.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-PERF-16
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Tunable defaults paragraph"
+  source_quote: >
+    per-call timeout [~3.5s → skip, no retry]
+  normalized_statement: >
+    THE SYSTEM SHALL read the per-call timeout from configuration
+    (SCRIBE_CALL_TIMEOUT_S defaulting to 3.5); on timeout the window SHALL be
+    skipped and the pipeline SHALL NOT retry the timed-out window; the timeout
+    value SHALL NOT be hard-coded.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-PERF-17
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Tunable defaults paragraph"
+  source_quote: >
+    cache TTL [5-min ephemeral, ×2 breakpoints]
+  normalized_statement: >
+    THE SYSTEM SHALL configure the prompt-cache TTL as 5-minute ephemeral with
+    exactly two breakpoints; the TTL and breakpoint count SHALL be configurable
+    (SCRIBE_CACHE_TTL_S defaulting to 300, SCRIBE_CACHE_BREAKPOINTS defaulting to 2);
+    using only one breakpoint or a different TTL SHALL be a configuration error.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-PERF-18
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Tunable defaults paragraph"
+  source_quote: >
+    rolling-summary refresh cadence [every ~20 note-deltas / ~90s, whichever first]
+  normalized_statement: >
+    THE SYSTEM SHALL read the rolling-summary refresh thresholds from configuration
+    (ROLLING_SUMMARY_EVERY_N_DELTAS defaulting to 20,
+    ROLLING_SUMMARY_MAX_AGE_S defaulting to 90); whichever threshold is reached first
+    SHALL trigger the refresh; both values SHALL NOT be hard-coded.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-PERF-19
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Tunable defaults paragraph"
+  source_quote: >
+    Scribe model [claude-haiku-4-5] (seat swappable, eval-gated)
+  normalized_statement: >
+    THE SYSTEM SHALL read the Scribe model from PROXY_MODEL_SCRIBE (defaulting to
+    claude-haiku-4-5); a model seat swap SHALL only be enacted after passing an accuracy
+    eval over real meeting transcripts; the default SHALL NOT be hard-coded in
+    non-configuration code.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-PERF-20
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Tunable defaults paragraph"
+  source_quote: >
+    close model [Sonnet-class]
+  normalized_statement: >
+    THE SYSTEM SHALL read the close-pass model from PROXY_MODEL_CLOSE (defaulting to
+    a Sonnet-class model); the close model seat SHALL be independently configurable
+    from the Scribe seat; the default SHALL NOT be hard-coded in non-configuration code.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-PERF-21
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Tunable defaults paragraph"
+  source_quote: >
+    notes freshness flag threshold [>90s lag]
+  normalized_statement: >
+    THE SYSTEM SHALL read the notes freshness flag threshold from configuration
+    (NOTES_FRESHNESS_LAG_THRESHOLD_S defaulting to 90); WHEN the lag between the
+    most-recently-spoken content and the most-recently-comprehended window exceeds
+    this threshold THE SYSTEM SHALL set the notes freshness flag; the threshold SHALL
+    NOT be hard-coded.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-PERF-22
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§4 Tunable defaults paragraph"
+  source_quote: >
+    QUALITY_GATE_SAMPLE_RATE ≈ 0.1 (configurable)
+  normalized_statement: >
+    THE SYSTEM SHALL read the quality-gate sample rate from QUALITY_GATE_SAMPLE_RATE
+    (defaulting to approximately 0.1, i.e., 1 in 10 applied deltas); this rate SHALL
+    NOT be hard-coded; per §3.2.2, always-check entries bypass this rate regardless of
+    its value.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
