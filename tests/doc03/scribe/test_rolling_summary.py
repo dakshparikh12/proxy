@@ -1,4 +1,3 @@
-\
 """Rolling summary: delta-count trigger, time trigger, off-hot-path refresh.
 
 Covers AC-SCRIBE-05, -06, -07. Time is injected (now_s) so triggers fire one at a
@@ -22,7 +21,14 @@ from _fixtures import FakeClient, FakeResp, TextBlock, make_call_external
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # Own a fresh loop per call so the test does not depend on (or mutate) the
+    # process-wide current loop — deterministic and free of the 3.12
+    # get_event_loop() deprecation.
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 def test_scribe_05_delta_count_trigger_fires_once_at_20() -> None:

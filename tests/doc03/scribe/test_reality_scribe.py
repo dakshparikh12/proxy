@@ -1,4 +1,3 @@
-\
 """Reality + negative tiers for the Scribe micro-call (vendor:anthropic).
 
 These drive Proxy's REAL ``call_external`` seam against a *recorded* Anthropic

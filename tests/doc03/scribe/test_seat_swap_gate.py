@@ -1,4 +1,3 @@
-\
 """AC-SCRIBE-09: an open-weight seat swap is never assumed equivalent (static).
 
 No production code path or config in the Scribe source hard-codes an open-weight

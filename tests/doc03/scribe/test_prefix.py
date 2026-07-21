@@ -1,4 +1,3 @@
-\
 """Prefix assembly: cache breakpoints, byte-stability, judgment rules, fences.
 
 Covers AC-SCRIBE-02 (unit), -03, -04, -10, -11, -12, -14 — all pure, deterministic.
