@@ -51,6 +51,10 @@ module = [
     "httpx", "httpx.*", "anthropic", "anthropic.*",
     "fastapi", "fastapi.*", "starlette", "starlette.*",
     "cryptography", "cryptography.*",
+    # GCS SDK — the finalized-notes Plane 2 store (§3.3); ships no type stubs and
+    # is an optional/integration-tier dep (imported lazily inside the writer).
+    "google", "google.*", "google.cloud", "google.cloud.*",
+    "google.api_core", "google.api_core.*", "google.api_core.exceptions",
 ]
 ignore_missing_imports = true
 
