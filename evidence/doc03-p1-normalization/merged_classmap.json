@@ -1,0 +1,507 @@
+{
+ "AC-QGATE-01": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Pure sampling-rate logic \u2014 \u00a73.2.2 QUALITY_GATE_SAMPLE_RATE cadence; seeded-RNG count assertion over 1000 entries, no LLM call exercised."
+ },
+ "AC-QGATE-02": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": false,
+  "why": "always-check for decision->final forces the Haiku entailment call (\u00a73.2.2 'a decision going final ... always-check'); oracle asserts the gate entailment call is actually issued at rate=0.0."
+ },
+ "AC-QGATE-02-NEG": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "NEG counterpart asserts ZERO API calls when the feature flag disables the gate \u2014 pure guard/branch logic, no LLM exercised (feature-gate suppresses even always-check)."
+ },
+ "AC-QGATE-03": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": false,
+  "why": "always-check for reversibility=irreversible fires the Haiku entailment call regardless of sample draw (\u00a73.2.2 'an irreversible reversibility'); oracle asserts gate call count==1."
+ },
+ "AC-QGATE-03-NEG": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "NEG: a reversible entry at rate=0.0 issues ZERO gate calls \u2014 pure not-always-checked branch logic, no LLM call made."
+ },
+ "AC-QGATE-04": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": false,
+  "why": "always-check for a contradicts link fires the Haiku entailment call (\u00a73.2.2 'a contradicts link'); oracle asserts gate call count==1 despite rate=0.0."
+ },
+ "AC-QGATE-04-NEG": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "NEG: a plain entry with no always-check flag at rate=0.0 issues ZERO gate calls \u2014 pure suppression branch, no LLM exercised."
+ },
+ "AC-QGATE-05": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Apply-then-gate ordering property (\u00a73.2.2 'sampled delta has already been applied ... gate runs beside the loop'); timestamp/ordering assertion on instrumented applier, verifiable without a real LLM."
+ },
+ "AC-QGATE-06": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Static AST scan of the prompt-builder asserting context is exactly window+entry (\u00a73.2.2 'reads only the transcript window + the emitted entry text'); no call issued \u2014 pure static analysis."
+ },
+ "AC-QGATE-07": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Model-resolver / env-var logic (\u00a73.2.2 PROXY_MODEL_QUALITY_GATE, default claude-haiku-4-5) plus source grep for hardcoded literals \u2014 resolver returns a string, no LLM call."
+ },
+ "AC-QGATE-07-NEG": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": false,
+  "why": "Asserts the entailment call is issued with the configured model field (no silent downgrade); oracle inspects the captured call_external request to the gate model, exercising the real gate call path."
+ },
+ "AC-QGATE-08": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Response-parser unit over fixtures \u2014 parses {grounded,reason}, parse-failure -> grounded=false (\u00a73.2.2 gate answers {grounded:bool,reason:str}); fixtures only, no live call."
+ },
+ "AC-QGATE-08-NEG": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": false,
+  "why": "Cassette-mocked gate entailment call returning grounded=true drives the no-escalation branch; classed same as positive gate-call criteria since it exercises the entailment call at call_external."
+ },
+ "AC-QGATE-09": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": false,
+  "why": "On grounded=false, re-run that extraction on the next tier \u2014 Sonnet (\u00a73.2.2 'PROXY_MODEL_SCRIBE -> Sonnet-class'); oracle asserts exactly one Sonnet-class extraction call over the same window."
+ },
+ "AC-QGATE-09-NEG": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": false,
+  "why": "NEG pair of QGATE-09: cassette-mocked grounded=true gate call, assert zero Sonnet escalation calls \u2014 same escalation LLM flow, same class as its positive pair."
+ },
+ "AC-QGATE-10": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": false,
+  "why": "Sonnet correction applied as PatchOp attributed to the gate, original superseded-not-erased (\u00a73.2.2 'replace the entry via the normal applier path, a patch, superseded-not-erased'); both gate + Sonnet calls cassette-mocked."
+ },
+ "AC-QGATE-10-NEG": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": false,
+  "why": "NEG pair of QGATE-10: cassette-mocked Sonnet re-extraction returns empty, assert no patch applied \u2014 same escalation call flow, same class as its positive pair."
+ },
+ "AC-QGATE-11": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": false,
+  "why": "End-to-end miss trace (grounded=false gate call + Sonnet correction, both cassette-mocked) asserting exactly one quality-gate-miss record with window span/Haiku entry/Sonnet correction (\u00a73.2.2 log the miss); exercises the gate+escalation calls."
+ },
+ "AC-QGATE-11-NEG": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": false,
+  "why": "NEG pair of QGATE-11: cassette-mocked grounded=false + Sonnet null, assert miss still logged once \u2014 same gate+escalation call flow, same class as its positive pair."
+ },
+ "AC-QGATE-12": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Miss-rate = M/N derivation from transcript-plane records (\u00a73.2.2 cascade-health telemetry); pure arithmetic over injected records, 'no external aggregator required' \u2014 no LLM and no DB read exercised by the oracle (injected records)."
+ },
+ "AC-QGATE-13": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Reads the four pinned config defaults (\u00a73.2.2 rate 0.1, always-check set, gate model, escalation tier) from a fresh config \u2014 pure config-default assertion, no external system."
+ },
+ "AC-QGATE-14": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Latency measurement that gate adds no synchronous applier-hot-path cost (\u00a73.2.2 'sampling is off the hot path'); times applier.commit() gate on vs off \u2014 in-process timing, no live LLM needed."
+ },
+ "AC-EVENT-01": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Emitter fires the seven material-change event types to a MOCK Doc 04 sink (\u00a73.5); state-machine assertion on emitted-event counts \u2014 in-process pipe, no external system."
+ },
+ "AC-EVENT-02": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Event-payload shape (entry + focused context slice, \u00a73.5 'each event carries the entry + a focused context slice'); contract-schema check on the emitted event object \u2014 pure shape assertion."
+ },
+ "AC-EVENT-03": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Chitchat delta emits zero events (\u00a73.5 'Chitchat and running-context updates emit nothing'); mock-sink count assertion \u2014 in-process negative frontier."
+ },
+ "AC-EVENT-04": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Running-context update emits zero events (\u00a73.5 'running-context updates emit nothing'); mock-sink count assertion \u2014 in-process negative frontier."
+ },
+ "AC-EVENT-05": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Scribe/emitter is a pipe not the mouth (\u00a73.5 'never the mouth'); asserts speak/send_chat/show_screen call_count==0 with room-delivery surfaces mocked \u2014 in-process, no external system."
+ },
+ "AC-EVENT-06": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Chat record line is deterministic-formatter output, no wake, no model call (\u00a73.5 'deterministic harness formatter ... never model-generated'); asserts wake/LLM mocks call_count==0 and byte-identical formatter output \u2014 pure determinism check."
+ },
+ "AC-EVENT-07": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "action-item-created deterministic formatter variant (\u00a73.5 '\u2610 Action: Sam ...'); asserts template match with wake/LLM mocks at zero \u2014 pure formatter assertion, no external system."
+ },
+ "AC-EVENT-08": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Dedupe by meeting_revision \u2014 re-fold of same committed delta emits no duplicate line (\u00a73.5 'dedupes by meeting_revision'); simulation-trace post-count assertion, pure in-process dedupe logic."
+ },
+ "AC-EVENT-09": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Disable toggle suppresses all chat record posts (\u00a73.5 'honors the room's disable toggle'); post-count==0 assertion \u2014 pure toggle branch, no external system."
+ },
+ "AC-CSREAD-01": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Pure static AST scan that notes_ref = meeting_id with no transformation and that the bundle carries a ref not the object (\u00a73.3.1: notes_ref = meeting_id). Touches no external system; verifiable over source only."
+ },
+ "AC-CSREAD-02": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "Asserts both handlers read note_deltas from Postgres and apply the left-fold in id order \u2014 'durable source of the notes object is the note_deltas Postgres table' (\u00a73.3.1). Exercises the Postgres fold path."
+ },
+ "AC-CSREAD-02-NEG": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "Negative pair of AC-CSREAD-02: simulates a Postgres outage on the fold path and asserts 5xx (no silent empty-notes fallback). Same store as its positive pair."
+ },
+ "AC-CSREAD-03": {
+  "dependency_class": "db:postgres",
+  "golden_path": true,
+  "why": "Core end-to-end happy path of the cross-service read: GET /internal/notes returns 200 with the folded notes object when note_deltas rows exist, 404 when none (\u00a73.3.1). Depends on Postgres note_deltas."
+ },
+ "AC-CSREAD-03-NEG": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Auth-only negative: missing internal bearer token \u2192 401/403 before any store read (\u00a73.3.1 token-gated reader mounted outside the auth wall). Rejection is pure request-middleware logic, no external system."
+ },
+ "AC-CSREAD-04": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Static route-group / middleware-mount inspection: /internal/notes sits in the same group as /internal/reconcile, outside the user-auth wall (\u00a73.3.1). Config/AST check only."
+ },
+ "AC-CSREAD-05": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Auth-policy simulation: session cookie rejected, internal bearer accepted (\u00a73.3.1 gated by shared internal bearer token, not the session cookie). The load-bearing assertion is the auth decision, not a store read."
+ },
+ "AC-CSREAD-06": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "Requires cold-cache path to fold from note_deltas and produce bytes identical to the DB fold \u2014 'fold-from-note_deltas is the contract; NOTES_CACHE is a read-through optimization' (\u00a73.3.1). The fold reads Postgres."
+ },
+ "AC-CSREAD-07": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Static analysis of Doc 05 bundle-handling: resolves notes_ref via an HTTP GET, never deserialises a notes object from the bundle (\u00a73.3.1). Source-only AST check, no store touched."
+ },
+ "AC-CSREAD-08": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "Asserts the authenticated /m/{meeting_id} handler calls the same canonical note_deltas fold symbol \u2014 'reads from this SAME note_deltas fold, never NOTES_CACHE' (\u00a73.3.1). Fold reads Postgres."
+ },
+ "AC-CSREAD-08-NEG": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "Negative pair of AC-CSREAD-08: Postgres down \u2192 /m/ must error, never serve stale cache as fresh. Same store (note_deltas) as its positive pair."
+ },
+ "AC-CSREAD-09": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "Freshness flag must ride every 200 from /internal/notes (\u00a73.8 flag on the \u00a73.3.1 response); the 200 is produced by folding note_deltas, so the check exercises the Postgres fold path."
+ },
+ "AC-CSREAD-09-NEG": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "Requires inserting a new note_delta after the last cache build and asserting the freshness flag reflects the Postgres-fold timestamp, not a stale cache clock. Directly reads/writes note_deltas in Postgres."
+ },
+ "AC-CSREAD-10": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "Freezes a fixed note_deltas set and asserts all three read paths (/internal/notes, /m/, direct fold) yield byte-identical JSON \u2014 the deterministic left-fold over Postgres note_deltas (\u00a73.3.1). Fold source is Postgres."
+ },
+ "AC-REFM-01": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Static call-graph scan proving lookup_referent makes no LLM call and no call_external \u2014 'deterministic, no-LLM' (\u00a73.4). Pure source analysis; touches no external system."
+ },
+ "AC-REFM-02": {
+  "dependency_class": "db:sqlite",
+  "golden_path": false,
+  "why": "Return-type contract (Optional[str]) checked against lookup_referent which queries the persisted graph_nodes corpus. Per Doc 01 the graph_nodes/graph_edges tables live in per-repo SQLite (Doc 01 \u00a7graph.sql; criteria.yaml already tags db:sqlite). NOTE: \u00a78.4 offers no db:sqlite class; the spec-accurate persisted store is SQLite, not Postgres, so I keep db:sqlite rather than misclassify."
+ },
+ "AC-REFM-02-NEG": {
+  "dependency_class": "db:sqlite",
+  "golden_path": false,
+  "why": "Negative pair of AC-REFM-02: empty/absent graph_nodes SQLite corpus \u2192 None gracefully, no exception, no fabricated node_id. Behavior text says 'the SQLite file is absent'; same store as its positive pair."
+ },
+ "AC-REFM-03": {
+  "dependency_class": "db:sqlite",
+  "golden_path": false,
+  "why": "Asserts the search corpus is only overview areas + graph_nodes, no other table/git-walk/external index (\u00a73.4 'over core overview areas + graph_nodes'). The persisted corpus is the per-repo SQLite graph (Doc 01)."
+ },
+ "AC-REFM-03-NEG": {
+  "dependency_class": "db:sqlite",
+  "golden_path": false,
+  "why": "Negative pair of AC-REFM-03: behavior text explicitly names 'A SQLite database with graph_nodes and additional unrelated tables' and asserts 0 queries to other tables via SQLite query logging. Same store as its positive pair."
+ },
+ "AC-REFM-04": {
+  "dependency_class": "db:sqlite",
+  "golden_path": false,
+  "why": "Seeds graph_nodes with a real 'payments/checkout' area/file and asserts lookup_referent('checkout') binds to a real node \u2014 a persisted-index query over the per-repo SQLite graph_nodes (\u00a73.4 / Doc 01), not an in-memory fixture."
+ },
+ "AC-REFM-05": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "A nonsense term returns None and is stored as a plain unbound referent with no fabrication (\u00a73.4 'unmatched candidates stay as plain referents'). The load-bearing assertion is the no-fabrication / honest-unbound applier logic; verifiable with a fixture/mock, no persisted store required to prove the miss handling."
+ },
+ "AC-REFM-06": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Merge/carry-forward logic: a bound referent's node_id survives the fold and read-back so the Workroom gets it (\u00a73.4). This is property of the note-delta fold/binding-field over already-produced data; verifiable with a delta fixture \u2014 no external store exercised for the assertion."
+ },
+ "AC-REFM-07": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Static scope guard over the whole V0 codebase: 0 LLM-based referent-resolution paths, no feature-flag stubs ('the agentic/LLM referent map is Expansion \u2014 V0 binds deterministically', \u00a73.4). Pure grep/AST, no store."
+ },
+ "AC-REFM-08": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "Determinism property: 100 identical calls return the same value, no random tiebreak/hash-order non-determinism (\u00a73.4 'a cheap string/rank match'). The invariant is over in-process ranking logic; provable with a frozen fixture, touches no external system for its assertion."
+ },
+ "AC-CORR-01": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "\u00a73.6 correction is an immediate attributed patch to the durable entry store (\u00a73.3 note_deltas/Postgres); oracle asserts current_value==V1 and superseded V0 both in Postgres."
+ },
+ "AC-CORR-01-NEG": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "NEG pair of AC-CORR-01; asserts an incomplete correction is not committed to Postgres as a complete record \u2014 same durable-store class."
+ },
+ "AC-CORR-02": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "\u00a73.6 superseded-not-erased audit trail; oracle queries superseded records [V0,V1] and current V2 in Postgres."
+ },
+ "AC-CORR-02-NEG": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "NEG pair of AC-CORR-02; asserts in-place overwrite (no supersede row) is detected in Postgres state \u2014 same class."
+ },
+ "AC-CORR-03-NEG": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "NEG pair of AC-CORR-03 (which is db:postgres in-file); a correction that fails to commit to Postgres leaves the Scribe prefix showing V0 \u2014 durable-store dependent."
+ },
+ "AC-CORR-04": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "\u00a73.6 ordinary firmness bump applies silently-immediate; oracle asserts entry.firmness==new value in Postgres (speak path only mocked, not the durable write)."
+ },
+ "AC-CORR-04-NEG": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "NEG pair of AC-CORR-04; a firmness-bump correction whose Postgres write fails must emit no false confirm \u2014 the write under test is Postgres."
+ },
+ "AC-CORR-05": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "\u00a73.6 action-item tweak on the silent-immediate path; oracle asserts action_item corrected value committed to Postgres."
+ },
+ "AC-CORR-05-NEG": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "NEG pair of AC-CORR-05; a tweak that also sets Decision.status=final is reclassified high-stakes \u2014 same durable-store class as its positive."
+ },
+ "AC-CORR-06": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "\u00a73.6 forming-decision lean stays on silent-immediate path; oracle asserts decision.status=='forming' committed in Postgres."
+ },
+ "AC-CORR-07": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "\u00a73.6 open-question edit stays silent-immediate; oracle asserts question.status=='open' committed in Postgres after patch."
+ },
+ "AC-CORR-08": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "\u00a73.6 high-stakes gate: patch (Decision.status=final) committed to Postgres BEFORE the spoken confirm; oracle traces db_commit happens-before speak, plus superseded row in Postgres."
+ },
+ "AC-CORR-08-NEG": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "NEG pair of AC-CORR-08; forced Postgres write failure must emit no false confirm \u2014 the failing write under test is Postgres."
+ },
+ "AC-CORR-09": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "\u00a73.6 high-stakes gate on Reversibility=irreversible: patch committed to Postgres before confirm; oracle traces db_commit happens-before speak, superseded row persisted."
+ },
+ "AC-CORR-09-NEG": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "NEG pair of AC-CORR-09; forced Postgres write failure \u2192 no false confirm \u2014 durable-store write under test."
+ },
+ "AC-CORR-10": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "\u00a73.6 gate fires on closing/finalizing an already-final entry; oracle asserts the patch commit occurs in Postgres alongside the single spoken confirm."
+ },
+ "AC-CORR-10-NEG": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "NEG pair of AC-CORR-10; second close of an already-final entry still commits to Postgres and fires the gate \u2014 same class."
+ },
+ "AC-CORR-11": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "\u00a73.6 confirm is an audible receipt, not a blocking approval; oracle is a pure pipeline state-machine property (no approval_pending/wait state, next-delta timing) verifiable in-process \u2014 touches no external system."
+ },
+ "AC-CORR-12": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "\u00a73.6 boundary: notes gate governs notes only; oracle asserts in-process routing booleans (notes_gate_invoked==False, human_click path fires, speak count 0) \u2014 pure state-machine, no external system."
+ },
+ "AC-CLOSE-01": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": true,
+  "why": "\u00a73.7 the one strong-model close pass producing the permanent record end-to-end; headline is 'exactly one generateStructured call to the Sonnet-class model' driving the whole model\u2192GCS\u2192chat\u2192teardown chain. THE golden-path close flow (multi-system: also db/gcs/recall; primary = the strong-model pass that is the substance of \u00a73.7)."
+ },
+ "AC-CLOSE-02": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "\u00a73.7 meeting-end signal is the sole trigger, initiated exactly once; pure trigger state-machine (in-file dependency_class []), no external system under test."
+ },
+ "AC-CLOSE-02-NEG": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "NEG pair of AC-CLOSE-02; asserts silence does not trigger the close pass \u2014 same in-process trigger state-machine, no external system."
+ },
+ "AC-CLOSE-03": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": false,
+  "why": "\u00a73.7 close pass is a Sonnet-class (PROXY_MODEL_SCRIBE_CLOSE) pass, never Haiku; cassette at call_external asserts request.model \u2014 the Anthropic call is under test."
+ },
+ "AC-CLOSE-03-NEG": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": false,
+  "why": "NEG pair of AC-CLOSE-03; the model-tier guard for the Anthropic close call \u2014 same vendor class as its positive."
+ },
+ "AC-CLOSE-04": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": false,
+  "why": "\u00a73.7 reduces over the folded ledger, NOT full raw transcript; primary oracle is a cassette assertion on the Anthropic prompt (folded ledger + exactly 5 gap/pending spans, no comprehended raw text). Also reads Postgres, but the property under test is prompt composition at the model seam."
+ },
+ "AC-CLOSE-04-NEG": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "Though the AC-CLOSE-04 pair is vendor:anthropic, this NEG specifically tests the gap/pending-span read failing when Postgres is unreachable (\u00a73.7 backfill from note_deltas/transcript_segments); the durable-store fetch is the primary system under test."
+ },
+ "AC-CLOSE-05": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "\u00a73.7 chunk-reduce only when the folded ledger exceeds a token threshold \u2014 a normal meeting folds in one pass; below-threshold single-call control-flow is pure in-process logic (in-file dependency_class [])."
+ },
+ "AC-CLOSE-05B": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "\u00a73.7 chunk-reduce path above the token threshold; the branch decision (model_call_count>1, still one merged object) is pure in-process control-flow \u2014 no external system directly under test."
+ },
+ "AC-CLOSE-06": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": false,
+  "why": "\u00a73.7 close pass runs as generateStructured with outputFormat json_schema (not raw messages.create); cassette at the Anthropic call_external seam is the oracle."
+ },
+ "AC-CLOSE-06-NEG": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": false,
+  "why": "NEG pair of AC-CLOSE-06; \u00a73.7 typed terminal error_max_turns from the generateStructured call \u2014 same Anthropic vendor class."
+ },
+ "AC-CLOSE-06-NEG2": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": false,
+  "why": "NEG pair of AC-CLOSE-06 (per rule); \u00a73.7 distinct typed error_max_structured_output_retries from the generateStructured call \u2014 same Anthropic vendor class."
+ },
+ "AC-CLOSE-07": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "\u00a73.7 single operation_runs row operation_type='meeting-close', NO close_jobs table; db_assertion over operation_runs and information_schema \u2014 Postgres is the system under test."
+ },
+ "AC-CLOSE-07-NEG": {
+  "dependency_class": "gcs:objects",
+  "golden_path": false,
+  "why": "\u00a73.7 create-only (if_generation_match=0) write exactly once; a second close attempt is rejected by the GCS precondition \u2014 the GCS create-only guard is the primary mechanism preventing the duplicate (also touches Postgres/operation_runs)."
+ },
+ "AC-CLOSE-08": {
+  "dependency_class": "gcs:objects",
+  "golden_path": false,
+  "why": "\u00a73.7 write_finalized_notes with if_generation_match=0 (create-only, written exactly once); integration assertion on the GCS request params and created object generation."
+ },
+ "AC-CLOSE-08-NEG": {
+  "dependency_class": "gcs:objects",
+  "golden_path": false,
+  "why": "NEG pair of AC-CLOSE-08; GCS unavailable \u2192 close halts before chat link/teardown (\u00a73.7 durable URL must exist first) \u2014 GCS is the failing system under test."
+ },
+ "AC-CLOSE-09": {
+  "dependency_class": "gcs:objects",
+  "golden_path": false,
+  "why": "\u00a73.7 mandatory order render\u2192GCS write\u2192post chat link\u2192tear down; the GCS write-confirm is the ordering anchor between render and the chat post (also touches recall for the chat post; primary = the GCS write pivot)."
+ },
+ "AC-CLOSE-10": {
+  "dependency_class": "vendor:recall",
+  "golden_path": false,
+  "why": "\u00a73.7 post the link in the meeting chat THEN tear down \u2014 the bot never leaves without the record posted; retry on the chat-link post is a Recall (Doc 04 chat) call at the call_external seam."
+ },
+ "AC-CLOSE-10-NEG": {
+  "dependency_class": "vendor:recall",
+  "golden_path": false,
+  "why": "NEG pair of AC-CLOSE-10; permanent chat-post failure blocks teardown and surfaces error \u2014 the failing chat post is the Recall vendor call."
+ },
+ "AC-CLOSE-11": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": false,
+  "why": "\u00a73.7/\u00a73.9 total_cost_usd is a claude_agent_sdk result convenience the close pass gets for free; oracle reads it from the generateStructured result \u2014 the Anthropic SDK call surface is under test."
+ },
+ "AC-CLOSE-11-NEG": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": false,
+  "why": "NEG pair of AC-CLOSE-11; a missing total_cost_usd field on the SDK result is tolerated \u2014 same Anthropic SDK-result vendor class."
+ },
+ "AC-CLOSE-12": {
+  "dependency_class": "vendor:anthropic",
+  "golden_path": false,
+  "why": "\u00a73.7 close output is deduped, conflicts resolved, gaps backfilled, human-polished; golden_key_comparison scores the strong-model output \u2014 the Anthropic generation quality is under test."
+ },
+ "AC-CLOSE-13": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "\u00a73.7 raw transcript + workroom tool-call telemetry persist on the Postgres plane as the audit record; db_assertion that row counts are unchanged after teardown."
+ },
+ "AC-CLOSE-13-NEG": {
+  "dependency_class": "db:postgres",
+  "golden_path": false,
+  "why": "NEG pair of AC-CLOSE-13; asserts no DELETE/TRUNCATE on transcript_segments/note_deltas during close \u2014 Postgres audit rows are the system under test."
+ },
+ "AC-CLOSE-14": {
+  "dependency_class": "gcs:objects",
+  "golden_path": false,
+  "why": "\u00a73.7 close deliverable written exactly once; crash recovery detects the existing GCS object via the if_generation_match precondition \u2014 the GCS create-only precondition is the primary detection mechanism (also touches Postgres)."
+ },
+ "AC-CLOSE-15": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "\u00a73.7 build-time pin: the claude_agent_sdk structured-output surface MUST be confirmed against live docs at build; process/code assertion on build evidence \u2014 no runtime external call."
+ },
+ "AC-CLOSE-16": {
+  "dependency_class": null,
+  "golden_path": false,
+  "why": "\u00a73.7 V1-deferred items (show-your-work trace, staged-drafts bundle, decisions\u2192index) are absent in V0; code_assertion (grep) \u2014 pure static check, no external system."
+ }
+}
