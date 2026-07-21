@@ -1,0 +1,618 @@
+# event_corr.requirements.yaml — Doc 03 (Notes / Scribe) — §3.5 Event Emitter + §3.6 Live Corrections
+# Atomic EARS requirements. Each carries source_location + verbatim source_quote + criticality.
+# ID scheme: R-doc03-EVENT-NN / R-doc03-CORR-NN
+# Authority document: DOC-03 (Notes spec §3.5 / §3.6)
+#
+# Dependency classes (per authoring brief):
+#   null     — in-process signal, no external system (event emission to Doc 04, chat line note emitted to Doc 04's formatter)
+#   db:postgres — hits Postgres (correction apply, supersede write, attribution write)
+#
+# golden_path: false for all (supporting behaviors)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §3.5 THE EVENT EMITTER
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Events fired on material-change deltas ────────────────────────────────────
+
+- requirement_id: R-doc03-EVENT-01
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.5, paragraph 1"
+  source_quote: "On applying a delta, the layer emits material-change events — claim-landed (checkable), decision-forming, decision-final, contradiction-detected, action-item-created, question-opened/closed — to the Orchestrator (Doc 04)."
+  normalized_statement: >
+    WHEN a delta is applied and the resulting entry is classified as a material change
+    THE SYSTEM SHALL emit exactly one of the following events to the Orchestrator (Doc 04):
+    claim-landed (checkable), decision-forming, decision-final, contradiction-detected,
+    action-item-created, question-opened, or question-closed; no other event types are
+    emitted by this layer for material changes.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-EVENT-02
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.5, paragraph 1"
+  source_quote: "On applying a delta, the layer emits material-change events — claim-landed (checkable), decision-forming, decision-final, contradiction-detected, action-item-created, question-opened/closed — to the Orchestrator (Doc 04)."
+  normalized_statement: >
+    WHEN a delta results in a claim-landed (checkable) entry
+    THE SYSTEM SHALL emit a claim-landed event carrying the entry and a focused context slice
+    to the Orchestrator.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-EVENT-03
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.5, paragraph 1"
+  source_quote: "On applying a delta, the layer emits material-change events — claim-landed (checkable), decision-forming, decision-final, contradiction-detected, action-item-created, question-opened/closed — to the Orchestrator (Doc 04)."
+  normalized_statement: >
+    WHEN a delta results in a decision-forming entry
+    THE SYSTEM SHALL emit a decision-forming event carrying the entry and a focused context slice
+    to the Orchestrator.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-EVENT-04
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.5, paragraph 1"
+  source_quote: "On applying a delta, the layer emits material-change events — claim-landed (checkable), decision-forming, decision-final, contradiction-detected, action-item-created, question-opened/closed — to the Orchestrator (Doc 04)."
+  normalized_statement: >
+    WHEN a delta results in a decision-final entry
+    THE SYSTEM SHALL emit a decision-final event carrying the entry and a focused context slice
+    to the Orchestrator.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-EVENT-05
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.5, paragraph 1"
+  source_quote: "On applying a delta, the layer emits material-change events — claim-landed (checkable), decision-forming, decision-final, contradiction-detected, action-item-created, question-opened/closed — to the Orchestrator (Doc 04)."
+  normalized_statement: >
+    WHEN a delta results in a contradiction-detected entry
+    THE SYSTEM SHALL emit a contradiction-detected event carrying the entry and a focused context slice
+    to the Orchestrator.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-EVENT-06
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.5, paragraph 1"
+  source_quote: "On applying a delta, the layer emits material-change events — claim-landed (checkable), decision-forming, decision-final, contradiction-detected, action-item-created, question-opened/closed — to the Orchestrator (Doc 04)."
+  normalized_statement: >
+    WHEN a delta results in an action-item-created entry
+    THE SYSTEM SHALL emit an action-item-created event carrying the entry and a focused context slice
+    to the Orchestrator.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-EVENT-07
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.5, paragraph 1"
+  source_quote: "On applying a delta, the layer emits material-change events — claim-landed (checkable), decision-forming, decision-final, contradiction-detected, action-item-created, question-opened/closed — to the Orchestrator (Doc 04)."
+  normalized_statement: >
+    WHEN a delta results in a question-opened entry
+    THE SYSTEM SHALL emit a question-opened event carrying the entry and a focused context slice
+    to the Orchestrator.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-EVENT-08
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.5, paragraph 1"
+  source_quote: "On applying a delta, the layer emits material-change events — claim-landed (checkable), decision-forming, decision-final, contradiction-detected, action-item-created, question-opened/closed — to the Orchestrator (Doc 04)."
+  normalized_statement: >
+    WHEN a delta results in a question-closed entry
+    THE SYSTEM SHALL emit a question-closed event carrying the entry and a focused context slice
+    to the Orchestrator.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+
+# ── Event payload: entry + focused context slice ──────────────────────────────
+
+- requirement_id: R-doc03-EVENT-09
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.5, paragraph 1, sentence 2"
+  source_quote: "Each event carries the entry + a focused context slice."
+  normalized_statement: >
+    WHEN any material-change event is emitted
+    THE SYSTEM SHALL include in that event payload: (a) the full entry that triggered the event,
+    and (b) a focused context slice scoped to that entry's relevant surrounding notes context;
+    the event SHALL NOT carry full meeting-wide context or an empty context.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+
+# ── Chitchat and running-context → NO event ───────────────────────────────────
+
+- requirement_id: R-doc03-EVENT-10
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.5, paragraph 1"
+  source_quote: "Chitchat and running-context updates emit nothing."
+  normalized_statement: >
+    WHEN a delta is applied and the resulting update is classified as chitchat
+    THE SYSTEM SHALL NOT emit any event to the Orchestrator; zero events are emitted
+    for chitchat deltas.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-EVENT-11
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.5, paragraph 1"
+  source_quote: "Chitchat and running-context updates emit nothing."
+  normalized_statement: >
+    WHEN a delta is applied and the resulting update is classified as a running-context update
+    THE SYSTEM SHALL NOT emit any event to the Orchestrator; zero events are emitted
+    for running-context updates.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+
+# ── The Scribe: pipe, not the mouth (CANONICAL §12.3) ────────────────────────
+
+- requirement_id: R-doc03-EVENT-12
+  authority_type: architecture_invariant
+  authority_document: DOC-03
+  source_location: "§3.5, paragraph 3"
+  source_quote: "This layer is a pipe, never the mouth (CANONICAL §12.3). The Scribe supplies notes context + material-change events to Doc 04; it does not deliver anything to the room itself."
+  normalized_statement: >
+    AT ALL TIMES the event emitter layer SHALL NOT deliver any output directly to the meeting room;
+    its sole output is notes context and material-change events forwarded to Doc 04 (the Orchestrator);
+    room delivery exclusively uses Proxy's wake-turn tools (speak/send_chat/show_screen) owned by Doc 04.
+  requirement_type: architecture_invariant
+  criticality: P0
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-EVENT-13
+  authority_type: architecture_invariant
+  authority_document: DOC-03
+  source_location: "§3.5, paragraph 3"
+  source_quote: "The Scribe emits no speech and holds no delivery authority."
+  normalized_statement: >
+    AT ALL TIMES the Scribe SHALL emit zero speech acts and SHALL hold no delivery authority;
+    the Scribe MUST NOT invoke speak, send_chat, or show_screen directly; any path through
+    this layer that produces room-audible or room-visible output is a violation.
+  requirement_type: architecture_invariant
+  criticality: P0
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+
+# ── Chat record lines: deterministic formatter, dedupe, disable toggle ────────
+
+- requirement_id: R-doc03-EVENT-14
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.5, paragraph 4"
+  source_quote: "a decision-final or action-item-created event MAY drive a one-line record post in the meeting chat (\"✓ Decision: ship checkout Friday\" / \"☐ Action: Sam — fix the retry test\")"
+  normalized_statement: >
+    WHEN a decision-final event is emitted AND the room's chat record posting is enabled
+    THE SYSTEM MAY drive a one-line chat record post in the meeting chat; such a post
+    SHALL be produced by the deterministic harness formatter and SHALL NOT be produced
+    in response to a disabled toggle.
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-EVENT-15
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.5, paragraph 4"
+  source_quote: "a decision-final or action-item-created event MAY drive a one-line record post in the meeting chat"
+  normalized_statement: >
+    WHEN an action-item-created event is emitted AND the room's chat record posting is enabled
+    THE SYSTEM MAY drive a one-line chat record post in the meeting chat; such a post
+    SHALL be produced by the deterministic harness formatter and SHALL NOT be produced
+    in response to a disabled toggle.
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-EVENT-16
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.5, paragraph 4"
+  source_quote: "that line is produced by a deterministic harness formatter keyed on the committed note-delta — NEVER a Proxy wake and NEVER model-generated."
+  normalized_statement: >
+    WHEN a chat record line is produced from a decision-final or action-item-created event
+    THE SYSTEM SHALL produce that line via a deterministic harness formatter keyed on the
+    committed note-delta; the chat record line SHALL NOT be produced by a Proxy wake turn
+    and SHALL NOT be model-generated.
+  requirement_type: architecture_invariant
+  criticality: P0
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-EVENT-17
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.5, paragraph 4"
+  source_quote: "It dedupes by meeting_revision (a re-fold of the same committed delta emits nothing new)"
+  normalized_statement: >
+    WHEN a chat record line would be produced for a given committed note-delta
+    AND that delta's meeting_revision has already been used to produce a chat record line
+    THE SYSTEM SHALL NOT emit a second chat record line; deduplication SHALL be keyed
+    on meeting_revision and SHALL suppress all duplicate outputs for the same revision.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-EVENT-18
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.5, paragraph 4"
+  source_quote: "and honors the room's disable toggle."
+  normalized_statement: >
+    WHEN the room's chat record posting disable toggle is active
+    THE SYSTEM SHALL NOT post any chat record lines regardless of how many decision-final
+    or action-item-created events are emitted; disabling the toggle immediately suppresses
+    all subsequent chat record line posts.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §3.6 LIVE CORRECTIONS (TRUST BEHAVIOR)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Correction apply: immediate, attributed, superseded-not-erased ────────────
+
+- requirement_id: R-doc03-CORR-01
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.6, paragraph 1"
+  source_quote: "this layer applies it as an immediate, attributed patch: the entry updates, the correction is noted (who corrected, when), and the old value is kept superseded-not-erased (the record never silently rewrites history)."
+  normalized_statement: >
+    WHEN a correction is received from Doc 04
+    THE SYSTEM SHALL apply it as an immediate patch to the target entry, recording
+    attribution (who corrected, timestamp), and persisting the old value as a superseded
+    record; the record SHALL NOT silently overwrite or erase the prior value.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  dependency_class: db:postgres
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-CORR-02
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.6, paragraph 1"
+  source_quote: "the correction is noted (who corrected, when)"
+  normalized_statement: >
+    WHEN a correction patch is written to Postgres
+    THE SYSTEM SHALL persist with the patch: (a) the identity of the corrector (participant),
+    and (b) the timestamp of the correction; a correction record lacking either field
+    SHALL NOT be considered complete.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  dependency_class: db:postgres
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-CORR-03
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.6, paragraph 1"
+  source_quote: "the old value is kept superseded-not-erased (the record never silently rewrites history)."
+  normalized_statement: >
+    WHEN a correction is applied
+    THE SYSTEM SHALL retain the prior entry value in a superseded state in Postgres;
+    the prior value SHALL be queryable after the correction; no correction path SHALL
+    delete or overwrite the prior value in place.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  dependency_class: db:postgres
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-CORR-04
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.6, paragraph 1"
+  source_quote: "The next Scribe call sees the corrected notes in its prefix — the correction sticks."
+  normalized_statement: >
+    WHEN a correction has been applied
+    THE SYSTEM SHALL ensure the next Scribe micro-call receives the corrected entry value
+    in its notes prefix (Segment B / rolling context); the correction SHALL be durable
+    across Scribe invocations and SHALL NOT revert to the prior value on the next call.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  dependency_class: db:postgres
+  golden_path: false
+  status: qualified
+
+# ── Ordinary corrections: silent-immediate path ───────────────────────────────
+
+- requirement_id: R-doc03-CORR-05
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.6, paragraph 2"
+  source_quote: "Most corrections apply silently-and-immediately — that is the right, low-friction behavior for the ordinary case."
+  normalized_statement: >
+    WHEN a correction is classified as ordinary (a firmness bump, an action-item tweak,
+    a forming-decision lean, or an open-question edit)
+    THE SYSTEM SHALL apply that correction silently and immediately without emitting
+    a spoken confirmation; no confirmation audio path SHALL be triggered for ordinary corrections.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  dependency_class: db:postgres
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-CORR-06
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.6, paragraph 3"
+  source_quote: "Ordinary firmness bumps, action-item tweaks, forming-decision leans, and open-question edits stay on the silent-immediate path — the gate must not add friction to the common case."
+  normalized_statement: >
+    WHEN a correction sets a firmness level on a non-final, non-irreversible entry
+    THE SYSTEM SHALL apply the patch on the silent-immediate path; no gate check
+    and no spoken confirmation SHALL be triggered.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  dependency_class: db:postgres
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-CORR-07
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.6, paragraph 3"
+  source_quote: "Ordinary firmness bumps, action-item tweaks, forming-decision leans, and open-question edits stay on the silent-immediate path — the gate must not add friction to the common case."
+  normalized_statement: >
+    WHEN a correction tweaks an action-item (assignee, due date, wording) without closing
+    or finalizing it THE SYSTEM SHALL apply the patch on the silent-immediate path;
+    no gate check and no spoken confirmation SHALL be triggered.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  dependency_class: db:postgres
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-CORR-08
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.6, paragraph 3"
+  source_quote: "Ordinary firmness bumps, action-item tweaks, forming-decision leans, and open-question edits stay on the silent-immediate path — the gate must not add friction to the common case."
+  normalized_statement: >
+    WHEN a correction updates a decision that is still in the forming state (not final)
+    THE SYSTEM SHALL apply the patch on the silent-immediate path; no gate check
+    and no spoken confirmation SHALL be triggered.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  dependency_class: db:postgres
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-CORR-09
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.6, paragraph 3"
+  source_quote: "Ordinary firmness bumps, action-item tweaks, forming-decision leans, and open-question edits stay on the silent-immediate path — the gate must not add friction to the common case."
+  normalized_statement: >
+    WHEN a correction edits an open question (wording, context, links) without closing it
+    THE SYSTEM SHALL apply the patch on the silent-immediate path; no gate check
+    and no spoken confirmation SHALL be triggered.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  dependency_class: db:postgres
+  golden_path: false
+  status: qualified
+
+# ── High-stakes gate: triggers ────────────────────────────────────────────────
+
+- requirement_id: R-doc03-CORR-10
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.6, paragraph 3 (Trigger)"
+  source_quote: "Trigger (narrow, high-stakes only): the correction sets Decision.status = final, sets Reversibility = irreversible, or closes/finalizes an entry with those properties."
+  normalized_statement: >
+    WHEN a correction sets Decision.status = final on any entry
+    THE SYSTEM SHALL classify that correction as high-stakes and SHALL trigger the
+    spoken-confirm gate; the silent-immediate path SHALL NOT be taken for this case.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  dependency_class: db:postgres
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-CORR-11
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.6, paragraph 3 (Trigger)"
+  source_quote: "Trigger (narrow, high-stakes only): the correction sets Decision.status = final, sets Reversibility = irreversible, or closes/finalizes an entry with those properties."
+  normalized_statement: >
+    WHEN a correction sets Reversibility = irreversible on any entry
+    THE SYSTEM SHALL classify that correction as high-stakes and SHALL trigger the
+    spoken-confirm gate; the silent-immediate path SHALL NOT be taken for this case.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  dependency_class: db:postgres
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-CORR-12
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.6, paragraph 3 (Trigger)"
+  source_quote: "Trigger (narrow, high-stakes only): the correction sets Decision.status = final, sets Reversibility = irreversible, or closes/finalizes an entry with those properties."
+  normalized_statement: >
+    WHEN a correction closes or finalizes an entry that already carries Decision.status = final
+    OR Reversibility = irreversible
+    THE SYSTEM SHALL classify that correction as high-stakes and SHALL trigger the
+    spoken-confirm gate; the silent-immediate path SHALL NOT be taken for this case.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  dependency_class: db:postgres
+  golden_path: false
+  status: qualified
+
+# ── High-stakes gate: behavior (apply-then-confirm, audible receipt) ──────────
+
+- requirement_id: R-doc03-CORR-13
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.6, paragraph 3 (Behavior)"
+  source_quote: "apply the patch (still immediate, still attributed, still superseded-not-erase) AND emit a one-line spoken acknowledgement via Doc 02's mouth (owned by Doc 04's turn) — e.g. \"— corrected: ship Friday, noted.\""
+  normalized_statement: >
+    WHEN a high-stakes correction triggers the gate
+    THE SYSTEM SHALL apply the patch immediately (attributed, superseded-not-erased) AND
+    emit exactly one spoken acknowledgement line via Doc 02's speech path, owned by Doc 04's
+    turn; the acknowledgement SHALL be emitted after (not before) the patch is committed.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  dependency_class: db:postgres
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-CORR-14
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.6, paragraph 3 (Behavior)"
+  source_quote: "apply the patch (still immediate, still attributed, still superseded-not-erase)"
+  normalized_statement: >
+    WHEN the high-stakes gate fires
+    THE SYSTEM SHALL NOT block or delay the patch application while waiting for
+    spoken confirmation; the patch is committed first, and the confirm is emitted after;
+    a high-stakes correction SHALL NOT leave the entry in an unpatched state
+    pending human approval.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  dependency_class: db:postgres
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-CORR-15
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.6, paragraph 3 (Behavior)"
+  source_quote: "The confirm is an audible receipt, not a blocking approval prompt."
+  normalized_statement: >
+    WHEN the spoken acknowledgement is emitted for a high-stakes correction
+    THE SYSTEM SHALL treat it as an audible receipt only; it SHALL NOT wait for
+    participant acknowledgement, SHALL NOT block further pipeline processing,
+    and SHALL NOT require a human approval response before completing the correction.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+
+- requirement_id: R-doc03-CORR-16
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.6, paragraph 3 (Behavior)"
+  source_quote: "emit a one-line spoken acknowledgement via Doc 02's mouth (owned by Doc 04's turn)"
+  normalized_statement: >
+    WHEN a spoken acknowledgement is emitted for a high-stakes correction
+    THE SYSTEM SHALL emit exactly one line of speech (not zero, not two or more lines)
+    via Doc 02's speech path, owned within Doc 04's wake turn; multiple acknowledgement
+    lines per single high-stakes correction are a violation.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+
+# ── Gate boundary: notes corrections only ─────────────────────────────────────
+
+- requirement_id: R-doc03-CORR-17
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.6, paragraph 3 (Boundary)"
+  source_quote: "this gate governs notes corrections only. World-touching actions already require a human click."
+  normalized_statement: >
+    WHEN the high-stakes correction gate evaluates an incoming correction
+    THE SYSTEM SHALL apply the gate only to notes corrections; world-touching actions
+    (any action requiring a human click per Law 3) SHALL NOT be subject to this gate
+    and SHALL retain their own human-click approval mechanism unaffected.
+  requirement_type: architecture_invariant
+  criticality: P0
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified

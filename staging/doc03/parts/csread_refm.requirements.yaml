@@ -1,0 +1,349 @@
+# csread_refm.requirements.yaml — Doc 03 (Notes / Scribe)
+# §3.3.1 Cross-service notes read path  (ID prefix: R-doc03-CSREAD-NN)
+# §3.4   Referent matcher               (ID prefix: R-doc03-REFM-NN)
+#
+# Authority documents: DOC-03, CANONICAL
+# Dependency classes:
+#   db:postgres  — fold-from-note_deltas; the /internal/notes endpoint
+#   db:sqlite    — graph_nodes lookup used by lookup_referent (code_intel host)
+#   null         — pure local string/rank logic; no external vendor dependency
+#
+# Five standing laws (CLAUDE.md / AGENTS.md) binding this section:
+#   Law 1: Grounded or silent — every behavior cited to spec line
+#   Law 2: Never overstate — unmatched referents stay unbound; fold is deterministic
+#   Law 3: Human control — the durable source of truth is Postgres; cache is optional
+#   Law 4: Dynamic, never hard-coded — fold is a left-fold in id order, not a snapshot
+#   Law 5: Talk-and-glance — freshness flag rides the response
+#
+# ID space: R-doc03-CSREAD-01 … R-doc03-CSREAD-NN
+#            R-doc03-REFM-01 … R-doc03-REFM-NN
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §3.3.1 — Cross-service notes read path
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc03-CSREAD-01
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3.1, paragraph 1, sentence 1 / CANONICAL §1.3 / CANONICAL §11.4"
+  source_quote: >
+    The bundle a wake turn hands the Workroom carries notes_ref, not the notes object
+    (CANONICAL §1.3) — and notes_ref = meeting_id (CANONICAL §11.4).
+  normalized_statement: >
+    THE SYSTEM SHALL set notes_ref to the meeting_id value (never a separate opaque
+    handle); the wake-turn bundle handed to the Workroom SHALL carry notes_ref, not the
+    notes object inline; any code path that embeds the notes object directly in the
+    bundle SHALL be rejected as a schema violation.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+- requirement_id: R-doc03-CSREAD-02
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3.1, paragraph 2 / CANONICAL §11.4"
+  source_quote: >
+    The durable source of the notes object is the note_deltas Postgres table — the
+    notes object is its deterministic left-fold in id order — so the read path folds
+    from Postgres, never from NOTES_CACHE.
+  normalized_statement: >
+    THE SYSTEM SHALL define the CONTRACT for the notes read path as a deterministic
+    left-fold of note_deltas (ordered by id, ascending) from Postgres; serving from
+    NOTES_CACHE SHALL NOT satisfy the contract; only the fold-from-note_deltas path
+    constitutes the authoritative read.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: db:postgres
+
+- requirement_id: R-doc03-CSREAD-03
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3.1, paragraph 3, bullet 1 — response shape"
+  source_quote: >
+    GET /internal/notes/{meeting_id} → 200 {notes object, JSON} | 404 (unknown meeting)
+  normalized_statement: >
+    WHEN a GET request is made to /internal/notes/{meeting_id} for a known meeting THE
+    SYSTEM SHALL return HTTP 200 with the notes object as JSON; WHEN the meeting_id is
+    unknown THE SYSTEM SHALL return HTTP 404; no other status code is permitted for those
+    two cases.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+  golden_path: true
+  dependency_class: db:postgres
+
+- requirement_id: R-doc03-CSREAD-04
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3.1, paragraph 3, bullet 1 — mount location"
+  source_quote: >
+    Mounted OUTSIDE the auth wall, alongside /internal/reconcile — gated by the shared
+    internal bearer token (not user session cookie), so the Workroom host can reach it
+    directly.
+  normalized_statement: >
+    THE SYSTEM SHALL mount GET /internal/notes/{meeting_id} outside the user-auth wall,
+    in the same route group as /internal/reconcile; the endpoint SHALL NOT require a
+    user session cookie for access; it SHALL be reachable directly by a foreign host
+    (the Workroom on another host).
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+- requirement_id: R-doc03-CSREAD-05
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3.1, paragraph 3, bullet 1 — auth gate"
+  source_quote: >
+    gated by the shared internal bearer token (not user session cookie)
+  normalized_statement: >
+    THE SYSTEM SHALL gate GET /internal/notes/{meeting_id} with the shared internal
+    bearer token; a request without a valid internal bearer token SHALL be rejected (HTTP
+    401 or 403); a request bearing only a user session cookie SHALL be rejected; the
+    gate MUST NOT be bypassed by any code path.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+- requirement_id: R-doc03-CSREAD-06
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3.1, paragraph 3, bullet 2"
+  source_quote: >
+    It folds note_deltas → the notes object server-side (the same left-fold NOTES_CACHE
+    is built from).
+  normalized_statement: >
+    WHEN /internal/notes/{meeting_id} serves a response it SHALL compute the notes object
+    by applying the identical left-fold (same algorithm, same id-ascending order) that
+    is used to build NOTES_CACHE; the fold logic SHALL NOT be duplicated or diverge from
+    the canonical fold function.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+  dependency_class: db:postgres
+
+- requirement_id: R-doc03-CSREAD-07
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3.1, paragraph 3, bullet 3"
+  source_quote: >
+    On the harness host it MAY serve the already-folded NOTES_CACHE[meeting_id] as a
+    read-through optimization (identical bytes), but the fold-from-note_deltas path is
+    the CONTRACT.
+  normalized_statement: >
+    ON the harness host the /internal/notes/{meeting_id} endpoint MAY serve
+    NOTES_CACHE[meeting_id] as a read-through optimization ONLY IF the cached bytes are
+    identical to a fresh fold; this optimization SHALL be conditional, never assumed; the
+    fold-from-note_deltas path MUST remain the contract and MUST be reachable at any time.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+  dependency_class: db:postgres
+
+- requirement_id: R-doc03-CSREAD-08
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3.1, paragraph 3, bullet 4"
+  source_quote: >
+    Doc 05's bundle handling resolves notes_ref by calling GET /internal/notes/{meeting_id}
+    (never expects the object inline in the bundle).
+  normalized_statement: >
+    WHEN Doc 05 bundle handling resolves a notes_ref it SHALL call GET
+    /internal/notes/{meeting_id} over HTTP and SHALL NOT expect the notes object to be
+    present inline in the bundle; any code path that reads the notes object directly from
+    the bundle (rather than resolving it via the endpoint) SHALL be rejected.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+  dependency_class: db:postgres
+
+- requirement_id: R-doc03-CSREAD-09
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3.1, paragraph 4 / CANONICAL §12.9"
+  source_quote: >
+    The authenticated GET /m/{meeting_id} user surface (CANONICAL §12.9) reads from
+    this SAME note_deltas fold — never from NOTES_CACHE. Every cross-process reader
+    (the Workroom on another host, the /m/ page) folds note_deltas server-side.
+  normalized_statement: >
+    THE SYSTEM SHALL make the authenticated GET /m/{meeting_id} user surface fold from
+    note_deltas server-side using the same fold function; it SHALL NOT read from
+    NOTES_CACHE; the contract for all cross-process readers (Workroom, /m/ page) is
+    fold-from-note_deltas, never cache.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+  dependency_class: db:postgres
+
+- requirement_id: R-doc03-CSREAD-10
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3.1, paragraph 5 / §3.8 cross-reference"
+  source_quote: >
+    The notes freshness flag (§3.8) rides the response so a consumer sees the object's
+    currency.
+  normalized_statement: >
+    WHEN /internal/notes/{meeting_id} returns HTTP 200 the response JSON SHALL include
+    the notes freshness flag (as defined in §3.8) so that the consumer can determine the
+    object's currency; a 200 response that omits the freshness flag SHALL be considered
+    malformed.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+  dependency_class: db:postgres
+
+- requirement_id: R-doc03-CSREAD-11
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3.1, paragraph 2 (fold determinism)"
+  source_quote: >
+    the notes object is its deterministic left-fold in id order
+  normalized_statement: >
+    THE SYSTEM SHALL produce byte-identical notes objects for the same set of
+    note_deltas regardless of which caller (Workroom, /m/ page, or harness-local) invokes
+    the fold; the fold is deterministic and order-stable (id ascending); any
+    non-determinism in the fold output is a correctness defect.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: db:postgres
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §3.4 — Referent matcher (deterministic, no LLM)
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc03-REFM-01
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.4, paragraph 1, sentence 1 / CANONICAL §12.6"
+  source_quote: >
+    the matcher calls lookup_referent(term) (defined in Doc 01, CANONICAL §12.6) — a
+    deterministic, no-LLM lookup over the core overview areas + graph_nodes
+  normalized_statement: >
+    WHEN the Scribe marks a referent candidate THE SYSTEM SHALL call
+    lookup_referent(term) as defined in Doc 01 (CANONICAL §12.6); the call SHALL be
+    deterministic and SHALL NOT invoke any LLM model call; for the same term and the
+    same graph_nodes state it SHALL always return the same result.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+- requirement_id: R-doc03-REFM-02
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.4, paragraph 1, sentence 2 / CANONICAL §12.6"
+  source_quote: >
+    which returns {node_id | area | None}, binding the entry to the real code node.
+  normalized_statement: >
+    THE SYSTEM SHALL define lookup_referent as returning exactly one of: a node_id
+    string (binding to a real code node), an area string (binding to a named code area),
+    or None (unmatched); no other return type is permitted; the binding SHALL reference
+    a real entry in graph_nodes or the core overview areas, never a fabricated value.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: db:sqlite
+
+- requirement_id: R-doc03-REFM-03
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.4, paragraph 1, sentence 3"
+  source_quote: >
+    A cheap string/rank match, no model call.
+  normalized_statement: >
+    THE SYSTEM SHALL implement lookup_referent using string/rank matching only; no
+    external API call, no embedding call, and no model inference call SHALL occur inside
+    lookup_referent; the implementation SHALL be cheap enough to run inline on the
+    Scribe hot path without material latency overhead.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+- requirement_id: R-doc03-REFM-04
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.4, paragraph 1 — search scope"
+  source_quote: >
+    a deterministic, no-LLM lookup over the core overview areas + graph_nodes
+    (area names, file names, key symbols)
+  normalized_statement: >
+    THE SYSTEM SHALL restrict lookup_referent's search corpus to: (a) core overview
+    area names, and (b) graph_nodes (area names, file names, key symbols); it SHALL NOT
+    search the full codebase or any other index not listed here; expanding the search
+    corpus beyond these two sources is an Expansion-phase change.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+  dependency_class: db:sqlite
+
+- requirement_id: R-doc03-REFM-05
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.4, paragraph 2, sentence 1"
+  source_quote: >
+    Unmatched candidates stay as plain referents (honest: named but unbound).
+  normalized_statement: >
+    WHEN lookup_referent returns None for a referent candidate THE SYSTEM SHALL
+    record that candidate as a plain referent (named but unbound); it SHALL NOT
+    fabricate a binding, invent a node_id, or silently discard the candidate; the
+    "unbound" state is an honest and valid outcome.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+- requirement_id: R-doc03-REFM-06
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.4, paragraph 2, sentence 2"
+  source_quote: >
+    This binding is what lets the Workroom start a task already knowing which part of
+    the codebase the room means.
+  normalized_statement: >
+    WHEN lookup_referent returns a node_id or area the bound referent SHALL be carried
+    forward in the notes entry so that the Workroom, on reading the notes object, can
+    identify which part of the codebase the referent names without further resolution;
+    the binding SHALL NOT be stripped or dropped during the notes fold or storage.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+- requirement_id: R-doc03-REFM-07
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.4, paragraph 3"
+  source_quote: >
+    (The agentic/LLM referent map is Expansion — V0 binds deterministically off the
+    overview areas + graph nodes only.)
+  normalized_statement: >
+    THE SYSTEM SHALL NOT implement an LLM-based or agentic referent mapping in V0;
+    the agentic referent map is deferred to Expansion; any code path that calls an LLM
+    to resolve a referent in V0 is a scope violation and SHALL fail the build.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+  dependency_class: null

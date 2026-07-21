@@ -1,0 +1,619 @@
+# qgate.criteria.yaml — Doc 03 (Notes / Scribe) — §3.2.2 Sampled Online Quality Gate
+# Acceptance criteria for the sampled entailment gate on Haiku Scribe outputs.
+# ID scheme: AC-QGATE-NN  (NEG partner: AC-QGATE-NN-NEG)
+# Authority refs: R-doc03-QGATE-NN
+#
+# dependency_class rules (per authoring brief):
+#   vendor:anthropic  — any criterion that exercises a Haiku or Sonnet API call
+#   null              — criteria whose behavior is logic/config-only (no live API call)
+# mock_boundary (when dependency_class == vendor:anthropic):
+#   "may mock the entailment API response via a vcrpy cassette at the call_external layer;
+#    MUST NOT replace the anthropic client with Mock()"
+# golden_path: false for all QGATE criteria (quality gate is infrastructure)
+# NEG: every non-null dependency criterion is paired with a NEG peer.
+#
+# verification_ladder tiers used:
+#   [static]       — AST/grep/import-graph, no runtime
+#   [unit-example] — deterministic single-input unit test
+#   [simulation]   — state-machine or trace-based integration sim
+#   [latency]      — measured timing or cost assertion
+#   [contract]     — schema / shape validation
+#
+# Oracles: deterministic-preferred throughout.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FAULT MODELS
+# ─────────────────────────────────────────────────────────────────────────────
+fault_models:
+
+  - id: F-QGATE-SAMPLE-HARDCODED
+    summary: "The sample rate is a literal constant in source rather than read from QUALITY_GATE_SAMPLE_RATE; changing the env var has no effect."
+
+  - id: F-QGATE-ALWAYS-CHECK-BYPASS
+    summary: "A decision→final, irreversible, or contradicts entry is subjected to the sample-rate draw and silently skipped on a losing draw, violating the always-check invariant."
+
+  - id: F-QGATE-BLOCKS-HOT-PATH
+    summary: "The entailment call runs synchronously before the applier returns, adding gate latency to the live delta path and stalling the pipeline."
+
+  - id: F-QGATE-WRONG-CONTEXT
+    summary: "The entailment call includes the full notes object, rolling summary, or schema-derivation instructions rather than only the transcript window + emitted entry text."
+
+  - id: F-QGATE-MODEL-HARDCODED
+    summary: "The gate model identifier is a literal string rather than read from PROXY_MODEL_QUALITY_GATE; env-var override has no effect."
+
+  - id: F-QGATE-BAD-RESPONSE-SHAPE
+    summary: "A model response that cannot be parsed to {grounded: bool, reason: str} is silently treated as grounded=true (miss suppressed) rather than grounded=false."
+
+  - id: F-QGATE-NO-ESCALATION
+    summary: "On grounded=false the system logs the miss but does not re-run the extraction on the Sonnet-class tier; the original incorrect entry stands uncorrected."
+
+  - id: F-QGATE-BYPASS-APPLIER
+    summary: "The Sonnet correction is written directly to the notes object bypassing the normal applier/PatchOp path, violating the single-writer invariant or supersede semantics."
+
+  - id: F-QGATE-MISS-SILENT
+    summary: "A miss event produces no quality-gate-miss record on the transcript plane (silent miss), removing the cascade-health signal."
+
+  - id: F-QGATE-MISS-DUPLICATE
+    summary: "A single miss event produces more than one quality-gate-miss record, inflating the miss-rate telemetry."
+
+  - id: F-QGATE-MISS-INCOMPLETE
+    summary: "A quality-gate-miss record is written but omits one or more required fields (window span, Haiku entry, Sonnet correction), making the telemetry non-actionable."
+
+  - id: F-QGATE-DEFAULT-WRONG
+    summary: "One or more pinned defaults (sample rate, always-check set, gate model, escalation tier) differ from the spec values, shipping an incorrectly calibrated gate."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ACCEPTANCE CRITERIA
+# ─────────────────────────────────────────────────────────────────────────────
+criteria:
+
+  # ── AC-QGATE-01: Sample rate is config-driven, default ≈0.1 ─────────────────
+
+  - criterion_id: AC-QGATE-01
+    name: "QUALITY_GATE_SAMPLE_RATE drives the gate probability; default is ≈0.1"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc03-QGATE-01, R-doc03-QGATE-03, R-doc03-QGATE-16]
+    dependency_class: null
+    golden_path: false
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The quality-gate sampler configured with QUALITY_GATE_SAMPLE_RATE=0.1 (default)"
+      when:  "1000 entries are passed through the sampler with no always-check criteria met"
+      then:
+        - "Approximately 100 entries (±20 at 95% CI) are selected for gating"
+        - "Changing QUALITY_GATE_SAMPLE_RATE to 0.0 causes zero entries to be selected"
+        - "Changing QUALITY_GATE_SAMPLE_RATE to 1.0 causes all entries to be selected"
+    primary_oracle:
+      type: unit_example
+      artifact: "Inject 1000 entries with seeded RNG; assert gate-selected count in [80, 120] for rate=0.1; assert 0 for rate=0.0; assert 1000 for rate=1.0."
+    thresholds:
+      default_sample_rate: 0.1
+      selected_count_at_default_min: 80
+      selected_count_at_default_max: 120
+      selected_at_rate_zero: 0
+      selected_at_rate_one: 1000
+    fault_model_refs: [F-QGATE-SAMPLE-HARDCODED]
+    test_ids: [T-QGATE-01]
+
+  # ── AC-QGATE-02 / NEG: always-check for decision→final ──────────────────────
+
+  - criterion_id: AC-QGATE-02
+    name: "decision.status=final entries are always gated regardless of sample draw"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-QGATE-02, R-doc03-QGATE-16]
+    dependency_class: vendor:anthropic
+    mock_boundary: "may mock the entailment API response via a vcrpy cassette at the call_external layer; MUST NOT replace the anthropic client with Mock()"
+    golden_path: false
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "QUALITY_GATE_SAMPLE_RATE=0.0 (sampling suppressed) and a Scribe entry with decision.status=final"
+      when:  "The applier emits the delta for this entry"
+      then:
+        - "The quality-gate entailment call is issued for the entry despite the sample rate being 0.0"
+        - "The always-check rule fires unconditionally; no RNG draw is consulted for this entry type"
+    primary_oracle:
+      type: simulation_trace
+      artifact: "Set rate=0.0, inject a decision.status=final entry; assert gate call count == 1 for this entry (checked even at rate=0.0)."
+    thresholds:
+      gate_calls_for_final_decision_at_rate_zero: 1
+    fault_model_refs: [F-QGATE-ALWAYS-CHECK-BYPASS]
+    test_ids: [T-QGATE-02]
+
+  - criterion_id: AC-QGATE-02-NEG
+    name: "NEG: decision.status=final entry NOT checked when gate is entirely disabled at the feature level"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc03-QGATE-02]
+    dependency_class: null
+    golden_path: false
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "The quality gate feature is disabled entirely (not merely rate=0.0, but gate_enabled=false feature flag)"
+      when:  "A decision.status=final entry passes through the applier"
+      then:
+        - "No entailment call is issued (the feature gate guards even the always-check path)"
+        - "The disabled-gate path does not panic or raise an error"
+    primary_oracle:
+      type: unit_example
+      artifact: "Set gate_enabled=false; inject a decision.status=final entry; assert 0 API calls emitted and no exception raised."
+    thresholds:
+      api_calls_when_gate_disabled: 0
+    fault_model_refs: [F-QGATE-ALWAYS-CHECK-BYPASS]
+    test_ids: [T-QGATE-02-NEG]
+
+  # ── AC-QGATE-03 / NEG: always-check for reversibility=irreversible ───────────
+
+  - criterion_id: AC-QGATE-03
+    name: "reversibility=irreversible entries are always gated regardless of sample draw"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-QGATE-02, R-doc03-QGATE-16]
+    dependency_class: vendor:anthropic
+    mock_boundary: "may mock the entailment API response via a vcrpy cassette at the call_external layer; MUST NOT replace the anthropic client with Mock()"
+    golden_path: false
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "QUALITY_GATE_SAMPLE_RATE=0.0 and a Scribe entry with reversibility=irreversible"
+      when:  "The applier emits the delta for this entry"
+      then:
+        - "The quality-gate entailment call is issued for the entry despite the sample rate being 0.0"
+        - "The always-check rule fires unconditionally for irreversible entries"
+    primary_oracle:
+      type: simulation_trace
+      artifact: "Set rate=0.0, inject a reversibility=irreversible entry; assert gate call count == 1."
+    thresholds:
+      gate_calls_for_irreversible_at_rate_zero: 1
+    fault_model_refs: [F-QGATE-ALWAYS-CHECK-BYPASS]
+    test_ids: [T-QGATE-03]
+
+  - criterion_id: AC-QGATE-03-NEG
+    name: "NEG: an entry with reversibility=reversible is subject to the sample draw (not always-checked)"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc03-QGATE-03]
+    dependency_class: null
+    golden_path: false
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "QUALITY_GATE_SAMPLE_RATE=0.0 and an entry with reversibility=reversible (no other always-check criteria)"
+      when:  "The applier emits the delta"
+      then:
+        - "No gate call is issued (reversible entries are subject to the rate draw, not always-checked)"
+    primary_oracle:
+      type: unit_example
+      artifact: "Set rate=0.0, inject a reversibility=reversible entry with no decision→final or contradicts; assert 0 gate calls."
+    thresholds:
+      gate_calls_for_reversible_at_rate_zero: 0
+    fault_model_refs: [F-QGATE-ALWAYS-CHECK-BYPASS]
+    test_ids: [T-QGATE-03-NEG]
+
+  # ── AC-QGATE-04 / NEG: always-check for contradicts link ────────────────────
+
+  - criterion_id: AC-QGATE-04
+    name: "entries with a contradicts link are always gated regardless of sample draw"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-QGATE-02, R-doc03-QGATE-16]
+    dependency_class: vendor:anthropic
+    mock_boundary: "may mock the entailment API response via a vcrpy cassette at the call_external layer; MUST NOT replace the anthropic client with Mock()"
+    golden_path: false
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "QUALITY_GATE_SAMPLE_RATE=0.0 and a Scribe entry that carries a contradicts link to another entry"
+      when:  "The applier emits the delta"
+      then:
+        - "The quality-gate entailment call is issued for the entry despite the sample rate being 0.0"
+        - "The always-check rule fires unconditionally for entries carrying contradicts links"
+    primary_oracle:
+      type: simulation_trace
+      artifact: "Set rate=0.0, inject an entry with contradicts_entry_id set; assert gate call count == 1."
+    thresholds:
+      gate_calls_for_contradicts_at_rate_zero: 1
+    fault_model_refs: [F-QGATE-ALWAYS-CHECK-BYPASS]
+    test_ids: [T-QGATE-04]
+
+  - criterion_id: AC-QGATE-04-NEG
+    name: "NEG: an entry with no contradicts link, no decision→final, and no irreversible is subject to sample draw"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc03-QGATE-03]
+    dependency_class: null
+    golden_path: false
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "QUALITY_GATE_SAMPLE_RATE=0.0 and a plain entry with no always-check criteria"
+      when:  "The applier emits the delta"
+      then:
+        - "No gate call is issued (the entry is subject to the rate draw, which at 0.0 always suppresses)"
+    primary_oracle:
+      type: unit_example
+      artifact: "Set rate=0.0, inject a plain entry with no always-check flags; assert 0 gate calls."
+    thresholds:
+      gate_calls_for_plain_entry_at_rate_zero: 0
+    fault_model_refs: [F-QGATE-ALWAYS-CHECK-BYPASS]
+    test_ids: [T-QGATE-04-NEG]
+
+  # ── AC-QGATE-05: gate runs AFTER apply (off hot path) ───────────────────────
+
+  - criterion_id: AC-QGATE-05
+    name: "Gate runs after apply completes — delta is visible before entailment call is issued"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-QGATE-04, R-doc03-QGATE-05]
+    dependency_class: null
+    golden_path: false
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The pipeline with an instrumented applier and gate"
+      when:  "A delta is processed by the pipeline (sampled or always-check)"
+      then:
+        - "The notes object reflects the applied delta BEFORE the gate entailment call is issued (apply-then-gate ordering)"
+        - "The gate call timestamp is strictly after the applier commit timestamp"
+    primary_oracle:
+      type: simulation_trace
+      artifact: "Instrument the applier commit and the first gate API call; assert t(gate_call) > t(apply_commit) for every gated entry."
+    thresholds:
+      gate_calls_before_apply_allowed: 0
+    fault_model_refs: [F-QGATE-BLOCKS-HOT-PATH]
+    test_ids: [T-QGATE-05]
+
+  # ── AC-QGATE-06: entailment context is window + entry only ─────────────────
+
+  - criterion_id: AC-QGATE-06
+    name: "Entailment call context is exactly transcript window + emitted entry text"
+    evidence_class: "[static]"
+    authority_refs: [R-doc03-QGATE-06, R-doc03-QGATE-09]
+    dependency_class: null
+    golden_path: false
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The quality-gate entailment prompt builder"
+      when:  "Static analysis inspects every field assembled into the entailment call payload"
+      then:
+        - "The only context fields are: (a) the fenced transcript window text, and (b) the emitted entry text"
+        - "No full notes object, no rolling summary, no schema-derivation instructions, no additional context is present"
+    primary_oracle:
+      type: static_analysis
+      artifact: "AST scan of the gate prompt-builder: assert exactly two inputs (window_text, entry_text); assert 0 references to notes_context, rolling_summary, or schema in the prompt assembly path."
+    thresholds:
+      non_window_entry_fields_in_prompt_allowed: 0
+      schema_derivation_instructions_in_prompt_allowed: 0
+    fault_model_refs: [F-QGATE-WRONG-CONTEXT]
+    test_ids: [T-QGATE-06]
+
+  # ── AC-QGATE-07 / NEG: PROXY_MODEL_QUALITY_GATE controls gate model ─────────
+
+  - criterion_id: AC-QGATE-07
+    name: "PROXY_MODEL_QUALITY_GATE env var controls the gate model; default is claude-haiku-4-5"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc03-QGATE-07, R-doc03-QGATE-16]
+    dependency_class: null
+    golden_path: false
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The gate model resolver"
+      when:  "PROXY_MODEL_QUALITY_GATE is unset, then set to a non-default model ID"
+      then:
+        - "When unset, the resolved model ID is claude-haiku-4-5"
+        - "When set to an alternate value (e.g. 'claude-sonnet-4-5'), the resolved model ID is that value"
+        - "The model ID is never a hard-coded literal in source"
+    primary_oracle:
+      type: unit_example
+      artifact: "Test with env var unset: assert resolved_model == 'claude-haiku-4-5'. Test with env var='claude-sonnet-4-5': assert resolved_model == 'claude-sonnet-4-5'. Grep source: assert 0 literal 'claude-haiku' strings outside the default-value declaration."
+    thresholds:
+      hardcoded_model_literals_outside_default_allowed: 0
+      default_model_id: "claude-haiku-4-5"
+    fault_model_refs: [F-QGATE-MODEL-HARDCODED]
+    test_ids: [T-QGATE-07]
+
+  - criterion_id: AC-QGATE-07-NEG
+    name: "NEG: gate model call is issued against the resolved model, not a fallback"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-QGATE-07]
+    dependency_class: vendor:anthropic
+    mock_boundary: "may mock the entailment API response via a vcrpy cassette at the call_external layer; MUST NOT replace the anthropic client with Mock()"
+    golden_path: false
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "PROXY_MODEL_QUALITY_GATE set to an alternate model ID (e.g. 'claude-haiku-4-5-20251014')"
+      when:  "The gate runs and issues the entailment call"
+      then:
+        - "The API call is issued with the model field equal to the configured alternate ID"
+        - "No call is silently downgraded to the default model ID"
+    primary_oracle:
+      type: simulation_trace
+      artifact: "Set PROXY_MODEL_QUALITY_GATE=claude-haiku-4-5-20251014; run gate; assert call_external captured request has model=='claude-haiku-4-5-20251014'."
+    thresholds:
+      model_downgrade_to_default_allowed: 0
+    fault_model_refs: [F-QGATE-MODEL-HARDCODED]
+    test_ids: [T-QGATE-07-NEG]
+
+  # ── AC-QGATE-08 / NEG: entailment output shape {grounded, reason} ────────────
+
+  - criterion_id: AC-QGATE-08
+    name: "Entailment response parsed to {grounded: bool, reason: str}; parse failure → grounded=false"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc03-QGATE-08]
+    dependency_class: null
+    golden_path: false
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The gate response parser"
+      when:  "Various response shapes are fed to the parser: valid grounded=true, valid grounded=false, unparseable"
+      then:
+        - "A well-formed grounded=true response parses to {grounded: True, reason: <non-empty str>}"
+        - "A well-formed grounded=false response parses to {grounded: False, reason: <non-empty str>}"
+        - "An unparseable response (malformed JSON, missing fields) yields {grounded: False, reason: '<parse-failure message>'} — never grounded=true"
+    primary_oracle:
+      type: unit_example
+      artifact: "Feed 3 fixtures to parser: assert correct grounded bool in each case; assert parse-failure case is grounded=False with a non-empty reason string."
+    thresholds:
+      parse_failure_treated_as_grounded_true_allowed: 0
+    fault_model_refs: [F-QGATE-BAD-RESPONSE-SHAPE]
+    test_ids: [T-QGATE-08]
+
+  - criterion_id: AC-QGATE-08-NEG
+    name: "NEG: a grounded=true response does not trigger escalation"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-QGATE-08, R-doc03-QGATE-10]
+    dependency_class: vendor:anthropic
+    mock_boundary: "may mock the entailment API response via a vcrpy cassette at the call_external layer; MUST NOT replace the anthropic client with Mock()"
+    golden_path: false
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "A gate entailment call that returns grounded=true (cassette-mocked)"
+      when:  "The gate processes the response"
+      then:
+        - "No Sonnet escalation call is issued"
+        - "No quality-gate-miss record is written to the transcript plane"
+        - "The original entry stands as-is"
+    primary_oracle:
+      type: simulation_trace
+      artifact: "Mock gate response to grounded=true; assert 0 Sonnet calls issued; assert 0 quality-gate-miss records written."
+    thresholds:
+      sonnet_escalations_on_grounded_true: 0
+      miss_records_on_grounded_true: 0
+    fault_model_refs: [F-QGATE-BAD-RESPONSE-SHAPE]
+    test_ids: [T-QGATE-08-NEG]
+
+  # ── AC-QGATE-09 / NEG: on miss, Sonnet re-extraction is issued ──────────────
+
+  - criterion_id: AC-QGATE-09
+    name: "On grounded=false, Sonnet-class re-extraction is issued over the same window"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-QGATE-10]
+    dependency_class: vendor:anthropic
+    mock_boundary: "may mock the entailment API response via a vcrpy cassette at the call_external layer; MUST NOT replace the anthropic client with Mock()"
+    golden_path: false
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "A gate entailment call that returns grounded=false (cassette-mocked), and a Sonnet-class model configured via PROXY_MODEL_SCRIBE"
+      when:  "The gate handles the miss"
+      then:
+        - "Exactly one Sonnet-class extraction call is issued"
+        - "The Sonnet call uses the same transcript window text that the Haiku Scribe used"
+        - "The Sonnet call model ID matches the Sonnet-class tier configured in PROXY_MODEL_SCRIBE"
+    primary_oracle:
+      type: simulation_trace
+      artifact: "Mock gate response to grounded=false; capture all outbound call_external calls; assert exactly one Sonnet-class extraction call with window_text==original_window_text."
+    thresholds:
+      sonnet_escalation_calls_on_miss: 1
+      escalation_calls_with_wrong_window_allowed: 0
+    fault_model_refs: [F-QGATE-NO-ESCALATION]
+    test_ids: [T-QGATE-09]
+
+  - criterion_id: AC-QGATE-09-NEG
+    name: "NEG: Sonnet escalation call is NOT issued when grounded=true"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-QGATE-10, R-doc03-QGATE-08]
+    dependency_class: vendor:anthropic
+    mock_boundary: "may mock the entailment API response via a vcrpy cassette at the call_external layer; MUST NOT replace the anthropic client with Mock()"
+    golden_path: false
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "A gate entailment call that returns grounded=true (cassette-mocked)"
+      when:  "The gate handles the response"
+      then:
+        - "Zero Sonnet-class extraction calls are issued"
+    primary_oracle:
+      type: simulation_trace
+      artifact: "Mock gate response to grounded=true; assert 0 Sonnet-tier API calls in the captured call_external log."
+    thresholds:
+      sonnet_calls_on_grounded_true: 0
+    fault_model_refs: [F-QGATE-NO-ESCALATION]
+    test_ids: [T-QGATE-09-NEG]
+
+  # ── AC-QGATE-10 / NEG: Sonnet correction via normal applier path ─────────────
+
+  - criterion_id: AC-QGATE-10
+    name: "Sonnet correction applied as PatchOp via normal applier, attributed to gate, original superseded-not-erased"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-QGATE-11]
+    dependency_class: vendor:anthropic
+    mock_boundary: "may mock the entailment API response via a vcrpy cassette at the call_external layer; MUST NOT replace the anthropic client with Mock()"
+    golden_path: false
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "A miss that triggers Sonnet re-extraction producing a correction (cassette-mocked for both calls)"
+      when:  "The gate applies the Sonnet correction"
+      then:
+        - "The correction is applied as a PatchOp through the normal applier path (same code path used by the Scribe)"
+        - "The patch is attributed to the quality gate (author/source field identifies the gate, not the Scribe)"
+        - "The original Haiku-authored entry remains in the notes object with a superseded marker; it is NOT deleted"
+    primary_oracle:
+      type: simulation_trace
+      artifact: "Trace applier calls: assert correction uses PatchOp (not a direct write); assert patch.attributed_to == 'quality_gate'; assert original entry has superseded=true and body preserved."
+    thresholds:
+      corrections_bypassing_applier_allowed: 0
+      corrections_with_wrong_attribution_allowed: 0
+      original_entries_erased_on_correction: 0
+    fault_model_refs: [F-QGATE-BYPASS-APPLIER]
+    test_ids: [T-QGATE-10]
+
+  - criterion_id: AC-QGATE-10-NEG
+    name: "NEG: if Sonnet re-extraction returns no extractable entry, no patch is applied"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-QGATE-11]
+    dependency_class: vendor:anthropic
+    mock_boundary: "may mock the entailment API response via a vcrpy cassette at the call_external layer; MUST NOT replace the anthropic client with Mock()"
+    golden_path: false
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "A miss where Sonnet re-extraction returns an empty or null correction (cassette-mocked)"
+      when:  "The gate processes the empty Sonnet result"
+      then:
+        - "No PatchOp is applied to the notes object"
+        - "The original entry remains as-is (neither patched nor erased)"
+        - "The miss is still logged as a quality-gate-miss with a note that Sonnet produced no correction"
+    primary_oracle:
+      type: simulation_trace
+      artifact: "Mock Sonnet result to empty/null; assert 0 PatchOp calls; assert original entry unchanged; assert 1 quality-gate-miss record with reason indicating no Sonnet correction."
+    thresholds:
+      patch_ops_on_empty_sonnet_result_allowed: 0
+      miss_records_on_empty_sonnet_result: 1
+    fault_model_refs: [F-QGATE-BYPASS-APPLIER]
+    test_ids: [T-QGATE-10-NEG]
+
+  # ── AC-QGATE-11 / NEG: miss logged once with all required fields ─────────────
+
+  - criterion_id: AC-QGATE-11
+    name: "Miss logged exactly once to transcript plane with window span, Haiku entry, Sonnet correction"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-QGATE-12, R-doc03-QGATE-14]
+    dependency_class: vendor:anthropic
+    mock_boundary: "may mock the entailment API response via a vcrpy cassette at the call_external layer; MUST NOT replace the anthropic client with Mock()"
+    golden_path: false
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "A single miss event (cassette-mocked gate response grounded=false, Sonnet correction provided)"
+      when:  "The gate processes the miss end-to-end"
+      then:
+        - "Exactly one quality-gate-miss record is written to the transcript plane"
+        - "The record contains: window_span (start_ts, end_ts), haiku_entry (original text), sonnet_correction (corrected text)"
+        - "The record is not duplicated even if the same pipeline event fires twice"
+    primary_oracle:
+      type: simulation_trace
+      artifact: "End-to-end miss trace; assert count(quality-gate-miss records) == 1; assert each record has {window_span, haiku_entry, sonnet_correction} fields with non-null values."
+    thresholds:
+      miss_records_per_miss_event: 1
+      miss_records_missing_required_fields_allowed: 0
+    fault_model_refs: [F-QGATE-MISS-SILENT, F-QGATE-MISS-DUPLICATE, F-QGATE-MISS-INCOMPLETE]
+    test_ids: [T-QGATE-11]
+
+  - criterion_id: AC-QGATE-11-NEG
+    name: "NEG: miss logged even when Sonnet correction also fails (e.g. Sonnet returns null)"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-QGATE-12, R-doc03-QGATE-14]
+    dependency_class: vendor:anthropic
+    mock_boundary: "may mock the entailment API response via a vcrpy cassette at the call_external layer; MUST NOT replace the anthropic client with Mock()"
+    golden_path: false
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "A miss event where the Sonnet re-extraction also fails to produce a correction (cassette-mocked)"
+      when:  "The gate processes the double-failure"
+      then:
+        - "Exactly one quality-gate-miss record is written to the transcript plane (the miss is not suppressed because the escalation failed)"
+        - "The sonnet_correction field in the record indicates the escalation failure (e.g. null or failure-reason string), not omitted"
+    primary_oracle:
+      type: simulation_trace
+      artifact: "Mock gate grounded=false, Sonnet result=null; assert 1 quality-gate-miss record with sonnet_correction field present (even if null/failure)."
+    thresholds:
+      miss_records_on_double_failure: 1
+      miss_records_silently_suppressed_on_escalation_failure_allowed: 0
+    fault_model_refs: [F-QGATE-MISS-SILENT]
+    test_ids: [T-QGATE-11-NEG]
+
+  # ── AC-QGATE-12: miss-rate is the cascade-health telemetry signal ────────────
+
+  - criterion_id: AC-QGATE-12
+    name: "Miss-rate is computable from transcript-plane quality-gate-miss records (cascade-health telemetry)"
+    evidence_class: "[simulation]"
+    authority_refs: [R-doc03-QGATE-13]
+    dependency_class: null
+    golden_path: false
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "A meeting session with N sampled entailment calls and M recorded quality-gate-miss events on the transcript plane"
+      when:  "The miss-rate metric is derived from the transcript plane"
+      then:
+        - "miss_rate == M / N (computable from transcript-plane records alone, no external aggregator required)"
+        - "A rising M/N over time is surfaced as the cascade-health signal indicating Haiku seat under-service"
+        - "The telemetry is queryable without joining to any other event stream"
+    primary_oracle:
+      type: simulation_trace
+      artifact: "Inject 100 gate events with 10 mocked misses; assert 10 quality-gate-miss records on transcript plane; assert miss_rate derivable as 10/100 from those records."
+    thresholds:
+      miss_rate_computable_from_transcript_plane: true
+      miss_records_required_for_telemetry: 10
+      gate_events_in_session: 100
+    fault_model_refs: [F-QGATE-MISS-SILENT]
+    test_ids: [T-QGATE-12]
+
+  # ── AC-QGATE-13: all pinned defaults correct ─────────────────────────────────
+
+  - criterion_id: AC-QGATE-13
+    name: "All four pinned defaults match spec: rate=0.1, always-check set, gate model, escalation tier"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc03-QGATE-16]
+    dependency_class: null
+    golden_path: false
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "A fresh gate config object with no env vars set"
+      when:  "Each pinned default is read from the config"
+      then:
+        - "QUALITY_GATE_SAMPLE_RATE default == 0.1"
+        - "Always-check entry types == {decision.status=final, reversibility=irreversible, has-contradicts-link} (exactly these three, no more, no fewer)"
+        - "PROXY_MODEL_QUALITY_GATE default == 'claude-haiku-4-5'"
+        - "Escalation tier default is Sonnet-class (as identified by PROXY_MODEL_SCRIBE configured to Sonnet)"
+    primary_oracle:
+      type: unit_example
+      artifact: "Read each default from a fresh unset-env config; assert each matches spec value exactly."
+    thresholds:
+      default_sample_rate: 0.1
+      always_check_type_count: 3
+      default_gate_model: "claude-haiku-4-5"
+      escalation_tier: "sonnet-class"
+      pinned_defaults_wrong_allowed: 0
+    fault_model_refs: [F-QGATE-DEFAULT-WRONG]
+    test_ids: [T-QGATE-13]
+
+  # ── AC-QGATE-14: gate does not double-cost by blocking the applier ───────────
+
+  - criterion_id: AC-QGATE-14
+    name: "Gate does not add latency to the applier — delta apply time is unaffected by gate scheduling"
+    evidence_class: "[latency]"
+    authority_refs: [R-doc03-QGATE-04, R-doc03-QGATE-05, R-doc03-QGATE-15]
+    dependency_class: null
+    golden_path: false
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The pipeline with the quality gate enabled vs disabled"
+      when:  "Applier commit latency is measured for 100 deltas in both configurations"
+      then:
+        - "Median applier commit latency with gate enabled is within ±10% of median with gate disabled"
+        - "The gate adds no synchronous latency on the applier hot path (async scheduling confirmed)"
+    primary_oracle:
+      type: latency_measurement
+      artifact: "Time applier.commit() over 100 deltas with gate on vs off; assert median ratio (on/off) in [0.90, 1.10]; assert p99 with gate on does not exceed p99 without gate by >10%."
+    thresholds:
+      applier_latency_ratio_max: 1.10
+      applier_latency_ratio_min: 0.90
+    fault_model_refs: [F-QGATE-BLOCKS-HOT-PATH]
+    test_ids: [T-QGATE-14]

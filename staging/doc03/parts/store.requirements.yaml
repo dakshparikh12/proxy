@@ -1,0 +1,342 @@
+# store.requirements.yaml — Doc 03 (Notes / Scribe) — §3.3 The notes object (dual storage plane)
+# Atomic EARS requirements. Each carries source_location + verbatim source_quote + criticality.
+# ID scheme: R-doc03-STORE-NN
+# Authority document: DOC-03
+
+# ── Plane 1: Live append plane — Postgres schema ──────────────────────────────
+
+- requirement_id: R-doc03-STORE-01
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3, SQL schema, transcript_segments table, status column"
+  source_quote: >
+    status text NOT NULL DEFAULT 'pending',  -- 'pending' | 'comprehended' | 'gap'
+  normalized_statement: >
+    THE SYSTEM SHALL create the transcript_segments table with a status column of
+    type text NOT NULL whose DEFAULT is 'pending'; valid values for status are exactly
+    'pending', 'comprehended', and 'gap'; newly inserted rows SHALL carry status='pending'
+    unless explicitly overridden.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-STORE-02
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3, SQL schema, note_deltas table, UNIQUE INDEX"
+  source_quote: >
+    CREATE UNIQUE INDEX ON note_deltas (meeting_id, window_start_s, entry_id, op);  -- ON CONFLICT DO NOTHING
+  normalized_statement: >
+    THE SYSTEM SHALL enforce a UNIQUE INDEX on note_deltas over the composite key
+    (meeting_id, window_start_s, entry_id, op); duplicate inserts on that key SHALL
+    be silently discarded via ON CONFLICT DO NOTHING, never raising an error.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-STORE-03
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3, SQL schema, both tables, meeting_id column"
+  source_quote: >
+    Both meeting_id columns are uuid.
+  normalized_statement: >
+    THE SYSTEM SHALL declare the meeting_id column as type uuid in BOTH
+    transcript_segments AND note_deltas; string or integer types for meeting_id
+    SHALL NOT be used in any application-layer table.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-STORE-04
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3, Plane 1 description, database access"
+  source_quote: >
+    asyncpg over the Cloud SQL Auth-Proxy Unix socket, a thin
+    NotesRepository/TranscriptRepository, no ORM.
+  normalized_statement: >
+    THE SYSTEM SHALL access Postgres exclusively via asyncpg over the Cloud SQL
+    Auth-Proxy Unix socket, through thin NotesRepository and TranscriptRepository
+    abstractions; no ORM (SQLAlchemy, Tortoise, or equivalent) SHALL be introduced
+    on the live plane; raw asyncpg is the only permitted database driver.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-STORE-05
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3, Plane 1 description, append-only"
+  source_quote: >
+    The transcript segments and note deltas are append-only rows.
+  normalized_statement: >
+    THE SYSTEM SHALL treat transcript_segments and note_deltas as append-only tables;
+    UPDATE or DELETE on either table's rows SHALL NOT occur during live meeting
+    processing (the sole mutation allowed on transcript_segments.status is the
+    'pending'→'comprehended'/'gap' flip inside the atomic transaction defined in §3.1).
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Plane 1: NOTES_CACHE left-fold ───────────────────────────────────────────
+
+- requirement_id: R-doc03-STORE-06
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3, NOTES_CACHE paragraph"
+  source_quote: >
+    The in-memory NOTES_CACHE[meeting_id] is the deterministic left-fold of
+    note_deltas in id order — single-writer per meeting.
+  normalized_statement: >
+    THE SYSTEM SHALL maintain NOTES_CACHE[meeting_id] as the deterministic left-fold
+    of all note_deltas for that meeting, replayed strictly in ascending id order;
+    the same sequence of deltas SHALL ALWAYS produce the same cache state (determinism
+    is a hard requirement, not a best-effort property).
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-STORE-07
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3, NOTES_CACHE paragraph"
+  source_quote: >
+    single-writer per meeting
+  normalized_statement: >
+    THE SYSTEM SHALL enforce a single-writer discipline per meeting for NOTES_CACHE:
+    at most one coroutine/task per meeting_id MAY apply deltas to that meeting's cache
+    at any given time; concurrent writers per meeting SHALL NOT be permitted.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-STORE-08
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3, NOTES_CACHE paragraph (load-bearing note)"
+  source_quote: >
+    This live plane is load-bearing beyond this doc: the Orchestrator's Tier-3 session
+    recovery rebuilds a stale/killed session's context by replaying this transcript +
+    note-delta plane.
+  normalized_statement: >
+    THE SYSTEM SHALL preserve the transcript and note_delta planes as the authoritative
+    replay source for Orchestrator Tier-3 session recovery; replaying transcript_segments
+    and note_deltas in id order SHALL reconstruct a stale or killed session's context
+    exactly; the live plane SHALL NOT be truncated, compacted, or altered in any way that
+    would prevent faithful replay.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Boot-time stale-row reaper ────────────────────────────────────────────────
+
+- requirement_id: R-doc03-STORE-09
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3, boot-time stale-row reaping paragraph, sentence 1"
+  source_quote: >
+    On boot, orphaned rows are healed.
+  normalized_statement: >
+    WHEN the service boots THE SYSTEM SHALL run a stale-row reaper that heals orphaned
+    rows left by previously interrupted meeting-harness processes.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-STORE-10
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3, boot-time stale-row reaping paragraph, sentences 2–3"
+  source_quote: >
+    The reaper must NOT key off meetings.last_heartbeat_at — that column does not
+    exist. The heartbeat is written to operation_runs.last_heartbeat_at.
+  normalized_statement: >
+    THE SYSTEM SHALL NOT use a meetings.last_heartbeat_at column in the boot reaper
+    because that column does not exist; the heartbeat is recorded in
+    operation_runs.last_heartbeat_at and that is the sole authoritative heartbeat
+    column for staleness determination.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-STORE-11
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3, boot-time stale-row reaping paragraph, sentence 4"
+  source_quote: >
+    The reaper reaps meetings via a JOIN to operation_runs on scope_id =
+    meeting_id::text: a meeting whose meeting-harness row is interrupted (already
+    reaped by mark_stale_operations_interrupted()) or running-but-stale → mark
+    the meeting interrupted.
+  normalized_statement: >
+    THE SYSTEM SHALL identify stale meetings in the boot reaper by JOINing the
+    meetings table to operation_runs on the condition scope_id = meeting_id::text;
+    a meeting SHALL be marked interrupted if its joined operation_runs row has status
+    'interrupted' OR if its operation_runs row has status 'running' but its
+    last_heartbeat_at is stale; the reaper SHALL NOT use any other join key or
+    staleness source.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Plane 2: GCS finalized notes artifact ─────────────────────────────────────
+
+- requirement_id: R-doc03-STORE-12
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3, Plane 2 description, sentence 1"
+  source_quote: >
+    the finalized notes artifact lives in GCS with native Object Versioning
+  normalized_statement: >
+    THE SYSTEM SHALL store finalized notes artifacts in GCS using a bucket with
+    native Object Versioning enabled at the bucket level; Object Versioning SHALL
+    NOT be optional or per-object.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-STORE-13
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3, write_finalized_notes, if_generation_match semantics"
+  source_quote: >
+    write_finalized_notes: if_generation_match: None = unconditional; 0 = create-only;
+    <gen> = require exact prior version.
+  normalized_statement: >
+    THE SYSTEM SHALL implement write_finalized_notes with if_generation_match semantics:
+    if_generation_match=None performs an unconditional write; if_generation_match=0
+    performs a create-only write (fails if the object already exists);
+    if_generation_match=<gen> requires the current object generation to equal <gen>
+    before the write proceeds; any other value is invalid.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-STORE-14
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3, write_finalized_notes, create-only close deliverable"
+  source_quote: >
+    0 = create-only
+  normalized_statement: >
+    WHEN writing the close deliverable (final finalized notes) THE SYSTEM SHALL use
+    if_generation_match=0 so the object can be created exactly once; a second attempt
+    to write the same close deliverable SHALL be blocked by the precondition check
+    and SHALL NOT silently overwrite the existing artifact.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-STORE-15
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3, write_finalized_notes, PreconditionFailed"
+  source_quote: >
+    On PreconditionFailed (HTTP 412): raise NotesGenerationConflictError.
+  normalized_statement: >
+    WHEN GCS returns HTTP 412 PreconditionFailed on a write_finalized_notes call
+    THE SYSTEM SHALL raise NotesGenerationConflictError; no other exception type
+    SHALL be raised for a 412; the error SHALL NOT be silently swallowed.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-STORE-16
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3, write_finalized_notes, generation type"
+  source_quote: >
+    Generations are uint64 — keep them as-read (str/int), never a rounded float.
+  normalized_statement: >
+    THE SYSTEM SHALL store and pass GCS object generation values as str or int
+    exactly as received from the GCS API; generation values SHALL NEVER be
+    converted to or stored as float (which would corrupt values above 2^53 due
+    to IEEE-754 rounding).
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-STORE-17
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3, list_notes_versions and read_notes_version"
+  source_quote: >
+    list_notes_versions: history — GCS keeps every prior generation.
+    read_notes_version: restore any prior version by generation.
+  normalized_statement: >
+    THE SYSTEM SHALL implement list_notes_versions to enumerate every prior generation
+    of the finalized notes object as kept by GCS Object Versioning; THE SYSTEM SHALL
+    implement read_notes_version to retrieve and restore any specific prior generation
+    by its generation number.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-STORE-18
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3, raw transcript persistence"
+  source_quote: >
+    The raw transcript persists on the Postgres plane as the append-only archive/backstore.
+  normalized_statement: >
+    THE SYSTEM SHALL retain all transcript_segments rows on the Postgres plane
+    throughout a meeting and after it ends, functioning as an append-only archive;
+    no row in transcript_segments SHALL be deleted during or after a meeting as part
+    of normal meeting lifecycle operations.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Image grounding via GCS + signed URL ─────────────────────────────────────
+
+- requirement_id: R-doc03-STORE-19
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3, Images ground on paragraph"
+  source_quote: >
+    Images ground on (screenshared slides): go to GCS and pass to Claude API by v4
+    signed URL (blob.generate_signed_url(version="v4", expiration=timedelta(minutes=10),
+    method="GET")) — never inline base64.
+  normalized_statement: >
+    WHEN a screenshared slide or image is captured THE SYSTEM SHALL upload it to GCS
+    and pass it to the Claude API as a v4 signed URL generated via
+    blob.generate_signed_url(version="v4", expiration=timedelta(minutes=10),
+    method="GET"); inline base64 encoding of images SHALL NEVER be used.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-STORE-20
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.3, Images ground on paragraph, signed URL parameters"
+  source_quote: >
+    blob.generate_signed_url(version="v4", expiration=timedelta(minutes=10), method="GET")
+  normalized_statement: >
+    THE SYSTEM SHALL generate image signed URLs with exactly version="v4",
+    expiration=timedelta(minutes=10), and method="GET"; no other version, expiration
+    duration, or HTTP method SHALL be used for image grounding signed URLs.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified

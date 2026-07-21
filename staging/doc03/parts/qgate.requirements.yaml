@@ -1,0 +1,263 @@
+# qgate.requirements.yaml — Doc 03 (Notes / Scribe) — §3.2.2 Sampled Online Quality Gate
+# Atomic EARS requirements.  Each carries source_location + verbatim source_quote + criticality.
+# ID scheme: R-doc03-QGATE-NN
+# Authority document: DOC-03 §3.2.2 (CANONICAL §10.7)
+#
+# Scope: the sampled, off-hot-path entailment check on Haiku Scribe outputs; always-check
+#   bias for high-stakes entries; Sonnet-class escalation on miss; miss logging; miss-rate
+#   telemetry; env-var configuration of gate model and escalation tier.
+# NOT in scope here: the cheap-first cascade itself (§3.2.1), the applier patch mechanics
+#   beyond attribution/supersede (§3.1/§3.6), the close pass (§3.4), or the schema
+#   derivation prompt (§3.2).
+
+# ── Sample rate and always-check bias ────────────────────────────────────────
+
+- requirement_id: R-doc03-QGATE-01
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.2, paragraph 2, sentence 1"
+  source_quote: "Cadence (tunable): sample [~1 in 10] applied deltas (QUALITY_GATE_SAMPLE_RATE)"
+  normalized_statement: >
+    THE SYSTEM SHALL read the sample rate for the quality gate from the
+    QUALITY_GATE_SAMPLE_RATE configuration value and SHALL apply that rate to applied
+    deltas; the default value SHALL be approximately 0.1 (1 in 10); the rate SHALL
+    NOT be hard-coded.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-QGATE-02
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.2, paragraph 2, sentence 1"
+  source_quote: "plus an always-check bias for the highest-stakes entries — a decision going final, an irreversible reversibility, or a contradicts link — since those are the notes most costly to get wrong."
+  normalized_statement: >
+    WHEN a Scribe-emitted entry has decision.status=final, OR has reversibility=irreversible,
+    OR carries a contradicts link THE SYSTEM SHALL subject that entry to the quality-gate
+    entailment check regardless of the sample-rate draw; the always-check rule SHALL NOT be
+    subject to sampling suppression for these three entry types.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-QGATE-03
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.2, paragraph 2, sentence 1"
+  source_quote: "sample [~1 in 10] applied deltas (QUALITY_GATE_SAMPLE_RATE)"
+  normalized_statement: >
+    WHEN a Scribe-emitted entry does NOT meet any always-check criterion THE SYSTEM SHALL
+    apply the QUALITY_GATE_SAMPLE_RATE probabilistic draw to decide whether to gate that
+    entry; entries that fail the draw SHALL be passed through without a gate call.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Off-hot-path execution ─────────────────────────────────────────────────────
+
+- requirement_id: R-doc03-QGATE-04
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.2, paragraph 2, sentences 2–3"
+  source_quote: "Sampling is OFF the hot path: the sampled delta has already been applied (live stays fast); the gate runs beside the loop and corrects/escalates rather than blocking."
+  normalized_statement: >
+    THE SYSTEM SHALL execute the quality-gate check only AFTER the sampled delta has been
+    applied to the notes object; the gate SHALL run beside the main pipeline loop and SHALL
+    NOT block or delay the application of any delta; the live pipeline SHALL remain fast
+    regardless of whether the gate is running.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-QGATE-05
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.2, paragraph 2, sentence 3"
+  source_quote: "the gate runs beside the loop and corrects/escalates rather than blocking."
+  normalized_statement: >
+    THE SYSTEM SHALL NOT gate, delay, or block the application of any Scribe delta while
+    the quality-gate entailment check is in progress; the gate's role is correction and
+    escalation after the fact, not a synchronous guard before apply.
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Entailment call — inputs and model ────────────────────────────────────────
+
+- requirement_id: R-doc03-QGATE-06
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.2, paragraph 3, sentence 1"
+  source_quote: "a single cheap Haiku entailment call (PROXY_MODEL_QUALITY_GATE, same cheap seat) that reads only the transcript window (the same fenced, untrusted block, §3.2) + the emitted entry text"
+  normalized_statement: >
+    WHEN the quality gate runs an entailment check THE SYSTEM SHALL issue exactly one
+    model call whose context contains only: (a) the same fenced transcript window that
+    produced the entry (per §3.2), and (b) the emitted entry text; the call SHALL NOT
+    include the full notes context, SHALL NOT re-derive the schema, and SHALL NOT include
+    any content beyond the window and the entry.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-QGATE-07
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.2, paragraph 3, sentence 1"
+  source_quote: "PROXY_MODEL_QUALITY_GATE, same cheap seat"
+  normalized_statement: >
+    THE SYSTEM SHALL read the gate model identifier from the PROXY_MODEL_QUALITY_GATE
+    environment variable; the default SHALL be claude-haiku-4-5; this value SHALL NOT
+    be hard-coded.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-QGATE-08
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.2, paragraph 3, sentence 2"
+  source_quote: "answers one question: does this note actually follow from what was said in this window? → {grounded: bool, reason: str}"
+  normalized_statement: >
+    THE SYSTEM SHALL formulate the entailment call to answer exactly one question — does
+    the emitted entry follow from what was said in the transcript window — and SHALL parse
+    the model response into a structured result with exactly two fields: grounded (boolean)
+    and reason (string); any response that cannot be parsed to this shape SHALL be treated
+    as grounded=false with a parsing-failure reason.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-QGATE-09
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.2, paragraph 3, sentence 2"
+  source_quote: "No schema re-derivation, no full-notes context — window-vs-note entailment only."
+  normalized_statement: >
+    THE SYSTEM SHALL NOT include schema-derivation instructions, the full notes object,
+    or any rolling-summary context in the quality-gate entailment call; the call is
+    window-vs-note entailment only.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Miss handling: escalation to Sonnet ───────────────────────────────────────
+
+- requirement_id: R-doc03-QGATE-10
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.2, paragraph 4, sentence 1"
+  source_quote: "On a miss (grounded=false): re-run that extraction on the next tier — Sonnet (PROXY_MODEL_SCRIBE → Sonnet-class), over the same window"
+  normalized_statement: >
+    WHEN the quality-gate entailment check returns grounded=false THE SYSTEM SHALL
+    re-run the extraction for that entry using the Sonnet-class model identified by the
+    PROXY_MODEL_SCRIBE configuration when set to Sonnet-class, over the same transcript
+    window that produced the original entry.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-QGATE-11
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.2, paragraph 4, sentence 1"
+  source_quote: "and replace the entry via the normal applier path (a patch, attributed to the gate, superseded-not-erased per §3.6)"
+  normalized_statement: >
+    WHEN the Sonnet-class re-extraction produces a correction THE SYSTEM SHALL apply
+    that correction via the normal applier path as a PatchOp attributed to the quality
+    gate; the original Haiku-authored entry SHALL be superseded-not-erased per §3.6;
+    the replacement SHALL NOT be applied by a special write path that bypasses the
+    applier.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Miss logging and telemetry ────────────────────────────────────────────────
+
+- requirement_id: R-doc03-QGATE-12
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.2, paragraph 4, sentence 2"
+  source_quote: "Log the miss to the transcript plane as a quality-gate-miss (window span, the Haiku entry, the Sonnet correction)"
+  normalized_statement: >
+    WHEN a quality-gate miss occurs THE SYSTEM SHALL log exactly one quality-gate-miss
+    record to the transcript plane; this record SHALL include: (a) the window span
+    (start/end timestamps), (b) the original Haiku-authored entry, and (c) the Sonnet
+    correction; the miss SHALL be logged even if the Sonnet correction also fails to
+    produce a grounded result.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-QGATE-13
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.2, paragraph 4, sentences 2–3"
+  source_quote: "this is the cascade-health telemetry: a rising miss-rate on the Haiku seat is the eval signal that the cheap seat is under-serving (and the concrete gate on the open-weight seat swap, §3.2)."
+  normalized_statement: >
+    THE SYSTEM SHALL accumulate quality-gate-miss records on the transcript plane as
+    cascade-health telemetry; the miss-rate derived from these records SHALL serve as the
+    primary eval signal indicating that the cheap Haiku seat is under-serving, and SHALL
+    be the concrete gate on any open-weight seat swap decision per §3.2.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-QGATE-14
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.2, paragraph 4, sentence 2"
+  source_quote: "Log the miss to the transcript plane as a quality-gate-miss"
+  normalized_statement: >
+    WHEN a quality-gate miss is logged THE SYSTEM SHALL log exactly one quality-gate-miss
+    record per miss event, regardless of whether the Sonnet escalation succeeds or fails;
+    a single miss event SHALL NOT produce zero records (silent miss) or more than one
+    record (duplicate log).
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Cost and defaults ─────────────────────────────────────────────────────────
+
+- requirement_id: R-doc03-QGATE-15
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.2, paragraph 5"
+  source_quote: "Cost: at a [1 in 10] sample the gate adds ≈10% of a Haiku-window call to the meeting; escalations are rarer still."
+  normalized_statement: >
+    THE SYSTEM SHALL design the quality-gate such that at the default 0.1 sample rate
+    the gate adds at most approximately 10% of one Haiku-window call's cost to the
+    meeting; escalation calls to Sonnet SHALL be rarer than the base gate checks, because
+    they are triggered only on misses.
+  requirement_type: performance
+  criticality: P2
+  testability: measurable
+  status: qualified
+
+- requirement_id: R-doc03-QGATE-16
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.2, paragraph 6"
+  source_quote: "Defaults to pin: QUALITY_GATE_SAMPLE_RATE [~0.1] · always-check [decision→final, irreversible, contradicts] · gate model [claude-haiku-4-5] · escalation tier [Sonnet-class]."
+  normalized_statement: >
+    THE SYSTEM SHALL ship with the following pinned defaults: QUALITY_GATE_SAMPLE_RATE=0.1,
+    always-check entries are decision.status=final / reversibility=irreversible / has-contradicts-link,
+    PROXY_MODEL_QUALITY_GATE=claude-haiku-4-5, and escalation tier is Sonnet-class; each
+    default SHALL be overridable via the named env var or config value without code change.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified

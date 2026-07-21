@@ -1,0 +1,284 @@
+# coal.requirements.yaml — Doc 03 (Notes / Scribe) — §3.1 Coalescer + Serial Pipeline
+# Atomic EARS requirements. Each carries source_location + verbatim source_quote + criticality.
+# ID scheme: R-doc03-COAL-NN
+# Authority document: DOC-03
+
+# ── Coalescing / window-cutting ───────────────────────────────────────────────
+
+- requirement_id: R-doc03-COAL-01
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.1, paragraph 1, sentence 1"
+  source_quote: "Raw transcript events are too granular to process word-by-word. The coalescer buffers the stream and cuts natural windows — a speaker turn or ~[30–60s], whichever comes first — using Doc 02's VAD/turn signals for boundaries."
+  normalized_statement: >
+    WHEN raw transcript events arrive THE SYSTEM SHALL buffer them in a coalescer
+    and cut windows at a speaker-turn boundary OR at a maximum of 60 seconds,
+    whichever occurs first, using VAD/turn signals from Doc 02 for boundary detection;
+    word-by-word processing SHALL NOT occur.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COAL-02
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.1, paragraph 1, sentence 2"
+  source_quote: "VAD-gating means silence costs nothing (no speech → no calls)."
+  normalized_statement: >
+    WHEN there is no speech in a window (silence only, VAD detects no activity)
+    THE SYSTEM SHALL NOT invoke any micro-call for that window; the coalescer
+    SHALL emit zero LLM calls during silence periods.
+  requirement_type: efficiency
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COAL-03
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.1, paragraph 1, sentence 3"
+  source_quote: "Long monologues chunk on pauses; rapid multi-speaker exchange chunks per turn so attribution stays clean."
+  normalized_statement: >
+    WHEN a single speaker holds the floor for a long period THE SYSTEM SHALL
+    chunk the monologue on detected pauses (sub-turn boundaries); WHEN rapid
+    multi-speaker exchange occurs THE SYSTEM SHALL cut one window per turn so
+    that attribution to a single speaker remains clean per window.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COAL-04
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.1, paragraph 1, sentence 4"
+  source_quote: "Each window carries its speakers, timestamps, and any chat messages from the same span (chat is part of the meeting record too)."
+  normalized_statement: >
+    WHEN a window is formed THE SYSTEM SHALL include in that window: (a) all
+    speaker identities who spoke during the span, (b) start and end timestamps,
+    and (c) any chat messages whose delivery timestamp falls within the same span;
+    chat messages are part of the meeting record and SHALL NOT be dropped from windows.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Input-window cap (latency guarantee) ─────────────────────────────────────
+
+- requirement_id: R-doc03-COAL-05
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.1, paragraph 2, sentences 1–2"
+  source_quote: "A window handed to the Scribe is hard-bounded to the last [45s] OR [~1,200 transcript tokens], whichever is smaller — never the whole backlog."
+  normalized_statement: >
+    WHEN a window is handed to the Scribe THE SYSTEM SHALL hard-bound the window
+    to a maximum of 45 seconds OR 1,200 transcript tokens, whichever bound is
+    reached first; the full backlog SHALL NEVER be passed as a single window.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COAL-06
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.1, paragraph 2, sentences 2–3"
+  source_quote: "This is the load-bearing latency guarantee: the uncached tail is small and near-constant, so per-call time stays flat regardless of how long or dense the meeting is (the prefix carries history via the rolling summary, §3.2; the tail carries only what's new)."
+  normalized_statement: >
+    THE SYSTEM SHALL ensure that per-call time remains flat regardless of meeting
+    duration or density, because the hard-bounded window cap keeps the uncached
+    tail small and near-constant; historical context is carried by the rolling
+    summary (§3.2), not by widening the window.
+  requirement_type: performance
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COAL-07
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.1, paragraph 2, sentence 4"
+  source_quote: "A window that would exceed the token cap is cut at the cap on a turn boundary and the remainder rolls to the next window — comprehension never widens the input to catch up."
+  normalized_statement: >
+    WHEN a window being formed would exceed 1,200 transcript tokens THE SYSTEM SHALL
+    cut it at the token cap on a turn boundary; the overflow content SHALL roll into
+    the next window; the system SHALL NEVER widen the current window beyond the cap
+    to catch up on comprehension.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Serial pipeline / ordering ────────────────────────────────────────────────
+
+- requirement_id: R-doc03-COAL-08
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.1, paragraph 3, sentences 1–2"
+  source_quote: "A serial stream — never fan-out (ordering is correctness). The Scribe processes windows strictly in order, one micro-call at a time per meeting."
+  normalized_statement: >
+    THE SYSTEM SHALL process windows for a single meeting strictly in serial order,
+    one micro-call at a time; parallel or concurrent window processing per meeting
+    SHALL NOT occur; ordering is a correctness requirement, not a performance choice.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COAL-09
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.1, paragraph 3, sentence 3"
+  source_quote: "We deliberately do not apply ~/platform's runWithConcurrency fan-out here — parallel windows would let a claim from T+40s land before its T+10s antecedent, corrupting contradicts links and firmness progression."
+  normalized_statement: >
+    THE SYSTEM SHALL NOT use runWithConcurrency or any equivalent fan-out mechanism
+    for per-meeting window processing; fan-out SHALL be rejected because parallel
+    windows can cause a claim from a later time (T+40s) to land before its antecedent
+    from an earlier time (T+10s), which would corrupt contradicts links and firmness
+    progression.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COAL-10
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.1, paragraph 3, sentences 4–5"
+  source_quote: "The real concurrency axis is many meetings per host, not many windows per meeting: bound total in-flight LLM calls per host so one busy meeting can't starve another, but each meeting's Scribe is a single serial consumer of its window queue."
+  normalized_statement: >
+    THE SYSTEM SHALL bound the total number of in-flight LLM calls per host so that
+    one busy meeting cannot starve other meetings; each meeting's Scribe SHALL be a
+    single serial consumer of its own window queue; concurrency SHALL be expressed
+    across meetings, never across windows within a single meeting.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Per-call timeout (skip, never retry) ─────────────────────────────────────
+
+- requirement_id: R-doc03-COAL-11
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.1, paragraph 4, sentence 1"
+  source_quote: "Each micro-call runs under a [~3.5s] deadline via an asyncio.wait_for (their raceWithTimeout rescaled from minutes to seconds)."
+  normalized_statement: >
+    WHEN a micro-call is issued to the Scribe THE SYSTEM SHALL enforce a deadline
+    of 3.5 seconds on the call using asyncio.wait_for (or equivalent raceWithTimeout
+    rescaled to seconds); calls SHALL NOT run unbounded.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COAL-12
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.1, paragraph 4, sentence 2"
+  source_quote: "On timeout — or on either typed error from §3.2.1 — we drop that window and move on; we do not retry it."
+  normalized_statement: >
+    WHEN a micro-call times out (exceeds 3.5s) OR raises either of the typed errors
+    defined in §3.2.1 THE SYSTEM SHALL drop that window and advance to the next window;
+    the dropped window SHALL NOT be retried.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COAL-13
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.1, paragraph 4, sentences 3–4"
+  source_quote: "A dropped note is fine (the raw transcript is preserved, the window's content usually recurs, and the close pass backfills from ground truth); a stalled meeting is not (the notes would fall seconds-then-minutes behind the room)."
+  normalized_statement: >
+    THE SYSTEM SHALL treat a stalled meeting (notes falling behind the room) as
+    unacceptable, and SHALL treat a dropped window (skipped note) as acceptable given
+    that: (a) the raw transcript is preserved, (b) the window's content usually recurs,
+    and (c) the close pass backfills from ground truth; the skip-not-retry policy
+    prevents the stalled-meeting failure mode.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COAL-14
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.1, paragraph 4, sentence 5"
+  source_quote: "The dropped span is recorded as a comprehension gap on the transcript plane (§3.3, §3.8), never silently missing."
+  normalized_statement: >
+    WHEN a window is dropped (timeout or typed error) THE SYSTEM SHALL record the
+    dropped span as an explicit comprehension gap on the transcript plane (per §3.3
+    and §3.8); a dropped span SHALL NEVER be silently absent from the record.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── The applier — patch in place (single writer) ─────────────────────────────
+
+- requirement_id: R-doc03-COAL-15
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.1, paragraph 5, sentences 1–2"
+  source_quote: "The Scribe emits a delta; the applier folds it into the one notes object. Single writer per meeting — deltas and correction patches (§3.6) apply serially, no write race — so add mints a new entry id and patch updates an existing entry by id, keeping the prior value superseded-not-erased."
+  normalized_statement: >
+    WHEN the Scribe emits a delta THE SYSTEM SHALL fold it into the one notes object
+    via a single-writer applier per meeting so that deltas and correction patches apply
+    serially with no write race; an add operation SHALL mint a new entry id; a patch
+    operation SHALL update an existing entry by id while keeping the prior value
+    superseded-not-erased.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COAL-16
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.1, paragraph 5, sentence 3"
+  source_quote: "Patch-in-place is why the object grows with content, not time: a fact stated fifty times is one entry patched (or ignored), not fifty rows."
+  normalized_statement: >
+    THE SYSTEM SHALL implement patch-in-place such that the notes object grows with
+    content, not with time; a fact stated repeatedly SHALL result in one entry that is
+    patched (or ignored if unchanged), not in duplicate rows per repetition; fifty
+    repetitions of the same fact SHALL produce at most one row.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Transactional coupling (replay-idempotency linchpin) ─────────────────────
+
+- requirement_id: R-doc03-COAL-17
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.1, paragraph 6 (CANONICAL §12.10), sentence 1"
+  source_quote: "The delta appends AND the flip of this window's transcript segments 'pending'→'comprehended' happen in ONE Postgres transaction."
+  normalized_statement: >
+    WHEN a delta is applied THE SYSTEM SHALL perform the delta append AND the flip of
+    the window's transcript segments from 'pending' to 'comprehended' status in ONE
+    Postgres transaction; the two operations SHALL NOT be split across separate
+    transactions.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-COAL-18
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.1, paragraph 6 (CANONICAL §12.10), sentence 2"
+  source_quote: "Either the notes advanced and the window is marked comprehended, or neither — so a crash mid-apply leaves the window 'pending' and a re-claimed harness (or the close pass) reprocesses it exactly once, never double-counts it."
+  normalized_statement: >
+    THE SYSTEM SHALL guarantee that after a crash mid-apply, exactly one of the
+    following states holds: (a) notes advanced AND window marked 'comprehended', or
+    (b) notes not advanced AND window still 'pending'; a re-claimed harness or the close
+    pass SHALL reprocess a 'pending' window exactly once; double-counting of any window
+    SHALL NOT occur.
+  requirement_type: correctness
+  criticality: P0
+  testability: executable
+  status: qualified

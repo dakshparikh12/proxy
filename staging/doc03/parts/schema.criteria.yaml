@@ -1,0 +1,767 @@
+# Acceptance Criteria — Doc 03 Note Extraction · SCHEMA section
+# Section: §3.2.1 Note extraction — schema-enforced structured output
+# (tool-forced, then Pydantic-revalidated)
+#
+# Authority refs resolve to R-doc03-SCHEMA-NN authored in schema.requirements.yaml.
+#
+# dependency_class governs verification_ladder and mock_boundary:
+#   null            → local Pydantic model; ladder: unit → property → integration
+#   vendor:anthropic → behavior rests on Claude API (stop_reason / tool_use presence);
+#                      ladder: mock → integration-stub → canary
+#
+# Every vendor:anthropic criterion is paired with a NEG criterion (suffix N).
+# golden_path: false for all — schema validation is infrastructure, not the
+#   golden product promise.
+#
+# Fault models referenced:
+#   F-SAID-AT-WALL-CLOCK       said_at_s populated with unix epoch / datetime
+#   F-CLAIM-VERIFIED-DEFAULT   Claim emitted with verified=True at creation
+#   F-REFERENTS-OVERFLOW       referents list exceeds 8 elements
+#   F-POSITIONS-OVERFLOW       positions list exceeds 12 elements
+#   F-OPS-OVERFLOW             ops list exceeds 40 elements
+#   F-TEXT-OVERFLOW-1000       text > 1000 chars on Claim/Decision/ActionItem/OpenQuestion
+#   F-TEXT-OVERFLOW-500        ContextLine text > 500 chars
+#   F-FREE-TEXT-PATH           model emits free text instead of tool_use block
+#   F-NO-BELT-SUSPENDERS       Pydantic re-validation skipped after extraction
+#   F-MAX-TOKENS-RETRY         ScribeMaxTokensError triggers a retry instead of skip
+#   F-NO-DELTA-RETRY           ScribeNoDeltaError triggers a retry instead of skip
+#   F-SCRIBE-EXECUTION-TOOL    execution tool registered alongside emit_notes_delta
+#   F-CONTRADICTS-DANGLING     contradicts points to a non-existent entry id
+#   F-SUPERSEDE-REASON-LONG    PatchOp.supersede_reason > 300 chars
+#   F-CURRENT-GOAL-LONG        current_goal > 200 chars
+#   F-OLD-VALUE-ERASED         PatchOp erases the old value instead of superseding it
+#   F-CONTEXTLINE-LIMIT-WRONG  ContextLine accepts 1000 chars instead of 500
+
+criteria:
+
+  # ── Enum validation: Firmness ──────────────────────────────────────────────
+
+  - criterion_id: AC-SCHEMA-01
+    name: "Firmness rejects any value outside {firm, hedged, speculative}"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc03-SCHEMA-01]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: null
+    verification_ladder: [unit, property, integration]
+    behavior:
+      given: "a Firmness field being populated"
+      when: "a value outside {firm, hedged, speculative} is supplied"
+      then:
+        - "Pydantic raises a validation error at instantiation time"
+        - "no object is returned from model_validate with an out-of-enum firmness"
+    primary_oracle:
+      type: unit_assertion
+      artifact: "assert Firmness('invalid') raises ValidationError; assert each of {firm,hedged,speculative} validates successfully"
+    thresholds: {out_of_enum_firmness_accepted: 0}
+    fault_model_refs: []
+    test_ids: [T-SCHEMA-01]
+
+  # ── Enum validation: Provenance ────────────────────────────────────────────
+
+  - criterion_id: AC-SCHEMA-02
+    name: "Provenance rejects any value outside {observed, inferred}"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc03-SCHEMA-02]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: null
+    verification_ladder: [unit, property, integration]
+    behavior:
+      given: "a Provenance field being populated"
+      when: "a value outside {observed, inferred} is supplied"
+      then:
+        - "Pydantic raises a validation error at instantiation time"
+        - "no object is returned from model_validate with an out-of-enum provenance"
+    primary_oracle:
+      type: unit_assertion
+      artifact: "assert Provenance('said') raises ValidationError; assert {observed,inferred} each validate"
+    thresholds: {out_of_enum_provenance_accepted: 0}
+    fault_model_refs: []
+    test_ids: [T-SCHEMA-02]
+
+  # ── Enum validation: Reversibility ────────────────────────────────────────
+
+  - criterion_id: AC-SCHEMA-03
+    name: "Reversibility rejects any value outside {easy-to-reverse, hard-to-reverse, irreversible}"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc03-SCHEMA-03]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: null
+    verification_ladder: [unit, property, integration]
+    behavior:
+      given: "a Reversibility field being populated"
+      when: "a value outside the three-member enum is supplied"
+      then:
+        - "Pydantic raises a validation error"
+        - "all three valid members are accepted"
+    primary_oracle:
+      type: unit_assertion
+      artifact: "assert Reversibility('uncertain') raises ValidationError; each of {easy-to-reverse,hard-to-reverse,irreversible} validates"
+    thresholds: {out_of_enum_reversibility_accepted: 0}
+    fault_model_refs: []
+    test_ids: [T-SCHEMA-03]
+
+  # ── Enum validation: DecisionStatus ───────────────────────────────────────
+
+  - criterion_id: AC-SCHEMA-04
+    name: "DecisionStatus rejects any value outside {forming, final}"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc03-SCHEMA-04]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: null
+    verification_ladder: [unit, property, integration]
+    behavior:
+      given: "a DecisionStatus field being populated"
+      when: "a value outside {forming, final} is supplied"
+      then:
+        - "Pydantic raises a validation error"
+        - "both {forming, final} are accepted"
+    primary_oracle:
+      type: unit_assertion
+      artifact: "assert DecisionStatus('pending') raises ValidationError; {forming,final} each validate"
+    thresholds: {out_of_enum_decisionstatus_accepted: 0}
+    fault_model_refs: []
+    test_ids: [T-SCHEMA-04]
+
+  # ── said_at_s: meeting-relative, NEVER wall-clock ─────────────────────────
+
+  - criterion_id: AC-SCHEMA-05
+    name: "said_at_s carries meeting-relative seconds; wall-clock values are detected as violations"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc03-SCHEMA-06]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: null
+    verification_ladder: [unit, property, integration]
+    behavior:
+      given: "a Claim being constructed with a said_at_s value"
+      when: "a unix epoch timestamp (e.g. 1_700_000_000.0) is supplied as said_at_s"
+      then:
+        - "the validator detects the value as a wall-clock violation (value exceeds the plausible meeting-duration upper bound)"
+        - "a ValidationError or equivalent typed error is raised"
+        - "a meeting-relative value (e.g. 47.3) is accepted without error"
+    primary_oracle:
+      type: unit_assertion
+      artifact: "assert Claim(said_at_s=1_700_000_000.0, ...) raises ValidationError; assert Claim(said_at_s=47.3, ...) succeeds"
+    thresholds: {wall_clock_values_accepted: 0}
+    fault_model_refs: [F-SAID-AT-WALL-CLOCK]
+    test_ids: [T-SCHEMA-05]
+
+  # ── verified=False default ────────────────────────────────────────────────
+
+  - criterion_id: AC-SCHEMA-06
+    name: "Claim.verified defaults to False on every new Claim"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc03-SCHEMA-07]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: null
+    verification_ladder: [unit, property, integration]
+    behavior:
+      given: "a new Claim constructed without explicitly setting verified"
+      when: "the Claim object is inspected"
+      then:
+        - "claim.verified == False"
+        - "no code path in the Scribe output pipeline sets verified=True at construction"
+    primary_oracle:
+      type: unit_assertion
+      artifact: "assert Claim(...).verified == False when verified not supplied; property: for all valid Claim inputs, verified defaults to False"
+    thresholds: {verified_true_at_construction_allowed: 0}
+    fault_model_refs: [F-CLAIM-VERIFIED-DEFAULT]
+    test_ids: [T-SCHEMA-06]
+
+  # ── referents max 8 ───────────────────────────────────────────────────────
+
+  - criterion_id: AC-SCHEMA-07
+    name: "Claim.referents rejects lists longer than 8 elements"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc03-SCHEMA-08]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: null
+    verification_ladder: [unit, property, integration]
+    behavior:
+      given: "a Claim being validated"
+      when: "referents is supplied as a list of 9 or more elements"
+      then:
+        - "Pydantic raises a ValidationError"
+        - "a list of exactly 8 elements is accepted"
+        - "an empty list and a list of 7 are also accepted"
+    primary_oracle:
+      type: unit_assertion
+      artifact: "assert Claim(referents=list(range(9)), ...) raises ValidationError; Claim(referents=list(range(8)), ...) succeeds"
+    thresholds: {referents_overflow_accepted: 0}
+    fault_model_refs: [F-REFERENTS-OVERFLOW]
+    test_ids: [T-SCHEMA-07]
+
+  # ── text max 1000 (Claim) ─────────────────────────────────────────────────
+
+  - criterion_id: AC-SCHEMA-08
+    name: "Claim.text rejects strings longer than 1000 characters"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc03-SCHEMA-09]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: null
+    verification_ladder: [unit, property, integration]
+    behavior:
+      given: "a Claim being validated"
+      when: "text is a string of 1001 or more characters"
+      then:
+        - "Pydantic raises a ValidationError"
+        - "a string of exactly 1000 characters is accepted"
+    primary_oracle:
+      type: unit_assertion
+      artifact: "assert Claim(text='x'*1001, ...) raises ValidationError; Claim(text='x'*1000, ...) succeeds"
+    thresholds: {text_overflow_1000_accepted: 0}
+    fault_model_refs: [F-TEXT-OVERFLOW-1000]
+    test_ids: [T-SCHEMA-08]
+
+  # ── text max 1000 (Decision, ActionItem, OpenQuestion) ─────────────────────
+
+  - criterion_id: AC-SCHEMA-09
+    name: "Decision, ActionItem, and OpenQuestion text fields each reject strings longer than 1000 characters"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc03-SCHEMA-10, R-doc03-SCHEMA-11, R-doc03-SCHEMA-12]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: null
+    verification_ladder: [unit, property, integration]
+    behavior:
+      given: "a Decision, ActionItem, or OpenQuestion being validated"
+      when: "text is a string of 1001 or more characters"
+      then:
+        - "Pydantic raises a ValidationError for each kind independently"
+        - "a string of exactly 1000 characters is accepted for each kind"
+    primary_oracle:
+      type: unit_assertion
+      artifact: "for kind in {Decision, ActionItem, OpenQuestion}: assert kind(text='x'*1001, ...) raises ValidationError; kind(text='x'*1000, ...) succeeds"
+    thresholds: {text_overflow_1000_accepted_per_kind: 0}
+    fault_model_refs: [F-TEXT-OVERFLOW-1000]
+    test_ids: [T-SCHEMA-09]
+
+  # ── positions max 12 ──────────────────────────────────────────────────────
+
+  - criterion_id: AC-SCHEMA-10
+    name: "OpenQuestion.positions rejects lists longer than 12 elements"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc03-SCHEMA-13]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: null
+    verification_ladder: [unit, property, integration]
+    behavior:
+      given: "an OpenQuestion being validated"
+      when: "positions is supplied as a list of 13 or more elements"
+      then:
+        - "Pydantic raises a ValidationError"
+        - "a list of exactly 12 elements is accepted"
+    primary_oracle:
+      type: unit_assertion
+      artifact: "assert OpenQuestion(positions=list(range(13)), ...) raises ValidationError; OpenQuestion(positions=list(range(12)), ...) succeeds"
+    thresholds: {positions_overflow_accepted: 0}
+    fault_model_refs: [F-POSITIONS-OVERFLOW]
+    test_ids: [T-SCHEMA-10]
+
+  # ── ContextLine text max 500 (lower limit than other kinds) ───────────────
+
+  - criterion_id: AC-SCHEMA-11
+    name: "ContextLine.text rejects strings longer than 500 characters — limit is 500, NOT 1000"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc03-SCHEMA-14]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: null
+    verification_ladder: [unit, property, integration]
+    behavior:
+      given: "a ContextLine being validated"
+      when: "text is a string of 501 or more characters"
+      then:
+        - "Pydantic raises a ValidationError"
+        - "a string of exactly 500 characters is accepted"
+        - "the validator uses 500 as the limit — a string of 501–1000 characters is rejected, not silently accepted"
+    primary_oracle:
+      type: unit_assertion
+      artifact: "assert ContextLine(text='x'*501) raises ValidationError; ContextLine(text='x'*500) succeeds; ContextLine(text='x'*1000) also raises ValidationError"
+    thresholds: {contextline_text_overflow_accepted: 0, contextline_limit_used_wrong: 0}
+    fault_model_refs: [F-TEXT-OVERFLOW-500, F-CONTEXTLINE-LIMIT-WRONG]
+    test_ids: [T-SCHEMA-11]
+
+  # ── ops max 40 ────────────────────────────────────────────────────────────
+
+  - criterion_id: AC-SCHEMA-12
+    name: "NoteDelta.ops rejects lists longer than 40 operations"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc03-SCHEMA-17]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: null
+    verification_ladder: [unit, property, integration]
+    behavior:
+      given: "a NoteDelta being validated"
+      when: "ops is supplied as a list of 41 or more operations"
+      then:
+        - "Pydantic raises a ValidationError"
+        - "a list of exactly 40 operations is accepted"
+    primary_oracle:
+      type: unit_assertion
+      artifact: "build 41 valid AddOps; assert NoteDelta(ops=ops_41) raises ValidationError; NoteDelta(ops=ops_40) succeeds"
+    thresholds: {ops_overflow_accepted: 0}
+    fault_model_refs: [F-OPS-OVERFLOW]
+    test_ids: [T-SCHEMA-12]
+
+  # ── current_goal max 200 ──────────────────────────────────────────────────
+
+  - criterion_id: AC-SCHEMA-13
+    name: "NoteDelta.current_goal rejects strings longer than 200 characters"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc03-SCHEMA-18]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: null
+    verification_ladder: [unit, property, integration]
+    behavior:
+      given: "a NoteDelta being validated with current_goal set"
+      when: "current_goal is a string of 201 or more characters"
+      then:
+        - "Pydantic raises a ValidationError"
+        - "a string of exactly 200 characters is accepted"
+        - "None / absent current_goal is also accepted"
+    primary_oracle:
+      type: unit_assertion
+      artifact: "assert NoteDelta(ops=[], current_goal='x'*201) raises ValidationError; NoteDelta(ops=[], current_goal='x'*200) succeeds; NoteDelta(ops=[], current_goal=None) succeeds"
+    thresholds: {current_goal_overflow_accepted: 0}
+    fault_model_refs: [F-CURRENT-GOAL-LONG]
+    test_ids: [T-SCHEMA-13]
+
+  # ── PatchOp.supersede_reason max 300 ──────────────────────────────────────
+
+  - criterion_id: AC-SCHEMA-14
+    name: "PatchOp.supersede_reason rejects strings longer than 300 characters; old value is retained superseded"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc03-SCHEMA-15]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: null
+    verification_ladder: [unit, property, integration]
+    behavior:
+      given: "a PatchOp being validated"
+      when: "supersede_reason is a string of 301 or more characters"
+      then:
+        - "Pydantic raises a ValidationError"
+        - "a string of exactly 300 characters is accepted"
+      given_alt: "a PatchOp is applied to an existing entry"
+      when_alt: "the changes dict replaces a field value"
+      then_alt:
+        - "the old value is retained in the record as superseded (not erased)"
+        - "the new value is set as the current value"
+    primary_oracle:
+      type: unit_assertion
+      artifact: "assert PatchOp(supersede_reason='x'*301, ...) raises ValidationError; PatchOp(supersede_reason='x'*300, ...) succeeds; apply_patch: assert old_value in entry.history and entry.current==new_value"
+    thresholds: {supersede_reason_overflow_accepted: 0, old_value_erased: 0}
+    fault_model_refs: [F-SUPERSEDE-REASON-LONG, F-OLD-VALUE-ERASED]
+    test_ids: [T-SCHEMA-14]
+
+  # ── Claim.contradicts referential integrity ────────────────────────────────
+
+  - criterion_id: AC-SCHEMA-15
+    name: "Claim.contradicts pointing to a non-existent entry id is flagged as a referential integrity violation"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc03-SCHEMA-19]
+    criticality: P1
+    blocking: true
+    golden_path: false
+    dependency_class: null
+    verification_ladder: [unit, property, integration]
+    behavior:
+      given: "a note store with known entry ids {A, B}"
+      when: "a Claim with contradicts='C' (no entry 'C' exists) is applied"
+      then:
+        - "the system flags a referential integrity violation for that contradicts value"
+        - "a Claim with contradicts='A' (entry 'A' exists) is accepted"
+        - "a Claim with contradicts=None is accepted"
+    primary_oracle:
+      type: state_machine_assertion
+      artifact: "apply AddOp(Claim(contradicts='C')) to store with ids {A,B}; assert referential_integrity_error raised; AddOp(Claim(contradicts='A')) succeeds"
+    thresholds: {dangling_contradicts_accepted: 0}
+    fault_model_refs: [F-CONTRADICTS-DANGLING]
+    test_ids: [T-SCHEMA-15]
+
+  # ── Tool-forcing: emit_notes_delta is the forced tool ─────────────────────
+  # [vendor:anthropic] — POS criterion
+
+  - criterion_id: AC-SCHEMA-16
+    name: "Scribe API call sets tool_choice to force emit_notes_delta — no free-text path"
+    evidence_class: "[mock]"
+    authority_refs: [R-doc03-SCHEMA-20]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: vendor:anthropic
+    verification_ladder: [mock, integration_stub, canary]
+    mock_boundary: "stub the Anthropic Messages API; assert the call arrives with tool_choice=={type:tool, name:emit_notes_delta}"
+    behavior:
+      given: "the Scribe call site with a mock Anthropic client capturing the request parameters"
+      when: "the Scribe is invoked for a meeting window"
+      then:
+        - "the mock records tool_choice == {\"type\": \"tool\", \"name\": \"emit_notes_delta\"}"
+        - "no request is issued with tool_choice absent, tool_choice=auto, or any tool name other than emit_notes_delta"
+    primary_oracle:
+      type: mock_assertion
+      artifact: "capture request params; assert request.tool_choice == {type:'tool', name:'emit_notes_delta'}; assert no request reaches client without this tool_choice"
+    thresholds: {requests_without_forced_tool_choice: 0, free_text_path_requests: 0}
+    fault_model_refs: [F-FREE-TEXT-PATH]
+    test_ids: [T-SCHEMA-16]
+
+  # NEG pair for AC-SCHEMA-16
+
+  - criterion_id: AC-SCHEMA-16N
+    name: "NEG: if tool_choice is absent or wrong, the forced-output invariant is violated (detected)"
+    evidence_class: "[mock]"
+    authority_refs: [R-doc03-SCHEMA-20]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: vendor:anthropic
+    verification_ladder: [mock, integration_stub, canary]
+    mock_boundary: "stub returns a response with stop_reason=end_turn and a text block (free-text path active)"
+    behavior:
+      given: "a test harness where tool_choice is deliberately omitted from the Scribe call"
+      when: "the stub returns a stop_reason=end_turn text response (the free-text path)"
+      then:
+        - "parse_scribe_result raises ScribeNoDeltaError (no tool_use block found)"
+        - "the free-text content is NOT parsed as a NoteDelta"
+        - "the window is skipped without data corruption"
+    primary_oracle:
+      type: mock_assertion
+      artifact: "stub returns {stop_reason:end_turn, content:[{type:text, text:'...'}]}; assert ScribeNoDeltaError raised; assert no NoteDelta produced"
+    thresholds: {free_text_accepted_as_delta: 0}
+    fault_model_refs: [F-FREE-TEXT-PATH, F-NO-BELT-SUSPENDERS]
+    test_ids: [T-SCHEMA-16N]
+
+  # ── Scribe has NO execution tools ─────────────────────────────────────────
+
+  - criterion_id: AC-SCHEMA-17
+    name: "Scribe tool registry contains only emit_notes_delta — no execution tools"
+    evidence_class: "[contract]"
+    authority_refs: [R-doc03-SCHEMA-21]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: null
+    verification_ladder: [unit, property, integration]
+    behavior:
+      given: "the list of tools registered for the Scribe API call"
+      when: "the tool list is inspected"
+      then:
+        - "exactly one tool is present: emit_notes_delta"
+        - "no web-fetch, code-execution, search, or any other capability-granting tool appears"
+    primary_oracle:
+      type: contract_schema
+      artifact: "assert len(scribe_tools) == 1 and scribe_tools[0].name == 'emit_notes_delta'; static scan finds no execution-tool registration for the Scribe"
+    thresholds: {execution_tools_registered_for_scribe: 0, tools_count_other_than_one: 0}
+    fault_model_refs: [F-SCRIBE-EXECUTION-TOOL]
+    test_ids: [T-SCHEMA-17]
+
+  # ── Belt-and-suspenders: Pydantic re-validate after extraction ────────────
+  # [vendor:anthropic] — POS criterion
+
+  - criterion_id: AC-SCHEMA-18
+    name: "parse_scribe_result extracts the tool_use block then re-validates with Pydantic"
+    evidence_class: "[mock]"
+    authority_refs: [R-doc03-SCHEMA-22]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: vendor:anthropic
+    verification_ladder: [mock, integration_stub, canary]
+    mock_boundary: "stub returns a well-formed tool_use block; assert NoteDelta.model_validate is called on block.input"
+    behavior:
+      given: "a stub API response containing a tool_use block named emit_notes_delta with valid block.input"
+      when: "parse_scribe_result processes the response"
+      then:
+        - "parse_scribe_result locates the tool_use block by name"
+        - "NoteDelta.model_validate(block.input) is called — the Pydantic re-validation step executes"
+        - "a valid NoteDelta is returned"
+    primary_oracle:
+      type: mock_assertion
+      artifact: "spy on NoteDelta.model_validate; assert called once with block.input; assert return type is NoteDelta"
+    thresholds: {pydantic_revalidation_skipped: 0}
+    fault_model_refs: [F-NO-BELT-SUSPENDERS]
+    test_ids: [T-SCHEMA-18]
+
+  # NEG pair for AC-SCHEMA-18: malformed block.input caught by Pydantic
+
+  - criterion_id: AC-SCHEMA-18N
+    name: "NEG: malformed tool_use block.input is caught by Pydantic re-validation, not silently accepted"
+    evidence_class: "[mock]"
+    authority_refs: [R-doc03-SCHEMA-22]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: vendor:anthropic
+    verification_ladder: [mock, integration_stub, canary]
+    mock_boundary: "stub returns a tool_use block whose block.input omits a required field (e.g. ops missing)"
+    behavior:
+      given: "a stub response with a tool_use block containing a structurally invalid block.input"
+      when: "parse_scribe_result calls NoteDelta.model_validate(block.input)"
+      then:
+        - "NoteDelta.model_validate raises a Pydantic ValidationError"
+        - "the malformed input is NOT silently coerced into a NoteDelta"
+        - "the error propagates as a typed error (not swallowed)"
+    primary_oracle:
+      type: mock_assertion
+      artifact: "stub tool_use with block.input={} (empty); assert NoteDelta.model_validate({}) raises ValidationError; assert no NoteDelta returned"
+    thresholds: {malformed_input_silently_accepted: 0}
+    fault_model_refs: [F-NO-BELT-SUSPENDERS]
+    test_ids: [T-SCHEMA-18N]
+
+  # ── ScribeMaxTokensError raised on stop_reason=max_tokens ────────────────
+  # [vendor:anthropic] — POS criterion
+
+  - criterion_id: AC-SCHEMA-19
+    name: "stop_reason=max_tokens raises ScribeMaxTokensError"
+    evidence_class: "[mock]"
+    authority_refs: [R-doc03-SCHEMA-23]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: vendor:anthropic
+    verification_ladder: [mock, integration_stub, canary]
+    mock_boundary: "stub Anthropic response with stop_reason='max_tokens'"
+    behavior:
+      given: "a stub API response with stop_reason == 'max_tokens'"
+      when: "parse_scribe_result is called with that response"
+      then:
+        - "ScribeMaxTokensError is raised before any attempt to extract a tool_use block"
+        - "no NoteDelta is produced"
+        - "no retry is initiated for this window"
+    primary_oracle:
+      type: mock_assertion
+      artifact: "stub {stop_reason:'max_tokens'}; call parse_scribe_result; assert ScribeMaxTokensError raised; assert retry_count == 0"
+    thresholds: {max_tokens_retry_count: 0, delta_produced_on_max_tokens: 0}
+    fault_model_refs: [F-MAX-TOKENS-RETRY]
+    test_ids: [T-SCHEMA-19]
+
+  # NEG pair for AC-SCHEMA-19: normal stop_reason does NOT raise ScribeMaxTokensError
+
+  - criterion_id: AC-SCHEMA-19N
+    name: "NEG: stop_reason=end_turn does NOT raise ScribeMaxTokensError"
+    evidence_class: "[mock]"
+    authority_refs: [R-doc03-SCHEMA-23]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: vendor:anthropic
+    verification_ladder: [mock, integration_stub, canary]
+    mock_boundary: "stub Anthropic response with stop_reason='end_turn' and a valid tool_use block"
+    behavior:
+      given: "a stub API response with stop_reason == 'end_turn' and a valid emit_notes_delta tool_use block"
+      when: "parse_scribe_result is called with that response"
+      then:
+        - "ScribeMaxTokensError is NOT raised"
+        - "processing continues to extract the tool_use block"
+        - "a valid NoteDelta is returned"
+    primary_oracle:
+      type: mock_assertion
+      artifact: "stub {stop_reason:'end_turn', tool_use_block: valid}; assert no ScribeMaxTokensError; assert isinstance(result, NoteDelta)"
+    thresholds: {false_max_tokens_errors: 0}
+    fault_model_refs: []
+    test_ids: [T-SCHEMA-19N]
+
+  # ── ScribeMaxTokensError is non-retryable ─────────────────────────────────
+  # [vendor:anthropic] — POS criterion
+
+  - criterion_id: AC-SCHEMA-20
+    name: "ScribeMaxTokensError causes the window to be skipped without retry"
+    evidence_class: "[mock]"
+    authority_refs: [R-doc03-SCHEMA-24]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: vendor:anthropic
+    verification_ladder: [mock, integration_stub, canary]
+    mock_boundary: "stub always returns stop_reason=max_tokens; count how many times the stub is called"
+    behavior:
+      given: "a Scribe pipeline stub that always returns stop_reason='max_tokens' for a given window"
+      when: "the pipeline processes that window"
+      then:
+        - "the stub is called exactly once (no retry for this window)"
+        - "the window is marked as dropped/skipped"
+        - "the pipeline advances to the next window without hanging or erroring fatally"
+    primary_oracle:
+      type: mock_assertion
+      artifact: "stub call_count; assert call_count == 1 after window processing; assert window logged as skipped"
+    thresholds: {max_tokens_retry_count: 0}
+    fault_model_refs: [F-MAX-TOKENS-RETRY]
+    test_ids: [T-SCHEMA-20]
+
+  # NEG pair for AC-SCHEMA-20: retry-on-MaxTokens would be detected
+
+  - criterion_id: AC-SCHEMA-20N
+    name: "NEG: if a retry is attempted after ScribeMaxTokensError the test harness detects it"
+    evidence_class: "[mock]"
+    authority_refs: [R-doc03-SCHEMA-24]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: vendor:anthropic
+    verification_ladder: [mock, integration_stub, canary]
+    mock_boundary: "stub always returns stop_reason=max_tokens; harness counts calls and asserts call_count > 1 is a failure"
+    behavior:
+      given: "a bug where the caller retries on ScribeMaxTokensError"
+      when: "the pipeline processes the window and a retry occurs"
+      then:
+        - "the stub records call_count > 1"
+        - "the test fails on assertion call_count == 1, proving the negative guard is active"
+    primary_oracle:
+      type: mock_assertion
+      artifact: "simulate a retrying caller; assert stub.call_count > 1 is the observable failure signal (the guard assertion fires)"
+    thresholds: {retry_detected_when_expected: 1}
+    fault_model_refs: [F-MAX-TOKENS-RETRY]
+    test_ids: [T-SCHEMA-20N]
+
+  # ── ScribeNoDeltaError raised when tool_use block is absent ───────────────
+  # [vendor:anthropic] — POS criterion
+
+  - criterion_id: AC-SCHEMA-21
+    name: "missing emit_notes_delta tool_use block raises ScribeNoDeltaError"
+    evidence_class: "[mock]"
+    authority_refs: [R-doc03-SCHEMA-25]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: vendor:anthropic
+    verification_ladder: [mock, integration_stub, canary]
+    mock_boundary: "stub returns stop_reason=end_turn with only text content blocks, no tool_use block"
+    behavior:
+      given: "a stub API response with stop_reason='end_turn' and no tool_use block of name emit_notes_delta in the content"
+      when: "parse_scribe_result is called"
+      then:
+        - "ScribeNoDeltaError is raised"
+        - "no NoteDelta is produced"
+        - "no retry is initiated for this window"
+    primary_oracle:
+      type: mock_assertion
+      artifact: "stub {stop_reason:'end_turn', content:[{type:'text', text:'some reply'}]}; assert ScribeNoDeltaError raised; assert retry_count==0"
+    thresholds: {no_delta_error_missed: 0, delta_produced_on_no_tool_use: 0}
+    fault_model_refs: [F-FREE-TEXT-PATH]
+    test_ids: [T-SCHEMA-21]
+
+  # NEG pair for AC-SCHEMA-21: a tool_use block present does NOT raise ScribeNoDeltaError
+
+  - criterion_id: AC-SCHEMA-21N
+    name: "NEG: a valid emit_notes_delta tool_use block does NOT raise ScribeNoDeltaError"
+    evidence_class: "[mock]"
+    authority_refs: [R-doc03-SCHEMA-25]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: vendor:anthropic
+    verification_ladder: [mock, integration_stub, canary]
+    mock_boundary: "stub returns a response containing a tool_use block named emit_notes_delta with valid block.input"
+    behavior:
+      given: "a stub response with a correctly named tool_use block"
+      when: "parse_scribe_result is called"
+      then:
+        - "ScribeNoDeltaError is NOT raised"
+        - "the tool_use block is extracted and model_validate is called"
+    primary_oracle:
+      type: mock_assertion
+      artifact: "stub valid tool_use; assert no ScribeNoDeltaError; assert NoteDelta returned"
+    thresholds: {false_no_delta_errors: 0}
+    fault_model_refs: []
+    test_ids: [T-SCHEMA-21N]
+
+  # ── ScribeNoDeltaError is non-retryable ───────────────────────────────────
+  # [vendor:anthropic] — POS criterion
+
+  - criterion_id: AC-SCHEMA-22
+    name: "ScribeNoDeltaError causes the window to be skipped without retry"
+    evidence_class: "[mock]"
+    authority_refs: [R-doc03-SCHEMA-26]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: vendor:anthropic
+    verification_ladder: [mock, integration_stub, canary]
+    mock_boundary: "stub always returns a text-only response (no tool_use); count stub calls"
+    behavior:
+      given: "a Scribe pipeline stub that always returns a text-only response (malformed turn)"
+      when: "the pipeline processes a window"
+      then:
+        - "the stub is called exactly once (no retry)"
+        - "the window is marked as dropped/skipped"
+        - "the pipeline advances to the next window"
+    primary_oracle:
+      type: mock_assertion
+      artifact: "stub call_count; assert call_count == 1 after window processing; assert window logged as skipped"
+    thresholds: {no_delta_retry_count: 0}
+    fault_model_refs: [F-NO-DELTA-RETRY]
+    test_ids: [T-SCHEMA-22]
+
+  # NEG pair for AC-SCHEMA-22: retry-on-NoDelta would be detected
+
+  - criterion_id: AC-SCHEMA-22N
+    name: "NEG: if a retry is attempted after ScribeNoDeltaError the test harness detects it"
+    evidence_class: "[mock]"
+    authority_refs: [R-doc03-SCHEMA-26]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: vendor:anthropic
+    verification_ladder: [mock, integration_stub, canary]
+    mock_boundary: "stub always returns text-only; harness counts calls and asserts call_count > 1 is the failure signal"
+    behavior:
+      given: "a bug where the caller retries on ScribeNoDeltaError"
+      when: "the pipeline processes the window and a retry occurs"
+      then:
+        - "the stub records call_count > 1"
+        - "the test fails on assertion call_count == 1, proving the guard is active"
+    primary_oracle:
+      type: mock_assertion
+      artifact: "simulate retrying caller; assert stub.call_count > 1 is the observable failure signal"
+    thresholds: {retry_detected_when_expected: 1}
+    fault_model_refs: [F-NO-DELTA-RETRY]
+    test_ids: [T-SCHEMA-22N]
+
+  # ── Decision.referents max 8 ──────────────────────────────────────────────
+
+  - criterion_id: AC-SCHEMA-23
+    name: "Decision.referents rejects lists longer than 8 elements"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc03-SCHEMA-10]
+    criticality: P0
+    blocking: true
+    golden_path: false
+    dependency_class: null
+    verification_ladder: [unit, property, integration]
+    behavior:
+      given: "a Decision being validated"
+      when: "referents is supplied as a list of 9 or more elements"
+      then:
+        - "Pydantic raises a ValidationError"
+        - "a list of exactly 8 elements is accepted"
+    primary_oracle:
+      type: unit_assertion
+      artifact: "assert Decision(referents=list(range(9)), ...) raises ValidationError; Decision(referents=list(range(8)), ...) succeeds"
+    thresholds: {decision_referents_overflow_accepted: 0}
+    fault_model_refs: [F-REFERENTS-OVERFLOW]
+    test_ids: [T-SCHEMA-23]

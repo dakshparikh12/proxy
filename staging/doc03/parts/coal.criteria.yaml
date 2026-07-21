@@ -1,0 +1,614 @@
+# coal.criteria.yaml — Doc 03 (Notes / Scribe) — §3.1 Coalescer + Serial Pipeline
+# Acceptance criteria for all COAL requirements.
+# ID scheme: AC-COAL-NN. authority_refs point at R-doc03-COAL-NN in coal.requirements.yaml.
+# dependency_class rules:
+#   null        → zero external systems
+#   db:postgres → Postgres touched
+# verification_ladder:
+#   always         lint, unit
+#   db:postgres    + integration
+#   golden_path    + e2e
+#   negative crit  + negative (instead of reality/e2e)
+# Every non-null dependency_class criterion has a paired AC-COAL-NN-NEG.
+
+# ── Coalescing / window-cutting ───────────────────────────────────────────────
+
+- criterion_id: AC-COAL-01
+  name: "Coalescer cuts window at speaker-turn OR 60s, whichever comes first"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COAL-01]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "A coalescer consuming a simulated transcript stream with VAD/turn signals from a Doc 02 fixture"
+    when:  "Windows are formed across a variety of turn lengths"
+    then:
+      - "Each window boundary falls at a speaker-turn boundary OR at 60s elapsed, whichever occurs first"
+      - "No window crosses a turn boundary mid-turn unless the 60s cap was the trigger"
+      - "No window exceeds 60s in duration"
+  primary_oracle: {type: simulation_trace, artifact: "drive fixture with turn/VAD events; assert every emitted window: boundary_type in {speaker_turn, time_cap_60s} AND duration_s <= 60"}
+  thresholds: {windows_exceeding_60s_allowed: 0, windows_crossing_turn_mid_turn_allowed: 0}
+  fault_model_refs: [F-WINDOW-EXCEEDS-60S, F-WINDOW-CUTS-MID-TURN]
+  test_ids: [T-COAL-01]
+
+- criterion_id: AC-COAL-02
+  name: "VAD-gating: silence produces zero micro-calls (negative/off-state)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COAL-02]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit, negative]
+  behavior:
+    given: "A coalescer consuming a transcript stream where VAD signals indicate silence for an extended span"
+    when:  "No speech is detected during the silence span"
+    then:
+      - "Zero micro-calls are issued during the silence span"
+      - "No window is emitted for a silence-only span"
+  primary_oracle: {type: simulation_trace, artifact: "inject silence-only VAD fixture; assert microcall_count==0 and windows_emitted==0 over the silent span"}
+  thresholds: {microcalls_during_silence_allowed: 0, windows_during_silence_allowed: 0}
+  fault_model_refs: [F-CALLS-DURING-SILENCE]
+  test_ids: [T-COAL-02]
+
+- criterion_id: AC-COAL-03
+  name: "Long monologue chunks on pauses; rapid exchange chunks per turn (attribution clean)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COAL-03]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: >
+      Two fixture types:
+      (A) a single long-speaker monologue with internal VAD pauses (no turn change),
+      (B) a rapid two-speaker exchange with alternating turns
+    when:  "Windows are formed from each fixture"
+    then:
+      - "Fixture A: windows are cut at detected pauses within the monologue (sub-turn chunks)"
+      - "Fixture B: each window contains content from exactly one speaker (attribution clean, per-turn boundary)"
+      - "Fixture B: no window mixes attributable content from two concurrent rapid-exchange speakers"
+  primary_oracle: {type: simulation_trace, artifact: "fixture A: assert each window.boundary_type==pause_within_turn; fixture B: assert each window.speaker_count==1"}
+  thresholds: {monologue_windows_missing_pause_boundary_allowed: 0, rapid_exchange_windows_with_mixed_speakers_allowed: 0}
+  fault_model_refs: [F-MONOLOGUE-NOT-CHUNKED-ON-PAUSE, F-ATTRIBUTION-MIXED-IN-WINDOW]
+  test_ids: [T-COAL-03]
+
+- criterion_id: AC-COAL-04
+  name: "Each window carries speakers, timestamps, and chat messages from the same span"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COAL-04]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "A coalescer fixture with speech from two speakers and a chat message whose timestamp falls within the window span"
+    when:  "The window is formed and emitted"
+    then:
+      - "The window payload carries: (a) all speaker identities who spoke, (b) start and end timestamps, (c) the chat message"
+      - "A chat message whose timestamp falls within the window span is never dropped from the window"
+  primary_oracle: {type: simulation_trace, artifact: "assert window.speakers != empty; assert window.start_ts and window.end_ts populated; assert window.chat_messages includes fixture chat message"}
+  thresholds: {windows_missing_speakers_allowed: 0, windows_missing_timestamps_allowed: 0, chat_messages_dropped_from_window_allowed: 0}
+  fault_model_refs: [F-WINDOW-MISSING-SPEAKERS, F-WINDOW-MISSING-TIMESTAMPS, F-CHAT-DROPPED-FROM-WINDOW]
+  test_ids: [T-COAL-04]
+
+# ── Input-window cap ──────────────────────────────────────────────────────────
+
+- criterion_id: AC-COAL-05
+  name: "Window hard-bounded to 45s OR 1,200 tokens, whichever is smaller — never the whole backlog"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COAL-05]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "A growing transcript backlog spanning well beyond 45s and 1,200 tokens"
+    when:  "A window is formed and handed to the Scribe"
+    then:
+      - "The window duration does not exceed 45 seconds"
+      - "The window token count does not exceed 1,200 transcript tokens"
+      - "The whole backlog is never passed as a single window"
+  primary_oracle: {type: simulation_trace, artifact: "assert every handed window: window.duration_s <= 45 AND window.token_count <= 1200 AND window.token_count < backlog_total_tokens"}
+  thresholds: {window_duration_s_max: 45, window_token_count_max: 1200, full_backlog_windows_allowed: 0}
+  fault_model_refs: [F-WINDOW-CAP-EXCEEDED, F-WHOLE-BACKLOG-PASSED]
+  test_ids: [T-COAL-05]
+
+- criterion_id: AC-COAL-05-NEG
+  name: "Window cap boundary: window at exactly 45s/1,200 tokens passes; one token/second over fails"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COAL-05]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit, negative]
+  behavior:
+    given: >
+      Three fixture windows:
+      (A) exactly 45s / exactly 1,200 tokens (at the cap),
+      (B) 45s + 1 second over,
+      (C) 1,200 + 1 token over
+    when:  "Each window is formed"
+    then:
+      - "Fixture A: window passes the cap check (accepted as-is)"
+      - "Fixture B: window is cut at the time cap; the 1-second excess rolls to the next window"
+      - "Fixture C: window is cut at the token cap on a turn boundary; the excess rolls to the next window"
+  primary_oracle: {type: simulation_trace, artifact: "fixture A: assert window formed without cut; fixture B: assert window.duration_s==45 AND remainder rolled; fixture C: assert window.token_count<=1200 AND remainder rolled"}
+  thresholds: {cap_not_enforced_at_boundary_allowed: 0, excess_dropped_not_rolled_allowed: 0}
+  fault_model_refs: [F-WINDOW-CAP-NOT-ENFORCED-AT-BOUNDARY, F-OVERFLOW-DROPPED-NOT-ROLLED]
+  test_ids: [T-COAL-05-NEG]
+
+- criterion_id: AC-COAL-06
+  name: "Per-call time stays flat over long/dense meetings (latency guarantee)"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc03-COAL-06]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "Simulated meetings of varying durations (30min, 60min, 90min) and varying density (sparse speech, dense speech)"
+    when:  "Windows are processed by the Scribe for each meeting"
+    then:
+      - "Per-call latency (window formation to Scribe call) is flat across all meeting durations — does not grow with meeting length"
+      - "Per-call latency is flat across speech density — a dense meeting does not cause latency to grow"
+      - "The p95 per-call time is within the SLO bound regardless of meeting duration or density"
+  primary_oracle: {type: latency_measurement_protocol, artifact: "compare per-call latency distribution at 30/60/90min mark; assert p95 stays flat (variance < threshold); assert no monotonic growth with meeting duration"}
+  thresholds: {per_call_p95_latency_s_max: 3.5, per_call_latency_growth_with_duration_allowed: false}
+  fault_model_refs: [F-LATENCY-GROWS-WITH-DURATION]
+  test_ids: [T-COAL-06]
+
+- criterion_id: AC-COAL-07
+  name: "Token-cap overflow cuts on turn boundary and rolls remainder to next window — never widens"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COAL-07]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "A transcript segment that would produce a window exceeding 1,200 tokens before a natural turn boundary"
+    when:  "The coalescer forms the window"
+    then:
+      - "The window is cut at the token cap, aligned to the nearest turn boundary at or before the cap"
+      - "Content beyond the cap rolls into the next window (not dropped)"
+      - "The system does not widen the current window past the cap to catch up on comprehension"
+  primary_oracle: {type: simulation_trace, artifact: "assert window.token_count <= 1200; assert cut_point is a turn_boundary; assert rolled_content appears as leading content of next window; assert window was never widened beyond cap"}
+  thresholds: {window_token_count_max: 1200, overflow_content_dropped_allowed: 0, windows_widened_past_cap_allowed: 0}
+  fault_model_refs: [F-OVERFLOW-DROPPED-NOT-ROLLED, F-WINDOW-WIDENED-TO-CATCH-UP]
+  test_ids: [T-COAL-07]
+
+# ── Serial pipeline ───────────────────────────────────────────────────────────
+
+- criterion_id: AC-COAL-08
+  name: "Windows processed strictly in order, one micro-call at a time per meeting (golden path)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COAL-08, R-doc03-COAL-09]
+  criticality: P0
+  blocking: true
+  golden_path: true
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit, e2e]
+  behavior:
+    given: "A simulated meeting with 10 sequential windows queued for the Scribe"
+    when:  "The pipeline processes all windows"
+    then:
+      - "Windows are processed in the exact order they were formed (window[N] completes before window[N+1] starts)"
+      - "At no point are two windows processing concurrently for the same meeting"
+      - "The sequence of applied deltas follows the window formation order exactly"
+  primary_oracle: {type: simulation_trace, artifact: "record (window_id, start_time, end_time) per call; assert max_concurrent_calls_per_meeting==1 and start_time[N+1]>end_time[N] for all N; assert delta_apply_order matches window_formation_order"}
+  thresholds: {concurrent_calls_per_meeting_max: 1, out_of_order_delta_applies_allowed: 0}
+  fault_model_refs: [F-CONCURRENT-WINDOWS-PER-MEETING, F-OUT-OF-ORDER-DELTA-APPLY]
+  test_ids: [T-COAL-08]
+
+- criterion_id: AC-COAL-08-NEG
+  name: "Fan-out (runWithConcurrency per-meeting) is explicitly absent from the pipeline"
+  evidence_class: "[static]"
+  authority_refs: [R-doc03-COAL-09]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit, negative]
+  behavior:
+    given: "The Scribe pipeline source code and any imported concurrency utilities"
+    when:  "A static analysis is performed for per-meeting fan-out patterns"
+    then:
+      - "No call to runWithConcurrency (or equivalent fan-out primitive) is made on the per-meeting window queue"
+      - "No asyncio.gather / task group / thread pool is applied across windows for the same meeting"
+  primary_oracle: {type: static, artifact: "grep/AST scan: zero runWithConcurrency / asyncio.gather / ThreadPoolExecutor calls on the per-meeting window queue; assert per-meeting concurrency == 1 structurally"}
+  thresholds: {fan_out_calls_on_per_meeting_queue_allowed: 0}
+  fault_model_refs: [F-FANOUT-APPLIED-PER-MEETING]
+  test_ids: [T-COAL-08-NEG]
+
+- criterion_id: AC-COAL-09
+  name: "Cross-meeting ordering preserved — out-of-order claim corruption is impossible"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COAL-09]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "Two windows for the same meeting: W1 at T+10s containing claim C1, W2 at T+40s containing claim C2 that contradicts C1"
+    when:  "Both windows are processed by the serial pipeline"
+    then:
+      - "C1 is applied before C2; C2 correctly reflects a contradiction/update to C1 (the later claim sees the earlier antecedent)"
+      - "No scenario exists where C2 lands before C1 and corrupts the contradicts link or firmness progression"
+  primary_oracle: {type: simulation_trace, artifact: "drive two-window fixture; assert notes.entry_order[C1] < notes.entry_order[C2]; assert C2.contradicts_link points to C1 (not dangling)"}
+  thresholds: {out_of_order_claim_applications_allowed: 0, dangling_contradicts_links_allowed: 0}
+  fault_model_refs: [F-CLAIM-ORDER-INVERSION, F-DANGLING-CONTRADICTS-LINK]
+  test_ids: [T-COAL-09]
+
+- criterion_id: AC-COAL-10
+  name: "Per-host in-flight LLM call bound prevents one meeting from starving others"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COAL-10]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "N meetings running concurrently on one host, where one meeting is generating windows at a high rate"
+    when:  "The busy meeting saturates its per-meeting serial queue"
+    then:
+      - "The total in-flight LLM calls per host stays within the configured bound"
+      - "Other meetings' windows are processed without starvation (all meetings make progress)"
+      - "The high-rate meeting's excess windows queue rather than pre-empting other meetings' slots"
+  primary_oracle: {type: simulation_trace, artifact: "assert max(inflight_llm_calls_per_host) <= host_bound; assert all_meetings_progressing==true (none blocked indefinitely); assert no meeting waited > starvation_threshold_ms for a slot"}
+  thresholds: {inflight_calls_per_host_max: "configured_bound", starvation_detected_allowed: 0}
+  fault_model_refs: [F-MEETING-STARVATION, F-HOST-BOUND-EXCEEDED]
+  test_ids: [T-COAL-10]
+
+# ── Per-call timeout ─────────────────────────────────────────────────────────
+
+- criterion_id: AC-COAL-11
+  name: "Each micro-call enforces a 3.5s asyncio.wait_for deadline"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COAL-11]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "A micro-call that is injected to stall for 3.5s + epsilon (simulated slow LLM response)"
+    when:  "The call runs under the asyncio.wait_for deadline"
+    then:
+      - "The call is cancelled at the deadline and does not run unbounded"
+      - "The cancellation fires within the deadline window (observed elapsed time <= 3.5s + scheduling_jitter)"
+  primary_oracle: {type: simulation_trace, artifact: "inject stalling mock; measure elapsed from call_start to cancellation; assert elapsed <= 3.5 + jitter_s; assert asyncio.TimeoutError (or equivalent) is the cancellation signal"}
+  thresholds: {timeout_deadline_s: 3.5, scheduling_jitter_s: 0.1, calls_exceeding_deadline_allowed: 0}
+  fault_model_refs: [F-CALL-RUNS-UNBOUNDED]
+  test_ids: [T-COAL-11]
+
+- criterion_id: AC-COAL-11-NEG
+  name: "Call that completes within 3.5s is NOT cancelled (boundary: on-time call must proceed)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COAL-11]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit, negative]
+  behavior:
+    given: "A micro-call that completes in 3.5s - epsilon (just within deadline)"
+    when:  "The call runs under the asyncio.wait_for deadline"
+    then:
+      - "The call completes normally and its result is accepted"
+      - "The on-time call is NOT cancelled or dropped by the timeout mechanism"
+  primary_oracle: {type: simulation_trace, artifact: "inject mock that returns at 3.5s - epsilon; assert result==accepted AND cancellation_fired==false"}
+  thresholds: {on_time_calls_cancelled_allowed: 0}
+  fault_model_refs: [F-ON-TIME-CALL-SPURIOUSLY-CANCELLED]
+  test_ids: [T-COAL-11-NEG]
+
+- criterion_id: AC-COAL-12
+  name: "Timeout or typed error: window dropped and pipeline advances (no retry)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COAL-12, R-doc03-COAL-13]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "A window whose micro-call times out after 3.5s, and a second window whose micro-call raises one of the typed errors from §3.2.1"
+    when:  "The pipeline processes each dropped window"
+    then:
+      - "The timed-out window is dropped and the pipeline immediately advances to the next window"
+      - "The typed-error window is dropped and the pipeline immediately advances to the next window"
+      - "Neither dropped window is retried (retry_count == 0 for both)"
+      - "The next window's processing begins without delay or state pollution from the dropped window"
+  primary_oracle: {type: simulation_trace, artifact: "inject timeout and typed-error windows; assert next_window_started==true; assert retry_count==0 for both dropped windows; assert pipeline_state is clean before next window"}
+  thresholds: {retries_on_timeout_allowed: 0, retries_on_typed_error_allowed: 0, next_window_blocked_after_drop_allowed: 0}
+  fault_model_refs: [F-WINDOW-RETRIED-ON-TIMEOUT, F-PIPELINE-STALLS-ON-DROP]
+  test_ids: [T-COAL-12]
+
+- criterion_id: AC-COAL-12-NEG
+  name: "A non-timeout, non-typed-error result is NOT dropped (positive boundary of the drop policy)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COAL-12]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit, negative]
+  behavior:
+    given: "A micro-call that succeeds within 3.5s and raises no typed error from §3.2.1"
+    when:  "The pipeline processes the result"
+    then:
+      - "The result is accepted and applied (not dropped)"
+      - "The drop policy does not trigger for a successful call"
+  primary_oracle: {type: simulation_trace, artifact: "inject successful mock; assert window dropped==false AND result applied==true"}
+  thresholds: {successful_windows_dropped_allowed: 0}
+  fault_model_refs: [F-SUCCESSFUL-WINDOW-INCORRECTLY-DROPPED]
+  test_ids: [T-COAL-12-NEG]
+
+- criterion_id: AC-COAL-13
+  name: "Stalled meeting (notes behind room) is prevented by skip-not-retry policy"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COAL-13]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "A sustained sequence of slow LLM responses (all near the 3.5s deadline) over a 5-minute meeting segment"
+    when:  "Every window's call hits the timeout and is dropped"
+    then:
+      - "The pipeline continues advancing (no queue backup grows unbounded)"
+      - "Notes lag does not compound across dropped windows (each drop skips, not retries)"
+      - "The meeting is not stalled: new incoming windows continue to be attempted"
+  primary_oracle: {type: simulation_trace, artifact: "inject sustained timeouts; assert queue_depth remains bounded; assert pipeline_advance_rate > 0; assert notes_lag_s stays < meeting_real_time (notes never permanently frozen)"}
+  thresholds: {queue_depth_unbounded_allowed: false, notes_permanently_frozen_allowed: false}
+  fault_model_refs: [F-SUSTAINED-TIMEOUTS-STALL-MEETING]
+  test_ids: [T-COAL-13]
+
+- criterion_id: AC-COAL-14
+  name: "Dropped window recorded as comprehension gap — never silently missing"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COAL-14]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: "Postgres stubbed via in-memory transcript_segments table for unit tier; real Postgres used for integration tier"
+  verification_ladder: [lint, unit, integration]
+  behavior:
+    given: "A window that is dropped due to timeout or typed error"
+    when:  "The drop is processed"
+    then:
+      - "The dropped span is recorded as an explicit comprehension gap entry on the transcript plane"
+      - "The gap entry carries the span's start and end timestamps and the drop reason"
+      - "No silently-absent hole exists in the transcript record for the dropped span"
+  primary_oracle: {type: state_machine_assertion, artifact: "after drop: assert transcript_segments row for the span has status==comprehension_gap with drop_reason populated; assert no unmarked hole in the time range"}
+  thresholds: {dropped_spans_silently_absent_allowed: 0, gap_entries_missing_timestamps_allowed: 0}
+  fault_model_refs: [F-DROP-SILENTLY-ABSENT]
+  test_ids: [T-COAL-14]
+
+- criterion_id: AC-COAL-14-NEG
+  name: "Gap entry is NOT written when the window succeeds (drop policy excludes successful windows)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COAL-14]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: "Postgres stubbed via in-memory transcript_segments table for unit tier; real Postgres used for integration tier"
+  verification_ladder: [lint, unit, integration, negative]
+  behavior:
+    given: "A window whose micro-call succeeds within 3.5s"
+    when:  "The successful delta is applied"
+    then:
+      - "No comprehension gap entry is created for the successful span"
+      - "The transcript record shows the span as 'comprehended', not 'comprehension_gap'"
+  primary_oracle: {type: state_machine_assertion, artifact: "after successful apply: assert transcript_segments row for span has status==comprehended and gap_entry_written==false"}
+  thresholds: {spurious_gap_entries_for_successful_windows_allowed: 0}
+  fault_model_refs: [F-SPURIOUS-GAP-ENTRY]
+  test_ids: [T-COAL-14-NEG]
+
+# ── Applier — patch-in-place, single writer ───────────────────────────────────
+
+- criterion_id: AC-COAL-15
+  name: "add mints new entry id; patch updates existing entry by id, keeping prior value superseded"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COAL-15]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: "Postgres stubbed via in-memory notes object for unit tier; real Postgres used for integration tier"
+  verification_ladder: [lint, unit, integration]
+  behavior:
+    given: "A notes object in the applier with one existing entry (entry id=E1) and two deltas: one add (new content) and one patch (update to E1)"
+    when:  "The applier processes both deltas"
+    then:
+      - "The add delta mints a new entry id (E2 != E1) and inserts a new entry"
+      - "The patch delta updates E1's content and sets the prior value as superseded-not-erased (prior value preserved in the record)"
+      - "No write race occurs: both operations complete serially; the notes object is internally consistent after each operation"
+  primary_oracle: {type: state_machine_assertion, artifact: "after add: assert entry_count increased by 1 and new_entry.id != any existing id; after patch: assert entry[E1].value == new_value AND entry[E1].prior_value == original_value (superseded not erased)"}
+  thresholds: {write_races_allowed: 0, prior_values_erased_not_superseded_allowed: 0, duplicate_entry_ids_allowed: 0}
+  fault_model_refs: [F-WRITE-RACE, F-PRIOR-VALUE-ERASED, F-DUPLICATE-ENTRY-ID]
+  test_ids: [T-COAL-15]
+
+- criterion_id: AC-COAL-15-NEG
+  name: "Concurrent applier writes for the same meeting are structurally impossible (single-writer enforced)"
+  evidence_class: "[static]"
+  authority_refs: [R-doc03-COAL-15]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: "Static analysis — no runtime execution required; Postgres schema constraint check in integration tier"
+  verification_ladder: [lint, unit, integration, negative]
+  behavior:
+    given: "The applier implementation and the per-meeting Scribe architecture"
+    when:  "A static analysis is performed for concurrent-write paths"
+    then:
+      - "There is no code path by which two concurrent delta or patch operations on the same meeting's notes object can interleave"
+      - "The single-writer invariant is structurally enforced (e.g., single asyncio task, single actor, or serialized queue — not a lock-per-write)"
+  primary_oracle: {type: static, artifact: "assert single writer path: one async task / one queue consumer per meeting handles all applier writes; grep finds no concurrent apply calls on the same meeting notes object"}
+  thresholds: {concurrent_write_paths_per_meeting_allowed: 0}
+  fault_model_refs: [F-CONCURRENT-APPLIER-WRITES]
+  test_ids: [T-COAL-15-NEG]
+
+- criterion_id: AC-COAL-16
+  name: "Fact stated N times produces one entry patched (or ignored), not N rows"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COAL-16]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: "Postgres stubbed via in-memory notes object for unit tier; real Postgres used for integration tier"
+  verification_ladder: [lint, unit, integration]
+  behavior:
+    given: "A fixture where the same factual claim is stated in 50 successive windows (simulating a repeated fact across the meeting)"
+    when:  "All 50 deltas are applied by the applier"
+    then:
+      - "The notes object contains exactly 1 entry for that fact (the last-stated value), not 50 rows"
+      - "Intermediate values are either superseded (patched) or ignored if identical to the current value"
+      - "Row count for the fact in the notes object == 1 after all 50 applies"
+  primary_oracle: {type: state_machine_assertion, artifact: "run 50-repetition fixture; assert notes.entries_for_fact_X == 1; assert no duplicate fact rows in notes object"}
+  thresholds: {duplicate_fact_rows_max: 1, fact_rows_per_repetition_max: 1}
+  fault_model_refs: [F-DUPLICATE-FACT-ROWS]
+  test_ids: [T-COAL-16]
+
+- criterion_id: AC-COAL-16-NEG
+  name: "Two distinct facts produce two distinct entries (patch-in-place does not collapse different facts)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COAL-16]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: "Postgres stubbed via in-memory notes object for unit tier; real Postgres used for integration tier"
+  verification_ladder: [lint, unit, integration, negative]
+  behavior:
+    given: "Two distinct factual claims (F1 and F2) each stated once in successive windows"
+    when:  "Both deltas are applied"
+    then:
+      - "The notes object contains exactly 2 entries, one for F1 and one for F2"
+      - "Patch-in-place does not collapse the two distinct facts into one entry"
+  primary_oracle: {type: state_machine_assertion, artifact: "assert notes.entries_for_fact_F1 == 1 AND notes.entries_for_fact_F2 == 1 AND total_entries == 2"}
+  thresholds: {distinct_facts_collapsed_to_single_entry_allowed: 0}
+  fault_model_refs: [F-DISTINCT-FACTS-COLLAPSED]
+  test_ids: [T-COAL-16-NEG]
+
+# ── Transactional coupling ────────────────────────────────────────────────────
+
+- criterion_id: AC-COAL-17
+  name: "Delta append AND pending→comprehended flip occur in ONE Postgres transaction (atomicity)"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-COAL-17]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: "Real Postgres required for integration tier; unit tier stubs the transaction boundary with an in-memory two-phase commit mock"
+  verification_ladder: [lint, unit, integration]
+  behavior:
+    given: "A window being applied with both a delta to append and a transcript_segments status to flip from pending to comprehended"
+    when:  "The apply runs against Postgres"
+    then:
+      - "Both the delta insert and the transcript_segments status flip execute within the same Postgres transaction"
+      - "They are not in separate transactions (two-statement single transaction, not two separate commits)"
+  primary_oracle: {type: state_machine_assertion, artifact: "intercept Postgres transaction boundary; assert exactly ONE commit contains both the notes delta INSERT and the transcript_segments UPDATE where status='comprehended'"}
+  thresholds: {split_transactions_allowed: 0, operations_in_separate_commits_allowed: 0}
+  fault_model_refs: [F-SPLIT-TRANSACTION]
+  test_ids: [T-COAL-17]
+
+- criterion_id: AC-COAL-17-NEG
+  name: "Crash mid-apply leaves window pending and notes unchanged (atomicity enforced by rollback)"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-COAL-17, R-doc03-COAL-18]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: "Real Postgres required for integration tier; unit tier uses an in-memory rollback harness"
+  verification_ladder: [lint, unit, integration, negative]
+  behavior:
+    given: "A crash (simulated by injecting an exception) that fires after the delta INSERT but before the transcript_segments UPDATE within the transaction"
+    when:  "The transaction is rolled back by Postgres"
+    then:
+      - "The notes object does not contain the partially-applied delta"
+      - "The transcript_segments row for the window remains 'pending' (not 'comprehended')"
+      - "The system state is as if the apply never started (full rollback)"
+  primary_oracle: {type: fault_injection, artifact: "inject crash mid-transaction; after rollback: assert notes_delta_absent==true AND transcript_segments.status=='pending' for the window"}
+  thresholds: {partial_applies_after_crash_allowed: 0, notes_advanced_without_comprehended_flip_allowed: 0}
+  fault_model_refs: [F-PARTIAL-APPLY-AFTER-CRASH]
+  test_ids: [T-COAL-17-NEG]
+
+- criterion_id: AC-COAL-18
+  name: "Pending window is reprocessed exactly once by re-claimed harness or close pass — no double-count"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-COAL-18]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: "Real Postgres required for integration tier (requires actual transcript_segments status check + re-claim logic); unit tier uses in-memory status store"
+  verification_ladder: [lint, unit, integration]
+  behavior:
+    given: "A window left in 'pending' status after a crash mid-apply (post rollback)"
+    when:  "A re-claimed harness or the close pass discovers the pending window and reprocesses it"
+    then:
+      - "The window is reprocessed exactly once — its delta is applied and its status is flipped to 'comprehended'"
+      - "A second attempt to reprocess the same window is rejected (idempotency: the comprehended status blocks double-apply)"
+      - "No content is double-counted in the notes object as a result of the re-claim"
+  primary_oracle: {type: state_machine_assertion, artifact: "after re-claim: assert transcript_segments.status=='comprehended' AND notes_entry_count_delta==1 (not 2); inject second re-claim attempt; assert second attempt is a no-op (no additional notes entries, no second comprehended flip)"}
+  thresholds: {double_applies_allowed: 0, notes_rows_from_reprocessing_max: 1}
+  fault_model_refs: [F-DOUBLE-COUNT-ON-RECLAIM]
+  test_ids: [T-COAL-18]
+
+- criterion_id: AC-COAL-18-NEG
+  name: "A successfully comprehended window is NOT reprocessed by the re-claimed harness (idempotency guard)"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc03-COAL-18]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: "Real Postgres required for integration tier; unit tier uses in-memory status store"
+  verification_ladder: [lint, unit, integration, negative]
+  behavior:
+    given: "A window whose transcript_segments status is already 'comprehended' (successfully applied)"
+    when:  "The re-claimed harness scans for pending windows"
+    then:
+      - "The comprehended window is not selected for reprocessing"
+      - "No second apply is triggered for the comprehended window"
+  primary_oracle: {type: state_machine_assertion, artifact: "assert re-claim scan predicate: only status=='pending' rows are selected; comprehended window appears zero times in re-claim candidate set"}
+  thresholds: {comprehended_windows_reprocessed_allowed: 0}
+  fault_model_refs: [F-COMPREHENDED-WINDOW-REPROCESSED]
+  test_ids: [T-COAL-18-NEG]

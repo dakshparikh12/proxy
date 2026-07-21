@@ -1,0 +1,441 @@
+# Doc 03 (Note Extraction) — SCHEMA section requirements
+# Section: §3.2.1 Note extraction — schema-enforced structured output
+# (tool-forced, then Pydantic-revalidated)
+#
+# Scope: schema field constraints (field types, max lengths, defaults, enum
+#        values), tool-forcing protocol, parse_scribe_result receipt path,
+#        ScribeMaxTokensError and ScribeNoDeltaError typed errors, and the
+#        invariant that emit_notes_delta is output shape only (no capability).
+#
+# Dependency classes used:
+#   null          — purely local: Pydantic model, field definitions, defaults
+#   vendor:anthropic — behavior rests on the Claude API (stop_reason, tool_use)
+#
+# Five standing laws (CLAUDE.md / AGENTS.md) binding this section:
+#   Law 1: Grounded or silent — schema field cited to spec line
+#   Law 2: Never overstate — no Claim enters as verified=True by default
+#   Law 3: Human control — all decisions are staged drafts, not autonomous
+#   Law 4: Dynamic, never hard-coded — field constraints live in Pydantic
+#   Law 5: Talk-and-glance — every schema value legible at a glance
+#
+# ID space: R-doc03-SCHEMA-NN (01-based)
+
+# ── Enumeration constraints ──────────────────────────────────────────────────
+
+- requirement_id: R-doc03-SCHEMA-01
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 schema — Firmness"
+  source_quote: "Firmness: firm | hedged | speculative"
+  normalized_statement: >
+    THE SYSTEM SHALL define Firmness as an enumeration whose only permitted
+    values are {firm, hedged, speculative}; any other value SHALL be rejected
+    at validation time.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+- requirement_id: R-doc03-SCHEMA-02
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 schema — Provenance"
+  source_quote: "Provenance: observed | inferred  (said vs concluded — blocks laundered hallucination)"
+  normalized_statement: >
+    THE SYSTEM SHALL define Provenance as an enumeration whose only permitted
+    values are {observed, inferred}; any other value SHALL be rejected at
+    validation time.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+- requirement_id: R-doc03-SCHEMA-03
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 schema — Reversibility"
+  source_quote: "Reversibility: easy-to-reverse | hard-to-reverse | irreversible"
+  normalized_statement: >
+    THE SYSTEM SHALL define Reversibility as an enumeration whose only permitted
+    values are {easy-to-reverse, hard-to-reverse, irreversible}; any other value
+    SHALL be rejected at validation time.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+- requirement_id: R-doc03-SCHEMA-04
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 schema — DecisionStatus"
+  source_quote: "DecisionStatus: forming | final"
+  normalized_statement: >
+    THE SYSTEM SHALL define DecisionStatus as an enumeration whose only permitted
+    values are {forming, final}; any other value SHALL be rejected at validation
+    time.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+# ── Claim field constraints ──────────────────────────────────────────────────
+
+- requirement_id: R-doc03-SCHEMA-05
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 schema — Claim"
+  source_quote: "Claim: kind=\"claim\", text (max 1000), speaker, said_at_s (float, meeting-relative seconds, NEVER wall-clock), firmness, provenance, verified=False (default), referents (list, max 8), contradicts (Optional[str] — id of conflicting claim)"
+  normalized_statement: >
+    THE SYSTEM SHALL define Claim with kind fixed to "claim", text capped at
+    1000 characters, speaker (string), said_at_s (float), firmness (Firmness),
+    provenance (Provenance), verified defaulting to False, referents (list, max
+    8 elements), and contradicts (Optional string — id of a conflicting claim).
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+- requirement_id: R-doc03-SCHEMA-06
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 schema — Claim.said_at_s"
+  source_quote: "said_at_s (float, meeting-relative seconds, NEVER wall-clock)"
+  normalized_statement: >
+    THE SYSTEM SHALL represent said_at_s as a float measuring meeting-relative
+    seconds (seconds from meeting start); it SHALL NEVER be populated with a
+    wall-clock timestamp (unix epoch or datetime) — any wall-clock value is a
+    schema violation.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+- requirement_id: R-doc03-SCHEMA-07
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 schema — Claim.verified"
+  source_quote: "verified=False (default)"
+  normalized_statement: >
+    THE SYSTEM SHALL default Claim.verified to False for every newly created
+    Claim entry; a Claim SHALL NOT be emitted with verified=True unless it has
+    been explicitly set after creation.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+- requirement_id: R-doc03-SCHEMA-08
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 schema — Claim.referents"
+  source_quote: "referents (list, max 8)"
+  normalized_statement: >
+    THE SYSTEM SHALL enforce that Claim.referents contains at most 8 elements;
+    a Claim with more than 8 referents SHALL be rejected at validation time.
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+- requirement_id: R-doc03-SCHEMA-09
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 schema — Claim.text"
+  source_quote: "text (max 1000)"
+  normalized_statement: >
+    THE SYSTEM SHALL enforce that Claim.text is at most 1000 characters; a
+    Claim whose text exceeds 1000 characters SHALL be rejected at validation
+    time.
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+# ── Decision field constraints ───────────────────────────────────────────────
+
+- requirement_id: R-doc03-SCHEMA-10
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 schema — Decision"
+  source_quote: "Decision: kind=\"decision\", text (max 1000), status (forming|final), reversibility, leans (speaker→for|against|silent), referents (max 8)"
+  normalized_statement: >
+    THE SYSTEM SHALL define Decision with kind fixed to "decision", text capped
+    at 1000 characters, status as DecisionStatus, reversibility as Reversibility,
+    leans as a mapping of speaker to one of {for, against, silent}, and referents
+    capped at 8 elements.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+# ── ActionItem field constraints ─────────────────────────────────────────────
+
+- requirement_id: R-doc03-SCHEMA-11
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 schema — ActionItem"
+  source_quote: "ActionItem: kind=\"action\", text (max 1000), owner (Optional), due (Optional), provenance"
+  normalized_statement: >
+    THE SYSTEM SHALL define ActionItem with kind fixed to "action", text capped
+    at 1000 characters, owner (Optional string), due (Optional), and provenance
+    as Provenance.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+# ── OpenQuestion field constraints ───────────────────────────────────────────
+
+- requirement_id: R-doc03-SCHEMA-12
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 schema — OpenQuestion"
+  source_quote: "OpenQuestion: kind=\"open_question\", text (max 1000), raised_by (Optional), positions (list, max 12), resolved=False"
+  normalized_statement: >
+    THE SYSTEM SHALL define OpenQuestion with kind fixed to "open_question", text
+    capped at 1000 characters, raised_by (Optional string), positions (list, max
+    12 elements), and resolved defaulting to False.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+- requirement_id: R-doc03-SCHEMA-13
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 schema — OpenQuestion.positions"
+  source_quote: "positions (list, max 12)"
+  normalized_statement: >
+    THE SYSTEM SHALL enforce that OpenQuestion.positions contains at most 12
+    elements; an OpenQuestion with more than 12 positions SHALL be rejected at
+    validation time.
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+# ── ContextLine field constraints ────────────────────────────────────────────
+
+- requirement_id: R-doc03-SCHEMA-14
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 schema — ContextLine"
+  source_quote: "ContextLine: kind=\"context\", text (max 500)"
+  normalized_statement: >
+    THE SYSTEM SHALL define ContextLine with kind fixed to "context" and text
+    capped at 500 characters; a ContextLine whose text exceeds 500 characters
+    SHALL be rejected at validation time. The limit of 500 is intentionally
+    lower than the 1000-character limit applied to all other entry kinds.
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+# ── Op types ─────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc03-SCHEMA-15
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 schema — PatchOp"
+  source_quote: "PatchOp: op=\"patch\", target_id (existing entry id), changes (dict, field→new value), supersede_reason (max 300)"
+  normalized_statement: >
+    THE SYSTEM SHALL define PatchOp with op fixed to "patch", target_id (an
+    existing entry id), changes (a dict mapping field name to new value), and
+    supersede_reason capped at 300 characters. The old value SHALL be retained
+    as superseded — not erased — when a PatchOp is applied.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+- requirement_id: R-doc03-SCHEMA-16
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 schema — CloseOp"
+  source_quote: "CloseOp: op=\"close\", target_id, resolution (max 300)"
+  normalized_statement: >
+    THE SYSTEM SHALL define CloseOp with op fixed to "close", target_id (an
+    existing entry id), and resolution capped at 300 characters.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+# ── NoteDelta constraints ─────────────────────────────────────────────────────
+
+- requirement_id: R-doc03-SCHEMA-17
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 schema — NoteDelta.ops"
+  source_quote: "NoteDelta: ops (list[Union[AddOp,PatchOp,CloseOp]], max 40), current_goal (Optional, max 200)"
+  normalized_statement: >
+    THE SYSTEM SHALL enforce that NoteDelta.ops contains at most 40 operations;
+    a NoteDelta with more than 40 ops SHALL be rejected at validation time.
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+- requirement_id: R-doc03-SCHEMA-18
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 schema — NoteDelta.current_goal"
+  source_quote: "current_goal (Optional, max 200)"
+  normalized_statement: >
+    THE SYSTEM SHALL enforce that NoteDelta.current_goal, when present, is at
+    most 200 characters; a current_goal exceeding 200 characters SHALL be
+    rejected at validation time.
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+# ── Referential integrity ─────────────────────────────────────────────────────
+
+- requirement_id: R-doc03-SCHEMA-19
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 schema — Claim.contradicts"
+  source_quote: "contradicts (Optional[str] — id of conflicting claim)"
+  normalized_statement: >
+    WHEN Claim.contradicts is set THE SYSTEM SHALL treat the value as a
+    reference to an existing entry id; a contradicts value that points to no
+    known entry id SHALL be flagged as a referential integrity violation.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+# ── Tool-forcing protocol ────────────────────────────────────────────────────
+
+- requirement_id: R-doc03-SCHEMA-20
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 — tool_choice"
+  source_quote: "tool_choice={\"type\": \"tool\", \"name\": \"emit_notes_delta\"}  # force schema-shaped output, no free text"
+  normalized_statement: >
+    THE SYSTEM SHALL set tool_choice to {"type": "tool", "name":
+    "emit_notes_delta"} on every Scribe API call, forcing the model to emit a
+    schema-shaped tool_use block and eliminating any free-text path from the
+    output.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: vendor:anthropic
+
+- requirement_id: R-doc03-SCHEMA-21
+  authority_type: architecture_invariant
+  authority_document: DOC-03
+  source_location: "§3.2.1 — The Scribe has NO execution tools"
+  source_quote: "The Scribe has NO execution tools — the single forced emit_notes_delta is an output shape, not a capability."
+  normalized_statement: >
+    THE SYSTEM SHALL make emit_notes_delta the only tool registered for the
+    Scribe; no execution tools (web fetch, code execution, search, or any other
+    capability-granting tool) SHALL be present in the Scribe's tool list.
+  requirement_type: architecture_invariant
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: null
+
+# ── Receipt path ─────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc03-SCHEMA-22
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 — parse_scribe_result"
+  source_quote: "extract the forced tool_use, then re-validate with Pydantic ... return NoteDelta.model_validate(block.input)  # belt-and-suspenders"
+  normalized_statement: >
+    WHEN the Scribe API response is received THE SYSTEM SHALL extract the
+    tool_use block named "emit_notes_delta" from the response content and then
+    pass block.input to NoteDelta.model_validate, re-validating with Pydantic
+    as a belt-and-suspenders check after the tool-forcing at generation time.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: vendor:anthropic
+
+# ── Typed error: ScribeMaxTokensError ────────────────────────────────────────
+
+- requirement_id: R-doc03-SCHEMA-23
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 — ScribeMaxTokensError"
+  source_quote: "ScribeMaxTokensError: stop_reason == \"max_tokens\" — window/output too big — skip this window"
+  normalized_statement: >
+    WHEN the Scribe API response has stop_reason equal to "max_tokens" THE
+    SYSTEM SHALL raise ScribeMaxTokensError and skip the current window without
+    retrying it.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: vendor:anthropic
+
+- requirement_id: R-doc03-SCHEMA-24
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 — Both typed errors are non-retryable"
+  source_quote: "Both typed errors are non-retryable at the window level — a dropped window is fine."
+  normalized_statement: >
+    WHEN ScribeMaxTokensError is raised THE SYSTEM SHALL NOT retry the current
+    window; a dropped window is acceptable and the pipeline SHALL proceed to the
+    next window.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: vendor:anthropic
+
+# ── Typed error: ScribeNoDeltaError ──────────────────────────────────────────
+
+- requirement_id: R-doc03-SCHEMA-25
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 — ScribeNoDeltaError"
+  source_quote: "ScribeNoDeltaError: model didn't call the tool — malformed turn, skip this window"
+  normalized_statement: >
+    WHEN the Scribe API response does not contain a tool_use block named
+    "emit_notes_delta" THE SYSTEM SHALL raise ScribeNoDeltaError and skip the
+    current window without retrying it.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: vendor:anthropic
+
+- requirement_id: R-doc03-SCHEMA-26
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 — Both typed errors are non-retryable"
+  source_quote: "Both typed errors are non-retryable at the window level — a dropped window is fine."
+  normalized_statement: >
+    WHEN ScribeNoDeltaError is raised THE SYSTEM SHALL NOT retry the current
+    window; a dropped window is acceptable and the pipeline SHALL proceed to the
+    next window.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+  dependency_class: vendor:anthropic
