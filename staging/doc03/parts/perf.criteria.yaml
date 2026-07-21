@@ -1,0 +1,888 @@
+# perf.criteria.yaml — Doc 03 (Notes / Scribe) · §4 Key variables
+# Acceptance criteria for all PERF requirements.
+# ID scheme: AC-PERF-NN. authority_refs point at R-doc03-PERF-NN in perf.requirements.yaml.
+#
+# dependency_class rules:
+#   null             → zero external systems; cost arithmetic is local
+#   vendor:anthropic → latency SLO measurement, cache-hit ratio — involves real API call
+# golden_path: false for ALL PERF criteria (per section rules)
+# Pairing: every non-null dependency_class criterion has a paired AC-PERF-NN-NEG
+# verification_ladder:
+#   null dependency   → lint, unit
+#   vendor:anthropic  → lint, unit, reality
+#   negative paired   → add "negative" to the vendor tier
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COST ENVELOPE — $0.15–0.35/hr proven by telemetry, not claimed
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-PERF-01
+  name: "Scribe cost envelope $0.15–0.35/hr proven by per-call telemetry (not claimed)"
+  evidence_class: "[telemetry]"
+  authority_refs: [R-doc03-PERF-01]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: vendor:anthropic
+  mock_boundary: >
+    may use a vcrpy cassette at the call_external/transport layer with realistic token
+    counts; MUST NOT replace the anthropic.AsyncAnthropic client with Mock() — real
+    request construction must execute; cost is computed from usage fields in the response
+  verification_ladder: [lint, unit, reality]
+  behavior:
+    given: >
+      A simulated 1-hour meeting with two density profiles: (A) light (sparse speech,
+      ~150 Scribe calls/hr), (B) active (dense speech, ~250 Scribe calls/hr); each
+      call uses realistic token counts: ~200–400-token uncached window + cache_read on
+      the fat prefix at 0.1× input rate; per-call telemetry from §3.9 is active
+    when:  "Cost is computed from telemetry by summing usage fields across all calls in the simulated hour"
+    then:
+      - "Light profile (A) total computed cost is approximately $0.15/hr or less"
+      - "Active profile (B) total computed cost is approximately $0.35/hr or less"
+      - "The cost is derived from telemetry usage fields (input_tokens, output_tokens, cache_read_input_tokens), not hard-coded or claimed"
+      - "Cache read tokens (0.1× rate) are applied to the prefix and full rate only to the ~200–400-token window"
+  primary_oracle:
+    type: telemetry_cost_computation
+    artifact: >
+      sum(call.usage.input_tokens * haiku_input_rate + call.usage.output_tokens *
+      haiku_output_rate + call.usage.cache_read_input_tokens * haiku_cache_read_rate)
+      across all calls in the simulated hour; assert result_A <= 0.15 and result_B <= 0.35;
+      assert cost derived from usage fields, not from a hard-coded estimate
+  thresholds:
+    light_profile_cost_per_hour_max_usd: 0.15
+    active_profile_cost_per_hour_max_usd: 0.35
+    cost_claims_without_telemetry_allowed: 0
+  fault_model_refs: [F-PERF-COST-ENVELOPE-EXCEEDED, F-PERF-COST-CLAIMED-NOT-PROVEN]
+  test_ids: [T-PERF-01]
+
+- criterion_id: AC-PERF-01-NEG
+  name: "Cost telemetry fails gracefully when API usage fields are absent (no silent miscount)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-PERF-01]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: vendor:anthropic
+  mock_boundary: >
+    cassette returns response with missing or null usage fields to simulate a
+    malformed API response; real request construction executes
+  verification_ladder: [lint, unit, reality, negative]
+  behavior:
+    given: "A Scribe call whose API response returns missing or null usage fields"
+    when:  "The telemetry system attempts to compute cost from the response"
+    then:
+      - "A structured error or warning is emitted indicating missing usage data"
+      - "The missing call is NOT counted as $0.00 cost (silent undercount is rejected)"
+      - "The telemetry record marks the call as cost-unresolvable"
+  primary_oracle:
+    type: error_injection_assertion
+    artifact: >
+      cassette with null usage fields; assert cost_record.status == 'unresolvable'
+      (not 0.00); assert telemetry emits a structured warning; assert total cost
+      report flags the gap
+  thresholds:
+    silent_cost_undercounts_allowed: 0
+    unresolvable_calls_silently_zeroed_allowed: 0
+  fault_model_refs: [F-PERF-COST-SILENT-UNDERCOUNT]
+  test_ids: [T-PERF-01-NEG]
+
+- criterion_id: AC-PERF-02
+  name: "Scribe and close-pass costs are distinct line items in §12.7 total (not conflated)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-PERF-02]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "A completed meeting with both per-window Scribe calls and a close-pass Sonnet call"
+    when:  "The §12.7 cost report is generated"
+    then:
+      - "The Scribe per-window cost is reported as a distinct line item"
+      - "The close-pass cost (one Sonnet-class generateStructured call) is reported as a distinct line item"
+      - "Neither line item is absorbed into or reported as the other"
+      - "The sum of distinct line items matches the total listening baseline cost"
+  primary_oracle:
+    type: cost_report_structure_assertion
+    artifact: >
+      assert cost_report.line_items contains 'scribe_per_window' and 'close_pass'
+      as separate keys; assert neither is zero when both paths executed; assert
+      sum(line_items) == cost_report.total
+  thresholds:
+    conflated_line_items_allowed: 0
+    missing_line_items_allowed: 0
+  fault_model_refs: [F-PERF-COST-CONFLATED]
+  test_ids: [T-PERF-02]
+
+- criterion_id: AC-PERF-03
+  name: "Coalescer window is NOT widened to reduce cost (freshness-over-pennies invariant)"
+  evidence_class: "[static]"
+  authority_refs: [R-doc03-PERF-03]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "The coalescer implementation and any cost-optimization code paths"
+    when:  "A static analysis scans for window-widening triggered by cost or call-count signals"
+    then:
+      - "No code path adjusts COAL_WINDOW_MAX_S or COAL_WINDOW_CAP_S based on per-call cost or call-count telemetry"
+      - "No dynamic window widening occurs in response to cost metrics"
+      - "The only permitted window-width inputs are the configured cap values (COAL_WINDOW_MAX_S, COAL_WINDOW_CAP_S, COAL_WINDOW_CAP_TOKENS)"
+  primary_oracle:
+    type: static
+    artifact: >
+      grep/AST scan: assert zero code paths where a cost or call_count value
+      modifies the coalescer window bounds; assert COAL_WINDOW_MAX_S is written
+      only from configuration, never from a runtime cost or call-rate signal
+  thresholds:
+    cost_driven_window_widening_paths_allowed: 0
+  fault_model_refs: [F-PERF-WINDOW-WIDENED-FOR-COST]
+  test_ids: [T-PERF-03]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ACCURACY — observed-vs-inferred + firmness labels always present
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-PERF-04
+  name: "Three correction paths available for every entry: Scribe patch, human live, close pass"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-PERF-04]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "A notes entry produced by the Scribe during a meeting"
+    when:  "Each of the three correction paths is exercised"
+    then:
+      - "(a) A Scribe patch delta updates the entry as subsequent windows firm up understanding"
+      - "(b) A human correction via §3.6 applies a patch to the entry live"
+      - "(c) The close pass re-derives the entry from the raw transcript"
+      - "All three paths are structurally present and reachable for any entry type"
+  primary_oracle:
+    type: static_plus_simulation
+    artifact: >
+      static: assert §3.6 human-correction path reachable; assert close-pass re-derive
+      path reachable; simulation: drive a fixture where the same entry is updated by
+      each of the three paths; assert entry.value updated by each path correctly
+  thresholds:
+    missing_correction_paths_allowed: 0
+  fault_model_refs: [F-PERF-CORRECTION-PATH-MISSING]
+  test_ids: [T-PERF-04]
+
+- criterion_id: AC-PERF-05
+  name: "observed-vs-inferred and firmness labels present on every Scribe-emitted entry (never omitted)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-PERF-05]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "A Scribe delta emitting one or more entries across a variety of entry types (claims, decisions, actions, questions, context)"
+    when:  "Each emitted entry is inspected"
+    then:
+      - "Every entry has a non-null observed_vs_inferred field"
+      - "Every entry has a non-null firmness field"
+      - "No entry omits these fields, even when the output is close to the token limit"
+      - "The labels are not defaulted to a placeholder — they reflect the Scribe's actual assessment"
+  primary_oracle:
+    type: schema_presence_assertion
+    artifact: >
+      for each entry in delta.entries: assert entry.observed_vs_inferred is not None;
+      assert entry.firmness is not None; assert neither field is set to a known
+      placeholder value such as 'unknown' or 'N/A' from an omission shortcut
+  thresholds:
+    entries_missing_observed_vs_inferred_allowed: 0
+    entries_missing_firmness_allowed: 0
+    placeholder_label_substitutions_allowed: 0
+  fault_model_refs: [F-PERF-LABEL-OMITTED-FOR-EFFICIENCY, F-PERF-LABEL-PLACEHOLDER]
+  test_ids: [T-PERF-05]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LATENCY — per-turn incremental, 2–4s lag, reactive on raw transcript
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-PERF-06
+  name: "Each Scribe call round-trip approximately 1–2s on a 200–400-token window with warm cache"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc03-PERF-06]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: vendor:anthropic
+  mock_boundary: >
+    may use a vcrpy cassette with realistic latency profile at the
+    call_external/transport layer; MUST NOT replace the anthropic.AsyncAnthropic
+    client with Mock(); real request construction must execute
+  verification_ladder: [lint, unit, reality]
+  behavior:
+    given: >
+      A Scribe call in warm-cache state (Segment A and B already cached, cache_read
+      served on prefix); the uncached window is 200–400 tokens; latency measured
+      end-to-end from request issued to delta received
+    when:  "Ten consecutive calls are timed under representative conditions"
+    then:
+      - "The p50 round-trip latency is approximately 1–2 seconds (<=2000ms)"
+      - "The cache_read_input_tokens field in the response confirms prefix was cache-served"
+      - "No per-turn latency exceeds 3.5s (the timeout boundary)"
+  primary_oracle:
+    type: latency_measurement_protocol
+    artifact: >
+      time 10 cassette-backed calls with warm cache (200–400 token window);
+      report p50 and p95; assert p50_ms <= 2000; assert all usage.cache_read_input_tokens > 0;
+      assert no individual call exceeded 3500ms
+  thresholds:
+    round_trip_p50_ms_max: 2000
+    round_trip_per_call_hard_cap_ms: 3500
+    cache_read_tokens_min: 1
+  fault_model_refs: [F-PERF-LATENCY-EXCEEDS-SLO, F-PERF-CACHE-MISS-ON-WARM-STATE]
+  test_ids: [T-PERF-06]
+
+- criterion_id: AC-PERF-06-NEG
+  name: "Cold-cache first call pays cache_creation not cache_read (latency correctly higher on first call)"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc03-PERF-06]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: vendor:anthropic
+  mock_boundary: >
+    cassette representing a first call (no prior cache) — usage fields show
+    cache_creation_input_tokens > 0 and cache_read_input_tokens == 0
+  verification_ladder: [lint, unit, reality, negative]
+  behavior:
+    given: "A Scribe call in cold-cache state (first call of the meeting; no prefix cached yet)"
+    when:  "The call completes"
+    then:
+      - "The response usage shows cache_creation_input_tokens > 0 (prefix written to cache)"
+      - "The response usage shows cache_read_input_tokens == 0 (nothing read from cache)"
+      - "No incorrect assumption is made that the first call is as fast as subsequent calls"
+  primary_oracle:
+    type: usage_field_assertion
+    artifact: >
+      cold-cache cassette: assert usage.cache_creation_input_tokens > 0;
+      assert usage.cache_read_input_tokens == 0; assert system does not log an error
+      or warning for this expected behavior
+  thresholds:
+    cold_call_cache_creation_tokens_min: 1
+    cold_call_cache_read_tokens_max: 0
+  fault_model_refs: [F-PERF-COLD-CACHE-MISINTERPRETED]
+  test_ids: [T-PERF-06-NEG]
+
+- criterion_id: AC-PERF-07
+  name: "Notes trail live meeting by approximately 2–4s; a claim at T is a structured entry by ~T+3s"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc03-PERF-07]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: vendor:anthropic
+  mock_boundary: >
+    cassette with realistic per-call latency; system clock used for lag measurement;
+    MUST NOT replace anthropic.AsyncAnthropic client with Mock()
+  verification_ladder: [lint, unit, reality]
+  behavior:
+    given: >
+      A simulated meeting where a claim C is spoken at time T; the coalescer window
+      cuts at T + turn_duration; the Scribe call is cassette-backed with ~1–2s round-trip
+    when:  "Lag is measured from T (claim spoken) to when the structured entry is written to the notes object"
+    then:
+      - "The structured entry for C is present in the notes object by approximately T+3s (within T+4s at p95)"
+      - "A proactive event derived from C has fired by approximately T+3s"
+      - "The measured lag is within the 2–4s typical range under normal operation"
+  primary_oracle:
+    type: latency_measurement_protocol
+    artifact: >
+      record T=claim_spoken; record T_entry=entry_written_to_notes; assert
+      2 <= (T_entry - T) <= 4 at p50; assert (T_entry - T) <= 4 at p95;
+      assert proactive_event_fired_at <= T_entry
+  thresholds:
+    comprehension_lag_p50_s_min: 2
+    comprehension_lag_p50_s_max: 4
+    comprehension_lag_p95_s_max: 4
+    proactive_event_fired_after_entry_allowed: 0
+  fault_model_refs: [F-PERF-COMPREHENSION-LAG-EXCEEDS-SLO, F-PERF-PROACTIVE-EVENT-DELAYED]
+  test_ids: [T-PERF-07]
+
+- criterion_id: AC-PERF-07-NEG
+  name: "Comprehension lag exceeding 4s triggers freshness flag (not silently tolerated)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-PERF-07, R-doc03-PERF-21]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: vendor:anthropic
+  mock_boundary: >
+    cassette injecting slow responses to force lag > 4s; clock advanced to simulate
+    accumulated lag; real request construction executes
+  verification_ladder: [lint, unit, reality, negative]
+  behavior:
+    given: "A simulated meeting where the Scribe pipeline has fallen behind and the lag between most-recently-spoken and most-recently-comprehended exceeds 90s"
+    when:  "The lag monitoring check fires"
+    then:
+      - "The notes freshness flag is set (notes.freshness_flag == true)"
+      - "The flag is NOT set when lag is below the threshold"
+      - "The flag is visible to consumers as a first-class field on the notes object"
+  primary_oracle:
+    type: state_machine_assertion
+    artifact: >
+      advance simulated lag to 91s; assert notes.freshness_flag == true;
+      reset lag to 80s; assert notes.freshness_flag == false;
+      assert field is present and inspectable in notes object schema
+  thresholds:
+    freshness_flag_absent_when_lag_exceeds_threshold_allowed: 0
+    freshness_flag_set_below_threshold_allowed: 0
+  fault_model_refs: [F-PERF-FRESHNESS-FLAG-NOT-SET, F-PERF-FRESHNESS-FLAG-FALSE-POSITIVE]
+  test_ids: [T-PERF-07-NEG]
+
+- criterion_id: AC-PERF-08
+  name: "Reactive asks dispatch on raw transcript (~300ms), NOT waiting for notes"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-PERF-08]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: >
+      A reactive ask that arrives while the Scribe is processing the current window
+      (notes not yet updated); the raw real-time transcript via Doc 02 → Doc 04 path
+      is available at approximately T+300ms
+    when:  "The reactive ask is processed"
+    then:
+      - "The reactive ask dispatches using the raw real-time transcript, not the notes object"
+      - "The dispatch latency is approximately 300ms from the triggering event — it does NOT wait for the current or next Scribe call to complete"
+      - "No code path blocks the reactive ask dispatch on notes availability"
+  primary_oracle:
+    type: dispatch_latency_assertion
+    artifact: >
+      inject reactive ask while Scribe window is artificially delayed; assert
+      reactive_ask_dispatched == true before notes_updated == true;
+      measure dispatch latency from trigger to dispatch; assert <= 500ms (300ms target + margin);
+      assert dispatch_source == 'raw_transcript' (not 'notes')
+  thresholds:
+    reactive_dispatch_latency_ms_max: 500
+    reactive_dispatches_blocked_on_notes_allowed: 0
+    reactive_dispatches_sourced_from_notes_instead_of_raw_allowed: 0
+  fault_model_refs: [F-PERF-REACTIVE-WAITS-FOR-NOTES, F-PERF-REACTIVE-SOURCES-NOTES]
+  test_ids: [T-PERF-08]
+
+- criterion_id: AC-PERF-08-NEG
+  name: "Consumer reading notes-only without raw tail has visible blind spot (integration is required)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-PERF-08]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit, negative]
+  behavior:
+    given: >
+      A consumer that reads only the notes object without appending the raw tail;
+      the last ~2–4s of transcript has been spoken but not yet comprehended by the Scribe
+    when:  "The consumer inspects the meeting state"
+    then:
+      - "The consumer is missing the last 2–4s of content (the raw tail blind spot is real and detectable)"
+      - "The system provides a mechanism (notes + raw tail) for consumers to see the blind spot"
+      - "Notes alone are NOT represented as complete coverage in any API surface or documentation"
+  primary_oracle:
+    type: coverage_gap_assertion
+    artifact: >
+      read notes without raw tail at T+1s after a claim at T; assert claim is absent
+      from notes; assert raw_tail.contains(claim) == true; assert combined (notes +
+      raw_tail) contains claim; grep: assert no consumer API asserts notes == complete_coverage
+  thresholds:
+    notes_only_blind_spot_seconds_min: 2
+    notes_misrepresented_as_complete_coverage_allowed: 0
+  fault_model_refs: [F-PERF-NOTES-CLAIMED-COMPLETE, F-PERF-BLIND-SPOT-HIDDEN]
+  test_ids: [T-PERF-08-NEG]
+
+- criterion_id: AC-PERF-09
+  name: "2–4s comprehension lag is treated as correct (no consumer assumes sub-2s notes)"
+  evidence_class: "[static]"
+  authority_refs: [R-doc03-PERF-09]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "All consumer call sites that read from the notes object"
+    when:  "A static analysis checks for assumptions about notes availability latency"
+    then:
+      - "No consumer code path assumes notes are available in under 2 seconds from the spoken event"
+      - "No timeout or retry in a consumer path is set below 2s while waiting on notes"
+      - "Consumer documentation and SLOs do not promise sub-2s notes latency"
+  primary_oracle:
+    type: static
+    artifact: >
+      grep/AST scan: assert no consumer timeout_ms < 2000 on a notes-wait path;
+      assert no comment or docstring promises notes_latency < 2s; assert consumer
+      contracts accept 2–4s as within SLO
+  thresholds:
+    consumer_paths_assuming_sub_2s_notes_allowed: 0
+  fault_model_refs: [F-PERF-CONSUMER-ASSUMES-INSTANT-NOTES]
+  test_ids: [T-PERF-09]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DURATION — object grows with content, patch-in-place, no truncation
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-PERF-10
+  name: "3-hour meeting with one decision produces short notes; dense 1-hour session produces longer notes"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-PERF-10]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: >
+      Two meeting fixtures:
+      (A) 3 hours of elapsed time with exactly one substantive decision spoken (minimal content),
+      (B) 1 hour of elapsed time with dense back-and-forth design discussion (rich content)
+    when:  "Both meetings complete and their final notes objects are inspected"
+    then:
+      - "Fixture A produces a notes object with a small number of entries (proportional to 1 decision)"
+      - "Fixture B produces a notes object with more entries than fixture A"
+      - "Fixture A entries count is not inflated by elapsed time (3× the time does not produce 3× entries)"
+      - "The ratio entries_B / entries_A reflects content density, not duration ratio"
+  primary_oracle:
+    type: state_machine_assertion
+    artifact: >
+      run both fixtures; assert len(notes_A.entries) < len(notes_B.entries);
+      assert len(notes_A.entries) is proportional to 1 decision (e.g., <= 5 entries);
+      assert len(notes_A.entries) / 3 < len(notes_B.entries) / 1 (density > time ratio)
+  thresholds:
+    sparse_meeting_entries_max: 10
+    time_proportional_growth_detected_allowed: false
+  fault_model_refs: [F-PERF-OBJECT-GROWS-WITH-TIME, F-PERF-SPARSE-MEETING-INFLATED]
+  test_ids: [T-PERF-10]
+
+- criterion_id: AC-PERF-11
+  name: "Notes entries are never truncated — only consolidated (truncation is a spec violation)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-PERF-11]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "A long dense meeting where the notes object has accumulated many entries over 3 hours"
+    when:  "The applier or any consolidation routine processes the accumulated notes"
+    then:
+      - "No entry is removed from the notes object without its substance being present in a consolidated entry"
+      - "Content that was previously extractable from the notes object remains accessible after any consolidation"
+      - "No code path sets a maximum entry count and discards older entries when the count is exceeded"
+  primary_oracle:
+    type: state_machine_assertion
+    artifact: >
+      drive a 200-entry notes object through the consolidation routine; assert all
+      substantive claims from original entries remain traceable in the consolidated output;
+      grep: assert no 'max_entries' cap that triggers discard; assert no 'truncate' or
+      'drop_oldest' logic in the applier or consolidation code
+  thresholds:
+    content_truncated_without_consolidation_allowed: 0
+    entries_silently_discarded_allowed: 0
+  fault_model_refs: [F-PERF-NOTES-TRUNCATED, F-PERF-ENTRIES-DISCARDED-AT-CAP]
+  test_ids: [T-PERF-11]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MEETING TYPE — universal schema, no branching, sparse referent is fine
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-PERF-12
+  name: "No meeting-type branching in the Scribe pipeline — standup and incident retro land in same schema fields"
+  evidence_class: "[static]"
+  authority_refs: [R-doc03-PERF-12]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "The Scribe pipeline source code, prompt templates, and schema definitions"
+    when:  "A static analysis checks for meeting-type conditional logic"
+    then:
+      - "No if/elif/switch on meeting type exists in the coalescer, Scribe call path, or applier"
+      - "No prompt template is selected or modified based on meeting type"
+      - "No schema variant is selected based on meeting type"
+      - "All meeting types produce output to the same schema fields (claims/decisions/actions/questions/context)"
+  primary_oracle:
+    type: static
+    artifact: >
+      grep/AST scan: assert zero occurrences of 'meeting_type' used as a conditional
+      branch target in the Scribe pipeline, coalescer, or applier; assert no
+      if meeting_type == 'standup' or equivalent construct; assert single prompt
+      template loaded regardless of meeting type
+  thresholds:
+    meeting_type_branch_points_allowed: 0
+    prompt_template_variants_by_meeting_type_allowed: 0
+    schema_variants_by_meeting_type_allowed: 0
+  fault_model_refs: [F-PERF-MEETING-TYPE-BRANCH, F-PERF-PROMPT-VARIANT-BY-TYPE]
+  test_ids: [T-PERF-12]
+
+- criterion_id: AC-PERF-13
+  name: "Meeting with no code referents: referent field is sparse, no error or breakage"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-PERF-13]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: >
+      A meeting transcript fixture that contains no mentions of code, files, functions,
+      or other code referents (e.g., a pure HR or project-status conversation)
+    when:  "The Scribe processes the transcript and entries are written to the notes object"
+    then:
+      - "All entries are written successfully without error"
+      - "The referent field on all entries is empty, null, or absent — not a placeholder"
+      - "No warning, error, or fallback behavior is triggered by the absent referent"
+      - "The schema validates successfully with sparse referent fields"
+  primary_oracle:
+    type: state_machine_assertion
+    artifact: >
+      run no-code-referent fixture; assert zero exceptions or errors during processing;
+      assert all entries pass schema validation; assert entry.referent in (None, [], '')
+      for all entries; assert no 'N/A', 'none detected', or fallback string in referent
+  thresholds:
+    errors_on_sparse_referent_allowed: 0
+    schema_violations_on_sparse_referent_allowed: 0
+    fallback_strings_in_referent_allowed: 0
+  fault_model_refs: [F-PERF-SPARSE-REFERENT-ERRORS, F-PERF-REFERENT-FALLBACK-STRING]
+  test_ids: [T-PERF-13]
+
+- criterion_id: AC-PERF-13-NEG
+  name: "Referent field present and non-null when code referent is detected (sparse is opt-out not default)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-PERF-13]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit, negative]
+  behavior:
+    given: >
+      A meeting transcript fixture that explicitly mentions a code element (e.g.,
+      "the retry_logic function" or "the checkout module")
+    when:  "The Scribe processes the transcript"
+    then:
+      - "The referent field on the relevant entry is non-null and non-empty"
+      - "The referent candidate is marked per the judgment rule in §3.2"
+      - "The sparse-referent path does not incorrectly fire when a referent is present"
+  primary_oracle:
+    type: state_machine_assertion
+    artifact: >
+      run code-referent fixture; assert at least one entry has referent != None/empty;
+      assert referent value matches the code element mentioned; assert
+      entry.referent_candidate_flag == true for the marked entry
+  thresholds:
+    code_referents_missed_as_sparse_allowed: 0
+  fault_model_refs: [F-PERF-CODE-REFERENT-DROPPED]
+  test_ids: [T-PERF-13-NEG]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TUNABLES — all defaults configurable, none hard-coded
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-PERF-14
+  name: "COAL_WINDOW_MIN_S and COAL_WINDOW_MAX_S are read from config; defaults 30/60; not hard-coded"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-PERF-14]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "The coalescer with COAL_WINDOW_MIN_S and COAL_WINDOW_MAX_S set to non-default values (e.g., 20 and 45)"
+    when:  "The coalescer forms windows under those env-var overrides"
+    then:
+      - "Windows are cut at the overridden max of 45s, not the default 60s"
+      - "The minimum window floor respects the overridden 20s value"
+      - "When both env vars are unset, defaults of 30s min and 60s max apply"
+      - "No literal '30', '60' window bounds appear in non-configuration source code"
+  primary_oracle:
+    type: config_override_assertion
+    artifact: >
+      set COAL_WINDOW_MAX_S=45; run coalescer; assert all windows.duration_s <= 45;
+      unset env vars; assert windows.duration_s <= 60; grep: assert no integer literal
+      30 or 60 as window bounds outside config parsing code
+  thresholds:
+    hard_coded_window_bounds_in_non_config_code_allowed: 0
+    windows_exceeding_overridden_max_allowed: 0
+  fault_model_refs: [F-PERF-WINDOW-HARD-CODED, F-PERF-OVERRIDE-IGNORED]
+  test_ids: [T-PERF-14]
+
+- criterion_id: AC-PERF-15
+  name: "COAL_WINDOW_CAP_S (45) and COAL_WINDOW_CAP_TOKENS (1200) are configurable; smaller applies"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-PERF-15]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "The coalescer with COAL_WINDOW_CAP_S and COAL_WINDOW_CAP_TOKENS both set; one cap will be hit first"
+    when:  "A long or token-dense transcript is processed"
+    then:
+      - "The window is cut at the cap that is reached first (time or tokens, whichever is smaller)"
+      - "Overriding only COAL_WINDOW_CAP_S changes the time cap without affecting the token cap"
+      - "Overriding only COAL_WINDOW_CAP_TOKENS changes the token cap without affecting the time cap"
+      - "When unset, defaults of 45s and 1200 tokens apply"
+  primary_oracle:
+    type: config_override_assertion
+    artifact: >
+      set COAL_WINDOW_CAP_S=30 COAL_WINDOW_CAP_TOKENS=2000; run dense transcript;
+      assert window cut at 30s (time cap hit first); set COAL_WINDOW_CAP_S=120
+      COAL_WINDOW_CAP_TOKENS=500; run dense transcript; assert window cut at 500 tokens
+      (token cap hit first); both caps independently override confirmed
+  thresholds:
+    wrong_cap_applied_when_other_is_smaller_allowed: 0
+    hard_coded_45_or_1200_in_non_config_code_allowed: 0
+  fault_model_refs: [F-PERF-WRONG-CAP-APPLIED, F-PERF-CAP-HARD-CODED]
+  test_ids: [T-PERF-15]
+
+- criterion_id: AC-PERF-16
+  name: "SCRIBE_CALL_TIMEOUT_S (3.5) is configurable; skip-not-retry on timeout"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-PERF-16]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "SCRIBE_CALL_TIMEOUT_S set to a non-default value (e.g., 5.0); a call that stalls for 5.0 + epsilon seconds"
+    when:  "The call runs under the configured timeout"
+    then:
+      - "The call is cancelled at 5.0s (the overridden value), not at 3.5s (the default)"
+      - "The window is skipped (not retried) after the timeout"
+      - "When SCRIBE_CALL_TIMEOUT_S is unset, the default of 3.5s applies"
+      - "No literal '3.5' timeout appears outside configuration parsing code"
+  primary_oracle:
+    type: config_override_assertion
+    artifact: >
+      set SCRIBE_CALL_TIMEOUT_S=5.0; inject call that stalls 5.0 + 0.1s; assert cancels
+      at ~5.0s not 3.5s; assert retry_count==0; unset env var; assert cancels at ~3.5s;
+      grep: assert no literal 3.5 timeout in non-config source
+  thresholds:
+    timeout_using_non_configured_value_allowed: 0
+    retries_after_timeout_allowed: 0
+    hard_coded_timeout_in_non_config_code_allowed: 0
+  fault_model_refs: [F-PERF-TIMEOUT-HARD-CODED, F-PERF-RETRY-ON-TIMEOUT]
+  test_ids: [T-PERF-16]
+
+- criterion_id: AC-PERF-17
+  name: "Cache TTL: 5-min ephemeral, exactly two breakpoints (configurable; not one)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-PERF-17]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "A Scribe message array assembled under default configuration"
+    when:  "The cache_control annotations are inspected"
+    then:
+      - "Exactly two cache_control breakpoints with type 'ephemeral' are present (never one)"
+      - "When SCRIBE_CACHE_BREAKPOINTS is set to 2 (or unset), exactly 2 breakpoints appear"
+      - "SCRIBE_CACHE_TTL_S defaults to 300 (5 minutes); the value is read from config, not hard-coded"
+      - "Using exactly 1 breakpoint when 2 are configured is rejected as a configuration error"
+  primary_oracle:
+    type: message_array_structure_assertion
+    artifact: >
+      assert count(cache_control:{type:'ephemeral'}) == 2 in default config;
+      set SCRIBE_CACHE_BREAKPOINTS=1; assert system emits a configuration error;
+      grep: assert no literal 300 cache TTL outside config parsing code
+  thresholds:
+    ephemeral_breakpoints_when_default_config_required: 2
+    single_breakpoint_accepted_without_error_allowed: 0
+    hard_coded_cache_ttl_in_non_config_code_allowed: 0
+  fault_model_refs: [F-PERF-WRONG-BREAKPOINT-COUNT, F-PERF-CACHE-TTL-HARD-CODED]
+  test_ids: [T-PERF-17]
+
+- criterion_id: AC-PERF-18
+  name: "ROLLING_SUMMARY_EVERY_N_DELTAS (≈20) and ROLLING_SUMMARY_MAX_AGE_S (≈90) are configurable"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-PERF-18]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "ROLLING_SUMMARY_EVERY_N_DELTAS and ROLLING_SUMMARY_MAX_AGE_S set to non-default values (e.g., 10 and 45)"
+    when:  "The rolling summary refresh logic is exercised"
+    then:
+      - "Refresh fires after 10 note-deltas (not 20) under the overridden N"
+      - "Refresh fires after 45s elapsed (not 90s) under the overridden max age"
+      - "When both env vars are unset, defaults of ~20 deltas and ~90s apply"
+      - "No literal '20' or '90' appears as hard-coded rolling-summary thresholds in non-configuration code"
+  primary_oracle:
+    type: config_override_assertion
+    artifact: >
+      set ROLLING_SUMMARY_EVERY_N_DELTAS=10; drive 10 deltas; assert refresh triggered;
+      drive 9 deltas; assert no refresh; set ROLLING_SUMMARY_MAX_AGE_S=45; advance
+      clock to 46s; assert refresh triggered; grep: no literal 20 or 90 in rolling
+      summary trigger code outside config
+  thresholds:
+    refresh_fires_at_non_configured_n_allowed: 0
+    hard_coded_rolling_summary_thresholds_in_non_config_code_allowed: 0
+  fault_model_refs: [F-PERF-ROLLING-SUMMARY-THRESHOLD-HARD-CODED, F-PERF-ROLLING-SUMMARY-OVERRIDE-IGNORED]
+  test_ids: [T-PERF-18]
+
+- criterion_id: AC-PERF-19
+  name: "PROXY_MODEL_SCRIBE defaults to claude-haiku-4-5; seat swap is eval-gated (not free)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-PERF-19]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "Two configurations: (A) PROXY_MODEL_SCRIBE unset, (B) PROXY_MODEL_SCRIBE set to a non-default model"
+    when:  "The Scribe model is resolved"
+    then:
+      - "Config A: resolved model is exactly 'claude-haiku-4-5'"
+      - "Config B: resolved model matches the env-var value exactly"
+      - "No literal model string 'claude-haiku-4-5' appears outside configuration parsing code"
+      - "Changing PROXY_MODEL_SCRIBE in production without an eval artifact is flagged in the deployment process"
+  primary_oracle:
+    type: config_override_assertion
+    artifact: >
+      unset PROXY_MODEL_SCRIBE; assert resolved_model == 'claude-haiku-4-5';
+      set PROXY_MODEL_SCRIBE='other-model'; assert resolved_model == 'other-model';
+      grep: assert model string not hard-coded outside config; assert eval gate
+      documented in seat-swap runbook
+  thresholds:
+    model_default_deviation_when_env_unset_allowed: 0
+    hard_coded_model_strings_in_non_config_code_allowed: 0
+  fault_model_refs: [F-PERF-MODEL-HARD-CODED, F-PERF-SEAT-SWAP-UNGATED]
+  test_ids: [T-PERF-19]
+
+- criterion_id: AC-PERF-20
+  name: "PROXY_MODEL_CLOSE defaults to Sonnet-class; close seat is independently configurable"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-PERF-20]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: >
+      Two configurations: (A) only PROXY_MODEL_SCRIBE overridden (close should be unaffected),
+      (B) only PROXY_MODEL_CLOSE overridden (Scribe should be unaffected)
+    when:  "Both model seats are resolved"
+    then:
+      - "Config A: PROXY_MODEL_CLOSE resolves to its own default (Sonnet-class), not the Scribe override"
+      - "Config B: PROXY_MODEL_SCRIBE resolves to its own default (claude-haiku-4-5), not the close override"
+      - "The two seats are independently configurable with no shared config key"
+  primary_oracle:
+    type: config_override_assertion
+    artifact: >
+      set PROXY_MODEL_SCRIBE='haiku-override'; assert PROXY_MODEL_CLOSE resolves to
+      Sonnet-class default (unchanged); set PROXY_MODEL_CLOSE='sonnet-override'; assert
+      PROXY_MODEL_SCRIBE resolves to claude-haiku-4-5 (unchanged); confirm independence
+  thresholds:
+    close_model_affected_by_scribe_override_allowed: 0
+    scribe_model_affected_by_close_override_allowed: 0
+  fault_model_refs: [F-PERF-MODEL-SEATS-COUPLED]
+  test_ids: [T-PERF-20]
+
+- criterion_id: AC-PERF-21
+  name: "NOTES_FRESHNESS_LAG_THRESHOLD_S (90) is configurable; flag set on lag > threshold, not below"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-PERF-21]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "NOTES_FRESHNESS_LAG_THRESHOLD_S set to a non-default value (e.g., 60)"
+    when:  "The lag reaches various levels: 59s, 61s, 90s, 91s"
+    then:
+      - "At 59s lag: freshness flag is NOT set (below the 60s overridden threshold)"
+      - "At 61s lag: freshness flag IS set (above the 60s overridden threshold)"
+      - "When env var is unset, default threshold of 90s applies (flag set at 91s, not at 89s)"
+      - "The threshold is not hard-coded: changing the env var changes the trip point"
+  primary_oracle:
+    type: config_override_assertion
+    artifact: >
+      set NOTES_FRESHNESS_LAG_THRESHOLD_S=60; advance lag to 59s; assert flag==false;
+      advance to 61s; assert flag==true; unset env var; advance to 89s; assert flag==false;
+      advance to 91s; assert flag==true; grep: no literal 90 as threshold in non-config code
+  thresholds:
+    flag_set_below_threshold_allowed: 0
+    flag_absent_above_threshold_allowed: 0
+    hard_coded_freshness_threshold_in_non_config_code_allowed: 0
+  fault_model_refs: [F-PERF-FRESHNESS-THRESHOLD-HARD-CODED, F-PERF-FRESHNESS-FLAG-WRONG-TRIP-POINT]
+  test_ids: [T-PERF-21]
+
+- criterion_id: AC-PERF-22
+  name: "QUALITY_GATE_SAMPLE_RATE (≈0.1) is configurable; not hard-coded; always-check entries bypass it"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-PERF-22]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "QUALITY_GATE_SAMPLE_RATE set to 1.0 (gate every delta) and to 0.0 (gate no delta); plus always-check entries present"
+    when:  "Deltas are applied and the quality gate draw is made"
+    then:
+      - "At rate=1.0: every non-always-check entry is gated"
+      - "At rate=0.0: no non-always-check entry is gated"
+      - "At rate=0.0: always-check entries (decision.status=final, reversibility=irreversible, contradicts link) are still gated"
+      - "When QUALITY_GATE_SAMPLE_RATE is unset, default of ~0.1 applies"
+      - "No literal '0.1' sample rate appears outside configuration parsing code"
+  primary_oracle:
+    type: config_override_assertion
+    artifact: >
+      set QUALITY_GATE_SAMPLE_RATE=1.0; assert gate_call_count == all_non_always_check_entries;
+      set QUALITY_GATE_SAMPLE_RATE=0.0; assert gate_call_count == 0 for non-always-check;
+      assert gate_call_count == always_check_count for always-check entries even at rate=0.0;
+      grep: no literal 0.1 in gate trigger code outside config
+  thresholds:
+    always_check_entries_bypassed_by_rate_zero_allowed: 0
+    hard_coded_sample_rate_in_non_config_code_allowed: 0
+  fault_model_refs: [F-PERF-SAMPLE-RATE-HARD-CODED, F-PERF-ALWAYS-CHECK-BYPASSED-BY-RATE]
+  test_ids: [T-PERF-22]
