@@ -57,6 +57,20 @@ def test_heartbeat_round_trips(tmp_path, monkeypatch):
     assert orch._read_last_heartbeat() == 1234567890.0
 
 
+def test_launch_script_wires_the_full_hardening_contract():
+    """orchestrator/launch.sh (TASK 5) must be the ONE command that wires every hardening property:
+    whole-tree sleep guard, detached tmux (survives terminal closure), an external watchdog that
+    outlives a tmux death, the double-launch guard, and a resume floor from tag+seal."""
+    txt = (ORCH / "launch.sh").read_text()
+    assert "caffeinate -dimsu" in txt, "whole-tree sleep guard (TASK 3) missing"
+    assert "tmux new-session -d" in txt, "detached tmux (survive terminal closure) missing"
+    assert "nohup" in txt and "watchdog.sh" in txt, "watchdog must run OUTSIDE tmux (survive its death)"
+    assert "WATCH_TMUX=1" in txt, "watchdog dead-session check must be armed"
+    assert "ALREADY LIVE" in txt, "double-launch guard (never mutate a live run) missing"
+    assert "remain-on-exit" in txt, "halt banner must stay readable after the supervisor exits"
+    assert "-done" in txt and "seal.json" in txt, "resume floor must consider BOTH tag and seal"
+
+
 def test_main_checks_suspend_before_starting_a_fresh_heartbeat():
     """Ordering guard: main() must read the OLD heartbeat (suspend check) BEFORE overwriting it."""
     src = (ORCH / "orchestrate.py").read_text()
