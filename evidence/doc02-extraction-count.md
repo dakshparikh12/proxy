@@ -10,3 +10,4 @@ bundle has MORE than the auditor found (-33%). Auditor judged the spec heavily c
 
 ## Disposition (per GENERATOR.md Task-5 design)
 HALT for founder review — the gate does NOT auto-resolve by regenerating. A human must adjudicate whether the disagreement is grain (most likely here) or a genuine under/over-extraction, using the spot-check pointers above.
+RATIFIED 2026-07-20: doc02 extraction-count MATERIAL_DISAGREEMENT (171 vs 114) reviewed by founder. Confirmed 77 platform/channel-pattern matches in requirements.yaml, consistent with auditor's combinatorial explanation (3 platforms x 5 channels x per-obligation rows). Confirmed grain difference, not coverage gap. No regeneration needed.
