@@ -1,0 +1,223 @@
+# dependency_manifest.yaml — regenerated from normalized criteria (GENERATOR.md §8.4.3)
+doc: doc03
+dependencies:
+  - dependency_class: db:postgres
+    kind: local
+    seam: libs/db|libs/fs
+    mock_boundary: >-
+      real db only; no in-memory substitute for the integration tier
+    criteria:
+      - AC-COAL-14
+      - AC-COAL-14-NEG
+      - AC-COAL-15
+      - AC-COAL-15-NEG
+      - AC-COAL-16
+      - AC-COAL-16-NEG
+      - AC-COAL-17
+      - AC-COAL-17-NEG
+      - AC-COAL-18
+      - AC-COAL-18-NEG
+      - AC-STORE-01
+      - AC-STORE-01-NEG
+      - AC-STORE-02
+      - AC-STORE-02-NEG
+      - AC-STORE-03
+      - AC-STORE-03-NEG
+      - AC-STORE-05
+      - AC-STORE-05-NEG
+      - AC-STORE-06
+      - AC-STORE-06-NEG
+      - AC-STORE-07
+      - AC-STORE-07-NEG
+      - AC-STORE-08
+      - AC-STORE-08-NEG
+      - AC-STORE-13
+      - AC-STORE-13-NEG
+      - AC-CSREAD-02
+      - AC-CSREAD-02-NEG
+      - AC-CSREAD-03
+      - AC-CSREAD-06
+      - AC-CSREAD-06-NEG
+      - AC-CSREAD-08
+      - AC-CSREAD-08-NEG
+      - AC-CSREAD-09
+      - AC-CSREAD-09-NEG
+      - AC-CSREAD-10
+      - AC-CSREAD-10-NEG
+      - AC-CORR-01
+      - AC-CORR-01-NEG
+      - AC-CORR-02
+      - AC-CORR-02-NEG
+      - AC-CORR-03
+      - AC-CORR-03-NEG
+      - AC-CORR-04
+      - AC-CORR-04-NEG
+      - AC-CORR-05
+      - AC-CORR-05-NEG
+      - AC-CORR-06
+      - AC-CORR-06-NEG
+      - AC-CORR-07
+      - AC-CORR-07-NEG
+      - AC-CORR-08
+      - AC-CORR-08-NEG
+      - AC-CORR-09
+      - AC-CORR-09-NEG
+      - AC-CORR-10
+      - AC-CORR-10-NEG
+      - AC-CLOSE-04-NEG
+      - AC-CLOSE-07
+      - AC-CLOSE-13
+      - AC-CLOSE-13-NEG
+      - AC-FAIL-02
+      - AC-FAIL-02-NEG
+      - AC-FAIL-03
+      - AC-FAIL-03-NEG
+      - AC-FAIL-04
+      - AC-FAIL-04-NEG
+      - AC-FAIL-05
+      - AC-FAIL-05-NEG
+      - AC-FAIL-06
+      - AC-FAIL-06-NEG
+      - AC-COST-05
+      - AC-COST-05-NEG
+      - AC-COST-06
+      - AC-COST-06-NEG
+      - AC-COST-12
+      - AC-COST-12-NEG
+      - AC-XCUT-05
+      - AC-XCUT-05-NEG
+      - AC-XCUT-06
+      - AC-XCUT-06-NEG
+      - AC-XCUT-08
+      - AC-XCUT-08-NEG
+      - AC-XCUT-11
+      - AC-XCUT-11-NEG
+      - AC-EVAL-04
+      - AC-EVAL-04-NEG
+    golden_path_criteria:
+      - AC-CSREAD-03
+  - dependency_class: db:sqlite
+    kind: local
+    seam: libs/db|libs/fs
+    mock_boundary: >-
+      real db only; no in-memory substitute for the integration tier
+    criteria:
+      - AC-REFM-02
+      - AC-REFM-02-NEG
+      - AC-REFM-03
+      - AC-REFM-03-NEG
+      - AC-REFM-04
+      - AC-REFM-04-NEG
+      - AC-EVAL-06
+      - AC-EVAL-06-NEG
+      - AC-EVAL-07
+      - AC-EVAL-07-NEG
+    golden_path_criteria:
+      []
+  - dependency_class: gcs:objects
+    kind: local
+    seam: libs/db|libs/fs
+    mock_boundary: >-
+      real gcs only; no in-memory substitute for the integration tier
+    criteria:
+      - AC-STORE-09
+      - AC-STORE-09-NEG
+      - AC-STORE-10
+      - AC-STORE-10-NEG
+      - AC-STORE-11
+      - AC-STORE-11-NEG
+      - AC-STORE-12
+      - AC-STORE-12-NEG
+      - AC-STORE-14
+      - AC-STORE-14-NEG
+      - AC-CLOSE-07-NEG
+      - AC-CLOSE-08
+      - AC-CLOSE-08-NEG
+      - AC-CLOSE-09
+      - AC-CLOSE-09-NEG
+      - AC-CLOSE-14
+      - AC-CLOSE-14-NEG
+    golden_path_criteria:
+      []
+  - dependency_class: vendor:anthropic
+    kind: vendor
+    seam: transport.external.call_external
+    mock_boundary: >-
+      may mock the vendor HTTP response body via a vcrpy cassette at the call_external/transport layer; MUST NOT replace the call_external seam, the request construction, or the client object with Mock()
+    cassette: tests/cassettes/anthropic_*.yaml
+    criteria:
+      - AC-SCRIBE-01
+      - AC-SCRIBE-01-NEG
+      - AC-SCRIBE-02
+      - AC-SCRIBE-02-NEG
+      - AC-SCRIBE-13
+      - AC-SCRIBE-13-NEG
+      - AC-SCRIBE-15
+      - AC-SCRIBE-15-NEG
+      - AC-SCHEMA-16
+      - AC-SCHEMA-16-NEG
+      - AC-SCHEMA-18
+      - AC-SCHEMA-18-NEG
+      - AC-SCHEMA-19
+      - AC-SCHEMA-19-NEG
+      - AC-SCHEMA-20
+      - AC-SCHEMA-20-NEG
+      - AC-SCHEMA-21
+      - AC-SCHEMA-21-NEG
+      - AC-SCHEMA-22
+      - AC-SCHEMA-22-NEG
+      - AC-QGATE-02
+      - AC-QGATE-03
+      - AC-QGATE-04
+      - AC-QGATE-07-NEG
+      - AC-QGATE-08-NEG
+      - AC-QGATE-09
+      - AC-QGATE-09-NEG
+      - AC-QGATE-10
+      - AC-QGATE-10-NEG
+      - AC-QGATE-11
+      - AC-QGATE-11-NEG
+      - AC-CLOSE-01
+      - AC-CLOSE-01-NEG
+      - AC-CLOSE-03
+      - AC-CLOSE-03-NEG
+      - AC-CLOSE-04
+      - AC-CLOSE-06
+      - AC-CLOSE-06-NEG
+      - AC-CLOSE-06B-NEG
+      - AC-CLOSE-11
+      - AC-CLOSE-11-NEG
+      - AC-CLOSE-12
+      - AC-CLOSE-12-NEG
+      - AC-PERF-01
+      - AC-PERF-01-NEG
+      - AC-PERF-06
+      - AC-PERF-06-NEG
+      - AC-PERF-07
+      - AC-PERF-07-NEG
+      - AC-XCUT-02
+      - AC-XCUT-02-NEG
+      - AC-XCUT-03
+      - AC-XCUT-03-NEG
+      - AC-EVAL-01
+      - AC-EVAL-01-NEG
+      - AC-EVAL-02
+      - AC-EVAL-02-NEG
+      - AC-EVAL-03
+      - AC-EVAL-03-NEG
+      - AC-EVAL-05
+      - AC-EVAL-05-NEG
+    golden_path_criteria:
+      - AC-SCRIBE-01
+      - AC-CLOSE-01
+  - dependency_class: vendor:recall
+    kind: vendor
+    seam: transport.external.call_external
+    mock_boundary: >-
+      may mock the vendor HTTP response body via a vcrpy cassette at the call_external/transport layer; MUST NOT replace the call_external seam, the request construction, or the client object with Mock()
+    cassette: tests/cassettes/recall_*.yaml
+    criteria:
+      - AC-CLOSE-10
+      - AC-CLOSE-10-NEG
+    golden_path_criteria:
+      []
