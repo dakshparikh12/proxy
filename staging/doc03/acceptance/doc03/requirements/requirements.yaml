@@ -1019,6 +1019,21 @@
   testability: executable
   status: qualified
   dependency_class: vendor:anthropic
+
+- requirement_id: R-doc03-SCHEMA-27
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2.1 schema — Decision.leans"
+  source_quote: "leans: dict[str, Literal["for","against","silent"]]"
+  normalized_statement: >
+    THE SYSTEM SHALL enforce that every value in Decision.leans is a member of
+    {"for", "against", "silent"}; any value outside that set (e.g. "maybe",
+    "abstain", or an empty string) SHALL be rejected at Pydantic validation time
+    and SHALL NOT be persisted to the note_deltas ledger.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
 # qgate.requirements.yaml — Doc 03 (Notes / Scribe) — §3.2.2 Sampled Online Quality Gate
 # Atomic EARS requirements.  Each carries source_location + verbatim source_quote + criticality.
 # ID scheme: R-doc03-QGATE-NN
@@ -2294,6 +2309,31 @@
   golden_path: false
   status: qualified
 
+- requirement_id: R-doc03-EVENT-19
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.5, paragraph 1 + §1 design"
+  source_quote: "claim-landed (checkable) … Chitchat and running-context updates emit nothing."
+  normalized_statement: >
+    WHEN an AddOp containing a ContextLine entry is applied
+    THE SYSTEM SHALL NOT emit a claim-landed event; only AddOps producing a Claim
+    entry with kind="claim" SHALL trigger claim-landed. Opinions, chitchat gists,
+    and running-context additions that land in ContextLine are not checkable and
+    SHALL NEVER fire claim-landed.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  dependency_class: null
+  golden_path: false
+  status: qualified
+  ambiguity_note: >
+    The spec lists "claim-landed (checkable)" as an event but the Claim schema has
+    no "checkable" field. Canonical resolution: any Claim entry is checkable (it is
+    a factual assertion); opinions/color/chitchat land in ContextLine and are not
+    checkable. This requirement pins the boundary: ContextLine additions MUST NOT fire
+    claim-landed; Claim additions MUST. How to distinguish an "opinion" (ContextLine)
+    from a "checkable claim" (Claim) is a Scribe judgment rule, not a schema field.
+
 # ══════════════════════════════════════════════════════════════════════════════
 # §3.6 LIVE CORRECTIONS (TRUST BEHAVIOR)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3428,19 +3468,27 @@
 - requirement_id: R-doc03-PERF-05
   authority_type: specification
   authority_document: DOC-03
-  source_location: "§4 Accuracy paragraph, sentence 2"
+  source_location: "§4 Accuracy paragraph + §2 design, Claims bullet"
   source_quote: >
     Observed-vs-inferred + firmness labels keep uncertainty visible instead of laundered.
+    Claims — who said what, when, with firmness … and an observed vs inferred label.
     The raw transcript is always the ground truth underneath.
   normalized_statement: >
-    THE SYSTEM SHALL attach observed-vs-inferred and firmness labels to every entry
-    emitted by the Scribe; these labels SHALL NEVER be omitted, defaulted, or suppressed
-    for any reason (including efficiency or output-length reduction); the raw transcript
+    THE SYSTEM SHALL attach observed-vs-inferred (provenance) and firmness labels to
+    every Claim entry emitted by the Scribe; these labels SHALL NEVER be omitted,
+    defaulted, or suppressed on a Claim for any reason (including efficiency or
+    output-length reduction). ActionItem entries SHALL carry a provenance label;
+    Decision, OpenQuestion, and ContextLine entries do NOT carry firmness or provenance
+    (those fields are not defined on their schemas per §3.2.1). The raw transcript
     SHALL always be preserved as the ground truth underneath all derived notes.
   requirement_type: correctness
   criticality: P0
   testability: executable
   status: qualified
+  ambiguity_note: >
+    Spec §4 says "every entry" but §2 + §3.2.1 schema scope firmness+provenance to
+    Claim only; ActionItem has provenance, not firmness; Decision/OpenQuestion/ContextLine
+    have neither. This requirement follows the schema as the narrower, executable truth.
 
 # ── Latency — real-time shape ────────────────────────────────────────────────
 
@@ -3928,5 +3976,40 @@
     output channel and has no execution capability.
   requirement_type: security
   criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-XCUT-13
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§2 design, Excluded on principle"
+  source_quote: >
+    Excluded on principle: inferred emotion, engagement/sentiment scores, addressee
+    ratios, meeting-type labels. Observable facts only. Never a meeting-type mode.
+  normalized_statement: >
+    THE SYSTEM SHALL NEVER attach inferred emotion scores, engagement or sentiment
+    scores, addressee ratios, or meeting-type labels to any notes entry or the notes
+    object; the Scribe's emit_notes_delta schema and the Notes object definition SHALL
+    contain no fields for these vibes-based signals; their absence is an invariant,
+    not a default.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-XCUT-14
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§2 design, model-seat paragraph"
+  source_quote: >
+    route stderr through an sk-ant-*/Bearer redactor before logging.
+  normalized_statement: >
+    WHEN any process or library writes to stderr during Scribe or notes-pipeline
+    operation THE SYSTEM SHALL route that stderr through a redactor that strips
+    any string matching sk-ant-* or Bearer <token> patterns before persisting or
+    emitting the log line; no API key or Bearer token SHALL appear in any log
+    output, error trace, or telemetry record.
+  requirement_type: security
+  criticality: P1
   testability: executable
   status: qualified

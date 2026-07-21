@@ -1970,6 +1970,36 @@ criteria:
     thresholds: {decision_referents_overflow_accepted: 0}
     fault_model_refs: [F-REFERENTS-OVERFLOW]
     test_ids: [T-SCHEMA-23]
+
+  # ── Enum validation: Decision.leans values ────────────────────────────────
+
+  - criterion_id: AC-SCHEMA-24
+    name: "Decision.leans rejects any value outside {for, against, silent}"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc03-SCHEMA-27]
+    criticality: P1
+    blocking: true
+    golden_path: false
+    dependency_class: null
+    mock_boundary: null
+    verification_ladder: [lint, unit]
+    behavior:
+      given: "a Decision being constructed with a leans dict"
+      when: "any speaker stance value is outside {"for", "against", "silent"} (e.g. "maybe", "abstain", "")"
+      then:
+        - "Pydantic raises a ValidationError at instantiation time"
+        - "leans values of "for", "against", and "silent" each validate without error"
+        - "no Decision object is returned from model_validate with an invalid stance value"
+    primary_oracle:
+      type: unit_assertion
+      artifact: >
+        assert Decision(leans={"Priya": "maybe"}, ...) raises ValidationError;
+        for v in ("for", "against", "silent"):
+          assert Decision(leans={"Priya": v}, ...) succeeds;
+        assert Decision(leans={"Priya": "abstain"}, ...) raises ValidationError
+    thresholds: {invalid_stance_values_accepted: 0}
+    fault_model_refs: [F-DECISION-LEANS-INVALID-STANCE]
+    test_ids: [T-SCHEMA-24]
 # qgate.criteria.yaml — Doc 03 (Notes / Scribe) — §3.2.2 Sampled Online Quality Gate
 # Acceptance criteria for the sampled entailment gate on Haiku Scribe outputs.
 # ID scheme: AC-QGATE-NN  (NEG partner: AC-QGATE-NN-NEG)
@@ -4067,6 +4097,40 @@ criteria:
   thresholds: {chat_lines_posted_when_disabled_allowed: 0}
   fault_model_refs: [F-CHAT-LINE-IGNORES-TOGGLE]
   test_ids: [T-EVENT-09]
+
+# ── ContextLine additions must NOT emit claim-landed (negative frontier) ───────
+
+- criterion_id: AC-EVENT-10
+  name: "ContextLine AddOp does NOT emit a claim-landed event (non-checkable negative frontier)"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-EVENT-19]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: >
+      The event emitter wired to a mock Doc 04 sink; a synthetic NoteDelta containing
+      only an AddOp with a ContextLine entry (kind="context", text="some chitchat")
+    when:  "The delta is applied via apply_delta"
+    then:
+      - "Zero claim-landed events are emitted to the Doc 04 sink"
+      - "No event of any kind is emitted for a ContextLine-only delta"
+      - "The ContextLine entry IS persisted to note_deltas (the no-event constraint is about the emitter, not persistence)"
+  primary_oracle:
+    type: state_machine_assertion
+    artifact: >
+      mock_sink = []; apply_delta(delta_with_context_line_only, sink=mock_sink);
+      assert len([e for e in mock_sink if e.type == 'claim-landed']) == 0;
+      assert len(mock_sink) == 0
+  thresholds: {claim_landed_events_for_context_lines_allowed: 0}
+  fault_model_refs: [F-CONTEXT-LINE-FIRES-CLAIM-LANDED]
+  test_ids: [T-EVENT-10]
+  ambiguity_note: >
+    The spec has no "checkable" field on Claim; canonical resolution is that all
+    Claim entries are checkable and all ContextLine entries are not. See R-doc03-EVENT-19.
 
 # ══════════════════════════════════════════════════════════════════════════════
 # §3.6 LIVE CORRECTIONS — ACCEPTANCE CRITERIA
@@ -6355,7 +6419,7 @@ criteria:
   test_ids: [T-PERF-04]
 
 - criterion_id: AC-PERF-05
-  name: "observed-vs-inferred and firmness labels present on every Scribe-emitted entry (never omitted)"
+  name: "observed-vs-inferred and firmness labels present on every Claim; provenance on every ActionItem (never omitted)"
   evidence_class: "[unit-property]"
   authority_refs: [R-doc03-PERF-05]
   criticality: P0
@@ -6365,22 +6429,33 @@ criteria:
   mock_boundary: null
   verification_ladder: [lint, unit]
   behavior:
-    given: "A Scribe delta emitting one or more entries across a variety of entry types (claims, decisions, actions, questions, context)"
-    when:  "Each emitted entry is inspected"
+    given: >
+      A Scribe delta emitting entries across all five entry types: Claim, Decision,
+      ActionItem, OpenQuestion, ContextLine (per §3.2.1 schema)
+    when:  "Each emitted entry is inspected for the labels its schema defines"
     then:
-      - "Every entry has a non-null observed_vs_inferred field"
-      - "Every entry has a non-null firmness field"
-      - "No entry omits these fields, even when the output is close to the token limit"
-      - "The labels are not defaulted to a placeholder — they reflect the Scribe's actual assessment"
+      - "Every Claim entry has a non-null provenance field (observed | inferred)"
+      - "Every Claim entry has a non-null firmness field (firm | hedged | speculative)"
+      - "Every ActionItem entry has a non-null provenance field"
+      - "Decision entries do NOT carry firmness or provenance (schema has none — asserting absent is a schema-conformant pass)"
+      - "OpenQuestion and ContextLine entries do NOT carry firmness or provenance"
+      - "No Claim or ActionItem omits its required labels even when output is close to the token limit"
+      - "Labels are not defaulted to a placeholder — they reflect the Scribe's actual assessment"
   primary_oracle:
     type: schema_presence_assertion
     artifact: >
-      for each entry in delta.entries: assert entry.observed_vs_inferred is not None;
-      assert entry.firmness is not None; assert neither field is set to a known
-      placeholder value such as 'unknown' or 'N/A' from an omission shortcut
+      for each entry in delta.ops where entry.kind == 'claim':
+        assert entry.provenance is not None; assert entry.firmness is not None;
+      for each entry where entry.kind == 'action':
+        assert entry.provenance is not None;
+      for each entry where entry.kind in ('decision','open_question','context'):
+        assert not hasattr(entry, 'firmness') or entry.firmness is None (schema defines none);
+      assert no Claim or ActionItem has provenance/firmness set to a known
+      placeholder such as 'unknown' or 'N/A'
   thresholds:
-    entries_missing_observed_vs_inferred_allowed: 0
-    entries_missing_firmness_allowed: 0
+    claims_missing_provenance_allowed: 0
+    claims_missing_firmness_allowed: 0
+    action_items_missing_provenance_allowed: 0
     placeholder_label_substitutions_allowed: 0
   fault_model_refs: [F-PERF-LABEL-OMITTED-FOR-EFFICIENCY, F-PERF-LABEL-PLACEHOLDER]
   test_ids: [T-PERF-05]
@@ -7113,7 +7188,7 @@ criteria:
       - "Fixture A: Claim.provenance=observed, Claim.firmness=firm"
       - "Fixture B: Claim.firmness in {hedged, speculative} — never 'firm'"
       - "Fixture C: Claim.provenance=inferred (not observed)"
-      - "No Claim or ActionItem entry lacks a firmness or provenance field"
+      - "No Claim entry lacks firmness or provenance; no ActionItem entry lacks provenance (ActionItem has no firmness field per §3.2.1 schema)"
   primary_oracle:
     type: schema_validation_plus_cassette_output_check
     artifact: "assert every Claim in NoteDelta has .provenance in {observed,inferred} and .firmness in {firm,hedged,speculative}; fixture B: assert .firmness != firm; fixture C: assert .provenance == inferred"
@@ -7536,3 +7611,82 @@ criteria:
   mock_boundary: "real Postgres instance with wrong column type; MUST NOT mock the insert path"
   golden_path: false
   verification_ladder: [lint, unit, negative]
+
+# ── Sentiment/emotion/meeting-type exclusion (honesty frontier) ───────────────
+
+- criterion_id: AC-XCUT-12
+  name: "No emotion score, sentiment score, addressee ratio, or meeting-type label in any notes entry or Notes object"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-XCUT-13]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: >
+      (a) A static scan of the Pydantic schema definitions for Claim, Decision,
+      ActionItem, OpenQuestion, ContextLine, NoteDelta, and the Notes object;
+      (b) A fixture set of Scribe deltas emitted over a transcript that contains
+      emotionally loaded speech and a mix of meeting types (standup, design review)
+    when: >
+      (a) Schema field names are inspected; (b) each delta is applied and the
+      resulting notes object is inspected
+    then:
+      - "No field named emotion, sentiment, engagement, addressee_ratio, meeting_type, or meeting_label exists on any schema class"
+      - "No NoteDelta or Notes object returned by apply_delta contains a key matching emotion*, sentiment*, engagement*, or addressee*"
+      - "The schema shape is identical for a standup fixture and a design-review fixture"
+      - "No vibes-based field is present even as an optional/nullable field with a default of None"
+  primary_oracle:
+    type: schema_field_scan_plus_fixture
+    artifact: >
+      static: grep/AST scan for field names matching emotion|sentiment|engagement|addressee|meeting_type
+      in scribe/schema.py and any Notes class definition — assert zero hits;
+      dynamic: run two fixture types (standup, design-review) through Scribe stub;
+      assert set(delta.model_fields.keys()).isdisjoint(VIBES_FIELDS) for each delta
+  thresholds:
+    vibes_fields_in_schema_allowed: 0
+    vibes_fields_in_any_emitted_delta_allowed: 0
+  fault_model_refs: [F-EMOTION-FIELD-IN-SCHEMA, F-SENTIMENT-FIELD-IN-DELTA]
+  test_ids: [T-XCUT-12]
+
+# ── Stderr API-key / Bearer-token redaction seam ─────────────────────────────
+
+- criterion_id: AC-XCUT-13
+  name: "No sk-ant-* API key or Bearer token appears in any log output or error trace"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc03-XCUT-14]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: >
+      (a) A call to get_sdk_env() or build_scribe_prefix() in an environment where
+      ANTHROPIC_API_KEY is set to a string matching sk-ant-api03-* pattern;
+      (b) A simulated exception raised inside a Scribe call that causes a traceback
+      to be written to stderr — the traceback includes the SDK client object whose
+      repr contains the API key
+    when: >
+      (a) The process writes to stderr; (b) the log emitter processes the error
+    then:
+      - "No output on stderr or any log sink contains a substring matching sk-ant-* or Bearer <any-token>"
+      - "The redactor replaces the token with a fixed mask (e.g. [REDACTED]) before any write"
+      - "The redacted log line is otherwise intact — the error message is readable minus the secret"
+      - "A static scan of the logging setup confirms the redactor is wired before any handler that writes to a persistent sink"
+  primary_oracle:
+    type: unit_assertion
+    artifact: >
+      inject ANTHROPIC_API_KEY="sk-ant-api03-TESTKEYFORTESTING" into env;
+      trigger an exception in the Scribe call path; capture stderr;
+      assert "sk-ant-" not in captured_stderr;
+      assert "Bearer sk-" not in captured_stderr;
+      assert "[REDACTED]" in captured_stderr or captured_stderr contains no token at all
+  thresholds:
+    log_lines_containing_api_key_allowed: 0
+    log_lines_containing_bearer_token_allowed: 0
+  fault_model_refs: [F-API-KEY-IN-LOG, F-BEARER-TOKEN-IN-STDERR]
+  test_ids: [T-XCUT-13]
