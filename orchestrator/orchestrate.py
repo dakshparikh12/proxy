@@ -1208,13 +1208,18 @@ def main():
     ap.add_argument("--from", dest="start", default="doc00")
     ap.add_argument("--only", default=None)
     args = ap.parse_args()
+    # Truncate run.log FIRST (one clean log per conductor run) so EVERY startup diagnostic that
+    # follows — PATH augment, a machine-sleep/suspend warning, and the preflight verdict (OK, a
+    # transient retry, or a FAIL) — persists in run.log instead of being wiped after preflight. The
+    # old order truncated AFTER preflight, so a bare stack of PATH-augment lines was all a failed
+    # restart left behind (the exact 2026-07-21 symptom) and PRELAUNCH OK / suspend warnings vanished.
+    LOG.write_text("")
     _ensure_host_tools_on_path()   # rg / postgres / homebrew tools the suite shells out to
     _note_suspend_gap()            # did the machine sleep since the last run? (reads OLD heartbeat)
     _start_heartbeat()             # begin stamping state/heartbeat so the NEXT start can tell
     _reap_orphaned_mcp()           # clear any legacy orphaned MCP helpers from a prior hard-killed run
     cli_preflight()
     docs = [args.only] if args.only else ORDER[ORDER.index(args.start):]
-    LOG.write_text("")
     for doc in docs:
         lock_pull_during_doc()      # doc in flight — pin the run to its launch SHA
         result = run_doc(doc)
