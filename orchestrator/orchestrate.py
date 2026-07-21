@@ -289,6 +289,67 @@ def _reap_orphaned_mcp() -> None:
         log(f"[startup] reaped {killed} orphaned MCP helper process(es) from a prior hard-killed run")
 
 
+# ── Machine-sleep / suspend detection (TASK 3) ───────────────────────────────
+# A heartbeat thread stamps state/heartbeat every HEARTBEAT_INTERVAL while the conductor is alive.
+# A suspend (idle/lid-close sleep) freezes the WHOLE process tree — the heartbeat stops too — and
+# can kill the tmux server, ending the run with no error line (the 2026-07-21 ~7h 19:42->02:35 gap).
+# On the NEXT conductor start we compare now vs the last heartbeat: a large gap => log a LOUD,
+# specific line so "why did it die?" has a visible answer instead of guesswork. Because the thread
+# keeps beating WHILE AWAKE, a merely-long (34m) phase never trips it — only a real suspend does.
+_HEARTBEAT = ORCH / "state" / "heartbeat"
+HEARTBEAT_INTERVAL = 60          # seconds between beats while alive
+SUSPEND_THRESHOLD = 900          # a gap larger than this between beats => machine likely slept
+
+
+def _suspend_gap_message(last_epoch: float, now_epoch: float, threshold: int = SUSPEND_THRESHOLD) -> str | None:
+    """Pure: return a loud warning if the heartbeat gap implies a suspend, else None."""
+    gap = now_epoch - last_epoch
+    if gap < threshold:
+        return None
+    mins = int(gap // 60)
+    return (f"[startup] WARNING: {int(gap)}s (~{mins}m) wall-clock gap since the last heartbeat — the "
+            f"machine likely SLEPT/SUSPENDED. Idle or lid-close sleep freezes the whole process tree "
+            f"and can kill the tmux server, ending the run with NO error line. If this run had to be "
+            f"relaunched, that is why. Prevent it: launch via orchestrator/launch.sh (caffeinate "
+            f"-dimsu) and keep the lid open + charger in.")
+
+
+def _read_last_heartbeat() -> float | None:
+    try:
+        return float(_HEARTBEAT.read_text().strip())
+    except (FileNotFoundError, ValueError, OSError):
+        return None
+
+
+def _note_suspend_gap() -> None:
+    """Called at startup BEFORE _start_heartbeat overwrites the file: did the machine sleep?"""
+    last = _read_last_heartbeat()
+    if last is None:
+        return
+    msg = _suspend_gap_message(last, time.time())
+    if msg:
+        log(msg)
+
+
+def _start_heartbeat() -> None:
+    """Daemon thread: stamp state/heartbeat every HEARTBEAT_INTERVAL so the NEXT start can measure
+    a suspend gap. Daemon => never blocks exit; failures are swallowed (a heartbeat miss is harmless)."""
+    _HEARTBEAT.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        _HEARTBEAT.write_text(str(int(time.time())))   # immediate first beat
+    except OSError:
+        pass
+
+    def _beat() -> None:
+        while True:
+            time.sleep(HEARTBEAT_INTERVAL)
+            try:
+                _HEARTBEAT.write_text(str(int(time.time())))
+            except OSError:
+                pass
+    threading.Thread(target=_beat, daemon=True, name="heartbeat").start()
+
+
 def _ensure_host_tools_on_path() -> None:
     """Prepend common host-tool bin dirs to PATH so the build + tests find the binaries the suite
     shells out to (ripgrep `rg`, `postgres`/`initdb` for testing.postgresql, other homebrew tools).
@@ -1148,6 +1209,8 @@ def main():
     ap.add_argument("--only", default=None)
     args = ap.parse_args()
     _ensure_host_tools_on_path()   # rg / postgres / homebrew tools the suite shells out to
+    _note_suspend_gap()            # did the machine sleep since the last run? (reads OLD heartbeat)
+    _start_heartbeat()             # begin stamping state/heartbeat so the NEXT start can tell
     _reap_orphaned_mcp()           # clear any legacy orphaned MCP helpers from a prior hard-killed run
     cli_preflight()
     docs = [args.only] if args.only else ORDER[ORDER.index(args.start):]

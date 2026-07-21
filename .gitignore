@@ -53,6 +53,7 @@ orchestrator/console.log
 orchestrator/state/run.sha
 orchestrator/state/ALLOW_PULL
 orchestrator/STOP
+orchestrator/state/heartbeat
 
 # Ladder-runner derived per-run state (rebuildable, like a cache — never source of truth).
 evidence/*-ladder.json
