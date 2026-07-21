@@ -70,7 +70,11 @@ P5_PLAN_TIMEOUT = 60 * 25   # the P5 planner is BOUNDED: planning a doc is minut
 #   subprocess and, on subprocess.TimeoutExpired, returns/logs a clear "<PHASE>_TIMEOUT" so main()
 #   exits non-DONE and supervise.sh relaunches — the resume logic then skips already-sealed work.
 #   Sized to the work each phase does: generation-heavy phases get planning-weight; narrow rulings less.
-GEN_CRITERIA_TIMEOUT = 60 * 15   # P1 + sweep gap-closure: derive a criteria bundle from one spec
+# P1 criteria-generation timeout SCALES with the target spec's size (see gen_criteria_timeout below):
+# bigger specs have more sections to read + turn into criteria, so a fixed 15m starved the largest
+# ones — doc03's 532-line spec timed out at 15m though doc01's 401-line spec had fit. base 300s +
+# 2.5s/line, FLOORED at the proven 15m and CAPPED at 35m so a genuine hang is still caught loud.
+GEN_CRITERIA_FLOOR, GEN_CRITERIA_CEIL = 60 * 15, 60 * 35
 GEN_EVIDENCE_TIMEOUT = 60 * 25   # P3 + sweep gap-closure: heaviest generator (tests+fixtures+sims+goldens)
 REVIEW_TIMEOUT       = 60 * 15   # P2: fresh-context adversarial criteria review (read one bundle + judge)
 VERIFY_TIMEOUT       = 60 * 20   # P7: fresh-context independent verifier (refute the whole built doc)
@@ -79,6 +83,21 @@ ADJUDICATE_TIMEOUT   = 60 * 10   # a single yes/no ruling on ONE claimed blocker
 REVIEW_CYCLES, SWEEP_CYCLES = 3, 2   # each pass is cheap now (formal artifacts dropped) so keep the
 #                                      coverage loop generous; both break EARLY once the reviewer
 #                                      approves + the RTM gate passes, so a clean doc costs 1 cycle.
+
+
+def gen_criteria_timeout(doc: str) -> int:
+    """P1 criteria-generation timeout, scaled by the doc's spec line count so a fixed constant can't
+    starve a large spec (base 300s + 2.5s/line, clamped to [15m floor, 35m cap]). Calibrated on the
+    real spec sizes — the largest docs (doc04 690L, doc08 706L) land near, but under, the 35m cap so
+    a genuine hang is still caught:
+        doc02 132L -> 15m (floor)   doc00 339L -> 19m   doc01 401L -> 22m   doc05 432L -> 23m
+        doc03 532L -> 27m           doc04 690L -> 34m   doc08 706L -> 34m   (>720L -> 35m cap)"""
+    spec = ROOT / "product" / "v0-spec" / DOCS[doc]["spec"]
+    try:
+        lines = sum(1 for _ in spec.open(encoding="utf-8", errors="replace"))
+    except Exception:
+        lines = 450   # spec unreadable -> safe middle estimate, still well above the floor
+    return int(min(GEN_CRITERIA_CEIL, max(GEN_CRITERIA_FLOOR, 300 + 2.5 * lines)))
 
 
 def log(msg: str) -> None:
@@ -892,7 +911,7 @@ def run_doc(doc: str) -> str:
         for cycle in range(1, REVIEW_CYCLES + 1):
             log(f"[{doc}] P1 generate criteria (cycle {cycle})")
             if run_agent("gen_criteria.md", {"<DOC>": doc, "<SPEC>": DOCS[doc]["spec"]},
-                         model=model_for("criteria-generation"), timeout=GEN_CRITERIA_TIMEOUT,
+                         model=model_for("criteria-generation"), timeout=gen_criteria_timeout(doc),
                          max_turns=200, phase=f"{doc} P1 criteria").timed_out:
                 return "P1_CRITERIA_TIMEOUT"
             log(f"[{doc}] P2 adversarial criteria review")
