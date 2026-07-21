@@ -80,6 +80,15 @@ dependencies:
       - AC-XCUT-02-NEG
       - AC-XCUT-03
       - AC-XCUT-03-NEG
+      # G2 patch: eval criteria for Scribe extraction quality (cassette-backed)
+      - AC-EVAL-01
+      - AC-EVAL-01-NEG
+      - AC-EVAL-02
+      - AC-EVAL-02-NEG
+      - AC-EVAL-03
+      - AC-EVAL-03-NEG
+      - AC-EVAL-05
+      - AC-EVAL-05-NEG
     golden_path_criteria:
       - AC-SCRIBE-01   # golden: Scribe hot loop end-to-end
       - AC-CLOSE-01    # golden: full close pass
@@ -172,6 +181,10 @@ dependencies:
       - AC-XCUT-08-NEG
       - AC-XCUT-11
       - AC-XCUT-11-NEG
+      # G2.3 patch: semantic dedup eval (requires real Postgres for note_deltas)
+      - AC-CORR-03
+      - AC-EVAL-04
+      - AC-EVAL-04-NEG
     golden_path_criteria:
       - AC-CSREAD-03   # golden: GET /internal/notes/{meeting_id} end-to-end
       - AC-CLOSE-01    # golden: close pass also writes/reads via Postgres
@@ -228,6 +241,10 @@ dependencies:
       - AC-REFM-03
       - AC-REFM-03-NEG
       - AC-REFM-04
+      # G1.2 / G2.4 patch: lookup_referent precision/recall eval criteria
+      - AC-EVAL-06
+      - AC-EVAL-06-NEG
+      - AC-EVAL-07
     golden_path_criteria: []
 
   # ─────────────────────────────────────────────────────────────────────────────

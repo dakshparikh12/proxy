@@ -4013,3 +4013,106 @@
   criticality: P1
   testability: executable
   status: qualified
+
+# ──────────────────────────────────────────────────────────────────────────────
+# §G2 / §G1.2 PATCH — Scribe extraction quality & referent marking (eval tier)
+# Added to close review gaps G2.1–G2.4 and the G1.2 referent-marking fragment.
+# ID scheme: R-doc03-EVAL-NN
+# Authority document: DOC-03 (§3.2 judgment rules, §3.4, §3.11, §4 accuracy)
+# ──────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc03-EVAL-01
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2 judgment rules / §2 design / §4 accuracy"
+  source_quote: >
+    label everything observed-vs-inferred; carry firmness; a hedged "maybe 2%" must
+    never read as a committed number. live entries are cheap-model quality but correctable.
+  normalized_statement: >
+    WHEN real meeting speech is processed by the Scribe THE SYSTEM SHALL correctly
+    label each Claim's firmness (firm / hedged / speculative) AND provenance
+    (observed / inferred) as measured against a calibrated golden set of meeting
+    transcripts; accuracy on both dimensions SHALL be measurable and meet a
+    threshold verifiable via an eval harness.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-EVAL-02
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§2 design, cross-cutting signals / §3.2 judgment rules"
+  source_quote: >
+    contradiction-across-time (a number stated at minute 3, quietly contradicted at
+    minute 20 — detectable from the claims ledger by structure alone; feeds Proactive's
+    hard floor). when a new claim conflicts with an existing entry, emit a patch that
+    marks contradiction rather than silently overwriting.
+  normalized_statement: >
+    WHEN a later claim in a meeting window conflicts with an earlier claim in the
+    notes ledger THE SYSTEM SHALL emit a PatchOp with the contradicts field set to
+    the earlier claim's entry_id; precision and recall of contradiction detection
+    SHALL be measurable on a calibrated evaluation set.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-EVAL-03
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.1 applier / §4 duration"
+  source_quote: >
+    The object grows with content, not with time — a fact stated fifty times is one
+    entry patched (or ignored), not fifty rows. patch-in-place is why the object grows
+    with content, not with time.
+  normalized_statement: >
+    WHEN the same substantive fact is stated multiple times across separate transcript
+    windows THE SYSTEM SHALL converge to a single entry (the original AddOp plus any
+    PatchOps, never additional AddOps for the same fact); a fact stated N times SHALL
+    produce at most O(1) note_deltas rows in the ledger for that fact, not O(N).
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-EVAL-04
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.2 judgment rules / §3.4 / §3.11"
+  source_quote: >
+    when a named thing sounds like code ("checkout," "the retry logic"), mark it as a
+    referent candidate. Referents → code — named things bound to real code areas via
+    Doc 01's lookup_referent(). This binding is what lets the Workroom start a task
+    already knowing which part of the codebase the room means.
+  normalized_statement: >
+    WHEN the Scribe processes a transcript window containing named code-sounding terms
+    THE SYSTEM SHALL populate the referents array of the corresponding entry with those
+    terms; the referent-marking recall rate over a fixture set of known code-sounding
+    terms SHALL be measurable and meet a threshold; non-code terms SHALL NOT be
+    spuriously marked at a rate that degrades precision below a threshold.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc03-EVAL-05
+  authority_type: specification
+  authority_document: DOC-03
+  source_location: "§3.4 / §3.11 referent matcher"
+  source_quote: >
+    the matcher calls lookup_referent(term) — a deterministic, no-LLM lookup over the
+    core overview areas + graph_nodes (area names, file names, key symbols) — which
+    returns {node_id | area | None}, binding the entry to the real code node. This
+    binding is what lets the Workroom start a task already knowing which part of the
+    codebase the room means.
+  normalized_statement: >
+    WHEN lookup_referent is called with a term that IS present in the graph_nodes
+    corpus or core overview areas THE SYSTEM SHALL return a correct binding (node_id
+    or area string) for at least a measurable threshold fraction of those terms; when
+    called with terms that are NOT present in the corpus THE SYSTEM SHALL return None
+    (never a fabricated binding), maintaining precision at or above a threshold.
+  requirement_type: correctness
+  criticality: P1
+  testability: executable
+  status: qualified
