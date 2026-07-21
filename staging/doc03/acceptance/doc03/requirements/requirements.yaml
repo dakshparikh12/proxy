@@ -1024,7 +1024,7 @@
   authority_type: specification
   authority_document: DOC-03
   source_location: "§3.2.1 schema — Decision.leans"
-  source_quote: "leans: dict[str, Literal["for","against","silent"]]"
+  source_quote: 'leans: dict[str, Literal["for","against","silent"]]'
   normalized_statement: >
     THE SYSTEM SHALL enforce that every value in Decision.leans is a member of
     {"for", "against", "silent"}; any value outside that set (e.g. "maybe",
