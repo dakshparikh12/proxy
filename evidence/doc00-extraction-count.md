@@ -10,3 +10,4 @@ auditor counted FINER than the bundle (+47%). Grain-dominated: schema/config/inv
 
 ## Disposition (per GENERATOR.md Task-5 design)
 HALT for founder review — the gate does NOT auto-resolve by regenerating. A human must adjudicate whether the disagreement is grain (most likely here) or a genuine under/over-extraction, using the spot-check pointers above.
+RATIFIED 2026-07-20: doc00 extraction-count MATERIAL_DISAGREEMENT (144 vs 211) reviewed by founder. §5 substrate + §15 invariants spot-checked against requirements.yaml — all flagged obligations present as sub-clauses under fewer parent IDs. Confirmed grain difference, not coverage gap. No regeneration needed.
