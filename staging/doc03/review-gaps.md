@@ -24,3 +24,4 @@ The reviewer mandate expects spec bugs routed to `ambiguities.yaml`, but **no su
 2. **G2.1–G2.4** — add real-data `[eval]` golden-key criteria for the *live* Scribe's firmness/provenance accuracy, contradiction detection, semantic dedup, and referent binding; today the product's central quality promise can pass while feeling wrong.
 3. **G1.1 (Topics)** and **G3.1/G3.2** — route to an ambiguities record and resolve.
 4. **G1.2, G1.3, G1.4** — close the omitted-behavior coverage.
+RATIFIED 2026-07-21: doc03 extraction-count MATERIAL_DISAGREEMENT (91 vs 127) reviewed by founder. Spot-checked §6 bi-temporal contradiction cases — SCRIBE-08 (symmetric contradiction ordering), SCRIBE-05 (decision-supersedes-decision), plus event_corr/schema requirements cover the named sub-cases as consolidated parent requirements. Confirmed grain difference, not coverage gap. No regeneration needed.
