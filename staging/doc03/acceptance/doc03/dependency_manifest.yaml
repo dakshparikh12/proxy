@@ -1,0 +1,251 @@
+# dependency_manifest.yaml — Doc 03 (Meeting Understanding / Notes)
+# Single source of truth for "what is real here and how may a test touch it."
+# The ladder_schema_gate.py verifies bidirectional consistency with criteria.yaml.
+
+doc: doc03
+
+dependencies:
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # vendor:anthropic — Haiku Scribe hot loop + quality-gate + rolling-summary
+  #                    + Sonnet close pass (all via Anthropic API)
+  # ─────────────────────────────────────────────────────────────────────────────
+  - dependency_class: vendor:anthropic
+    kind: vendor
+    seam: >
+      anthropic.AsyncAnthropic().messages.create (Scribe hot loop, quality gate,
+      rolling-summary generator); claude_agent_sdk.generateStructured (close pass)
+    mock_boundary: >
+      may mock the Anthropic HTTP response body via a vcrpy cassette at the
+      call_external/transport layer; MUST NOT replace messages.create, the tool
+      construction, the tool_choice directive, or generateStructured with Mock() —
+      the real request must be built and driven through the real seam; negative
+      cassettes (5xx/timeout/truncated body) must be pre-recorded against the real
+      API before use in negative-tier tests.
+    cassette: "tests/cassettes/scribe_*.yaml,tests/cassettes/scribe_close_*.yaml,tests/cassettes/quality_gate_*.yaml,tests/cassettes/rolling_summary_*.yaml"
+    criteria:
+      # Scribe call mechanics
+      - AC-SCRIBE-01
+      - AC-SCRIBE-02
+      - AC-SCRIBE-02-NEG
+      - AC-SCRIBE-07
+      - AC-SCRIBE-08
+      - AC-SCRIBE-13
+      - AC-SCRIBE-15
+      # Schema-enforced structured output (tool-forced NoteDelta)
+      - AC-SCHEMA-16
+      - AC-SCHEMA-16N
+      - AC-SCHEMA-18
+      - AC-SCHEMA-18N
+      - AC-SCHEMA-19
+      - AC-SCHEMA-19N
+      - AC-SCHEMA-20
+      - AC-SCHEMA-20N
+      - AC-SCHEMA-21
+      - AC-SCHEMA-21N
+      - AC-SCHEMA-22
+      - AC-SCHEMA-22N
+      - AC-SCHEMA-23
+      # Quality gate (Haiku entailment + Sonnet escalation)
+      - AC-QGATE-02
+      - AC-QGATE-03
+      - AC-QGATE-04
+      - AC-QGATE-07-NEG
+      - AC-QGATE-08-NEG
+      - AC-QGATE-09
+      - AC-QGATE-09-NEG
+      - AC-QGATE-10
+      - AC-QGATE-10-NEG
+      - AC-QGATE-11
+      - AC-QGATE-11-NEG
+      # Close pass (Sonnet generateStructured)
+      - AC-CLOSE-01
+      - AC-CLOSE-03
+      - AC-CLOSE-04
+      - AC-CLOSE-06
+      - AC-CLOSE-06-NEG
+      - AC-CLOSE-06-NEG2
+      - AC-CLOSE-11
+      - AC-CLOSE-11-NEG
+      - AC-CLOSE-12
+      # Performance / configurability (model-seat & cost)
+      - AC-PERF-01
+      - AC-PERF-01-NEG
+      - AC-PERF-06
+      - AC-PERF-06-NEG
+      - AC-PERF-07
+      - AC-PERF-07-NEG
+      # Cross-cutting (provenance labeling + injection defense)
+      - AC-XCUT-02
+      - AC-XCUT-02-NEG
+      - AC-XCUT-03
+      - AC-XCUT-03-NEG
+    golden_path_criteria:
+      - AC-SCRIBE-01   # golden: Scribe hot loop end-to-end
+      - AC-CLOSE-01    # golden: full close pass
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # db:postgres — Cloud SQL Postgres via asyncpg
+  #   note_deltas, transcript_segments, meeting_cost, operation_runs
+  # ─────────────────────────────────────────────────────────────────────────────
+  - dependency_class: db:postgres
+    kind: local
+    seam: "asyncpg pool + NotesRepository + TranscriptRepository (scribe/apply.py, scribe/notes_reader.py, tracing/cost_repo.py)"
+    mock_boundary: >
+      MUST use a real Postgres test instance (docker-compose postgres or Cloud SQL Auth Proxy);
+      MUST NOT mock the asyncpg pool, NotesRepository, TranscriptRepository, or the transaction
+      boundary — actual DDL constraints (uuid column types, unique indexes, ON CONFLICT DO NOTHING,
+      transaction atomicity) must be exercised; in-process fakes are not acceptable for integration tier.
+    cassette: null
+    criteria:
+      # Coalescer — append-only transcript segment writes
+      - AC-COAL-14
+      - AC-COAL-14-NEG
+      - AC-COAL-15
+      - AC-COAL-15-NEG
+      - AC-COAL-16
+      - AC-COAL-16-NEG
+      - AC-COAL-17
+      - AC-COAL-17-NEG
+      - AC-COAL-18
+      - AC-COAL-18-NEG
+      # Applier / dual storage plane
+      - AC-STORE-01
+      - AC-STORE-01-NEG
+      - AC-STORE-02
+      - AC-STORE-02-NEG
+      - AC-STORE-03
+      - AC-STORE-03-NEG
+      - AC-STORE-04
+      - AC-STORE-05
+      - AC-STORE-05-NEG
+      - AC-STORE-06
+      - AC-STORE-07
+      - AC-STORE-07-NEG
+      - AC-STORE-08
+      - AC-STORE-13
+      - AC-STORE-13-NEG
+      # Close pass (also in vendor:anthropic + gcs:objects)
+      - AC-CLOSE-01
+      - AC-CLOSE-04
+      - AC-CLOSE-04-NEG
+      - AC-CLOSE-07
+      - AC-CLOSE-07-NEG
+      - AC-CLOSE-13
+      - AC-CLOSE-13-NEG
+      - AC-CLOSE-14
+      # Cost telemetry (write-through to meeting_cost)
+      - AC-COST-05
+      - AC-COST-05-NEG
+      - AC-COST-06
+      - AC-COST-06-NEG
+      - AC-COST-12
+      - AC-COST-12-NEG
+      # Failure honesty (gap row write)
+      - AC-FAIL-02
+      - AC-FAIL-02-NEG
+      - AC-FAIL-03
+      - AC-FAIL-03-NEG
+      - AC-FAIL-04
+      - AC-FAIL-04-NEG
+      - AC-FAIL-05
+      - AC-FAIL-05-NEG
+      - AC-FAIL-06
+      - AC-FAIL-06-NEG
+      # Cross-service notes read
+      - AC-CSREAD-02
+      - AC-CSREAD-02-NEG
+      - AC-CSREAD-03
+      - AC-CSREAD-06
+      - AC-CSREAD-08
+      - AC-CSREAD-08-NEG
+      - AC-CSREAD-09
+      - AC-CSREAD-09-NEG
+      - AC-CSREAD-10
+      # Cross-cutting
+      - AC-XCUT-01
+      - AC-XCUT-05
+      - AC-XCUT-05-NEG
+      - AC-XCUT-06
+      - AC-XCUT-06-NEG
+      - AC-XCUT-08
+      - AC-XCUT-08-NEG
+      - AC-XCUT-11
+      - AC-XCUT-11-NEG
+    golden_path_criteria:
+      - AC-CSREAD-03   # golden: GET /internal/notes/{meeting_id} end-to-end
+      - AC-CLOSE-01    # golden: close pass also writes/reads via Postgres
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # gcs:objects — Google Cloud Storage (Object Versioning)
+  #   finalized notes.md with if_generation_match
+  # ─────────────────────────────────────────────────────────────────────────────
+  - dependency_class: gcs:objects
+    kind: local
+    seam: "write_finalized_notes() in storage/notes_artifact.py — google.cloud.storage.Blob.upload_from_string with if_generation_match; list_notes_versions(); read_notes_version()"
+    mock_boundary: >
+      MUST use a real GCS bucket or GCS-compatible emulator exercising the same HTTP API surface
+      (if_generation_match header, 412 PreconditionFailed → NotesGenerationConflictError);
+      MUST NOT mock Blob.upload_from_string — the actual if_generation_match semantics must execute;
+      in-process fakes that skip real GCS HTTP are not acceptable for the integration tier.
+    cassette: null
+    criteria:
+      - AC-STORE-09
+      - AC-STORE-09-NEG
+      - AC-STORE-10
+      - AC-STORE-10-NEG
+      - AC-STORE-11
+      - AC-STORE-11-NEG
+      - AC-STORE-12
+      - AC-STORE-14
+      - AC-CLOSE-01
+      - AC-CLOSE-04
+      - AC-CLOSE-05
+      - AC-CLOSE-05B
+      - AC-CLOSE-06
+      - AC-CLOSE-07-NEG
+      - AC-CLOSE-08
+      - AC-CLOSE-08-NEG
+      - AC-CLOSE-09
+    golden_path_criteria:
+      - AC-CLOSE-01    # golden: close pass writes final notes.md to GCS
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # db:sqlite — per-repo SQLite dependency graph on code_intel volume
+  #   lookup_referent() reads graph_nodes (Doc 01)
+  # ─────────────────────────────────────────────────────────────────────────────
+  - dependency_class: db:sqlite
+    kind: local
+    seam: "lookup_referent(term) defined in Doc 01 — deterministic string/rank match over graph_nodes + core overview area names in per-repo SQLite on the code_intel volume"
+    mock_boundary: >
+      MUST use a real SQLite database file pre-seeded with representative graph_nodes rows;
+      MUST NOT mock lookup_referent() itself — the actual SQLite query must execute;
+      an in-memory sqlite3:///:memory: with the same schema is acceptable for integration tier.
+    cassette: null
+    criteria:
+      - AC-REFM-02
+      - AC-REFM-02-NEG
+      - AC-REFM-03
+      - AC-REFM-03-NEG
+      - AC-REFM-04
+    golden_path_criteria: []
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # vendor:recall — Recall.ai chat API
+  #   close pass posts notes link in meeting chat
+  # ─────────────────────────────────────────────────────────────────────────────
+  - dependency_class: vendor:recall
+    kind: vendor
+    seam: "Recall.ai chat post API — called at close-pass teardown to post the notes markdown link in the meeting chat room"
+    mock_boundary: >
+      may mock the Recall HTTP response via a vcrpy cassette at the call_external/transport
+      layer; MUST NOT replace the call_external seam or Recall request construction with Mock() —
+      the real request must be built through the real seam at least once; negative cassettes
+      (5xx/timeout) must be pre-recorded against the real Recall API.
+    cassette: "tests/cassettes/recall_chat_*.yaml"
+    criteria:
+      - AC-CLOSE-01
+      - AC-CLOSE-09
+      - AC-CLOSE-10
+      - AC-CLOSE-10-NEG
+    golden_path_criteria: []
