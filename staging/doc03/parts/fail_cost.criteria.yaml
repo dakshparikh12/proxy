@@ -1,0 +1,975 @@
+# fail_cost.criteria.yaml — Doc 03 (Notes / Scribe) · §3.8 Failure honesty + §3.9 Cost telemetry
+# Acceptance criteria. Oracles: DB state assertions, log/metric checks, arithmetic fixtures,
+# UPSERT replay, cache-hit ratio probes, alert emission checks.
+# ID scheme: AC-FAIL-NN (§3.8), AC-COST-NN (§3.9).
+# authority_refs point at R-doc03-FAIL-NN / R-doc03-COST-NN in fail_cost.requirements.yaml.
+#
+# dependency_class rules:
+#   null        → zero external systems (pure logic / arithmetic)
+#   db:postgres → Postgres meeting_cost or transcript_segments touched
+# golden_path: false for all (failure honesty and cost telemetry are infrastructure)
+# Every non-null dependency_class criterion has a paired AC-FAIL-NN-NEG or AC-COST-NN-NEG.
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §3.8 FAILURE HONESTY
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SKIP-NOT-RETRY — failed window produces zero retry calls
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FAIL-01
+  name: "Failed Scribe call is skipped (zero retries, consumer continues)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-FAIL-01]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit, negative]
+  behavior:
+    given: >
+      A Scribe consumer processing a transcript window; the messages.create call for
+      that window is injected to return a 500 Internal Server Error
+    when:  "The Scribe pipeline handles the injected failure"
+    then:
+      - "Exactly zero retry calls are issued for the failed window (messages.create call count for that window stays at 1)"
+      - "The consumer does not hang or raise an unhandled exception"
+      - "The consumer proceeds to accept the next transcript window after recording the gap"
+  primary_oracle:
+    type: call_count_and_lifecycle_assertion
+    artifact: >
+      inject 500 on messages.create via cassette or mock transport;
+      assert messages.create call count for failed window == 1 (the original attempt);
+      assert no second messages.create call with same window content;
+      assert consumer task is alive and processes a subsequent synthetic window
+  thresholds:
+    retry_calls_per_failed_window_allowed: 0
+    consumer_crashes_allowed: 0
+
+- criterion_id: AC-FAIL-01-NEG
+  name: "Scribe failure on every window does not stall the consumer indefinitely"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-FAIL-01]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit, negative]
+  behavior:
+    given: "A Scribe consumer where every messages.create call is injected to fail with a 503"
+    when:  "Ten consecutive windows arrive and all fail"
+    then:
+      - "The consumer processes all ten windows without blocking (skip, not stall)"
+      - "Exactly ten gap records are produced (one per failed window)"
+      - "No retry calls are issued for any window"
+  primary_oracle:
+    type: bulk_failure_trace_assertion
+    artifact: >
+      inject 503 on all messages.create calls; drive 10 synthetic windows;
+      assert gap_records_written == 10; assert total messages.create calls == 10;
+      assert consumer task exits normally or awaits next window
+  thresholds:
+    gap_records_per_failed_window: 1
+    retry_calls_allowed: 0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GAP RECORD CONTENT — time span + "transcript preserved" required
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FAIL-02
+  name: "Gap record in transcript_segments contains time span and 'transcript preserved'"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-FAIL-02]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: null
+  verification_ladder: [lint, unit, integration]
+  behavior:
+    given: >
+      A Scribe call fails for the window spanning 14:03–14:05 (meeting-relative timestamps);
+      the consumer records the gap to the transcript_segments table
+    when:  "The gap row is inspected in transcript_segments"
+    then:
+      - "The row has status='gap'"
+      - "The row's gap_description (or equivalent text field) contains both the start timestamp ('14:03') and the end timestamp ('14:05')"
+      - "The row's gap_description contains the literal phrase 'transcript preserved'"
+      - "No other row for the same window has status='comprehended' or status='pending'"
+  primary_oracle:
+    type: db_row_content_assertion
+    artifact: >
+      insert test meeting; inject failure for 14:03–14:05 window; query transcript_segments
+      WHERE meeting_id=X AND window_start covers 14:03; assert status=='gap';
+      assert 'transcript preserved' in gap_description; assert start+end timestamps present
+  thresholds:
+    gap_rows_missing_transcript_preserved_phrase_allowed: 0
+    gap_rows_missing_timestamps_allowed: 0
+
+- criterion_id: AC-FAIL-02-NEG
+  name: "A successful Scribe call on the same window does NOT produce a gap row"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-FAIL-02]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: null
+  verification_ladder: [lint, unit, integration, negative]
+  behavior:
+    given: "A Scribe call that succeeds (returns a valid structured delta) for a window"
+    when:  "transcript_segments is queried for that window after processing"
+    then:
+      - "No row with status='gap' exists for the successfully-processed window"
+      - "The row for the window has status='comprehended'"
+  primary_oracle:
+    type: db_negative_row_assertion
+    artifact: >
+      drive a successful Scribe call (cassette-backed); query transcript_segments for that window;
+      assert count(rows WHERE status='gap') == 0; assert status=='comprehended'
+  thresholds:
+    spurious_gap_rows_on_success_allowed: 0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RAW TRANSCRIPT PRESERVATION — bytes not deleted on failure
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FAIL-03
+  name: "Raw transcript bytes are retained in transcript_segments after a Scribe failure"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-FAIL-03]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: null
+  verification_ladder: [lint, unit, integration]
+  behavior:
+    given: >
+      A transcript window with known speaker text ("Alice: the retry logic needs rework")
+      is inserted into transcript_segments before the Scribe call; the Scribe call for
+      that window then fails
+    when:  "transcript_segments is queried after the gap is recorded"
+    then:
+      - "The row for the failed window still has its raw_transcript field populated with the original content"
+      - "The raw_transcript content is byte-for-byte identical to the pre-failure insert"
+      - "No UPDATE or DELETE on raw_transcript has occurred as a result of the failure"
+  primary_oracle:
+    type: db_field_preservation_assertion
+    artifact: >
+      record SHA-256 of raw_transcript before injecting failure; inject failure; re-query;
+      assert SHA-256 of raw_transcript after failure equals pre-failure hash;
+      assert row count for the window has not decreased
+  thresholds:
+    raw_transcript_mutation_events_on_failure_allowed: 0
+
+- criterion_id: AC-FAIL-03-NEG
+  name: "raw_transcript is not nulled or truncated by the gap-recording path"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-FAIL-03]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: null
+  verification_ladder: [lint, unit, integration, negative]
+  behavior:
+    given: "A gap record is written for a failed window"
+    when:  "The gap-writing code path executes (the record_gap or equivalent function)"
+    then:
+      - "The code path does not issue UPDATE transcript_segments SET raw_transcript=NULL"
+      - "The code path does not issue UPDATE transcript_segments SET raw_transcript=''"
+      - "The raw_transcript column value is unchanged by the gap write"
+  primary_oracle:
+    type: query_log_and_field_inspection_assertion
+    artifact: >
+      enable Postgres statement log; trigger failure + gap write; grep logs for
+      UPDATE...raw_transcript=NULL or similar; assert zero such statements;
+      assert raw_transcript non-empty after gap write
+  thresholds:
+    raw_transcript_null_assignments_allowed: 0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLOSE PASS BACKFILL — status='gap' AND status='pending' both backfilled
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FAIL-04
+  name: "Close pass backfills all status='gap' spans from raw transcript"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-FAIL-04]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: null
+  verification_ladder: [lint, unit, integration]
+  behavior:
+    given: >
+      A meeting with two transcript_segments rows having status='gap' (from two
+      different Scribe failures during the live session); the close pass is invoked
+      on meeting end
+    when:  "The close pass completes"
+    then:
+      - "Both gap rows have been processed: status updated to 'comprehended' or an equivalent post-backfill state"
+      - "A note delta or backfill record exists for each gap row, derived from its raw_transcript"
+      - "No gap row remains in status='gap' after the close pass"
+  primary_oracle:
+    type: db_status_sweep_assertion
+    artifact: >
+      seed meeting with 2 gap rows (raw_transcript populated); run close pass;
+      query transcript_segments for meeting; assert count(status='gap') == 0;
+      assert count(backfill_note_deltas) >= 2
+  thresholds:
+    gap_rows_remaining_after_close_pass_allowed: 0
+
+- criterion_id: AC-FAIL-04-NEG
+  name: "Close pass backfills all status='pending' (never-comprehended) spans"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-FAIL-04]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: null
+  verification_ladder: [lint, unit, integration, negative]
+  behavior:
+    given: >
+      A meeting where three transcript windows were queued but the session ended before
+      the Scribe processed them; those three rows have status='pending' in transcript_segments
+    when:  "The close pass runs"
+    then:
+      - "All three pending rows receive a backfill attempt"
+      - "No row remains in status='pending' after the close pass completes"
+  primary_oracle:
+    type: db_status_sweep_assertion
+    artifact: >
+      seed meeting with 3 pending rows; run close pass; query transcript_segments;
+      assert count(status='pending') == 0; assert 3 backfill attempts logged
+  thresholds:
+    pending_rows_remaining_after_close_pass_allowed: 0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FRESHNESS TIMESTAMP — always present, never stale-silent
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FAIL-05
+  name: "Notes object served to reader always carries a freshness timestamp"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-FAIL-05]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: null
+  verification_ladder: [lint, unit, integration]
+  behavior:
+    given: "A notes object is requested via the /internal/notes endpoint for any meeting"
+    when:  "The response is returned"
+    then:
+      - "The response body contains a 'last_updated_at' field (or equivalent freshness timestamp)"
+      - "The timestamp is an ISO-8601 datetime or Unix epoch value"
+      - "The timestamp reflects the actual time of the last notes write, not the request time"
+  primary_oracle:
+    type: response_field_presence_assertion
+    artifact: >
+      call GET /internal/notes?meeting_id=X; parse JSON; assert 'last_updated_at' key present;
+      assert value is parseable as ISO-8601 or integer epoch; assert value <= now()
+  thresholds:
+    responses_missing_freshness_timestamp_allowed: 0
+
+- criterion_id: AC-FAIL-05-NEG
+  name: "Stale notes object does not suppress the freshness timestamp"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-FAIL-05]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: null
+  verification_ladder: [lint, unit, integration, negative]
+  behavior:
+    given: >
+      A notes object that was last written 10 minutes ago (well past any freshness
+      threshold); the object is served without a new write having occurred
+    when:  "The /internal/notes endpoint is called"
+    then:
+      - "The 'last_updated_at' timestamp reflects 10 minutes ago, not the current time"
+      - "The response does NOT fabricate a recent timestamp to appear current"
+      - "If a freshness_lagging flag is also present, it is set to true"
+  primary_oracle:
+    type: timestamp_accuracy_assertion
+    artifact: >
+      seed a notes object with last_updated_at = now() - 10 minutes; call GET /internal/notes;
+      assert abs(response.last_updated_at - (now() - 10m)) < 5s;
+      assert response.last_updated_at != approx(now())
+  thresholds:
+    fabricated_timestamps_allowed: 0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FRESHNESS LAG FLAG — >90s lag triggers flag
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FAIL-06
+  name: "freshness_lagging flag set when notes lag exceeds 90s threshold"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-FAIL-06]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: null
+  verification_ladder: [lint, unit, integration]
+  behavior:
+    given: >
+      A notes object whose last_updated_at is more than 90 seconds before the
+      current clock time (simulated by advancing the clock or seeding an old timestamp)
+    when:  "The /internal/notes response is constructed"
+    then:
+      - "The response includes freshness_lagging=true (or equivalent boolean field)"
+      - "The freshness_lagging flag is not set when the lag is below 90 seconds"
+  primary_oracle:
+    type: flag_boundary_assertion
+    artifact: >
+      case A: seed last_updated_at = now() - 91s; call endpoint; assert freshness_lagging==true;
+      case B: seed last_updated_at = now() - 89s; call endpoint; assert freshness_lagging==false
+  thresholds:
+    false_negatives_at_91s_allowed: 0
+    false_positives_at_89s_allowed: 0
+
+- criterion_id: AC-FAIL-06-NEG
+  name: "freshness_lagging flag clears when lag drops below threshold"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-FAIL-06]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: null
+  verification_ladder: [lint, unit, integration, negative]
+  behavior:
+    given: >
+      A notes object that previously had freshness_lagging=true (lag > 90s);
+      a new write updates last_updated_at to now() (lag drops to 0)
+    when:  "The /internal/notes endpoint is called after the new write"
+    then:
+      - "The response has freshness_lagging=false"
+      - "The flag is cleared without requiring a restart or manual intervention"
+  primary_oracle:
+    type: flag_transition_assertion
+    artifact: >
+      seed old timestamp (lag=120s); call endpoint; assert freshness_lagging==true;
+      write new note (last_updated_at=now()); call endpoint again;
+      assert freshness_lagging==false
+  thresholds:
+    stale_flag_persisting_after_fresh_write_allowed: 0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UNBOUND REFERENT — stays named, not dropped or fabricated
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FAIL-07
+  name: "Unbound referent is recorded as named-but-unbound (not dropped, not fabricated)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-FAIL-07]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: >
+      A Scribe output contains a referent candidate named "the checkout flow" that
+      cannot be resolved to any entity in the codebase index
+    when:  "The note delta for that referent is applied to the notes object"
+    then:
+      - "The notes object contains an entry for the referent with the original name 'the checkout flow'"
+      - "The entry has a binding_status of 'unbound' (or equivalent unresolved marker)"
+      - "The entry is NOT absent from the notes (not silently dropped)"
+      - "The entry does NOT contain a fabricated file path or resolved binding"
+  primary_oracle:
+    type: notes_object_content_assertion
+    artifact: >
+      feed Scribe delta with unresolvable referent 'the checkout flow' to the applier;
+      query the notes object; assert entry present with original name;
+      assert binding_status == 'unbound'; assert no resolved_path field set
+  thresholds:
+    dropped_unbound_referents_allowed: 0
+    fabricated_bindings_allowed: 0
+
+- criterion_id: AC-FAIL-07-NEG
+  name: "A resolvable referent is NOT marked unbound (binding fires when possible)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-FAIL-07]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit, negative]
+  behavior:
+    given: >
+      A Scribe output contains a referent candidate "checkout.py" that IS resolvable
+      in the codebase index (the file exists at services/payments/checkout.py)
+    when:  "The note delta for that referent is applied"
+    then:
+      - "The entry has binding_status of 'bound' (not 'unbound')"
+      - "The resolved_path or equivalent field points to the correct entity"
+  primary_oracle:
+    type: notes_object_content_assertion
+    artifact: >
+      seed codebase index with checkout.py; feed delta with 'checkout.py' referent;
+      query notes; assert binding_status == 'bound'; assert resolved_path contains 'checkout.py'
+  thresholds:
+    missed_bindings_on_resolvable_referents_allowed: 0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NO FABRICATION — notes never invent content to fill a hole
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FAIL-08
+  name: "Notes do not fabricate content to fill a gap (no hallucinated entries)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-FAIL-08]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit, negative]
+  behavior:
+    given: >
+      A meeting with a known gap spanning 14:03–14:05 (Scribe failed for that window)
+      and a known pending span spanning 14:05–14:07 (never reached by the live Scribe)
+    when:  "The notes object is read before the close pass runs"
+    then:
+      - "The notes object contains no entries that claim to originate from the 14:03–14:07 span"
+      - "The gap is represented only by the absence of comprehended note deltas for that span and/or a gap marker"
+      - "No inferred, synthesized, or generated entries appear for the gap period"
+  primary_oracle:
+    type: notes_object_gap_inspection_assertion
+    artifact: >
+      run meeting with injected failures for 14:03–14:07; read notes object before close pass;
+      assert zero note_delta rows with window_start in [14:03, 14:07] and status='comprehended';
+      assert no entry in the assembled notes references content from that span
+  thresholds:
+    fabricated_entries_in_gap_span_allowed: 0
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §3.9 COST TELEMETRY
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RATE CONSTANTS — exact values enforced by arithmetic fixture
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-COST-01
+  name: "HAIKU_INPUT, HAIKU_OUTPUT, HAIKU_CACHE_WRITE, HAIKU_CACHE_READ are exact values"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-COST-01, R-doc03-COST-02, R-doc03-COST-03, R-doc03-COST-04]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "The rate constants as defined in the cost module"
+    when:  "Their values are asserted in a unit test"
+    then:
+      - "HAIKU_INPUT == 1.00e-6 (exactly 1.00 / 1e6)"
+      - "HAIKU_OUTPUT == 5.00e-6 (exactly 5.00 / 1e6)"
+      - "HAIKU_CACHE_WRITE == 1.25e-6 (exactly HAIKU_INPUT * 1.25)"
+      - "HAIKU_CACHE_READ == 1.00e-7 (exactly HAIKU_INPUT * 0.10)"
+  primary_oracle:
+    type: constant_value_assertion
+    artifact: >
+      from cost_module import HAIKU_INPUT, HAIKU_OUTPUT, HAIKU_CACHE_WRITE, HAIKU_CACHE_READ;
+      assert HAIKU_INPUT == 1.00e-6;
+      assert HAIKU_OUTPUT == 5.00e-6;
+      assert abs(HAIKU_CACHE_WRITE - 1.25e-6) < 1e-15;
+      assert abs(HAIKU_CACHE_READ - 1.00e-7) < 1e-15
+  thresholds:
+    constant_value_deviations_allowed: 0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# scribe_call_cost_usd — correct arithmetic, graceful on missing cache fields
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-COST-02
+  name: "scribe_call_cost_usd computes correct total from all four usage fields"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-COST-05]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: >
+      A usage object with:
+        input_tokens=1000, output_tokens=200,
+        cache_creation_input_tokens=800, cache_read_input_tokens=0
+      (first-call scenario)
+    when:  "scribe_call_cost_usd(u) is called"
+    then:
+      - >
+        The result equals exactly:
+        (1000 * 1.00e-6) + (200 * 5.00e-6) + (800 * 1.25e-6) + (0 * 1.00e-7)
+        = 0.001000 + 0.001000 + 0.001000 + 0.000000
+        = 0.003000 USD
+      - "No floating-point error exceeds 1e-12 USD"
+  primary_oracle:
+    type: arithmetic_fixture_assertion
+    artifact: >
+      fixture_usage = SimpleNamespace(input_tokens=1000, output_tokens=200,
+        cache_creation_input_tokens=800, cache_read_input_tokens=0);
+      result = scribe_call_cost_usd(fixture_usage);
+      assert abs(result - 0.003000) < 1e-12
+  thresholds:
+    arithmetic_error_usd: 1e-12
+
+- criterion_id: AC-COST-03
+  name: "scribe_call_cost_usd does not raise AttributeError when cache fields are absent"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-COST-05]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit, negative]
+  behavior:
+    given: >
+      A usage object that has only input_tokens and output_tokens (no cache fields),
+      as might be returned by a non-cache-enabled call
+    when:  "scribe_call_cost_usd(u) is called on this object"
+    then:
+      - "The function returns a positive float without raising AttributeError or KeyError"
+      - "cache_creation_input_tokens and cache_read_input_tokens default to 0"
+      - "The result equals (input_tokens * HAIKU_INPUT + output_tokens * HAIKU_OUTPUT)"
+  primary_oracle:
+    type: exception_absence_assertion
+    artifact: >
+      fixture_usage = SimpleNamespace(input_tokens=500, output_tokens=100);
+      result = scribe_call_cost_usd(fixture_usage);  # must not raise
+      assert abs(result - (500*1e-6 + 100*5e-6)) < 1e-12
+  thresholds:
+    attribute_errors_on_missing_cache_fields_allowed: 0
+
+- criterion_id: AC-COST-03-NEG
+  name: "scribe_call_cost_usd with all-zero cache tokens produces only input+output cost"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-COST-05]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit, negative]
+  behavior:
+    given: >
+      A usage object with cache_creation_input_tokens=0 and cache_read_input_tokens=0
+      (non-cache call with fields explicitly present)
+    when:  "scribe_call_cost_usd(u) is called"
+    then:
+      - "The cache write and cache read terms contribute exactly $0.000000 to the total"
+      - "The total equals input_tokens * HAIKU_INPUT + output_tokens * HAIKU_OUTPUT"
+  primary_oracle:
+    type: arithmetic_fixture_assertion
+    artifact: >
+      u = SimpleNamespace(input_tokens=500, output_tokens=100,
+        cache_creation_input_tokens=0, cache_read_input_tokens=0);
+      assert abs(scribe_call_cost_usd(u) - (500*1e-6 + 100*5e-6)) < 1e-12
+  thresholds:
+    arithmetic_error_usd: 1e-12
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IN-PROCESS MEETING_COST ACCUMULATOR — updated on every call
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-COST-04
+  name: "MEETING_COST[meeting_id] incremented by total on every record_scribe_cost call"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-COST-06]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: >
+      MEETING_COST is initialized to {} (empty dict); record_scribe_cost is called
+      three times for the same meeting_id with usage objects whose individual
+      totals are $0.001, $0.002, and $0.003
+    when:  "All three calls complete"
+    then:
+      - "MEETING_COST[meeting_id] == 0.006 (sum of all three totals)"
+      - "The accumulator was incremented after each call (not only the last)"
+  primary_oracle:
+    type: accumulator_state_assertion
+    artifact: >
+      MEETING_COST = {}; mid = uuid4();
+      for cost in [0.001, 0.002, 0.003]:
+        record_scribe_cost(mid, usage_for_cost(cost), MEETING_COST=MEETING_COST, ...db_stub...)
+      assert abs(MEETING_COST[mid] - 0.006) < 1e-12
+  thresholds:
+    accumulator_error_usd: 1e-12
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WRITE-THROUGH TO POSTGRES — UPSERT with additive increment
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-COST-05
+  name: "record_scribe_cost writes model_usd, cache_read_usd, cache_creation_usd to Postgres via UPSERT"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-COST-07, R-doc03-COST-08]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: null
+  verification_ladder: [lint, unit, integration]
+  behavior:
+    given: >
+      A meeting with no existing row in meeting_cost; record_scribe_cost is called
+      with a usage object producing model_usd=$0.001200, cache_read_usd=$0.000080,
+      cache_creation_usd=$0.001000
+    when:  "record_scribe_cost completes"
+    then:
+      - "A row exists in meeting_cost for meeting_id with model_usd=0.001200, cache_read_usd=0.000080, cache_creation_usd=0.001000"
+      - "The row was inserted (no prior row existed)"
+  primary_oracle:
+    type: db_row_content_assertion
+    artifact: >
+      truncate meeting_cost; call record_scribe_cost with known usage;
+      SELECT model_usd, cache_read_usd, cache_creation_usd FROM meeting_cost WHERE meeting_id=X;
+      assert model_usd == 0.001200; assert cache_read_usd == 0.000080; assert cache_creation_usd == 0.001000
+  thresholds:
+    missing_rows_after_first_call_allowed: 0
+
+- criterion_id: AC-COST-05-NEG
+  name: "Second record_scribe_cost call increments meeting_cost row (does not overwrite)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-COST-07, R-doc03-COST-08]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: null
+  verification_ladder: [lint, unit, integration, negative]
+  behavior:
+    given: >
+      A meeting_cost row already exists with model_usd=0.001200;
+      a second record_scribe_cost call arrives with model_usd contribution of $0.000800
+    when:  "The second call's UPSERT executes"
+    then:
+      - "meeting_cost.model_usd for the meeting is 0.002000 (0.001200 + 0.000800)"
+      - "The row was NOT overwritten with 0.000800 alone"
+      - "Exactly one row exists in meeting_cost for that meeting_id"
+  primary_oracle:
+    type: db_upsert_additive_assertion
+    artifact: >
+      insert meeting_cost row with model_usd=0.001200; call record_scribe_cost contributing 0.000800;
+      SELECT model_usd FROM meeting_cost WHERE meeting_id=X;
+      assert model_usd == 0.002000; assert count(*) == 1
+  thresholds:
+    rows_overwritten_instead_of_incremented_allowed: 0
+    duplicate_rows_allowed: 0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CRASH RECOVERY — Postgres is the canonical meter (reload, not reset)
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-COST-06
+  name: "After orchestrator restart, MEETING_COST is reloaded from Postgres (not reset to 0)"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc03-COST-07]
+  criticality: P0
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: null
+  verification_ladder: [lint, unit, integration]
+  behavior:
+    given: >
+      A meeting has accumulated $0.050000 in meeting_cost (Postgres); the orchestrator
+      process is restarted (in-process MEETING_COST dict is cleared); the orchestrator
+      re-initializes for the same meeting
+    when:  "The orchestrator loads state for the existing meeting after restart"
+    then:
+      - "MEETING_COST[meeting_id] is initialized to $0.050000 (loaded from Postgres)"
+      - "MEETING_COST[meeting_id] is NOT 0.0 (reset) after restart"
+      - "The first record_scribe_cost call after restart increments from $0.050000, not from $0.000000"
+  primary_oracle:
+    type: restart_state_reload_assertion
+    artifact: >
+      seed meeting_cost with 0.050000; simulate MEETING_COST = {} (restart);
+      call orchestrator.init_meeting(meeting_id); assert MEETING_COST[meeting_id] == 0.050000;
+      then call record_scribe_cost contributing 0.001; assert MEETING_COST[meeting_id] == 0.051000
+  thresholds:
+    post_restart_accumulator_resets_to_zero_allowed: 0
+
+- criterion_id: AC-COST-06-NEG
+  name: "New meeting (no prior Postgres row) initializes MEETING_COST to 0.0, not a stale value"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-COST-07]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: null
+  verification_ladder: [lint, unit, integration, negative]
+  behavior:
+    given: >
+      A brand new meeting_id with no row in meeting_cost (truly new meeting);
+      the orchestrator initializes for this meeting
+    when:  "MEETING_COST[meeting_id] is read after init"
+    then:
+      - "MEETING_COST[meeting_id] == 0.0 (not a stale value from another meeting)"
+      - "No meeting_cost row exists for this meeting_id after init alone (row created on first record_scribe_cost)"
+  primary_oracle:
+    type: new_meeting_init_assertion
+    artifact: >
+      ensure no meeting_cost row for new_meeting_id; call orchestrator.init_meeting(new_meeting_id);
+      assert MEETING_COST.get(new_meeting_id, 0.0) == 0.0;
+      assert SELECT count(*) FROM meeting_cost WHERE meeting_id=new_meeting_id == 0
+  thresholds:
+    stale_values_on_new_meeting_init_allowed: 0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CACHE-HIT RATIO — computation, division-by-zero safety, alert
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-COST-07
+  name: "Cache-hit ratio uses max(prefix, 1) guard (division-by-zero safe)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-COST-09]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: >
+      A usage object where both cache_creation_input_tokens=0 and
+      cache_read_input_tokens=0 (non-cache call; prefix is zero)
+    when:  "The cache-hit ratio is computed"
+    then:
+      - "No ZeroDivisionError is raised"
+      - "The computed ratio is 0.0 (0 / max(0, 1) == 0)"
+  primary_oracle:
+    type: exception_absence_and_value_assertion
+    artifact: >
+      u = SimpleNamespace(cache_creation_input_tokens=0, cache_read_input_tokens=0);
+      ratio = compute_cache_hit_ratio(u);
+      assert ratio == 0.0  # no exception
+  thresholds:
+    zero_division_errors_allowed: 0
+
+- criterion_id: AC-COST-08
+  name: "First call produces near-zero hit ratio (cache_creation dominates)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-COST-10]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: >
+      A usage object from the first Scribe call of a meeting:
+      cache_creation_input_tokens=2000, cache_read_input_tokens=0
+    when:  "The cache-hit ratio is computed"
+    then:
+      - "hit_ratio = 0 / max(2000, 1) = 0.0"
+      - "The ratio is below any low-ratio alert threshold (expected behavior for call #1)"
+      - "No alert is emitted for the first call, regardless of ratio value"
+  primary_oracle:
+    type: ratio_value_and_no_alert_assertion
+    artifact: >
+      u = SimpleNamespace(cache_creation_input_tokens=2000, cache_read_input_tokens=0);
+      ratio = compute_cache_hit_ratio(u);
+      assert ratio == 0.0;
+      assert not alert_emitted_for_call_number(1)
+  thresholds:
+    first_call_false_positive_alerts_allowed: 0
+
+- criterion_id: AC-COST-09
+  name: "Steady-state calls produce near-1 hit ratio (cache_read dominates)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-COST-11]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: >
+      A usage object from the fifth Scribe call of a meeting (prefix cached):
+      cache_creation_input_tokens=0, cache_read_input_tokens=2000
+    when:  "The cache-hit ratio is computed"
+    then:
+      - "hit_ratio = 2000 / max(2000, 1) = 1.0"
+      - "No low-ratio alert is emitted (ratio is at or near 1)"
+  primary_oracle:
+    type: ratio_value_assertion
+    artifact: >
+      u = SimpleNamespace(cache_creation_input_tokens=0, cache_read_input_tokens=2000);
+      ratio = compute_cache_hit_ratio(u);
+      assert abs(ratio - 1.0) < 1e-9
+  thresholds:
+    steady_state_ratio_min: 0.90
+
+- criterion_id: AC-COST-10
+  name: "Low hit ratio on call #2+ triggers alert (prefix not byte-identical)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-COST-12]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit, negative]
+  behavior:
+    given: >
+      Call #3 of a meeting (past the first call) has
+      cache_creation_input_tokens=1800, cache_read_input_tokens=200,
+      producing hit_ratio = 200 / 2000 = 0.10 (anomalously low)
+    when:  "record_scribe_cost or a co-located observer evaluates the ratio for call #3"
+    then:
+      - "An alert is emitted (log at ERROR level or equivalent monitored signal) indicating the prefix is not byte-identical"
+      - "The alert distinguishes this as a call-#3 anomaly (not the expected first-call low-ratio)"
+      - "The alert is loggable and monitorable (not silently swallowed)"
+  primary_oracle:
+    type: alert_emission_assertion
+    artifact: >
+      simulate call_number=3, cache_creation=1800, cache_read=200;
+      assert alert_log_contains('prefix not byte-identical') or alert_metric_emitted();
+      assert no alert suppressed for call_number > 1
+  thresholds:
+    missed_low_ratio_alerts_after_first_call_allowed: 0
+
+- criterion_id: AC-COST-10-NEG
+  name: "Low hit ratio on call #1 does NOT trigger alert (expected first-call behavior)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-COST-12, R-doc03-COST-10]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit, negative]
+  behavior:
+    given: >
+      Call #1 of a meeting has cache_creation_input_tokens=2000, cache_read_input_tokens=0,
+      producing hit_ratio=0.0 (expected, cache cold)
+    when:  "The ratio is evaluated for call #1"
+    then:
+      - "No alert is emitted for the low ratio on call #1"
+      - "The system correctly identifies this as the first call and suppresses the alert"
+  primary_oracle:
+    type: no_alert_assertion
+    artifact: >
+      simulate call_number=1, cache_creation=2000, cache_read=0;
+      assert zero alerts emitted with message containing 'prefix not byte-identical'
+  thresholds:
+    first_call_false_positive_alerts_allowed: 0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DIRECT WRITE — Scribe bypasses provider seam for cost records
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-COST-11
+  name: "Scribe writes cost directly to meeting_cost (no provider seam in cost path)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-COST-13]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  mock_boundary: null
+  verification_ladder: [lint, unit]
+  behavior:
+    given: "The full Proxy codebase"
+    when:  "A static audit traces the cost-write call path from record_scribe_cost"
+    then:
+      - "The call path from record_scribe_cost to the Postgres write does NOT traverse call_external (libs/http provider seam)"
+      - "No import of the provider seam appears in the cost module or the Scribe call module for the purpose of cost writing"
+      - "The only path to meeting_cost writes from the Scribe is through record_scribe_cost itself"
+  primary_oracle:
+    type: static_import_and_call_graph_assertion
+    artifact: >
+      AST/import audit: trace imports in cost_module.py and scribe_call.py;
+      assert 'call_external' or 'libs.http' not in transitive imports for the record_cost path;
+      assert meeting_cost writes reachable from record_scribe_cost without visiting call_external
+  thresholds:
+    provider_seam_crossings_in_cost_path_allowed: 0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# checkMeetingBudget INTEGRATION — persisted sum readable by Doc 04
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-COST-12
+  name: "checkMeetingBudget reads the cumulative cost from Postgres meeting_cost"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-COST-14]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: null
+  verification_ladder: [lint, unit, integration]
+  behavior:
+    given: >
+      Five Scribe calls have completed for a meeting, each contributing $0.003 to
+      meeting_cost (total $0.015 in Postgres); the in-process MEETING_COST dict has
+      been cleared (simulating restart)
+    when:  "checkMeetingBudget(meeting_id) is called"
+    then:
+      - "checkMeetingBudget reads from Postgres and returns a budget state reflecting $0.015 spent"
+      - "checkMeetingBudget does NOT rely solely on the in-process MEETING_COST dict"
+      - "The budget check produces correct over/under-budget determinations based on the persisted sum"
+  primary_oracle:
+    type: budget_check_db_read_assertion
+    artifact: >
+      seed meeting_cost with model_usd=0.015; clear MEETING_COST dict;
+      result = checkMeetingBudget(meeting_id);
+      assert result.spent_usd == 0.015 (or within 1e-9);
+      assert result read from Postgres (captured via DB query log)
+  thresholds:
+    budget_reads_from_in_process_cache_only_allowed: 0
+
+- criterion_id: AC-COST-12-NEG
+  name: "checkMeetingBudget handles missing meeting_cost row gracefully (new meeting)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc03-COST-14]
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: null
+  verification_ladder: [lint, unit, integration, negative]
+  behavior:
+    given: "A meeting_id with no row in meeting_cost (meeting just started, no Scribe calls yet)"
+    when:  "checkMeetingBudget(meeting_id) is called"
+    then:
+      - "No exception is raised (KeyError, NoneType, etc.)"
+      - "The function returns a budget state with spent_usd=0.0"
+      - "The meeting is not considered over-budget with zero spend"
+  primary_oracle:
+    type: exception_absence_and_value_assertion
+    artifact: >
+      ensure no row in meeting_cost for meeting_id; result = checkMeetingBudget(meeting_id);
+      assert result.spent_usd == 0.0;  # no exception
+      assert result.over_budget == False
+  thresholds:
+    exceptions_on_missing_meeting_cost_row_allowed: 0
