@@ -59,7 +59,14 @@ from _qgate_fixtures import (
 
 
 def _run(coro):
-    return asyncio.new_event_loop().run_until_complete(coro)
+    # Own a fresh loop per call and CLOSE it — no leaked loops across the ~100
+    # gate runs in the miss-rate end-to-end test; deterministic, no process-wide
+    # loop state (mirrors tests/doc03/scribe/test_call.py::_run).
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 def _gate_input(entry, *, entry_text="a note", window_text="W: hello", applied=True,
