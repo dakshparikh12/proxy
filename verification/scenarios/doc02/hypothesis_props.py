@@ -10,13 +10,10 @@ an uncontrolled exception on attacker-shaped input; return a well-typed result.
 from __future__ import annotations
 
 import pytest
-from hypothesis import given
-from hypothesis import strategies as st
-
 from config.hypothesis_profiles import malformed_mapping, weird_text
-
-from transport import events  # noqa: E402
+from hypothesis import given
 from transport import chat as chatmod  # noqa: E402
+from transport import events  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

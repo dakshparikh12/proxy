@@ -13,15 +13,13 @@ that matter here are law-shaped:
 from __future__ import annotations
 
 import pytest
-from hypothesis import given
-from hypothesis import strategies as st
-
 from config.hypothesis_profiles import malformed_json, weird_text
-
 from contracts import registry  # noqa: E402
 from contracts.bundle import Bundle  # noqa: E402
 from contracts.channels import ChannelReport  # noqa: E402
 from contracts.readiness import ReadinessReport  # noqa: E402
+from hypothesis import given
+from hypothesis import strategies as st
 
 _REGISTERED_TYPES = {"connect-repo", "approve-draft", "invite-proxy"}
 _READINESS = ("connecting", "cloning", "indexing", "ready", "not_ready")

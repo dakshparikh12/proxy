@@ -19,8 +19,7 @@ from config import pathsetup  # noqa: E402
 
 pathsetup.bootstrap()
 
-from hypothesis import settings  # noqa: E402
-
 import config.hypothesis_profiles  # noqa: E402,F401  (registers profiles on import)
+from hypothesis import settings  # noqa: E402
 
 settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "ci"))

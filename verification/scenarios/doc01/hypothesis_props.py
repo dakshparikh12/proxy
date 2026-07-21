@@ -13,10 +13,9 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from config.hypothesis_profiles import path_component, weird_text
 from hypothesis import given
 from hypothesis import strategies as st
-
-from config.hypothesis_profiles import path_component, weird_text
 
 # Pin the volume root to an isolated temp dir so the property exercises the
 # path algebra without touching the real /tenants mount.
