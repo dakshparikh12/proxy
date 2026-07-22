@@ -98,7 +98,9 @@ DeltaLoader = Callable[[Any, Any], Awaitable[list[dict[str, Any]]]]
 def _default_loader() -> DeltaLoader:
     # Imported lazily so this module imports on a host without libs.db wired; the
     # db tier and every real call resolve the committed ``db.repos.notes`` seam.
-    from db.repos.notes import load_deltas  # type: ignore[import-not-found]  # workspace seam; resolved at runtime (§3.3)
+    from db.repos.notes import (
+        load_deltas,  # type: ignore[import-not-found]  # workspace seam; resolved at runtime (§3.3)
+    )
 
     return load_deltas  # type: ignore[no-any-return]  # the workspace seam is untyped to mypy
 
