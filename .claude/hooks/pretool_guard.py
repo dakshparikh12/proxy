@@ -59,7 +59,10 @@ def main() -> None:
         sys.exit(0)
 
     tool_input = payload.get("tool_input", {})
-    file_path = tool_input.get("file_path", "")
+    # NotebookEdit passes the target as `notebook_path`, not `file_path`; without
+    # this the guard would wave notebook writes to tests/ etc. straight through
+    # (and notebooks execute Python). Accept either key.
+    file_path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
 
     if not file_path:
         sys.exit(0)

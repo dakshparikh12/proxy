@@ -33,22 +33,40 @@ if [[ -n "$PROTECTED_PATHS" ]]; then
 fi
 
 # ── Secret literal scan ─────────────────────────────────────────────────────
-# Get the full diff of all changes
+# Portable regex via python3. Do NOT use `grep -P` here: BSD grep (macOS
+# /usr/bin/grep, which /bin/bash resolves) has no PCRE and errors on -P (rc 2),
+# which silently disabled this whole scan. python3 is always present.
 DIFF=$(git diff 2>/dev/null; git diff --cached 2>/dev/null) || true
 
-# Check for sk- prefixed tokens (20+ chars), but NOT 32-hex trace IDs
-# Pattern: sk- followed by 20+ alphanumeric/special chars that are NOT pure hex
-if echo "$DIFF" | grep -qP '^[+].*\bsk-[A-Za-z0-9_\-]{20,}' 2>/dev/null; then
-    # Exclude lines that look like pure 32-char hex (trace IDs)
-    if echo "$DIFF" | grep -P '^[+].*\bsk-[A-Za-z0-9_\-]{20,}' 2>/dev/null | grep -qvP '\bsk-[0-9a-f]{32}\b'; then
-        printf '{"decision":"block","reason":"subagent introduced secret literal (sk- token)"}\n'
-        exit 0
-    fi
-fi
+SECRET_REASON=$(DIFF_TEXT="$DIFF" python3 - <<'PY'
+import os, re, sys
 
-# Check for x-api-key or authorization: bearer with non-REDACTED 12+ char values
-if echo "$DIFF" | grep -qiP '^[+].*(?:x-api-key|authorization:\s*bearer)\s*[:\s]+(?!REDACTED)[A-Za-z0-9_\-\.]{12,}' 2>/dev/null; then
-    printf '{"decision":"block","reason":"subagent introduced secret literal (api-key/bearer)"}\n'
+# Pass the diff via env, NOT stdin: `python3 -` reads its script from the
+# heredoc (stdin), so piping $DIFF in would be swallowed and the scan would
+# match nothing. Only inspect added lines ('+', excluding the '+++' header).
+added = "\n".join(
+    ln for ln in os.environ.get("DIFF_TEXT", "").splitlines()
+    if ln.startswith("+") and not ln.startswith("+++")
+)
+
+# sk- tokens (20+ chars) — but NOT a pure 32-hex trace ID (sk-<32 hex>).
+for m in re.finditer(r"\bsk-[A-Za-z0-9_\-]{20,}", added):
+    if not re.fullmatch(r"sk-[0-9a-f]{32}", m.group(0)):
+        print("sk- token")
+        sys.exit(0)
+
+# x-api-key / authorization: bearer with a non-REDACTED 12+ char value.
+if re.search(
+    r"(?i)(x-api-key|authorization:\s*bearer)\s*[:\s]+(?!REDACTED)[A-Za-z0-9_\-.]{12,}",
+    added,
+):
+    print("api-key/bearer")
+    sys.exit(0)
+PY
+)
+
+if [[ -n "$SECRET_REASON" ]]; then
+    printf '{"decision":"block","reason":"subagent introduced secret literal (%s)"}\n' "$SECRET_REASON"
     exit 0
 fi
 
