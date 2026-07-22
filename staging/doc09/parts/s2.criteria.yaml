@@ -1,0 +1,247 @@
+# Doc 09 — §2 Cross-doc contract checks: acceptance criteria
+# Proves the seams from CANONICAL-DECISIONS actually close.
+
+- criterion_id: AC-S2-001
+  name: "assert_registry_closed() passes in CI on a correct codebase"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S2-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The codebase has every produced MessageType registered in CHANNEL_REGISTRY"
+    when: "assert_registry_closed() is called in the CI build"
+    then:
+      - "The assertion completes without raising, and the CI step is green"
+  primary_oracle: {type: deterministic_assertion, artifact: "assert_registry_closed() raises no exception; CI exits 0"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S2-001]
+  test_ids: [T-S2-001]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S2-001
+
+- criterion_id: AC-S2-002
+  name: "assert_registry_closed() raises on an unconsumed MessageType in CI"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S2-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A MessageType is produced by one service but absent from CHANNEL_REGISTRY"
+    when: "assert_registry_closed() is called in the CI build"
+    then:
+      - "The assertion raises an error identifying the unregistered MessageType"
+      - "The CI build exits non-zero"
+  primary_oracle: {type: deterministic_assertion, artifact: "assert_registry_closed() raises with the specific missing type; CI exits non-zero"}
+  thresholds: {unconsumed_message_types_allowed: 0}
+  fault_model_refs: [F-S2-002]
+  test_ids: [T-S2-002]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S2-002
+
+- criterion_id: AC-S2-003
+  name: "assert_registry_closed() is called at boot and aborts an unclosed registry"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S2-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The meeting_runtime process starts with an unclosed registry (a MessageType missing from CHANNEL_REGISTRY)"
+    when: "The boot sequence executes assert_registry_closed()"
+    then:
+      - "The process raises at startup and does not reach the running state"
+  primary_oracle: {type: deterministic_assertion, artifact: "Inject missing MessageType; assert process exits before entering serving state"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S2-003]
+  test_ids: [T-S2-003]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S2-003
+
+- criterion_id: AC-S2-004
+  name: "No shared wire type re-declared outside libs/contracts"
+  evidence_class: "[static]"
+  authority_refs: [R-doc09-S2-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The repo tree is scanned for class/dataclass/TypedDict definitions of Bundle, Envelope, AgentChunk, NotesDelta, Readiness, and EnvelopeStatus"
+    when: "A static grep or AST scan is run across all service and app directories"
+    then:
+      - "No definition of these types exists outside libs/contracts"
+      - "Every import of these types resolves to libs.contracts"
+  primary_oracle: {type: static_grep_ast, artifact: "grep -rn 'class Bundle|class Envelope|class AgentChunk|class NotesDelta|Readiness =|EnvelopeStatus =' services/ apps/ libs/ --include='*.py' | grep -v libs/contracts"}
+  thresholds: {re_declared_shared_types: 0}
+  fault_model_refs: [F-S2-004]
+  test_ids: [T-S2-004]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - static:T-S2-004
+
+- criterion_id: AC-S2-005
+  name: "Exactly one CREATE TABLE operation_runs, zero CREATE TABLE meeting_harness"
+  evidence_class: "[static]"
+  authority_refs: [R-doc09-S2-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The repo is scanned for SQL DDL"
+    when: "A grep for CREATE TABLE operation_runs and CREATE TABLE meeting_harness is run across all .py, .sql, and migration files"
+    then:
+      - "CREATE TABLE operation_runs appears exactly once"
+      - "CREATE TABLE meeting_harness appears zero times"
+  primary_oracle: {type: static_grep_ast, artifact: "grep -rn 'CREATE TABLE operation_runs' -- count must equal 1; grep -rn 'CREATE TABLE meeting_harness' -- count must equal 0"}
+  thresholds: {operation_runs_definitions: 1, meeting_harness_definitions: 0}
+  fault_model_refs: [F-S2-005]
+  test_ids: [T-S2-005]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - static:T-S2-005
+
+- criterion_id: AC-S2-006
+  name: "No consumer accesses .kind, .tool, or .structured as top-level AgentChunk attrs"
+  evidence_class: "[static]"
+  authority_refs: [R-doc09-S2-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The codebase is scanned for AgentChunk field access patterns"
+    when: "A static grep or AST analysis is run looking for .kind, .tool, or .structured on AgentChunk objects"
+    then:
+      - "No file outside libs/contracts accesses chunk.kind, chunk.tool, or chunk.structured as a top-level attribute"
+  primary_oracle: {type: static_grep_ast, artifact: "AST scan for .kind/.tool/.structured attribute access on AgentChunk instances outside libs/contracts"}
+  thresholds: {forbidden_field_accesses: 0}
+  fault_model_refs: [F-S2-006]
+  test_ids: [T-S2-006]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - static:T-S2-006
+
+- criterion_id: AC-S2-007
+  name: "All AgentChunk consumers route the stream through stream_deltas before consuming"
+  evidence_class: "[static]"
+  authority_refs: [R-doc09-S2-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The codebase has modules that consume AgentChunk streams (projector, cost meter, transcript logger)"
+    when: "A static or unit analysis traces each consumer's stream intake"
+    then:
+      - "Every AgentChunk consumer calls stream_deltas() before iterating chunks"
+      - "No consumer iterates a raw AgentChunk async iterator without stream_deltas"
+  primary_oracle: {type: static_grep_ast, artifact: "grep for async for chunk in / async for item in on raw AgentChunk iterators not preceded by stream_deltas; count must be 0"}
+  thresholds: {raw_chunk_consumers: 0}
+  fault_model_refs: [F-S2-007]
+  test_ids: [T-S2-007]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - static:T-S2-007
+
+- criterion_id: AC-S2-008
+  name: "meeting_cost and staged_drafts rows survive a SIGKILL and are readable by replacement"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S2-06, R-doc09-S2-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A meeting is in progress; meeting_cost and staged_drafts rows have been
+      written to Postgres; the owning process receives SIGKILL
+    when: "A replacement process re-claims the meeting and reads the Postgres rows"
+    then:
+      - "Both meeting_cost and staged_drafts rows are present and intact"
+      - "All cost columns (model_usd, transport_usd, e2b_usd) retain their pre-kill values — none is reset to 0"
+      - "The replacement process can read the draft artifact_ref without error"
+  primary_oracle: {type: deterministic_state_check, artifact: "After SIGKILL: SELECT model_usd, transport_usd, e2b_usd FROM meeting_cost WHERE meeting_id=X; assert all equal pre-kill values; SELECT * FROM staged_drafts WHERE meeting_id=X; assert row count unchanged"}
+  thresholds: {rows_lost: 0, cost_reset_to_zero_violations: 0, violations_allowed: 0}
+  fault_model_refs: [F-S2-008]
+  test_ids: [T-S2-008]
+  dependency_class: db:postgres
+  mock_boundary: >
+    may use a real Postgres test database (asyncpg pool against a local or
+    containerised Postgres); MUST NOT mock the INSERT/SELECT path or replace
+    the asyncpg pool with an in-memory stub — the real persistence path must execute.
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: e2e}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S2-008
+
+- criterion_id: AC-S2-008-NEG
+  name: "meeting_cost write degrades honestly when Postgres is unreachable"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S2-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Postgres is unreachable (connection refused or timeout) during a meeting_cost or staged_drafts write"
+    when: "The write is attempted"
+    then:
+      - "The operation raises a structured error rather than silently succeeding"
+      - "No partial or phantom row is left in the database"
+      - "The caller receives an honest failure indication (exception or error envelope), not a false success"
+  primary_oracle: {type: deterministic_state_check, artifact: "Inject Postgres connection-refused at the asyncpg pool; assert write raises; assert no row materialises in the table"}
+  thresholds: {silent_failures_allowed: 0, phantom_rows_allowed: 0}
+  fault_model_refs: [F-S2-008-NEG]
+  test_ids: [T-S2-008-NEG]
+  dependency_class: db:postgres
+  mock_boundary: >
+    negative cassette only: inject a real connection-refused or asyncpg
+    OperationalError at the call_external/asyncpg layer; MUST NOT replace the
+    asyncpg pool object with Mock() — the real error path must execute.
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S2-008-NEG

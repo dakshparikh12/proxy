@@ -541,3 +541,182 @@
     - {tier: unit}
     - {tier: negative}
 
+
+# ── AC-SEAM-014: SDK subprocess receives curated env (auth keys stripped) ──────
+
+- criterion_id: AC-SEAM-014
+  name: "SDK subprocess launched with curated env dict that strips mutually-exclusive auth keys"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-SEAM-18]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A parent environment containing multiple conflicting auth keys (e.g., ANTHROPIC_API_KEY and CLAUDE_API_KEY)"
+    when: "The provider seam constructs the subprocess env and launches the SDK subprocess"
+    then:
+      - "The subprocess env contains only the expected curated key set"
+      - "Mutually-exclusive conflicting auth keys are stripped"
+      - "The full parent process environment is NOT forwarded verbatim"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: intercept subprocess launch call; assert env passed does not contain conflicting auth keys"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-014]
+  dependency_class: null
+  mock_boundary: "subprocess launch intercepted/mocked; no real SDK subprocess spawned"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-SEAM-015: SDK stderr redacted before logging (P0 security) ─────────────
+
+- criterion_id: AC-SEAM-015
+  name: "SDK stderr routed through secret redactor before any log write; no raw secret appears in logs"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-SEAM-19]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      SDK stderr output containing: "Error: sk-ant-abc123def456 is invalid",
+      "Authorization: Bearer eyJtoken123", "https://api.example.com?token=secret99"
+    when: "The provider seam's stderr handler processes this output and writes to the log"
+    then:
+      - "The log entry does NOT contain 'sk-ant-abc123def456'"
+      - "The log entry does NOT contain 'eyJtoken123'"
+      - "The log entry does NOT contain 'secret99' at a token= position"
+      - "A redacted placeholder (e.g., '[REDACTED]') appears in place of each secret"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: capture log output after processing synthetic stderr; assert no raw secret values present via regex search"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-015]
+  dependency_class: null
+  mock_boundary: "log capture in-process; no real SDK subprocess"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-SEAM-015-NEG: unredacted secret in log output is detected ──────────────
+
+- criterion_id: AC-SEAM-015-NEG
+  name: "Oracle detects raw sk-ant-* or Bearer token in log output when redactor is misconfigured"
+  evidence_class: "[negative]"
+  authority_refs: [R-doc04-SEAM-19]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "SDK stderr containing 'sk-ant-secretvalue' and a pass-through (no-op) redactor"
+    when: "The stderr handler processes the line and the oracle checks log output"
+    then:
+      - "The oracle detects 'sk-ant-' pattern in log output"
+      - "The negative test correctly identifies the security violation"
+  primary_oracle:
+    type: deterministic
+    artifact: "Negative unit test: inject passthrough redactor; assert re.search(r'sk-ant-', captured_logs) is not None"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-015-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ── AC-SEAM-016: pick_provider returns Claude for unknown model ────────────────
+
+- criterion_id: AC-SEAM-016
+  name: "pick_provider returns the Claude provider for any unrecognized model identifier"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-SEAM-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A model identifier 'some-unknown-model-xyz' that no registered provider's matches() returns True for"
+    when: "pick_provider('some-unknown-model-xyz') is called"
+    then:
+      - "A provider is returned (no exception raised)"
+      - "The returned provider is the Claude provider (provider.name == 'claude' or equivalent)"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: assert pick_provider('unknown-model').name == 'claude'"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-016]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-SEAM-017: AgentProvider Protocol compliance (mypy --strict) ─────────────
+
+- criterion_id: AC-SEAM-017
+  name: "Every registered AgentProvider implementation satisfies the Protocol under mypy --strict"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-SEAM-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "All registered AgentProvider implementations in services/ and libs/"
+    when: "mypy --strict type-checking is run on the provider registration site and implementations"
+    then:
+      - "Zero type errors reported on AgentProvider protocol compliance"
+      - "Each provider class has name: str, matches(model: str) -> bool, and stream(prompt: str, q: ProviderQuery) -> AsyncIterator[AgentChunk]"
+  primary_oracle:
+    type: deterministic
+    artifact: "mypy --strict output; assert zero errors on provider implementation modules"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-017]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-SEAM-018: AgentChunk metadata keys validated per variant ────────────────
+
+- criterion_id: AC-SEAM-018
+  name: "AgentChunk.metadata carries the variant-appropriate canonical keys for each ChunkType"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-SEAM-20]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "One synthetic AgentChunk of each type, constructed with canonical metadata keys for that type"
+    when: "AGENT_CHUNK_METADATA_KEYS from libs/contracts is used to validate each chunk's metadata"
+    then:
+      - "INIT chunk metadata contains session_id, tools, mcp_servers (and model)"
+      - "TEXT chunk metadata contains msg_id"
+      - "TOOL_USE chunk metadata contains name, input, id"
+      - "TOOL_RESULT chunk metadata contains tool_use_id, is_error, structured"
+      - "RESULT chunk metadata contains num_turns, total_cost_usd, structured_output, subtype, session_id"
+      - "ERROR chunk metadata contains message"
+      - "No consumer assumes metadata keys from one variant are present on a different variant"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: for each type, construct chunk and assert set(chunk.metadata.keys()) >= AGENT_CHUNK_METADATA_KEYS[chunk.type]"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-018]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}

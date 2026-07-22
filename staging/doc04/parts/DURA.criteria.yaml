@@ -67,6 +67,7 @@ criteria:
     verification_ladder:
       - {tier: lint}
       - {tier: unit}
+      - {tier: integration}
       - {tier: negative}
 
   # ── AC-DURA-002: every subsequent wake passes resume=<session_id> ─────────

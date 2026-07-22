@@ -1306,3 +1306,28 @@
     - {tier: integration}
     - {tier: e2e}
   test_ids: [T-S2-025]
+
+- criterion_id: AC-S2-025-NEG
+  name: "Without GCS + Postgres persistence, draft is lost after sandbox teardown — confirms durability is required"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S2-35, R-doc05-S2-36]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "propose_change is modified to store the bundle only in the sandbox filesystem (not GCS/Postgres)."
+    when: "The sandbox is torn down after propose_change is called."
+    then:
+      - "The draft_id is no longer resolvable — the bundle is lost and the human cannot accept it."
+      - "This confirms GCS Object-Versioned + staged_drafts Postgres row are both required for durability."
+  primary_oracle:
+    type: deterministic
+    artifact: "Remove GCS/Postgres writes from propose_change; call it; tear down sandbox; attempt draft lookup; assert draft not found (404/KeyError)."
+  thresholds:
+    drafts_surviving_sandbox_teardown_without_durable_storage: 0
+  dependency_class: db:postgres
+  mock_boundary: "Postgres test instance; GCS test double; sandbox as destroyable fixture; control experiment only."
+  golden_path: false
+  verification_ladder:
+    - {tier: integration}
+    - {tier: negative}
+  test_ids: [T-S2-025-NEG]
