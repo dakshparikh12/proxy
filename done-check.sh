@@ -327,9 +327,12 @@ EOF
         OVERALL_DEFERRED=$((OVERALL_DEFERRED + 1))
     else
         # Step 1: run the ORIGINAL cmd and assert it exits 0 (real green)
+        # Capture exit code explicitly before the if construct (bash 3.2: $? inside
+        # `if ! cmd; then` reflects the negated result, not the raw cmd exit code).
         # shellcheck disable=SC2086
-        if ! uv run $REAL_CMD -p no:cacheprovider -p no:testmon > /tmp/done_check_c8_orig.txt 2>&1; then
-            ORIG_RC=$?
+        uv run $REAL_CMD -p no:cacheprovider -p no:testmon > /tmp/done_check_c8_orig.txt 2>&1
+        ORIG_RC=$?
+        if [[ $ORIG_RC -ne 0 ]]; then
             if [[ $ORIG_RC -eq 5 ]]; then
                 echo "FAIL (original cmd collected no tests — exit 5; acceptance cmd does not bind to real tests)"
             else
