@@ -15,7 +15,6 @@ import ast
 import inspect
 
 import pytest
-
 from scribe import close
 from scribe.close import (
     CHAT_POST_MAX_ATTEMPTS,
@@ -27,6 +26,7 @@ from scribe.close import (
     CloseMaxTurnsError,
     CloseStep,
     CloseVendorError,
+    DatabaseConnectionError,
     FinalActionItem,
     FinalDecision,
     FinalNotes,
@@ -35,9 +35,13 @@ from scribe.close import (
     HaikuModelRejectedError,
     InMemoryOperationRunSink,
     NotesGenerationConflictError,
+    ReduceResult,
     approx_tokens,
     assert_not_haiku,
+    chunk_folded_ledger,
+    connect_and_fetch_gap_pending_spans,
     generate_structured_close,
+    reduce_close,
     render_markdown,
     resolve_close_model,
     run_close_pass,
@@ -170,6 +174,114 @@ def test_ac_close_05b_above_threshold_enters_chunk_path():
     big = "y" * ((CHUNK_REDUCE_TOKEN_THRESHOLD + 10) * 4 + 8)
     assert approx_tokens(big) > CHUNK_REDUCE_TOKEN_THRESHOLD
     assert should_chunk_reduce(big) is True
+
+
+def test_chunk_folded_ledger_splits_over_threshold_into_subthreshold_chunks():
+    # Below threshold -> one chunk (single map call, i.e. AC-CLOSE-05 single-pass).
+    small = "line\n" * 10
+    assert chunk_folded_ledger(small, threshold=1000) == [small]
+    # Over threshold -> >1 chunk, and EVERY chunk is at or under the budget.
+    threshold = 100
+    max_chars = threshold * 4
+    big = "".join(f"entry-{i} some ledger text here\n" for i in range(400))
+    chunks = chunk_folded_ledger(big, threshold=threshold)
+    assert len(chunks) > 1
+    for c in chunks:
+        assert len(c) <= max_chars
+    # No content is lost across the split (the reduce sees the whole ledger).
+    assert "".join(chunks) == big
+
+
+class _CountingCaller:
+    """Honest StructuredCaller counting real generateStructured invocations.
+
+    NOT a Mock of the seam: it honours the caller contract (model/prompt/schema in,
+    a real StructuredResult out) and simply records how many times the reduce path
+    invoked it and the prompts it saw. Driven through the real call_external seam
+    (real_call_external) exactly like every other unit-tier caller.
+    """
+
+    def __init__(self):
+        self.count = 0
+        self.prompts: list[str] = []
+
+    async def __call__(self, *, model, prompt, output_schema):
+        self.count += 1
+        self.prompts.append(prompt)
+        # Each call returns a valid FinalNotes payload with a call-tagged action
+        # item so the merge can be observed to fold across chunks.
+        data = _final_notes(
+            summary=f"partial summary {self.count}",
+            action_items=[FinalActionItem(text=f"item-from-call-{self.count}")],
+        ).model_dump()
+        return close.StructuredResult(data=data, total_cost_usd=0.01)
+
+
+async def test_ac_close_05b_chunk_reduce_makes_more_than_one_call_one_object():
+    # AC-CLOSE-05B: an OVER-threshold folded ledger enters the real chunk-reduce
+    # path -> MORE THAN ONE generateStructured call, and the result is still a
+    # SINGLE unified FinalNotes object (not a list of per-chunk partials).
+    threshold = 100
+    over = "".join(f"ledger entry {i} with content\n" for i in range(500))
+    assert should_chunk_reduce(over, threshold=threshold) is True
+    caller = _CountingCaller()
+    result = await reduce_close(
+        CloseInput(folded_ledger=over, gap_pending_spans=()),
+        model="claude-sonnet-4-6",
+        caller=caller,
+        call_external=real_call_external,
+        threshold=threshold,
+    )
+    assert isinstance(result, ReduceResult)
+    # More than one model call actually happened (the chunk-reduce loop ran).
+    assert result.model_call_count > 1
+    assert caller.count == result.model_call_count
+    # It is per-chunk maps + exactly ONE reduce: N chunks -> N+1 calls.
+    n_chunks = len(chunk_folded_ledger(over, threshold=threshold))
+    assert n_chunks > 1
+    assert result.model_call_count == n_chunks + 1
+    # The output is ONE merged notes object, not a list.
+    assert isinstance(result.final_notes, FinalNotes)
+    # Cost is SUMMED from the per-call SDK results (never recomputed from tokens).
+    assert result.total_cost_usd is not None
+    assert abs(result.total_cost_usd - 0.01 * result.model_call_count) < 1e-9
+
+
+async def test_ac_close_05_below_threshold_makes_exactly_one_call():
+    # AC-CLOSE-05 (behavioral): a below-threshold ledger reduces in EXACTLY ONE
+    # model call — no chunk-reduce loop is entered.
+    threshold = 100_000
+    small = "a normal meeting's folded ledger, well under threshold\n" * 3
+    assert should_chunk_reduce(small, threshold=threshold) is False
+    caller = _CountingCaller()
+    result = await reduce_close(
+        CloseInput(folded_ledger=small, gap_pending_spans=()),
+        model="claude-sonnet-4-6",
+        caller=caller,
+        call_external=real_call_external,
+        threshold=threshold,
+    )
+    assert result.model_call_count == 1
+    assert caller.count == 1
+    assert isinstance(result.final_notes, FinalNotes)
+
+
+async def test_ac_close_05b_backfill_reduced_in_once_not_per_chunk():
+    # The gap/pending backfill is reduced in EXACTLY ONCE (at the merge), never
+    # duplicated into every chunk's map call. Only one prompt carries the span.
+    threshold = 100
+    over = "".join(f"ledger entry {i}\n" for i in range(500))
+    spans = (GapPendingSpan("s1", "UNIQUE-GAP-BACKFILL-TOKEN", "gap"),)
+    caller = _CountingCaller()
+    await reduce_close(
+        CloseInput(folded_ledger=over, gap_pending_spans=spans),
+        model="claude-sonnet-4-6",
+        caller=caller,
+        call_external=real_call_external,
+        threshold=threshold,
+    )
+    carrying = [p for p in caller.prompts if "UNIQUE-GAP-BACKFILL-TOKEN" in p]
+    assert len(carrying) == 1  # only the reduce prompt carries the backfill
 
 
 def test_ac_close_05_boundary_is_strict_greater_than():
@@ -549,11 +661,36 @@ async def test_ac_close_11neg_missing_cost_does_not_crash():
 # ── AC-CLOSE-02 — meeting-end is the sole trigger; init exactly once ─────────
 
 async def test_ac_close_02_close_initiated_exactly_once():
-    # run_close_pass is the close-pass initiation; it opens exactly one op row.
-    bucket, poster, teardown = _RecordingBucket(), _Poster(), _Teardown()
+    # AC-CLOSE-02: run_close_pass IS the close-pass initiation (opening the single
+    # operation_runs row). This asserts the strongest in-scope property of the
+    # trigger: (a) BEFORE any invocation, zero initiations exist; (b) ONE invocation
+    # initiates the close pass EXACTLY once; (c) a SECOND invocation for the SAME
+    # meeting does NOT initiate a second close pass — the sink's duplicate-row guard
+    # rejects it (crash-recovery re-entry cannot double-initiate).
+    #
+    # NOTE (honest scope): the true TRIGGER coupling — the Doc 02 meeting-end signal
+    # being the SOLE cause of exactly one initiation — is NOT wired in close's scope.
+    # scribe.close is imported by nothing and the transport MeetingEnd signal never
+    # calls it; that meeting-end -> close wiring is Doc04 orchestration (see
+    # services/transport/.../events.py: "re-run the Doc 04 close sequence"). Within
+    # close's scope we can only assert the initiation is idempotent-per-meeting and
+    # count-exactly-once, which is what this test does.
     sink = InMemoryOperationRunSink()
+
+    # (a) none-before: no initiation exists prior to any invocation.
+    assert sink.rows == {}
+
+    # (b) exactly-once: a single close-pass invocation initiates exactly one row.
+    bucket, poster, teardown = _RecordingBucket(), _Poster(), _Teardown()
     await _run(bucket, poster, teardown, sink, mid="m2")
-    assert len(sink.rows) == 1  # one initiation
+    assert len(sink.rows) == 1  # exactly one initiation
+    assert sink.rows["m2"]["operation_type"] == "meeting-close"
+
+    # (c) not-more-than-once: a second invocation for the SAME meeting is rejected
+    # at initiation (the operation_runs row already exists) -> no second close pass.
+    with pytest.raises(RuntimeError):
+        await _run(_RecordingBucket(), _Poster(), _Teardown(), sink, mid="m2")
+    assert len(sink.rows) == 1  # still exactly one — never initiated twice
 
 
 async def test_ac_close_02neg_no_close_without_invocation():
@@ -565,6 +702,70 @@ async def test_ac_close_02neg_no_close_without_invocation():
     surface = set(close.__all__)
     for forbidden in ("schedule", "on_silence", "timer", "poll"):
         assert not any(forbidden in name.lower() for name in surface)
+
+
+# ── AC-CLOSE-04-NEG — backfill DB failure marks the op row FAILED (wired) ────
+
+# A genuinely unroutable DSN — a real asyncpg connect to 127.0.0.1:1 is refused
+# (port 1 is unassigned), so the backfill read fails FOR REAL, never via a double
+# (mock_boundary: real db fault injection, MUST NOT stub the db seam).
+_UNROUTABLE_DSN = "postgresql://proxy@127.0.0.1:1/nope"
+
+
+async def test_ac_close_04neg_backfill_db_failure_marks_op_row_failed():
+    # AC-CLOSE-04-NEG (the untested clause): when the gap/pending backfill read
+    # cannot reach Postgres, run_close_pass surfaces DatabaseConnectionError AND
+    # marks the operation_runs row FAILED (not succeeded) — wired through the real
+    # run_close_pass path, driven by a REAL unroutable DSN (no hand double).
+    pytest.importorskip("asyncpg")
+    import uuid
+
+    from scribe.close import FinalNotes as _FN  # noqa: F401 (parity import)
+
+    bucket, poster, teardown = _RecordingBucket(), _Poster(), _Teardown()
+    sink = InMemoryOperationRunSink()
+    mid = uuid.uuid4()
+
+    async def fetch_backfill():
+        # The DB-path wiring: a real connect to the unroutable DSN, surfaced as
+        # DatabaseConnectionError by the real close seam (not a stub of it).
+        return await connect_and_fetch_gap_pending_spans(
+            _UNROUTABLE_DSN, mid, timeout=1
+        )
+
+    with pytest.raises(DatabaseConnectionError):
+        await run_close_pass(
+            mid,
+            _final_notes(),
+            0.01,
+            bucket=bucket,
+            bucket_name="notes-bucket",
+            post_chat_link=poster,
+            teardown=teardown,
+            op_sink=sink,
+            fetch_backfill=fetch_backfill,
+        )
+
+    # The operation_runs row is marked FAILED, not succeeded (the key clause).
+    row = sink.rows[str(mid)]
+    assert row["status"] == "failed"
+    assert row["status"] != "succeeded"
+    assert row["error_type"] == "db_backfill_failed"
+    # It did NOT silently skip the backfill and proceed: nothing world-touching ran.
+    assert teardown.count == 0  # no teardown
+    assert poster.calls == []  # no chat link posted
+    assert bucket.written == []  # no GCS object written
+    # And no later step confirm was recorded on the trace (surfaced before render).
+
+
+async def test_ac_close_04neg_connect_helper_surfaces_typed_error_on_unroutable_dsn():
+    # The DB-path connect helper maps a REAL refused connection to the typed
+    # DatabaseConnectionError (never a silent skip / bare OSError leak).
+    pytest.importorskip("asyncpg")
+    import uuid
+
+    with pytest.raises(DatabaseConnectionError):
+        await connect_and_fetch_gap_pending_spans(_UNROUTABLE_DSN, uuid.uuid4(), timeout=1)
 
 
 # ── AC-CLOSE-16 — no V1 features present in V0 ───────────────────────────────

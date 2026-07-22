@@ -53,11 +53,19 @@ _HAVE_ASYNCPG = importlib.util.find_spec("asyncpg") is not None
 pytest.importorskip("asyncpg")
 
 import asyncpg  # noqa: E402
-
 from scribe.close import (  # noqa: E402
     DatabaseConnectionError,
+    FinalNotes,
+    InMemoryOperationRunSink,
+    connect_and_fetch_gap_pending_spans,
     fetch_gap_pending_spans,
+    run_close_pass,
 )
+
+# A genuinely unroutable DSN: a real asyncpg connect to 127.0.0.1:1 is refused
+# (port 1 is unassigned). The AC-CLOSE-04-NEG fault is injected via this REAL DSN,
+# never a hand double of the seam (mock_boundary: real db fault injection).
+_UNROUTABLE_DSN = "postgresql://proxy@127.0.0.1:1/nope"
 
 
 async def _try_connect(dsn: str):
@@ -124,15 +132,84 @@ async def test_ac_close_04_comprehended_raw_text_never_returned(pg_dsn, meeting_
 
 
 async def test_ac_close_04neg_unreachable_db_raises_typed_error(meeting_id):
-    # An unroutable DSN -> the seam surfaces DatabaseConnectionError, never a
-    # silent skip of the backfill. We drive the REAL seam with a connection object
-    # that fails on .fetch (a genuinely broken connection), not a stub of the seam.
-    class _BrokenConn:
-        async def fetch(self, *a, **k):
-            raise OSError("connection refused (simulated DB outage)")
+    # An unroutable DSN -> the REAL connect seam surfaces DatabaseConnectionError,
+    # never a silent skip of the backfill. A genuine asyncpg connect to the refused
+    # port fails for real (no hand double of the seam).
+    with pytest.raises(DatabaseConnectionError):
+        await connect_and_fetch_gap_pending_spans(_UNROUTABLE_DSN, meeting_id, timeout=1)
+
+
+class _RecBucket:
+    """Create-only bucket double honouring if_generation_match=0 (record-only)."""
+
+    def __init__(self):
+        self.written: list[str] = []
+
+    def blob(self, name):
+        outer = self
+
+        class _Blob:
+            generation = None
+
+            def upload_from_string(self, markdown, *, content_type, if_generation_match):
+                assert if_generation_match == 0
+                outer.written.append(markdown)
+
+            def reload(self):
+                self.generation = 1
+
+        return _Blob()
+
+
+class _RecPoster:
+    def __init__(self):
+        self.calls: list[str] = []
+
+    async def __call__(self, url):
+        self.calls.append(url)
+
+
+class _RecTeardown:
+    def __init__(self):
+        self.count = 0
+
+    async def __call__(self):
+        self.count += 1
+
+
+async def test_ac_close_04neg_backfill_failure_marks_op_row_failed_via_run_close_pass(
+    meeting_id,
+):
+    # AC-CLOSE-04-NEG (the previously-untested clause): a backfill DB failure wired
+    # THROUGH run_close_pass marks the operation_runs row FAILED (not succeeded) and
+    # runs nothing world-touching. Driven by a REAL unroutable DSN, not a double.
+    bucket, poster, teardown = _RecBucket(), _RecPoster(), _RecTeardown()
+    sink = InMemoryOperationRunSink()
+
+    async def fetch_backfill():
+        return await connect_and_fetch_gap_pending_spans(
+            _UNROUTABLE_DSN, meeting_id, timeout=1
+        )
 
     with pytest.raises(DatabaseConnectionError):
-        await fetch_gap_pending_spans(_BrokenConn(), meeting_id)
+        await run_close_pass(
+            meeting_id,
+            FinalNotes(summary="s"),
+            0.01,
+            bucket=bucket,
+            bucket_name="notes-bucket",
+            post_chat_link=poster,
+            teardown=teardown,
+            op_sink=sink,
+            fetch_backfill=fetch_backfill,
+        )
+
+    row = sink.rows[str(meeting_id)]
+    assert row["status"] == "failed"  # NOT succeeded — the key clause
+    assert row["error_type"] == "db_backfill_failed"
+    assert teardown.count == 0
+    assert poster.calls == []
+    assert bucket.written == []
 
 
 async def test_ac_close_13_backfill_read_does_not_delete_archive(pg_dsn, meeting_id):

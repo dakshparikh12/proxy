@@ -280,6 +280,42 @@ def should_chunk_reduce(
     return approx_tokens(folded_ledger) > threshold
 
 
+def chunk_folded_ledger(
+    folded_ledger: str, *, threshold: int = CHUNK_REDUCE_TOKEN_THRESHOLD
+) -> list[str]:
+    """Split an over-threshold folded ledger into sub-threshold map chunks (§3.7).
+
+    Each chunk is at most ``threshold`` tokens (~``threshold * _CHARS_PER_TOKEN``
+    chars), so every map call stays under the model's context budget. Chunk
+    boundaries prefer line breaks so a ledger entry is not split mid-line; an
+    over-long single line is still hard-split so no chunk ever exceeds the budget.
+    A below-threshold ledger returns a single chunk (the caller then makes ONE
+    map call, i.e. AC-CLOSE-05's single-pass). Pure arithmetic — no model call.
+    """
+    max_chars = threshold * _CHARS_PER_TOKEN
+    if len(folded_ledger) <= max_chars:
+        return [folded_ledger]
+    chunks: list[str] = []
+    current = ""
+    for line in folded_ledger.splitlines(keepends=True):
+        while len(line) > max_chars:
+            # A single over-long line cannot fit any chunk — hard-split it so no
+            # chunk exceeds the budget (still deterministic, still no model call).
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(line[:max_chars])
+            line = line[max_chars:]
+        if len(current) + len(line) > max_chars:
+            chunks.append(current)
+            current = line
+        else:
+            current += line
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 # ── Input composition (folded ledger + gap/pending ONLY) ────────────────────
 
 @dataclass(frozen=True)
@@ -350,6 +386,34 @@ async def fetch_gap_pending_spans(conn: Any, meeting_id: Any) -> tuple[GapPendin
         GapPendingSpan(segment_id=str(r["id"]), text=r["text"], status=r["status"])
         for r in rows
     )
+
+
+async def connect_and_fetch_gap_pending_spans(
+    dsn: str, meeting_id: Any, *, timeout: float = 5.0
+) -> tuple[GapPendingSpan, ...]:
+    """Open a real Postgres connection and read the gap/pending backfill (§3.7).
+
+    The DB-path wiring for :func:`run_close_pass`'s ``fetch_backfill``: it opens a
+    real asyncpg connection to ``dsn`` and delegates the read to
+    :func:`fetch_gap_pending_spans`, closing the connection afterward. A failure
+    to CONNECT (unreachable host/port, refused connection) is surfaced as
+    :class:`DatabaseConnectionError` exactly like a failed read — the close pass
+    never silently skips the backfill and proceeds with an incomplete input
+    (AC-CLOSE-04-NEG). ``asyncpg`` is imported lazily so this module stays
+    importable on a host without it.
+    """
+    import asyncpg  # lazy: dev dependency, not needed to import this module
+
+    try:
+        conn = await asyncpg.connect(dsn, timeout=timeout)
+    except Exception as exc:  # connection refused / unreachable — surface, never skip
+        raise DatabaseConnectionError(
+            f"could not connect to Postgres for meeting {meeting_id} backfill: {exc}"
+        ) from exc
+    try:
+        return await fetch_gap_pending_spans(conn, meeting_id)
+    finally:
+        await conn.close()
 
 
 # ── The ordered close sequence trace (render → GCS → chat → teardown) ────────
@@ -536,6 +600,109 @@ async def generate_structured_close(
     return final, result.total_cost_usd
 
 
+# ── The chunk-reduce map-reduce (one pass under threshold, N+1 over it) ───────
+
+@dataclass
+class ReduceResult:
+    """The outcome of reducing the folded ledger into ONE final notes object.
+
+    ``final_notes`` is always a SINGLE unified object regardless of how many map
+    calls ran. ``model_call_count`` is the real number of ``generateStructured``
+    calls made: exactly 1 below the token threshold (AC-CLOSE-05), and
+    ``len(chunks) + 1`` above it — the per-chunk map calls plus the one merge
+    reduce (AC-CLOSE-05B, ``model_call_count > 1``). ``total_cost_usd`` sums the
+    per-call SDK-reported costs (None if every call reported None), never
+    recomputed from token arithmetic (§3.9 / AC-CLOSE-11).
+    """
+
+    final_notes: FinalNotes
+    model_call_count: int
+    total_cost_usd: float | None
+
+
+def _merge_final_notes(partials: list[FinalNotes]) -> FinalNotes:
+    """Deterministically fold per-chunk partials into ONE object before the reduce.
+
+    Concatenates the section lists and joins the chunk summaries. This is the
+    map-side accumulation; the final reduce model call (below) re-summarises and
+    dedups the merged whole into the definitive record. No model call here.
+    """
+    return FinalNotes(
+        summary="\n\n".join(p.summary for p in partials if p.summary.strip()),
+        decisions=[d for p in partials for d in p.decisions],
+        action_items=[a for p in partials for a in p.action_items],
+        open_questions=[q for p in partials for q in p.open_questions],
+    )
+
+
+def _sum_costs(costs: list[float | None]) -> float | None:
+    seen = [c for c in costs if c is not None]
+    return sum(seen) if seen else None
+
+
+async def reduce_close(
+    close_input: CloseInput,
+    *,
+    model: str,
+    caller: StructuredCaller,
+    call_external: CallExternal,
+    threshold: int = CHUNK_REDUCE_TOKEN_THRESHOLD,
+) -> ReduceResult:
+    """Reduce the folded ledger + gap/pending backfill into ONE FinalNotes (§3.7).
+
+    Below the token threshold this makes EXACTLY ONE ``generateStructured`` call
+    over the whole input and returns its result verbatim — a normal meeting folds
+    in one pass, no map-reduce loop (AC-CLOSE-05, ``model_call_count == 1``).
+
+    Above the threshold it enters the real chunk-reduce path (AC-CLOSE-05B): the
+    folded ledger is split into sub-threshold chunks; each chunk is mapped through
+    its OWN ``generateStructured`` call (MORE THAN ONE model call), the partials
+    are folded, and ONE final reduce call merges them — carrying the gap/pending
+    backfill — into a SINGLE unified FinalNotes. ``model_call_count`` is
+    ``len(chunks) + 1 > 1``; the output is one merged object, not a list.
+
+    Each call goes through :func:`generate_structured_close`, so the same real
+    ``call_external`` seam, Pydantic re-validation, and typed terminal-error
+    surfacing apply to every map AND the reduce (AC-CLOSE-06/-06-NEG).
+    """
+    if not should_chunk_reduce(close_input.folded_ledger, threshold=threshold):
+        final, cost = await generate_structured_close(
+            close_input, model=model, caller=caller, call_external=call_external
+        )
+        return ReduceResult(final_notes=final, model_call_count=1, total_cost_usd=cost)
+
+    # ── Map: one generateStructured call PER chunk (> 1 model call) ───────────
+    chunks = chunk_folded_ledger(close_input.folded_ledger, threshold=threshold)
+    partials: list[FinalNotes] = []
+    costs: list[float | None] = []
+    for chunk in chunks:
+        # Map inputs carry NO gap/pending backfill — the raw spans are reduced in
+        # exactly once at the merge step, never duplicated across every chunk.
+        map_input = CloseInput(folded_ledger=chunk, gap_pending_spans=())
+        part, cost = await generate_structured_close(
+            map_input, model=model, caller=caller, call_external=call_external
+        )
+        partials.append(part)
+        costs.append(cost)
+
+    # ── Reduce: ONE merge call folds the partials + backfill into one object ──
+    merged = _merge_final_notes(partials)
+    reduce_input = CloseInput(
+        folded_ledger=render_markdown(merged),
+        gap_pending_spans=close_input.gap_pending_spans,
+    )
+    final, reduce_cost = await generate_structured_close(
+        reduce_input, model=model, caller=caller, call_external=call_external
+    )
+    costs.append(reduce_cost)
+
+    return ReduceResult(
+        final_notes=final,  # a SINGLE merged object, not a list
+        model_call_count=len(chunks) + 1,  # per-chunk maps + one reduce (> 1)
+        total_cost_usd=_sum_costs(costs),
+    )
+
+
 # ── The orchestrated close pass (render → GCS → chat → teardown) ─────────────
 
 @dataclass
@@ -564,16 +731,25 @@ async def run_close_pass(
     post_chat_link: ChatPoster,
     teardown: Callable[[], Awaitable[None]],
     op_sink: OperationRunSink,
+    fetch_backfill: Callable[[], Awaitable[Any]] | None = None,
     already_started: bool = False,
     chat_post_max_attempts: int = CHAT_POST_MAX_ATTEMPTS,
 ) -> CloseResult:
     """The V0 close sequence, in the MANDATORY order (§3.7 / AC-CLOSE-09).
 
-    Step 1 render → Step 2 GCS create-only write (``if_generation_match=0``) →
-    Step 3 chat-link post (retried) → Step 4 teardown. Each step's confirm is
-    recorded on the :class:`CloseTrace`, and NO later step runs until the prior
-    step confirms:
+    Step 0 gap/pending backfill read → Step 1 render → Step 2 GCS create-only
+    write (``if_generation_match=0``) → Step 3 chat-link post (retried) → Step 4
+    teardown. Each step's confirm is recorded on the :class:`CloseTrace`, and NO
+    later step runs until the prior step confirms:
 
+    * If the gap/pending backfill read cannot reach Postgres, the close pass does
+      NOT silently skip it and proceed with an incomplete input: the
+      :class:`DatabaseConnectionError` is surfaced and the operation_runs row is
+      marked failed, not succeeded — no render, no GCS write, no chat post, no
+      teardown (AC-CLOSE-04-NEG). ``fetch_backfill`` is the injected read (the DB
+      path passes :func:`fetch_gap_pending_spans` bound to a live connection);
+      when omitted, the backfill was performed by the caller and this step is a
+      no-op.
     * If the GCS write fails, Step 3 and Step 4 do NOT proceed; the error is
       surfaced and the operation_runs row is marked failed (AC-CLOSE-08-NEG).
     * A second close pass (crash recovery) hits ``if_generation_match=0`` →
@@ -593,6 +769,17 @@ async def run_close_pass(
     trace = CloseTrace()
     if not already_started:
         await op_sink.start(meeting_id)
+
+    # ── Step 0: gap/pending backfill read — never silently skipped ──────────
+    # If the read cannot reach Postgres the close pass surfaces the failure and
+    # marks the row failed rather than proceeding with an incomplete input
+    # (AC-CLOSE-04-NEG). Nothing world-touching (render/GCS/chat/teardown) runs.
+    if fetch_backfill is not None:
+        try:
+            await fetch_backfill()
+        except DatabaseConnectionError:
+            await op_sink.mark_failed(meeting_id, error_type="db_backfill_failed")
+            raise
 
     # ── Step 1: render (deterministic, no model call) ───────────────────────
     markdown = render_markdown(final_notes)
@@ -688,9 +875,13 @@ __all__ = [
     "assert_not_haiku",
     "approx_tokens",
     "should_chunk_reduce",
+    "chunk_folded_ledger",
+    "ReduceResult",
+    "reduce_close",
     "GapPendingSpan",
     "CloseInput",
     "fetch_gap_pending_spans",
+    "connect_and_fetch_gap_pending_spans",
     "CloseStep",
     "CloseEvent",
     "CloseTrace",
