@@ -205,14 +205,21 @@ class CapturingApplier:
 
 
 class FakeReExtractor:
-    """A Sonnet re-extractor that returns a queued NoteDelta (or None) and counts calls."""
+    """A Sonnet re-extractor that returns a queued NoteDelta (or None) and counts calls.
+
+    Captures the ``model`` threaded in at the REAL escalation call site so a test can
+    assert the escalation ran on the Sonnet-class tier at the actual re-extraction
+    call (not merely in a ``supersede_reason`` string) — AC-QGATE-09.
+    """
 
     def __init__(self, *deltas: Any) -> None:
         self._deltas = list(deltas)
         self.windows_seen: list[str] = []
+        self.models_seen: list[str] = []
 
-    async def __call__(self, window_text: str) -> Any:
+    async def __call__(self, window_text: str, *, model: str) -> Any:
         self.windows_seen.append(window_text)
+        self.models_seen.append(model)
         if not self._deltas:
             return None
         return self._deltas.pop(0)

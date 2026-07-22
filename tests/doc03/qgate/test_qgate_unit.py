@@ -19,6 +19,7 @@ import pytest
 
 from scribe.quality_gate import (
     ALWAYS_CHECK_TRIGGERS,
+    DEFAULT_ESCALATION_MODEL,
     DEFAULT_GATE_MODEL,
     GATE_AUTHOR,
     MISS_RECORD_TYPE,
@@ -296,18 +297,21 @@ def test_qgate_07_no_hardcoded_haiku_literal_outside_default() -> None:
             if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
                 docstrings.add(id(body[0].value))
 
-    # The Constant nodes that are the value of the `DEFAULT_GATE_MODEL` declaration
-    # (a type-annotated assignment: `DEFAULT_GATE_MODEL: str = "..."`).
+    # The Constant nodes that are the value of a DEFAULT_*_MODEL declaration
+    # (a type-annotated assignment: `DEFAULT_GATE_MODEL: str = "..."` and the
+    # Sonnet-class `DEFAULT_ESCALATION_MODEL: str = "..."`). These are named
+    # default-value declarations, NOT call-site literals.
+    _default_names = {"DEFAULT_GATE_MODEL", "DEFAULT_ESCALATION_MODEL"}
     allowed = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
-            if "DEFAULT_GATE_MODEL" in targets and isinstance(node.value, ast.Constant):
+            if _default_names & set(targets) and isinstance(node.value, ast.Constant):
                 allowed.add(id(node.value))
         elif isinstance(node, ast.AnnAssign):
             if (
                 isinstance(node.target, ast.Name)
-                and node.target.id == "DEFAULT_GATE_MODEL"
+                and node.target.id in _default_names
                 and isinstance(node.value, ast.Constant)
             ):
                 allowed.add(id(node.value))
@@ -378,7 +382,11 @@ def test_qgate_08neg_grounded_true_no_escalation_no_miss() -> None:
 # === AC-QGATE-09 : grounded=false -> exactly one Sonnet re-extraction, same window ===
 
 def test_qgate_09_miss_triggers_one_sonnet_reextraction_same_window(monkeypatch) -> None:
-    monkeypatch.setenv("PROXY_MODEL_SCRIBE", "claude-sonnet-4-6")
+    # UNSET env: the escalation tier must be Sonnet-class BY DEFAULT (not a
+    # monkeypatched echo). A miss must escalate to a strictly stronger model than
+    # the Haiku gate-check — never Haiku->Haiku (AC-QGATE-09 / §3.2.2).
+    monkeypatch.delenv("PROXY_MODEL_QUALITY_ESCALATION", raising=False)
+    monkeypatch.delenv("PROXY_MODEL_SCRIBE", raising=False)
     reextractor = FakeReExtractor(a_delta_with_one_add("corrected"))
     applier = CapturingApplier()
     applier.seed("e1", {"kind": "context", "text": "original haiku note"})
@@ -396,8 +404,15 @@ def test_qgate_09_miss_triggers_one_sonnet_reextraction_same_window(monkeypatch)
     assert outcome.escalated is True
     assert len(reextractor.windows_seen) == 1
     assert reextractor.windows_seen[0] == "ORIGINAL-WINDOW"
-    # Escalation tier resolves to the Sonnet-class SCRIBE seat.
-    assert gate.config.escalation_model() == "claude-sonnet-4-6"
+    # The model threaded into the REAL re-extraction call is Sonnet-class — the
+    # escalation genuinely ran a stronger tier at the actual call site, not just in
+    # a supersede_reason string, and not the Haiku gate model.
+    assert len(reextractor.models_seen) == 1
+    assert reextractor.models_seen[0] == "claude-sonnet-4-6"
+    assert "sonnet" in reextractor.models_seen[0]
+    assert reextractor.models_seen[0] != gate.config.gate_model()
+    # And the default resolver agrees: Sonnet-class with env unset.
+    assert "sonnet" in gate.config.escalation_model()
 
 
 # === AC-QGATE-09-NEG : grounded=true -> zero Sonnet calls ===
@@ -580,7 +595,8 @@ def test_qgate_12_miss_rate_end_to_end_over_gate() -> None:
 
 def test_qgate_13_pinned_defaults(monkeypatch) -> None:
     monkeypatch.delenv("PROXY_MODEL_QUALITY_GATE", raising=False)
-    monkeypatch.setenv("PROXY_MODEL_SCRIBE", "claude-sonnet-4-6")
+    monkeypatch.delenv("PROXY_MODEL_QUALITY_ESCALATION", raising=False)
+    monkeypatch.delenv("PROXY_MODEL_SCRIBE", raising=False)
     cfg = GateConfig()
     assert cfg.sample_rate == 0.1
     assert QUALITY_GATE_SAMPLE_RATE_DEFAULT == 0.1
@@ -588,8 +604,12 @@ def test_qgate_13_pinned_defaults(monkeypatch) -> None:
     assert len(ALWAYS_CHECK_TRIGGERS) == 3
     assert cfg.gate_model() == "claude-haiku-4-5"
     assert DEFAULT_GATE_MODEL == "claude-haiku-4-5"
-    # Escalation tier is Sonnet-class as configured via PROXY_MODEL_SCRIBE.
+    # Escalation tier is Sonnet-class BY DEFAULT with env fully unset — a strictly
+    # stronger tier than the Haiku gate-check, never Haiku->Haiku (the real defect).
+    assert "sonnet" in cfg.escalation_model()
     assert cfg.escalation_model() == "claude-sonnet-4-6"
+    assert DEFAULT_ESCALATION_MODEL == "claude-sonnet-4-6"
+    assert cfg.escalation_model() != cfg.gate_model()
 
 
 # === AC-QGATE-14 : gate adds no synchronous latency to the applier ===

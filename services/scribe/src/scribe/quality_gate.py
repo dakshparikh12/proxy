@@ -26,8 +26,10 @@ Four load-bearing invariants, each pinned by an AC-QGATE criterion:
   rolling summary, no schema re-derivation — and answers one question:
   `{grounded: bool, reason: str}`. A parse failure is grounded=False, never true.
 * **Escalate + log (AC-QGATE-09..12).** On `grounded=false` we re-run *that*
-  extraction on the Sonnet tier (`PROXY_MODEL_SCRIBE` → Sonnet-class) over the same
-  window and replace the entry via the **normal applier path** (a `PatchOp`,
+  extraction on a Sonnet-class tier (`PROXY_MODEL_QUALITY_ESCALATION`, default
+  `claude-sonnet-4-6`) over the same window — a strictly *stronger* model than the
+  Haiku gate-check, so an escalation is a real tier bump (never Haiku→Haiku). The
+  escalation replaces the entry via the **normal applier path** (a `PatchOp`,
   attributed to the gate, superseded-not-erased per §3.6). We log a
   `quality-gate-miss` to the transcript plane (window span, Haiku entry, Sonnet
   correction) exactly once — the cascade-health telemetry whose rising miss-rate is
@@ -42,6 +44,7 @@ client construction through the seam.
 from __future__ import annotations
 
 import json
+import os
 import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -66,18 +69,22 @@ T = TypeVar("T")
 QUALITY_GATE_SAMPLE_RATE_DEFAULT: float = 0.1
 """Default fraction of ordinary applied deltas that draw a gate check (§3.2.2)."""
 
-# The gate seat and the escalation seat are resolved from the ONE canonical seat
-# table — never a hard-coded model literal in a call site (AC-QGATE-07). The
-# strings below are the *default-value declarations* the seat table already owns;
-# the only place a model id text appears in this module is these named constants,
-# so a static audit of the call path finds zero hard-coded literals.
+# The gate (Haiku) seat is resolved from the ONE canonical seat table — never a
+# hard-coded model literal in a call site (AC-QGATE-07). The escalation tier is a
+# DISTINCT resolution: it must be a *stronger* model than the gate-check, so it does
+# NOT reuse the Haiku ``SCRIBE`` seat (which would make an escalation a no-op
+# Haiku→Haiku). It has its own env override + its own Sonnet-class default (below),
+# leaving the canonical 8-seat table in :mod:`libs.llm.routing` untouched.
 _GATE_SEAT = "QUALITY_GATE"  # PROXY_MODEL_QUALITY_GATE → default claude-haiku-4-5
-_ESCALATION_SEAT = "SCRIBE"  # PROXY_MODEL_SCRIBE → Sonnet-class on escalation
+_ESCALATION_ENV = "PROXY_MODEL_QUALITY_ESCALATION"  # override → Sonnet-class default
 
-# The default model ids, exposed for the AC-QGATE-13 defaults assertion. They are
-# read back FROM the seat table so this is not an independent second source of
-# truth — it is the seat default surfaced by name.
+# The default model ids, exposed for the AC-QGATE-13 defaults assertion. The gate
+# default is read back FROM the seat table (not an independent second source of
+# truth — it is the seat default surfaced by name). The escalation default is this
+# module's own Sonnet-class constant, distinct from any Haiku seat, so a miss always
+# escalates to a strictly stronger tier.
 DEFAULT_GATE_MODEL: str = "claude-haiku-4-5"
+DEFAULT_ESCALATION_MODEL: str = "claude-sonnet-4-6"  # Sonnet-class, strictly > Haiku gate
 
 # The attribution stamped on a gate-authored correction (AC-QGATE-10): a patch the
 # gate applies is authored by the gate, never masquerading as the Scribe.
@@ -149,9 +156,11 @@ class GateConfig:
 
     A fresh, env-unset config carries the four spec defaults (AC-QGATE-13):
     ``sample_rate == 0.1``; the three always-check triggers; gate model resolving
-    to ``claude-haiku-4-5``; escalation resolving to the Sonnet-class Scribe seat.
-    The model ids are resolved through the seat table on every read so a
-    ``PROXY_MODEL_*`` override is honoured (AC-QGATE-07) and nothing is hard-coded.
+    to ``claude-haiku-4-5``; escalation resolving to the Sonnet-class default
+    ``claude-sonnet-4-6`` — strictly stronger than the Haiku gate-check, never the
+    same tier. The gate model is resolved through the seat table on every read so a
+    ``PROXY_MODEL_QUALITY_GATE`` override is honoured (AC-QGATE-07); the escalation
+    honours ``PROXY_MODEL_QUALITY_ESCALATION`` — nothing is hard-coded at a call site.
     """
 
     sample_rate: float = QUALITY_GATE_SAMPLE_RATE_DEFAULT
@@ -163,8 +172,16 @@ class GateConfig:
         return model
 
     def escalation_model(self) -> str:
-        """The escalation (Sonnet-class) model id — the ``PROXY_MODEL_SCRIBE`` seat."""
-        model: str = model_for(_ESCALATION_SEAT)
+        """The escalation model id — ``PROXY_MODEL_QUALITY_ESCALATION`` or the
+        Sonnet-class default ``claude-sonnet-4-6``.
+
+        Distinct from :meth:`gate_model` on purpose: an escalation must be a
+        strictly stronger tier than the Haiku gate-check (AC-QGATE-09 / §3.2.2), so
+        this resolves to a Sonnet-class model by default — never Haiku→Haiku. It does
+        NOT read the canonical ``SCRIBE`` seat (which is Haiku); it owns its own env
+        override so the 8-seat table stays untouched.
+        """
+        model: str = os.environ.get(_ESCALATION_ENV, DEFAULT_ESCALATION_MODEL)
         return model
 
     @property
@@ -405,13 +422,15 @@ class CorrectionApplier(Protocol):
 class ReExtractor(Protocol):
     """Re-run the extraction on the Sonnet tier over the SAME window (AC-QGATE-09).
 
-    Given the original window text and the Haiku entry that missed, issue exactly
-    one Sonnet-class extraction (through ``call_external``) and return a
-    :class:`NoteDelta` — or ``None`` when the re-extraction produced no extractable
-    entry (AC-QGATE-10-NEG / -11-NEG).
+    Given the original window text, the Haiku entry that missed, and the resolved
+    escalation ``model`` (Sonnet-class), issue exactly one extraction on that tier
+    (through ``call_external``) and return a :class:`NoteDelta` — or ``None`` when the
+    re-extraction produced no extractable entry (AC-QGATE-10-NEG / -11-NEG). The
+    ``model`` is passed explicitly so the escalation tier is exercised at the REAL
+    call site, not merely recorded in a ``supersede_reason`` string.
     """
 
-    async def __call__(self, window_text: str) -> NoteDelta | None: ...
+    async def __call__(self, window_text: str, *, model: str) -> NoteDelta | None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -502,8 +521,12 @@ class QualityGate:
             # (AC-QGATE-08-NEG / -09-NEG).
             return GateOutcome(gated=True, entailment=entailment)
 
-        # A miss (grounded=false): escalate to Sonnet over the SAME window.
-        correction_delta = await self.re_extract(gate_input.window_text)
+        # A miss (grounded=false): escalate over the SAME window on the resolved
+        # Sonnet-class tier — the model is threaded to the REAL re-extraction call,
+        # so the escalation genuinely runs a stronger model (AC-QGATE-09).
+        correction_delta = await self.re_extract(
+            gate_input.window_text, model=self.config.escalation_model()
+        )
         correction_text, correction_applied = self._apply_correction(
             gate_input, correction_delta
         )
@@ -627,6 +650,7 @@ def entry_to_text(entry: Any) -> str:
 __all__ = [
     "QUALITY_GATE_SAMPLE_RATE_DEFAULT",
     "DEFAULT_GATE_MODEL",
+    "DEFAULT_ESCALATION_MODEL",
     "GATE_AUTHOR",
     "MISS_RECORD_TYPE",
     "ALWAYS_CHECK_TRIGGERS",
