@@ -1,0 +1,1004 @@
+# BEAT.criteria.yaml — Doc 04 (Proxy Orchestrator) — §3.7 The Harness as a Heartbeated Durable-Operation Row
+# Acceptance criteria. All infrastructure slice criteria are golden_path: false.
+# ID scheme: AC-BEAT-NNN
+# Authority: DOC-04 §3.7, CANONICAL-DECISIONS §2, §12.10, §12.12
+#
+# dependency_class conventions:
+#   null       → pure in-process (is_owner flag, fencing gate, struct checks); ladder: [lint, unit]
+#   db:postgres → real Postgres via Cloud SQL Auth-Proxy or test container; ladder: [lint, unit, integration]
+#
+# mock_boundary rules (MANDATORY):
+#   db:postgres : real Postgres or testcontainers; MUST NOT mock the asyncpg pool;
+#                 the real SQL heartbeat UPDATE rowcount-return behaviour must be exercised
+#   null        : no external boundary; pure Python unit test with fakes permitted
+#
+# Every non-null dependency_class has a paired NEG criterion.
+# golden_path: false for all (heartbeat is infrastructure).
+
+# ── AC-BEAT-001: with_operation_run adopts claimed run_id (no second INSERT) ──
+
+- criterion_id: AC-BEAT-001
+  name: "with_operation_run adopts §3.6 run_id and issues no INSERT INTO operation_runs"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-BEAT-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A real Postgres database with an operation_runs row pre-created by §3.6 claim_meeting
+      (status='running', operation_type='meeting-harness', last_heartbeat_at set);
+      no other rows exist for this meeting_id.
+    when: "with_operation_run(pool, meeting_id, run_id, activity) is entered"
+    then:
+      - "No INSERT INTO operation_runs statement is issued during context manager entry"
+      - "The operation_runs row count for the meeting_id remains exactly 1 after entry"
+      - "The adopted row has the same run_id passed to with_operation_run"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      pg_stat_activity / statement log: assert zero INSERT statements against operation_runs
+      during the context-entry window; assert SELECT count(*) WHERE meeting_id=$1 == 1
+  thresholds:
+    insert_statements_on_entry: 0
+    operation_runs_rows_per_meeting: 1
+  fault_model_refs: []
+  test_ids: [T-BEAT-001]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or testcontainers; MUST NOT mock the asyncpg pool — real SQL rowcount must be verified"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-BEAT-001-NEG
+  name: "NEG: a second INSERT for the same meeting_id during harness entry would violate the unique claim"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-BEAT-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "An operation_runs row already exists for meeting_id with operation_type='meeting-harness'"
+    when: "Any code path attempts a duplicate INSERT for the same (meeting_id, operation_type) during harness entry"
+    then:
+      - "The duplicate INSERT is rejected by the database (unique constraint violation)"
+      - "with_operation_run does NOT issue such a duplicate INSERT (verifying the adopt-only contract)"
+      - "The error is surfaced rather than silently swallowed"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      inject a duplicate INSERT attempt; assert UniqueViolationError raised;
+      assert with_operation_run code path never triggers this path
+  thresholds:
+    duplicate_insert_violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-001-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or testcontainers; MUST NOT mock the asyncpg pool"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ── AC-BEAT-002: scope_id=meeting_id, operation_type='meeting-harness' ────────
+
+- criterion_id: AC-BEAT-002
+  name: "operation_runs row has scope_id=meeting_id and operation_type='meeting-harness'"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-BEAT-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A claimed operation_runs row for a meeting-harness operation"
+    when: "The row is read from Postgres after with_operation_run adopts it"
+    then:
+      - "scope_id == meeting_id (UUID)"
+      - "operation_type == 'meeting-harness' (exact string)"
+      - "No other scope_id or operation_type value is present"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      SELECT scope_id, operation_type FROM operation_runs WHERE id=$1;
+      assert scope_id == meeting_id AND operation_type == 'meeting-harness'
+  thresholds:
+    wrong_scope_id_allowed: 0
+    wrong_operation_type_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-002]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or testcontainers; MUST NOT mock the asyncpg pool"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+# ── AC-BEAT-003: HEARTBEAT_S constant = 10 (not <10, not >20) ─────────────────
+
+- criterion_id: AC-BEAT-003
+  name: "HEARTBEAT_S constant is defined as exactly 10 seconds"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc04-BEAT-05]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The harness module defining with_operation_run is imported"
+    when: "The HEARTBEAT_S constant is read"
+    then:
+      - "HEARTBEAT_S == 10 (integer or float 10)"
+      - "HEARTBEAT_S >= 10 (not less than 10)"
+      - "HEARTBEAT_S <= 20 (not more than STALE_AFTER_S / 2, ensuring at least two beats before staleness)"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert module.HEARTBEAT_S == 10 in unit test; assert 10 <= module.HEARTBEAT_S <= 20"
+  thresholds:
+    heartbeat_s_violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-003]
+  dependency_class: null
+  mock_boundary: "no external boundary; pure Python constant check"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-BEAT-004: STALE_AFTER_S constant = 40 ─────────────────────────────────
+
+- criterion_id: AC-BEAT-004
+  name: "STALE_AFTER_S constant is defined as exactly 40 seconds"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc04-BEAT-06]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The harness module defining with_operation_run is imported"
+    when: "The STALE_AFTER_S constant is read"
+    then:
+      - "STALE_AFTER_S == 40 (integer or float 40)"
+      - "STALE_AFTER_S == 4 * HEARTBEAT_S (approximately four missed beats)"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert module.STALE_AFTER_S == 40; assert module.STALE_AFTER_S == 4 * module.HEARTBEAT_S"
+  thresholds:
+    stale_after_s_violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-004]
+  dependency_class: null
+  mock_boundary: "no external boundary; pure Python constant check"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-BEAT-005: heartbeat fires every HEARTBEAT_S seconds (timing) ───────────
+
+- criterion_id: AC-BEAT-005
+  name: "Heartbeat task fires approximately every HEARTBEAT_S=10 seconds"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc04-BEAT-05]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A running with_operation_run context with a mock pool that records UPDATE invocations;
+      asyncio time is controlled (event-loop clock or monkeypatched sleep).
+    when: "30 seconds of simulated time elapse"
+    then:
+      - "The heartbeat UPDATE is called approximately 3 times (once per 10s: at t≈10, t≈20, t≈30)"
+      - "No heartbeat fires before the first HEARTBEAT_S sleep completes (delay-first pattern)"
+      - "The beat count is in [2, 4] for a 30-second window (allowing 1 jitter either direction)"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      unit test with controlled event loop: count mock pool.execute calls matching
+      the heartbeat UPDATE signature; assert 2 <= count <= 4 after 30s of simulated time
+  thresholds:
+    beats_missing_in_30s_window: 0
+    extra_beats_in_30s_window: 1
+  fault_model_refs: []
+  test_ids: [T-BEAT-005]
+  dependency_class: null
+  mock_boundary: "no external Postgres; mock pool recording execute() calls"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-BEAT-006: heartbeat UPDATE SQL uses WHERE id=$1 AND status='running' ───
+
+- criterion_id: AC-BEAT-006
+  name: "Heartbeat UPDATE SQL includes WHERE id=$1 AND status='running' (not unconditional)"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-BEAT-07]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A real Postgres database with a running with_operation_run context;
+      the operation_runs row has status='running'.
+    when: "The heartbeat fires and issues the UPDATE"
+    then:
+      - "The UPDATE statement text contains both \"id=$1\" and \"status='running'\" in the WHERE clause"
+      - "The UPDATE does NOT use an unconditional WHERE id=$1 clause alone"
+      - "last_heartbeat_at is updated to approximately NOW() on success"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      pg_stat_activity or statement log capturing the UPDATE during heartbeat window;
+      assert WHERE clause contains both id=$1 predicate AND status='running' predicate;
+      assert last_heartbeat_at updated
+  thresholds:
+    unconditional_updates_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-006]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or testcontainers; MUST NOT mock the asyncpg pool — real SQL execution needed to verify WHERE clause semantics"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-BEAT-006-NEG
+  name: "NEG: heartbeat UPDATE rowcount is 0 when status is not 'running' (fencing precondition)"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-BEAT-07, R-doc04-BEAT-08]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A real Postgres database where the operation_runs row for run_id has been
+      externally flipped to status='interrupted' (simulating a reaper acting on it).
+    when: "The heartbeat fires and issues UPDATE ... WHERE id=$1 AND status='running'"
+    then:
+      - "The UPDATE returns rowcount 0 (the WHERE predicate fails because status != 'running')"
+      - "last_heartbeat_at is NOT updated"
+      - "The rowcount-0 path triggers the fencing response (is_owner=False, self-terminate)"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      real Postgres: UPDATE externally sets status='interrupted'; trigger next heartbeat;
+      assert pool.execute result ends with ' 0'; assert last_heartbeat_at unchanged;
+      assert op.is_owner == False after the heartbeat completes
+  thresholds:
+    fencing_misses_on_interrupted_row: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-006-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or testcontainers; MUST NOT mock the asyncpg pool"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ── AC-BEAT-007: rowcount 0 → is_owner=False + WARNING log + heartbeat exits ──
+
+- criterion_id: AC-BEAT-007
+  name: "Heartbeat rowcount 0 sets is_owner=False, logs WARNING with meeting_id, self-terminates"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-BEAT-08]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A with_operation_run context where the operation_runs row has been externally
+      set to status='interrupted' before the next heartbeat fires.
+    when: "The heartbeat executes and the UPDATE returns rowcount 0"
+    then:
+      - "op.is_owner is set to False"
+      - "A WARNING-level log message is emitted containing 'fenced out' and the meeting_id"
+      - "The _heartbeat coroutine returns (self-terminates) immediately after setting is_owner=False"
+      - "No further heartbeat UPDATEs are issued after the fencing event"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      caplog + asyncio task state: assert op.is_owner == False;
+      assert WARNING log captured with 'fenced out' and meeting_id strings;
+      assert _heartbeat task finishes (not cancelled — returns naturally);
+      assert no subsequent pool.execute calls matching heartbeat UPDATE pattern
+  thresholds:
+    fencing_failures_allowed: 0
+    post_fence_updates_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-007]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or testcontainers; MUST NOT mock the asyncpg pool"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-BEAT-007-NEG
+  name: "NEG: a fenced-out harness emits NO further speak/send_chat/apply/dispatch calls"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc04-BEAT-08, R-doc04-BEAT-20]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A with_operation_run context where is_owner has been set to False (fencing has occurred)"
+    when: "The harness business logic attempts to call speak, send_chat, apply, or dispatch"
+    then:
+      - "Each side-effect call is blocked by the is_owner guard before execution"
+      - "No speak output is delivered"
+      - "No send_chat message is sent"
+      - "No apply or dispatch call reaches the subsystem"
+      - "The fenced harness produces zero externally-observable side-effects"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      unit test: set op.is_owner = False; invoke each side-effect wrapper;
+      assert zero external calls in mock stubs for speak/send_chat/apply/dispatch
+  thresholds:
+    side_effects_after_fence_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-007-NEG]
+  dependency_class: null
+  mock_boundary: "no external boundary; mock stubs for side-effect functions; is_owner set directly"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ── AC-BEAT-008: activity.bump() called on each SUCCESSFUL heartbeat ──────────
+
+- criterion_id: AC-BEAT-008
+  name: "activity.bump(meeting_id) is called after each successful heartbeat UPDATE (rowcount > 0)"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc04-BEAT-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A with_operation_run context with a mock pool that returns rowcount > 0 for
+      the heartbeat UPDATE; activity is a mock/spy object.
+    when: "Three heartbeat cycles fire successfully"
+    then:
+      - "activity.bump(meeting_id) is called exactly 3 times"
+      - "Each call receives the correct meeting_id argument"
+      - "activity.bump() is called after the UPDATE, not before"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      spy on activity.bump; assert call_count == 3 after 3 successful heartbeat cycles;
+      assert all calls receive meeting_id as argument
+  thresholds:
+    bump_calls_missing_per_successful_beat: 0
+    bump_calls_with_wrong_meeting_id: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-008]
+  dependency_class: null
+  mock_boundary: "no external boundary; mock pool returning rowcount > 0; spy on activity.bump"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-BEAT-008-NEG
+  name: "NEG: activity.bump() is NOT called when heartbeat UPDATE returns rowcount 0 (fenced)"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc04-BEAT-09, R-doc04-BEAT-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A with_operation_run context with a mock pool returning rowcount 0 for the heartbeat UPDATE"
+    when: "The heartbeat fires and the UPDATE returns rowcount 0"
+    then:
+      - "activity.bump() is NOT called"
+      - "op.is_owner is set to False"
+      - "The heartbeat self-terminates without bumping activity"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      spy on activity.bump; assert call_count == 0 after fenced heartbeat cycle;
+      assert op.is_owner == False
+  thresholds:
+    bump_calls_after_fence_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-008-NEG]
+  dependency_class: null
+  mock_boundary: "no external boundary; mock pool returning rowcount 0; spy on activity.bump"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ── AC-BEAT-009: heartbeat exception — log ERROR, loop continues ───────────────
+
+- criterion_id: AC-BEAT-009
+  name: "Transient heartbeat exception logs ERROR at run_id level and loop continues"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc04-BEAT-10]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A with_operation_run context where the mock pool raises asyncpg.PostgresConnectionError
+      on the first heartbeat UPDATE, then succeeds on the second.
+    when: "Two heartbeat cycles fire"
+    then:
+      - "The first heartbeat raises an exception; an ERROR-level log is emitted containing the run_id"
+      - "The heartbeat loop does NOT exit after the transient failure"
+      - "The second heartbeat fires normally and succeeds"
+      - "op.is_owner remains True (no fencing triggered by exception alone)"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      caplog: assert ERROR log with run_id on first cycle;
+      assert second heartbeat UPDATE called (spy on pool.execute);
+      assert op.is_owner == True after two cycles
+  thresholds:
+    loop_exits_on_transient_error_allowed: 0
+    is_owner_false_on_transient_error_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-009]
+  dependency_class: null
+  mock_boundary: "no external boundary; mock pool raising then succeeding; caplog captured"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-BEAT-010: normal exit → status='completed', completed_at set ───────────
+
+- criterion_id: AC-BEAT-010
+  name: "Normal exit from with_operation_run body sets status='completed' and completed_at in Postgres"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-BEAT-11]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A real Postgres database with a pre-created operation_runs row (status='running');
+      with_operation_run is entered and the body completes without raising.
+    when: "The with_operation_run context exits normally"
+    then:
+      - "The operation_runs row for run_id has status='completed'"
+      - "completed_at is set to a non-NULL timestamp close to the exit time"
+      - "The status UPDATE occurs BEFORE hb.cancel() (terminal status written before heartbeat stops)"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      SELECT status, completed_at FROM operation_runs WHERE id=$1 after normal exit;
+      assert status == 'completed' AND completed_at IS NOT NULL AND
+      completed_at >= test_start_time
+  thresholds:
+    wrong_terminal_status_allowed: 0
+    null_completed_at_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-010]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or testcontainers; MUST NOT mock the asyncpg pool"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-BEAT-010-NEG
+  name: "NEG: exception in with_operation_run body does NOT leave status='running'"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-BEAT-11, R-doc04-BEAT-12]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A real Postgres database with a pre-created operation_runs row (status='running');
+      with_operation_run is entered and the body raises RuntimeError.
+    when: "The with_operation_run context exits via exception"
+    then:
+      - "The operation_runs row does NOT have status='running' after the exception"
+      - "The status is 'failed' (not 'running', not 'completed', not 'interrupted')"
+      - "The exception propagates to the caller (re-raised)"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      SELECT status FROM operation_runs WHERE id=$1 after exception exit;
+      assert status == 'failed' AND status != 'running';
+      assert RuntimeError re-raised to caller
+  thresholds:
+    running_status_after_exception_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-010-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or testcontainers; MUST NOT mock the asyncpg pool"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ── AC-BEAT-011: exception exit → status='failed', error=str(e)[:500] ─────────
+
+- criterion_id: AC-BEAT-011
+  name: "Exception exit sets status='failed', error column = str(e)[:500], completed_at set"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-BEAT-12, R-doc04-BEAT-13]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A real Postgres database with a pre-created operation_runs row;
+      with_operation_run body raises RuntimeError("test failure message").
+    when: "The with_operation_run context exits via exception"
+    then:
+      - "status == 'failed'"
+      - "error == 'test failure message' (str(e)[:500] of the exception)"
+      - "completed_at is set to a non-NULL timestamp"
+      - "The exception is re-raised to the caller"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      SELECT status, error, completed_at FROM operation_runs WHERE id=$1;
+      assert status == 'failed' AND error == 'test failure message' AND
+      completed_at IS NOT NULL
+  thresholds:
+    wrong_error_value_allowed: 0
+    null_completed_at_on_failure_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-011]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or testcontainers; MUST NOT mock the asyncpg pool"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+# ── AC-BEAT-012: error truncated to 500 chars (boundary test) ─────────────────
+
+- criterion_id: AC-BEAT-012
+  name: "Error string in operation_runs is truncated to at most 500 characters"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-BEAT-13]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A real Postgres database; with_operation_run body raises an exception whose
+      str() representation is 1000 characters long (e.g., 'x' * 1000).
+    when: "The with_operation_run context exits via the 1000-char exception"
+    then:
+      - "The error column in operation_runs contains exactly 500 characters"
+      - "The error column does NOT contain the full 1000-character string"
+      - "The truncation is at character 500 (str(e)[:500] semantics)"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      SELECT length(error) FROM operation_runs WHERE id=$1; assert == 500;
+      assert error != ('x' * 1000)
+  thresholds:
+    error_length_exceeding_500_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-012]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or testcontainers; MUST NOT mock the asyncpg pool"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-BEAT-012-NEG
+  name: "NEG: a 499-char error is stored untruncated (boundary: exactly at limit)"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc04-BEAT-13]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "An exception whose str() is exactly 499 characters"
+    when: "The str(e)[:500] truncation is applied"
+    then:
+      - "The stored error is exactly 499 characters (no truncation at 499)"
+      - "A 500-char exception stores exactly 500 characters (upper boundary)"
+      - "A 501-char exception stores exactly 500 characters (truncated at 501st char)"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      unit test: assert len(str(e499)[:500]) == 499;
+      assert len(str(e500)[:500]) == 500;
+      assert len(str(e501)[:500]) == 500
+  thresholds:
+    boundary_truncation_violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-012-NEG]
+  dependency_class: null
+  mock_boundary: "no external boundary; pure Python string slicing test"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ── AC-BEAT-013: finally always cancels heartbeat task ────────────────────────
+
+- criterion_id: AC-BEAT-013
+  name: "Heartbeat asyncio Task is cancelled in finally block on both normal and exception exit"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc04-BEAT-14]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A with_operation_run context with a real asyncio event loop and a running heartbeat task"
+    when: "The body exits (both normal and exception paths are tested separately)"
+    then:
+      - "hb.cancel() is called in the finally block regardless of exit path"
+      - "The heartbeat task reaches a cancelled state (hb.cancelled() == True) after context exit"
+      - "No heartbeat UPDATE is issued after context exit"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      asyncio test: assert hb.cancelled() == True after context exit on both paths;
+      spy on pool.execute to assert zero heartbeat UPDATE calls after exit
+  thresholds:
+    uncancelled_heartbeat_tasks_after_exit: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-013]
+  dependency_class: null
+  mock_boundary: "no external Postgres required; mock pool; real asyncio event loop to observe Task lifecycle"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-BEAT-013-NEG
+  name: "NEG: terminal-status UPDATE executes BEFORE heartbeat cancel (ordering invariant)"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc04-BEAT-14, R-doc04-BEAT-11]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A with_operation_run context with a mock pool recording call order and a
+      spy on hb.cancel.
+    when: "The body exits normally (completed path)"
+    then:
+      - "The 'completed' UPDATE is recorded BEFORE hb.cancel() is called"
+      - "hb.cancel() is NOT called before the terminal UPDATE"
+      - "The ordering is: yield op → try body completes → UPDATE status='completed' → finally: hb.cancel()"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      call-order recorder: assert pool.execute (completed UPDATE) appears at index N;
+      assert hb.cancel() appears at index N+1; assert N < N+1 (strict ordering)
+  thresholds:
+    cancel_before_terminal_update_violations: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-013-NEG]
+  dependency_class: null
+  mock_boundary: "no external boundary; mock pool with call-order recorder; spy on task.cancel"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ── AC-BEAT-014: staleness boundary — 39s alive, 41s stale ───────────────────
+
+- criterion_id: AC-BEAT-014
+  name: "Staleness boundary: row with last_heartbeat_at 39s ago is NOT reaped; 41s ago IS reaped"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-BEAT-06, R-doc04-BEAT-15, R-doc04-BEAT-16]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A real Postgres database with two operation_runs rows:
+      (A) status='running', last_heartbeat_at = NOW() - INTERVAL '39 seconds'
+      (B) status='running', last_heartbeat_at = NOW() - INTERVAL '41 seconds'
+    when: "mark_stale_operations_interrupted(pool) is called"
+    then:
+      - "Row A retains status='running' (39s < 40s threshold, not stale)"
+      - "Row B is updated to status='interrupted' (41s > 40s threshold, stale)"
+      - "The function returns count=1 (exactly one row reaped)"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      SELECT status FROM operation_runs WHERE id IN (A, B) after call;
+      assert row_A.status == 'running' AND row_B.status == 'interrupted';
+      assert return_value == 1
+  thresholds:
+    false_reap_of_alive_row_allowed: 0
+    missed_reap_of_stale_row_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-014]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or testcontainers; MUST NOT mock the asyncpg pool — INTERVAL arithmetic must execute in real Postgres"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-BEAT-014-NEG
+  name: "NEG: mark_stale_operations_interrupted returns 0 when no stale rows exist"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-BEAT-16]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: >
+      A real Postgres database with zero operation_runs rows in status='running'
+      with last_heartbeat_at older than 40 seconds.
+    when: "mark_stale_operations_interrupted(pool) is called"
+    then:
+      - "No rows are updated"
+      - "The function returns 0 (not None, not 1)"
+      - "No exception is raised"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      call mark_stale_operations_interrupted; assert return_value == 0;
+      assert no operation_runs rows have status changed
+  thresholds:
+    spurious_row_updates_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-014-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or testcontainers; MUST NOT mock the asyncpg pool"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ── AC-BEAT-015: mark_stale uses status='interrupted' not 'failed' or 'dead' ──
+
+- criterion_id: AC-BEAT-015
+  name: "mark_stale_operations_interrupted sets status='interrupted' (not 'failed' or 'dead')"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-BEAT-16]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A real Postgres database with a stale operation_runs row (status='running', age > 40s)"
+    when: "mark_stale_operations_interrupted(pool) is called"
+    then:
+      - "The reaped row has status='interrupted'"
+      - "The status is NOT 'failed', NOT 'dead', NOT 'stale', NOT 'cancelled'"
+      - "completed_at is set on the reaped row"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      SELECT status, completed_at FROM operation_runs WHERE id=$1 after reap;
+      assert status == 'interrupted' AND completed_at IS NOT NULL
+  thresholds:
+    wrong_interrupted_status_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-015]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or testcontainers; MUST NOT mock the asyncpg pool"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+# ── AC-BEAT-016: boot-time sweep runs BEFORE any other DB write ───────────────
+
+- criterion_id: AC-BEAT-016
+  name: "mark_stale_operations_interrupted is called at boot before any claim or DB write"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-BEAT-17]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A real Postgres database with one stale running row (pre-existing crashed harness)
+      and a fresh instance starting up.
+    when: "The harness instance initialises (boot sequence)"
+    then:
+      - "mark_stale_operations_interrupted() is called and completes BEFORE any claim_meeting INSERT"
+      - "The stale row is set to status='interrupted' before the new harness makes any claim"
+      - "The sweep return value is logged (count of reaped rows)"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      call-order recording in boot sequence: assert mark_stale_operations_interrupted
+      call timestamp < first claim_meeting INSERT timestamp;
+      assert stale row status == 'interrupted' when first new claim is issued
+  thresholds:
+    boot_sweep_after_claim_violations: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-016]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or testcontainers; MUST NOT mock the asyncpg pool"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-BEAT-016-NEG
+  name: "NEG: a stale row NOT swept at boot remains 'running' until sweep is called (proving sweep is needed)"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-BEAT-17]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "A real Postgres database with a stale operation_runs row (age > 40s, status='running')"
+    when: "mark_stale_operations_interrupted is NOT called (boot sweep is skipped in this negative test)"
+    then:
+      - "The row retains status='running' indefinitely without the sweep"
+      - "A subsequent claim_meeting for the same meeting_id would encounter the uncleared stale row"
+      - "This confirms the boot sweep is the required healing mechanism"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      SELECT status FROM operation_runs WHERE id=$1 without calling sweep;
+      assert status == 'running' (stale row not self-healed)
+  fault_model_refs: []
+  test_ids: [T-BEAT-016-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or testcontainers; MUST NOT mock the asyncpg pool"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ── AC-BEAT-017: check_pause() reads pause_requested column ──────────────────
+
+- criterion_id: AC-BEAT-017
+  name: "check_pause() returns True when pause_requested is set in Postgres, False otherwise"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-BEAT-18]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A real Postgres database with an operation_runs row.
+      Test case A: pause_requested = TRUE.
+      Test case B: pause_requested = FALSE or NULL.
+    when: "op.check_pause() is called for each case"
+    then:
+      - "Case A: check_pause() returns True"
+      - "Case B: check_pause() returns False"
+      - "The read is issued against the Postgres row, not an in-memory flag"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      UPDATE operation_runs SET pause_requested=TRUE WHERE id=$1; assert check_pause() == True;
+      UPDATE operation_runs SET pause_requested=FALSE WHERE id=$1; assert check_pause() == False
+  thresholds:
+    wrong_pause_state_reads_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-017]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or testcontainers; MUST NOT mock the asyncpg pool — pause_requested must be read from real DB"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-BEAT-017-NEG
+  name: "NEG: check_pause() returning True halts further side-effects (human interrupt honoured)"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc04-BEAT-18]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A with_operation_run context where check_pause() returns True;
+      the harness business logic polls check_pause() before each side-effect.
+    when: "The harness loop evaluates the pause condition"
+    then:
+      - "No speak, send_chat, apply, or dispatch call is made after check_pause() returns True"
+      - "The harness enters a paused/waiting state rather than continuing work"
+      - "Human control is exercised: the running build is interrupted by the pause signal"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      unit test with mock returning check_pause()=True; assert zero side-effect calls
+      after pause detected; assert harness loop does not continue processing
+  thresholds:
+    side_effects_after_pause_signal_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-017-NEG]
+  dependency_class: null
+  mock_boundary: "no external boundary; mock check_pause() returning True; mock side-effect stubs"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ── AC-BEAT-018: update_progress() persists dict to progress column ───────────
+
+- criterion_id: AC-BEAT-018
+  name: "update_progress(dict) persists the progress dict to the operation_runs.progress column"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-BEAT-19]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A real Postgres database with a running operation_runs row"
+    when: "op.update_progress({'step': 'analysis', 'pct': 42}) is called"
+    then:
+      - "The progress column for run_id contains the JSON-serialised dict {'step': 'analysis', 'pct': 42}"
+      - "The write succeeds without error"
+      - "A subsequent read of the progress column returns the same dict"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      SELECT progress FROM operation_runs WHERE id=$1; assert JSON.parse(progress) ==
+      {'step': 'analysis', 'pct': 42}
+  thresholds:
+    progress_write_failures_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-018]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres via Cloud SQL proxy or testcontainers; MUST NOT mock the asyncpg pool"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+# ── AC-BEAT-019: is_owner gate on ALL side-effect call sites (structural) ──────
+
+- criterion_id: AC-BEAT-019
+  name: "Every speak/send_chat/apply/dispatch call site in the harness is gated on op.is_owner"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc04-BEAT-20, R-doc04-BEAT-21]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The harness source modules are statically inspected"
+    when: "A grep/AST scan for all call sites of speak, send_chat, apply, and dispatch is performed"
+    then:
+      - "Every call site has an is_owner check in the enclosing scope (immediately before the call or in a guard function)"
+      - "Zero call sites reach speak/send_chat/apply/dispatch without an is_owner gate"
+      - "The structural invariant holds across all harness modules (not just with_operation_run.py)"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      AST analysis or grep: for each call site of speak|send_chat|apply|dispatch in
+      services/orchestrator/**; assert each is enclosed in an is_owner check block;
+      assert unchecked_call_sites_count == 0
+  thresholds:
+    unchecked_side_effect_call_sites_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-019]
+  dependency_class: null
+  mock_boundary: "no external boundary; static code analysis / AST scan of harness modules"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-BEAT-019-NEG
+  name: "NEG: is_owner=True required for side-effect to execute; is_owner=False prevents it"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc04-BEAT-20, R-doc04-BEAT-21]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A harness context where op.is_owner is toggled between True and False"
+    when: "Each side-effect wrapper (speak, send_chat, apply, dispatch) is called in both states"
+    then:
+      - "With is_owner=True: the side-effect proceeds and the underlying stub is called"
+      - "With is_owner=False: the side-effect is blocked; the underlying stub is NOT called"
+      - "The block is enforced by the is_owner check, not by the subsystem being unavailable"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      parametrised unit test (is_owner=True, is_owner=False) × (speak, send_chat, apply, dispatch);
+      assert stub called_count == 1 when True; assert stub called_count == 0 when False
+  thresholds:
+    side_effect_on_false_is_owner_allowed: 0
+    blocked_side_effect_on_true_is_owner_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BEAT-019-NEG]
+  dependency_class: null
+  mock_boundary: "no external boundary; mock stubs for side-effect subsystems; is_owner set directly on op"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}

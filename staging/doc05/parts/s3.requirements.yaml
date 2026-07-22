@@ -1,0 +1,270 @@
+# Doc 05 (Workroom) — S3 requirements slice
+# Coverage: §3.1 (Sessions & sandbox), §3.2 (Models), §3.3 (Native vs built)
+# ID scheme: R-doc05-S3-NN
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.1 Sessions & sandbox
+# ═══════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc05-S3-01
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.1 paragraph 1"
+  source_quote: "Task durability = the task IS an operation_runs row (operation_type='workroom:<id>', progress jsonb = task bundle, result_ref = terminal Envelope). NO workroom_tasks table."
+  normalized_statement: >
+    WHEN a workroom task is created
+    THE SYSTEM SHALL persist the task exclusively as an operation_runs row with
+    operation_type='workroom:<id>', progress jsonb holding the task bundle, and
+    result_ref holding the terminal Envelope; no separate workroom_tasks table shall
+    exist.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S3-02
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.1 paragraph 2"
+  source_quote: "One warm sandbox per meeting hosts N task sessions (Doc 04's [3-5] semaphore)."
+  normalized_statement: >
+    WHEN concurrent tasks are dispatched for a meeting
+    THE SYSTEM SHALL allow at most [3-5] simultaneous active SDK task sessions inside
+    the meeting's single warm sandbox, enforced by a semaphore inherited from Doc 04.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S3-03
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.1 paragraph 3"
+  source_quote: "Cached prefix (system prompt + map) → a new task pays only its bundle."
+  normalized_statement: >
+    WHEN a new task session is started inside an already-warmed sandbox
+    THE SYSTEM SHALL reuse the cached prefix comprising the system prompt and codebase
+    map so that the new task's token cost is bounded to its own bundle only.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S3-04
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.1 paragraph 4"
+  source_quote: "Sessions share the sandbox filesystem (follow-ups see prior artifacts)."
+  normalized_statement: >
+    WHEN a follow-up task session is executed within the same sandbox
+    THE SYSTEM SHALL mount the same sandbox filesystem so that artifacts produced by
+    prior sessions within the same meeting are visible to the new session.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S3-05
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.1 paragraph 5"
+  source_quote: "Cancellation kills at the next tool boundary via per-task AbortController/asyncio cancellation (§3.11)."
+  normalized_statement: >
+    WHEN a task cancellation is requested
+    THE SYSTEM SHALL stop the task at the next tool boundary by triggering the per-task
+    AbortController (Python: asyncio cancellation) rather than killing mid-turn, as
+    specified in §3.11.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S3-06
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.1 paragraph 6"
+  source_quote: "SDK session id is persisted per task; on resume failure context is rebuilt from bundle and run continues (stale-session-replay pattern)."
+  normalized_statement: >
+    WHEN a task session is initiated or resumed
+    THE SYSTEM SHALL persist the SDK session id against the task record; if resume
+    fails the system shall rebuild context from the bundle and continue execution
+    without surfacing the session failure to the caller (stale-session-replay pattern).
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S3-07
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.1 paragraph 7"
+  source_quote: "Replay is resume_with_fallback(session_id, history_fn) IMPORTED from libs/agentkit/resume.py (CANONICAL §11.9), NOT reimplemented here. history_fn = rebuild-from-bundle."
+  normalized_statement: >
+    WHEN the workroom service implements session replay
+    THE SYSTEM SHALL import and call resume_with_fallback(session_id, history_fn) from
+    libs/agentkit/resume.py with history_fn set to a rebuild-from-bundle callable, and
+    shall NOT reimplement replay logic locally.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.2 Models (per-role)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc05-S3-08
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.2 paragraph 1"
+  source_quote: "libs/llm/routing.py is the one per-role model table — imported, never redefined in this service."
+  normalized_statement: >
+    WHEN the workroom service selects a model for any role
+    THE SYSTEM SHALL import the per-role model table exclusively from libs/llm/routing.py
+    and shall not redefine, copy, or shadow that table within the workroom service package.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S3-09
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.2 paragraph 2"
+  source_quote: "Verifier: stronger than the worker, fresh context (anti-anchoring)"
+  normalized_statement: >
+    WHEN a verifier role model is configured
+    THE SYSTEM SHALL assign the verifier a model of strictly higher capability tier than
+    the big-build worker model in the same session; the verifier model shall never be
+    equal to or weaker than the worker model.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S3-10
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.2 paragraph 3"
+  source_quote: "One MAX_OUTPUT_TOKENS env with min(env, model_ceiling) self-clamp per model (§3.9)."
+  normalized_statement: >
+    WHEN any model call is constructed
+    THE SYSTEM SHALL compute the effective max_tokens as min(MAX_OUTPUT_TOKENS_env,
+    model_ceiling) and pass that value to every model invocation, ensuring no single
+    call can exceed the model's hard ceiling even if the env variable is set higher.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S3-11
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.2 paragraph 4"
+  source_quote: "Decided against cheap-model-first routing by task type (re-introduces de-facto classifier). Per-role selection is config, not runtime classifier."
+  normalized_statement: >
+    WHEN the workroom service selects a model for a task
+    THE SYSTEM SHALL select the model by static per-role configuration resolved at
+    startup and shall not implement any runtime classifier that maps task content or
+    type to a model choice.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.3 Native vs built
+# ═══════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc05-S3-12
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.3 USE NATIVE paragraph"
+  source_quote: "EVERY tool handler wraps errors; a handler must never throw (uncaught exception kills the loop blind)"
+  normalized_statement: >
+    WHEN any workroom tool handler encounters an exception
+    THE SYSTEM SHALL catch the exception within the handler, return a structured error
+    result, and must not allow the exception to propagate uncaught out of the handler
+    boundary.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S3-13
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.3 BUILD item 7"
+  source_quote: "No-progress detection (output-hash/action-effect similarity over last N turns) + bounded replan ≤[2] → honest partial"
+  normalized_statement: >
+    WHEN the workroom agent has produced output across the last N turns
+    THE SYSTEM SHALL detect no-progress by computing output-hash and action-effect
+    similarity over those turns; upon detecting no-progress it shall trigger a bounded
+    replan (maximum 2 replan attempts) and, if no-progress persists after the replan
+    budget is exhausted, shall terminate the task with an honest partial result rather
+    than continuing indefinitely.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S3-14
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.3 BUILD item 8"
+  source_quote: "Correction-into-the-plan — mid-task correction rewrites live plan artifact (NOT SDK's native mid-turn injection string)"
+  normalized_statement: >
+    WHEN a mid-task correction is received
+    THE SYSTEM SHALL apply the correction by rewriting the live plan artifact stored in
+    the task bundle and shall not use the SDK's native mid-turn injection string
+    mechanism to deliver the correction.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S3-15
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.3 BUILD list"
+  source_quote: "BUILD (thin, meeting-specific): 1. SDK-isolation triad … 2. Sandbox tool transport … 3. Sequential big-build contract … 4. Minimal verify-loop … 5. propose_change staged code-change drafts … 6. Structured progress envelopes at tool boundaries … 7. No-progress detection … 8. Correction-into-the-plan"
+  normalized_statement: >
+    WHEN the workroom service is inspected
+    THE SYSTEM SHALL implement exactly the eight BUILD items enumerated in §3.3 (SDK-isolation
+    triad, sandbox tool transport, sequential big-build contract, minimal verify-loop,
+    propose_change drafts, structured progress envelopes, no-progress detection,
+    correction-into-the-plan) and shall not rebuild any capability listed under USE NATIVE.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S3-16
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.3 BUILD item 6"
+  source_quote: "Structured progress envelopes at tool boundaries (SDK has no external progress stream)"
+  normalized_statement: >
+    WHEN a tool boundary is crossed during task execution
+    THE SYSTEM SHALL emit a structured progress envelope to the external progress stream
+    at each tool boundary, compensating for the absence of a native SDK external progress
+    stream.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S3-17
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.3 USE NATIVE paragraph"
+  source_quote: "The loop, self-scaling effort, planning-within-a-turn, session resume, compaction, is_error:true loop-survival"
+  normalized_statement: >
+    WHEN the workroom service runs a task loop
+    THE SYSTEM SHALL delegate the agentic loop, self-scaling effort, planning-within-a-turn,
+    session resume, context compaction, and is_error:true loop-survival entirely to the
+    SDK and shall not reimplement any of these capabilities in workroom service code.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified

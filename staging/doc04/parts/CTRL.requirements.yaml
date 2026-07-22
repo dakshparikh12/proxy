@@ -1,0 +1,367 @@
+# CTRL.requirements.yaml — Doc 04 (Proxy Orchestrator) — §3.10 Restart-Not-Resume + §3.11 AbortController Discipline
+# Atomic EARS requirements. Each carries source_location + verbatim source_quote + criticality.
+# ID scheme: R-doc04-CTRL-NN
+# Authority document: DOC-04
+# Canonical overrides: §11.9 (AbortController/AbortRegistry imported from libs/agentkit/abort.py),
+#                      §12.10 (no workroom_tasks table; workroom tasks ARE operation_runs rows)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.10 — Restart-Not-Resume (the honest recovery policy)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── Meeting harness: restart-not-resume promise ───────────────────────────
+
+- requirement_id: R-doc04-CTRL-01
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.10 paragraph 2 (meeting harness)"
+  source_quote: >
+    The meeting harness (Doc 04): restart-not-resume. When the orchestrator instance dies, the media
+    session is gone — you cannot resume an RTP stream.
+  normalized_statement: >
+    WHEN the orchestrator instance dies
+    THE SYSTEM SHALL NOT attempt to resume the RTP media stream; the recovery policy for the
+    meeting harness is restart-not-resume, and the system SHALL acknowledge that the media
+    session is irrecoverably gone.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-CTRL-02
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.10 paragraph 2 (meeting harness — replacement instance)"
+  source_quote: >
+    So the replacement instance (which re-claimed the meeting via §3.6 after the heartbeat went stale)
+    re-joins via Recall, replays the recent transcript from the persisted progress + Doc 03's Postgres
+    transcript plane, rebuilds Proxy's SDK context via §3.5 Tier-2 replay, and speaks a single honest
+    line if anything was lost ("I dropped for about a minute — catching back up").
+  normalized_statement: >
+    WHEN a replacement orchestrator instance re-claims a meeting after a stale heartbeat
+    THE SYSTEM SHALL: (1) re-join the meeting via Recall (vendor), (2) replay the recent transcript
+    from persisted progress and the Postgres transcript plane (Doc 03), (3) rebuild the SDK context
+    via §3.5 Tier-2 replay, and (4) speak exactly one honest disclosure line if any content was
+    missed during the outage.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-CTRL-03
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.10 paragraph 2 (honest disclosure)"
+  source_quote: >
+    speaks a single honest line if anything was lost ("I dropped for about a minute — catching back up")
+  normalized_statement: >
+    WHEN the replacement orchestrator instance detects that audio content was missed during a crash
+    THE SYSTEM SHALL speak exactly one disclosure line (not zero, not more than one) and the content
+    of that line SHALL honestly acknowledge the gap (e.g., "I dropped for about a minute — catching
+    back up") rather than silently resuming as if no outage occurred.
+  requirement_type: behavioral
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-CTRL-04
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.10 paragraph 2 (transcript plane survives)"
+  source_quote: >
+    Proxy's judgment history survives in Doc 03's transcript plane; only the live audio couldn't be resumed.
+  normalized_statement: >
+    WHEN the orchestrator instance crashes and is replaced
+    THE SYSTEM SHALL recover Proxy's judgment history from Doc 03's Postgres transcript plane;
+    the judgment history SHALL survive the crash and SHALL be available to the replacement instance;
+    only the live audio stream is unrecoverable.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── No fine-grained process checkpointing ────────────────────────────────
+
+- requirement_id: R-doc04-CTRL-05
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.10 paragraph 3"
+  source_quote: >
+    We do NOT promise fine-grained process checkpointing. We promise restart-guarded-by-completion-predicate
+    (tasks) + durable-artifact-resume (state) + honest disclosure (the room).
+  normalized_statement: >
+    WHEN the system's recovery contract is evaluated
+    THE SYSTEM SHALL NOT implement or claim fine-grained process checkpointing; the stated promise
+    is exactly: restart-guarded-by-completion-predicate for tasks, durable-artifact-resume for state,
+    and honest disclosure to the room — no more, no less.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Workroom task: operation_runs row (no workroom_tasks table) ──────────
+
+- requirement_id: R-doc04-CTRL-06
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.10 paragraph 1 (workroom task); CANONICAL §12.10"
+  source_quote: >
+    A Workroom task is itself an operation_runs row (operation_type='workroom:<id>', progress jsonb =
+    the dispatched bundle {ask, notes_ref, pinned_sha, sandbox_id, plan_session_id}, result_ref = the
+    terminal Envelope = the outbox) — no workroom_tasks table (CANONICAL §12.10).
+  normalized_statement: >
+    WHEN a Workroom task is created or queried
+    THE SYSTEM SHALL represent it exclusively as an operation_runs row with operation_type='workroom:<id>',
+    progress jsonb containing {ask, notes_ref, pinned_sha, sandbox_id, plan_session_id}, and result_ref
+    equal to the terminal Envelope; no separate workroom_tasks table SHALL exist in the schema.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Workroom task: completion predicate guards re-run ────────────────────
+
+- requirement_id: R-doc04-CTRL-07
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.10 paragraph 1 (completion predicate)"
+  source_quote: >
+    A crashed workroom:<id> row → interrupted, re-picked by the drain loop / boot-recovery
+    (WHERE operation_type LIKE 'workroom:%' AND status='interrupted'), but only re-run if its
+    deliverable doesn't already exist (a SQL completion predicate) — finished work isn't redone.
+  normalized_statement: >
+    WHEN the drain loop or boot-recovery finds a workroom task row with status='interrupted'
+    THE SYSTEM SHALL re-run the task ONLY IF its deliverable does not already exist as determined
+    by a SQL completion predicate; if the deliverable already exists the task SHALL NOT be re-run
+    (finished work is not redone).
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-CTRL-08
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.10 paragraph 1 (interrupted status + drain-loop recovery)"
+  source_quote: >
+    A crashed workroom:<id> row → interrupted, re-picked by the drain loop / boot-recovery
+    (WHERE operation_type LIKE 'workroom:%' AND status='interrupted')
+  normalized_statement: >
+    WHEN a workroom task crashes mid-execution
+    THE SYSTEM SHALL set the operation_runs row status to 'interrupted'; the drain loop or
+    boot-recovery SHALL pick it up via the query WHERE operation_type LIKE 'workroom:%'
+    AND status='interrupted'.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-CTRL-09
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.10 paragraph 1 (cooldown + sub-artifacts preserved)"
+  source_quote: >
+    a persistently-failing item cools down; completed sub-artifacts (worktrees) are preserved
+    so restart is cheap. finally → kick_drain pulls the next queued task.
+  normalized_statement: >
+    WHEN a workroom task fails repeatedly
+    THE SYSTEM SHALL apply a cooldown before re-attempting it; completed sub-artifacts (e.g.,
+    worktrees) SHALL be preserved across restart attempts so that re-execution is cheap; after
+    completion or terminal failure kick_drain SHALL pull the next queued task.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.11 — AbortController Discipline
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── DRY import from libs/agentkit/abort.py ───────────────────────────────
+
+- requirement_id: R-doc04-CTRL-10
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.11 paragraph 1; CANONICAL §11.9"
+  source_quote: >
+    DRY (CANONICAL §11.9): the AbortController + AbortRegistry are imported from libs/agentkit/abort.py
+    — Docs 04 §3.11 and 05 §3.11 both import them, neither redefines them.
+  normalized_statement: >
+    WHEN the orchestrator (Doc 04) or the Workroom (Doc 05) uses AbortController or AbortRegistry
+    THE SYSTEM SHALL import them from libs/agentkit/abort.py; neither Doc 04 nor Doc 05 SHALL
+    contain a local definition or redefinition of AbortController or AbortRegistry.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Abort halts the model loop itself ────────────────────────────────────
+
+- requirement_id: R-doc04-CTRL-11
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.11 paragraph 2"
+  source_quote: >
+    Aborting halts the model loop itself (not just ignoring the result — the SDK would otherwise
+    run to maxTurns=1000, burning our budget).
+  normalized_statement: >
+    WHEN an AbortController is triggered
+    THE SYSTEM SHALL halt the model loop itself (not merely discard the result after completion);
+    the SDK loop SHALL NOT be allowed to continue running to maxTurns while the result is ignored.
+  requirement_type: behavioral
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Abort is final — never retried ───────────────────────────────────────
+
+- requirement_id: R-doc04-CTRL-12
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.11 paragraph 2"
+  source_quote: >
+    Abort is final, never retried — this is what makes §3.5's stale-session/JSON retry safe:
+    a build the user killed can't be resurrected.
+  normalized_statement: >
+    WHEN a task is aborted via AbortController
+    THE SYSTEM SHALL treat that abort as final; the aborted task SHALL NOT be retried, resumed,
+    or resurrected by any path including §3.5 stale-session retry; the property abort.aborted==True
+    SHALL permanently block any re-execution of that task instance.
+  requirement_type: behavioral
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── AbortRegistry.make() preempts existing controller ────────────────────
+
+- requirement_id: R-doc04-CTRL-13
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.11 AbortRegistry code block"
+  source_quote: >
+    def make(self, key: str) -> AbortController:
+        self.cancel(key)                       # a new judgment-moment preempts a stale one
+        c = self._m[key] = AbortController()
+        return c
+  normalized_statement: >
+    WHEN AbortRegistry.make(key) is called
+    THE SYSTEM SHALL cancel (abort) any existing AbortController registered under that key BEFORE
+    creating and registering the new one; a new judgment-moment SHALL preempt a stale one with no
+    window in which both controllers are simultaneously active and un-aborted.
+  requirement_type: ordering
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Three abort triggers ──────────────────────────────────────────────────
+
+- requirement_id: R-doc04-CTRL-14
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.11 paragraph 3 (trigger 1: meeting-end)"
+  source_quote: >
+    Wire aborts to three triggers:
+    1. meeting-end (cancel everything)
+  normalized_statement: >
+    WHEN a meeting-end event is received
+    THE SYSTEM SHALL call AbortRegistry.cancel_meeting(meeting_id), which cancels every
+    AbortController whose key starts with that meeting_id, halting all in-flight tasks for
+    that meeting.
+  requirement_type: behavioral
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-CTRL-15
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.11 paragraph 3 (trigger 2: whisper stop)"
+  source_quote: >
+    2. whisper-"stop" / "Proxy, quiet" (cancel the addressed task)
+  normalized_statement: >
+    WHEN the user says "Proxy, quiet" or the equivalent barge-in/whisper stop signal
+    THE SYSTEM SHALL call AbortRegistry.cancel(task_id) for the addressed task, halting
+    that specific task's model loop immediately; this trigger is P0 (human control is absolute).
+  requirement_type: behavioral
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-CTRL-16
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.11 paragraph 3 (trigger 3: hard per-task timeout)"
+  source_quote: >
+    3. a hard per-task timeout (rescaled to seconds for the interactive loop — Scribe ~3–4s then
+    skip-the-window, Orchestrator answer ~4–5s; a stalled meeting is worse than a dropped note)
+  normalized_statement: >
+    WHEN a wake turn or Workroom task exceeds its per-task timeout threshold
+    THE SYSTEM SHALL fire the AbortController for that task; the timeout SHALL be set in seconds
+    for the interactive loop: approximately 3–4s for Scribe turns (then skip-the-window) and
+    approximately 4–5s for Orchestrator answer turns; a stalled meeting is treated as worse than
+    a dropped note.
+  requirement_type: behavioral
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── cancel_meeting cancels ALL tasks with meeting_id prefix ──────────────
+
+- requirement_id: R-doc04-CTRL-17
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.11 AbortRegistry code block (cancel_meeting)"
+  source_quote: >
+    def cancel_meeting(self, meeting_id: str) -> None:   # on meeting-end: kill all its tasks
+        for k in [k for k in self._m if k.startswith(meeting_id)]:
+            self.cancel(k)
+  normalized_statement: >
+    WHEN AbortRegistry.cancel_meeting(meeting_id) is called
+    THE SYSTEM SHALL cancel every AbortController whose key begins with the given meeting_id
+    string prefix; no task belonging to that meeting SHALL remain active after this call returns.
+  requirement_type: behavioral
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── AbortController API contract ─────────────────────────────────────────
+
+- requirement_id: R-doc04-CTRL-18
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.11 AbortController class definition"
+  source_quote: >
+    class AbortController:
+        def __init__(self): self._evt = asyncio.Event()
+        @property
+        def aborted(self) -> bool: return self._evt.is_set()
+        def abort(self) -> None: self._evt.set()
+  normalized_statement: >
+    WHEN AbortController is defined
+    THE SYSTEM SHALL implement it with: an asyncio.Event as the backing store (_evt), an
+    'aborted' read-only property (not a method) returning bool, and an abort() method that
+    sets the event; the .aborted property SHALL return True once and forever after abort()
+    is called, with no mechanism to unset it.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Every wake turn and Workroom run threaded with abort handle ───────────
+
+- requirement_id: R-doc04-CTRL-19
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.11 paragraph 2"
+  source_quote: >
+    Every wake turn and every dispatched Workroom run is threaded with an abort handle, held
+    in a dict[meeting_id | task_id, AbortController].
+  normalized_statement: >
+    WHEN any wake turn or dispatched Workroom run begins
+    THE SYSTEM SHALL create an AbortController via AbortRegistry.make(key) and thread it into
+    the execution; the AbortRegistry SHALL hold all live controllers in a dict keyed by
+    meeting_id (for meeting-scoped turns) or task_id (for Workroom tasks).
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified

@@ -1,0 +1,392 @@
+# s6.requirements.yaml — Doc 05 (Workroom) · §3.6 The big-build contract
+# Requirements for plan → resumed session → checkpoint → read-back → publish-or-fail.
+# ID scheme: R-doc05-S6-NN
+# Authority document: DOC-05 §3.6 + §3.14
+# Criticality key: P0 = must not ship broken, P1 = significant regression, P2 = quality/efficiency.
+#
+# Source-paragraph index used below:
+#   §3.6 ¶plan-shape        — "Plan = first SDK turn → 4-5 persisted subtasks…"
+#   §3.6 ¶plan-tags         — "each tagged with the acceptance check it serves…"
+#   §3.6 ¶plan-retry        — "If plan JSON doesn't parse, ONE max_turns:1 retry…"
+#   §3.6 ¶plan-session      — "captures SDK session id (persisted immediately, fire-and-forget)"
+#   §3.6 ¶extended-thinking — "enable interleaved/extended thinking on THIS planning turn…"
+#   §3.6 ¶thinking-budget   — "Cap thinking budget safely below MAX_OUTPUT_TOKENS ceiling…"
+#   §3.6 ¶thinking-off      — "Keep extended thinking OFF the fast path…"
+#   §3.6 ¶execute-session   — "Execute in ONE resumed SDK session…"
+#   §3.6 ¶subtask-turns     — "fresh query() per subtask with tight max_turns + explicit stop"
+#   §3.6 ¶head-before       — "head_before captured before subtask turn"
+#   §3.6 ¶git-verify        — "READ THE CHECKPOINT BACK from git — never mark done off narration"
+#   §3.6 ¶publish-or-fail   — "publish_or_fail THROWS on failure → subtask fails, never green"
+#   §3.6 ¶stream-progress   — "Stream tool_start + each captured commit as progress envelopes"
+#   §3.6 ¶stop-instruction  — "'Do NOT start the next' instruction in every subtask prompt"
+#   §3.6 ¶replan-gate       — "Gated replan (only if plan ≥ 3 steps)…"
+#   §3.6 ¶replan-id         — "ID-preserving (preserve subtask ids/state by title match)"
+#   §3.6 ¶replan-cap        — "capped at 8 remaining"
+#   §3.6 ¶replan-parse      — "parse fail → keep existing plan (best-effort)"
+#   §3.6 ¶replan-human      — "A mid-task human correction lands here — rewrites live plan unit, no restart"
+#   §3.6 ¶expansion         — "Cross-worker fan-out, per-sandbox commit lock = NOT V0 (Expansion §5)"
+#   §3.6 ¶context-editing   — "enable SDK context-editing on multi-subtask builds…"
+#   §3.6 ¶context-off       — "Off on quick asks (single-turn — nothing stale to clear)"
+#   §3.14 ¶artifact-fields  — "Each unit has: files-to-touch, AC-tag, verify line, done-when"
+#   §3.14 ¶artifact-post    — "Multi-step plans posted to chat before execution; silence = go"
+
+requirements:
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PLAN SHAPE
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - requirement_id: R-doc05-S6-01
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶plan-shape"
+    source_quote: "Plan = first SDK turn → 4-5 persisted subtasks, ordered setup → core → integration → testing"
+    normalized_statement: >
+      WHEN the Workroom big-build contract begins THE SYSTEM SHALL emit a plan that
+      contains between 4 and 5 subtasks (inclusive) in the canonical order:
+      setup → core → integration → testing.
+    requirement_type: data_integrity
+    criticality: P0
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc05-S6-02
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶plan-tags"
+    source_quote: "each tagged with the acceptance check it serves and that check's exact pass rule ('mirror the AC into the step'), with hard numeric bounds"
+    normalized_statement: >
+      WHEN the plan is produced THE SYSTEM SHALL tag every subtask with the acceptance
+      criterion it serves and the exact pass rule (machine-checkable command that exits 0),
+      with hard numeric bounds included in the done-when condition.
+    requirement_type: data_integrity
+    criticality: P0
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc05-S6-03
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶plan-retry"
+    source_quote: "If plan JSON doesn't parse, ONE max_turns:1 retry — 'return ONLY the JSON array' — resuming same session"
+    normalized_statement: >
+      WHEN the plan response JSON fails to parse THE SYSTEM SHALL issue exactly one
+      retry turn (max_turns:1) in the same SDK session with the instruction
+      "return ONLY the JSON array"; if the retry also fails to parse, the system
+      shall abort the build — no further retries are permitted.
+    requirement_type: state_consistency
+    criticality: P0
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc05-S6-04
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶plan-session"
+    source_quote: "captures SDK session id (persisted immediately, fire-and-forget, so a restart resumes)"
+    normalized_statement: >
+      WHEN the plan turn completes and a session id is available THE SYSTEM SHALL
+      persist the SDK session id immediately (fire-and-forget, no blocking wait), so
+      that a subsequent restart can resume the same SDK session rather than starting
+      a new one.
+    requirement_type: state_consistency
+    criticality: P0
+    testability: executable
+    status: qualified
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # EXTENDED THINKING
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - requirement_id: R-doc05-S6-05
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶extended-thinking (CANONICAL §10.6)"
+    source_quote: "enable interleaved/extended thinking on THIS planning turn and on Opus-escalated grounded answers"
+    normalized_statement: >
+      WHEN the planning turn SDK call is constructed THE SYSTEM SHALL enable
+      interleaved extended thinking on that call, and on any Opus-escalated grounded
+      answer turn.
+    requirement_type: functional
+    criticality: P1
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc05-S6-06
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶thinking-budget"
+    source_quote: "Cap thinking budget safely below MAX_OUTPUT_TOKENS ceiling so plan JSON always has room to finish"
+    normalized_statement: >
+      WHEN extended thinking is enabled for the planning turn THE SYSTEM SHALL set
+      the thinking-token budget to a value strictly less than the MAX_OUTPUT_TOKENS
+      ceiling, leaving sufficient headroom so the plan JSON array always has room
+      to complete without truncation.
+    requirement_type: data_integrity
+    criticality: P0
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc05-S6-07
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶thinking-off"
+    source_quote: "Keep extended thinking OFF the fast path (quick-ask disposition, should-I-speak gate, Scribe) where it is latency-toxic"
+    normalized_statement: >
+      WHEN a turn is routed to the quick-ask disposition, the should-I-speak gate,
+      or the Scribe component THE SYSTEM SHALL NOT enable extended thinking on that
+      turn.
+    requirement_type: functional
+    criticality: P1
+    testability: executable
+    status: qualified
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # SUBTASK EXECUTION — ONE RESUMED SESSION
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - requirement_id: R-doc05-S6-08
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶execute-session"
+    source_quote: "Execute in ONE resumed SDK session — each subtask is a follow-up turn (full context)"
+    normalized_statement: >
+      WHEN executing a multi-subtask build THE SYSTEM SHALL run all subtasks within
+      a single resumed SDK session, issuing each subtask as a follow-up turn that
+      carries the full prior context of the session.
+    requirement_type: state_consistency
+    criticality: P0
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc05-S6-09
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶subtask-turns"
+    source_quote: "a fresh query() per subtask with tight max_turns + explicit 'do THIS subtask, then STOP. Do NOT start the next.'"
+    normalized_statement: >
+      WHEN each subtask turn is dispatched THE SYSTEM SHALL issue a fresh query()
+      call with a tight max_turns limit and a prompt that explicitly instructs the
+      agent to complete only the current subtask and stop, using language equivalent
+      to "do NOT start the next subtask".
+    requirement_type: functional
+    criticality: P0
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc05-S6-10
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶head-before"
+    source_quote: "Capture HEAD before turn; after, read headBefore..HEAD for actual commits"
+    normalized_statement: >
+      WHEN a subtask turn is about to execute THE SYSTEM SHALL capture the current
+      git HEAD reference (head_before) from the sandbox before issuing the subtask
+      query(); after the turn completes, the system shall read the commit range
+      headBefore..HEAD to obtain the actual commits produced.
+    requirement_type: data_integrity
+    criticality: P0
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc05-S6-11
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶git-verify"
+    source_quote: "READ THE CHECKPOINT BACK from git — never mark done off the agent's narration"
+    normalized_statement: >
+      WHEN determining whether a subtask is complete THE SYSTEM SHALL read the
+      checkpoint back from git (commits in headBefore..HEAD) and SHALL NOT mark a
+      subtask done based solely on the agent's narrated output.
+    requirement_type: data_integrity
+    criticality: P0
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc05-S6-12
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶publish-or-fail"
+    source_quote: "publish_or_fail — if publish throws, subtask FAILS, never reports success (captureAndPublishCommits throws on publish failure → subtask can't pass silently)"
+    normalized_statement: >
+      WHEN captureAndPublishCommits is called for a subtask and the publish operation
+      throws an exception THE SYSTEM SHALL propagate the failure so that the subtask
+      status is recorded as FAIL; the subtask SHALL NOT be marked done or successful
+      under any publish-failure condition.
+    requirement_type: contract
+    criticality: P0
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc05-S6-13
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶stream-progress"
+    source_quote: "Stream tool_start + each captured commit as progress envelopes"
+    normalized_statement: >
+      WHEN a subtask turn is executing THE SYSTEM SHALL stream progress envelopes to
+      callers: one envelope for each tool_start event and one envelope for each
+      commit captured in headBefore..HEAD after the turn completes.
+    requirement_type: functional
+    criticality: P1
+    testability: executable
+    status: qualified
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # GATED REPLAN
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - requirement_id: R-doc05-S6-14
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶replan-gate"
+    source_quote: "Gated replan (only if plan ≥ 3 steps): after each subtask, a max_turns:1, no-tools turn — 'given what you just did, is the rest still right?'"
+    normalized_statement: >
+      WHEN a subtask completes and the original plan contains 3 or more subtasks
+      THE SYSTEM SHALL issue a gated-replan turn (max_turns:1, zero tools available)
+      asking whether the remaining plan is still correct; this replan gate SHALL NOT
+      fire when the original plan has fewer than 3 subtasks.
+    requirement_type: functional
+    criticality: P1
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc05-S6-15
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶replan-id"
+    source_quote: "ID-preserving (preserve subtask ids/state by title match)"
+    normalized_statement: >
+      WHEN the gated-replan response produces an updated plan THE SYSTEM SHALL
+      preserve existing subtask identifiers and completion state by matching updated
+      subtasks to existing ones by title; identifiers and state SHALL NOT be
+      reassigned or reset on a replan.
+    requirement_type: state_consistency
+    criticality: P0
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc05-S6-16
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶replan-cap"
+    source_quote: "capped at 8 remaining"
+    normalized_statement: >
+      WHEN the gated replan proposes a revised plan THE SYSTEM SHALL accept at most
+      8 remaining (incomplete) subtasks in the updated plan; any replan response
+      proposing more than 8 remaining subtasks SHALL be rejected and the existing
+      plan retained.
+    requirement_type: data_integrity
+    criticality: P1
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc05-S6-17
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶replan-parse"
+    source_quote: "parse fail → keep existing plan (best-effort)"
+    normalized_statement: >
+      WHEN the gated-replan response fails to parse THE SYSTEM SHALL retain the
+      existing plan unchanged and continue execution; the parse failure SHALL NOT
+      abort or stall the build.
+    requirement_type: state_consistency
+    criticality: P1
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc05-S6-18
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶replan-human"
+    source_quote: "A mid-task human correction lands here — it rewrites the live plan unit (§2.3.1), no restart"
+    normalized_statement: >
+      WHEN a human correction arrives during subtask execution THE SYSTEM SHALL apply
+      the correction by rewriting the live plan unit through the gated-replan
+      mechanism (§2.3.1) without restarting the SDK session.
+    requirement_type: functional
+    criticality: P1
+    testability: executable
+    status: qualified
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # EXPANSION GATE (V0 boundary)
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - requirement_id: R-doc05-S6-19
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶expansion"
+    source_quote: "Cross-worker fan-out is Expansion (CANONICAL §12.4). V0 core: independent units run SEQUENTIALLY in one resumed session. Per-sandbox commit lock (withProjectCommitLock) only needed once cross-worker fan-out added at Expansion (§5)."
+    normalized_statement: >
+      WHEN V0 big-build execution runs THE SYSTEM SHALL execute independent subtasks
+      sequentially within the single resumed session and SHALL NOT implement
+      cross-worker fan-out or per-sandbox commit locking (withProjectCommitLock);
+      those behaviors are deferred to Expansion §5.
+    requirement_type: contract
+    criticality: P1
+    testability: executable
+    status: qualified
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # SDK CONTEXT-EDITING
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - requirement_id: R-doc05-S6-20
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶context-editing (CANONICAL §10.2)"
+    source_quote: "on multi-subtask build, enable SDK's context-editing (auto-clear stale tool_result blocks from earlier subtasks) so long build doesn't overflow"
+    normalized_statement: >
+      WHEN a build contains more than one subtask THE SYSTEM SHALL enable the SDK's
+      context-editing feature so that stale tool_result blocks from earlier subtasks
+      are automatically cleared, preventing context-window overflow on long builds.
+    requirement_type: functional
+    criticality: P1
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc05-S6-21
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.6 ¶context-off"
+    source_quote: "Off on quick asks (single-turn — nothing stale to clear)"
+    normalized_statement: >
+      WHEN a request is handled as a single quick-ask turn THE SYSTEM SHALL NOT
+      enable SDK context-editing on that turn.
+    requirement_type: functional
+    criticality: P2
+    testability: executable
+    status: qualified
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # §3.14 PLAN ARTIFACT FIELDS
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - requirement_id: R-doc05-S6-22
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.14 ¶artifact-fields"
+    source_quote: "Each unit has: files-to-touch, AC-tag, verify line (exact machine-checkable command), done-when condition"
+    normalized_statement: >
+      WHEN the plan artifact is produced THE SYSTEM SHALL include in every subtask
+      unit: (a) files-to-touch, (b) AC-tag, (c) a verify line containing an exact
+      machine-checkable command that exits 0, and (d) a done-when condition.
+    requirement_type: data_integrity
+    criticality: P0
+    testability: executable
+    status: qualified
+
+  - requirement_id: R-doc05-S6-23
+    authority_type: specification
+    authority_document: DOC-05
+    source_location: "§3.14 ¶artifact-post"
+    source_quote: "Multi-step plans posted to chat before execution; silence = go"
+    normalized_statement: >
+      WHEN a multi-step plan is ready THE SYSTEM SHALL post the plan artifact to the
+      meeting chat before beginning execution; execution SHALL commence after a
+      silence interval (no human veto), implementing a human-gate pause.
+    requirement_type: functional
+    criticality: P1
+    testability: executable
+    status: qualified

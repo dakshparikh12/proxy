@@ -1,0 +1,12 @@
+# Hypothesis' example database is a local cache, not source.
+.hypothesis/
+__pycache__/
+*.pyc
+# Ephemeral local tool venvs (Layer 2/3 isolated envs) are never committed.
+.venv-*/
+node_modules/
+
+# Isolated tool venvs and caches
+**/.venv/
+.deepeval*
+tools/uv.lock

@@ -1,0 +1,948 @@
+# BHVR.criteria.yaml — Doc 04 (Proxy Orchestrator) — §3.4 Wake-Behaviors
+# Acceptance criteria for typed BehaviorConfig constants + one generic runner.
+# ID scheme: AC-BHVR-NNN (positive), AC-BHVR-NNN-NEG (negative)
+# Every criterion carries: dependency_class, mock_boundary, golden_path, verification_ladder.
+
+# ── BehaviorConfig as Typed Python Constants ──────────────────────────────────
+
+- criterion_id: AC-BHVR-001
+  name: "Each wake-behavior is a module-level typed BehaviorConfig constant"
+  evidence_class: "[unit-structural]"
+  authority_refs: [R-doc04-BHVR-01, R-doc04-BHVR-20]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The behaviors module is imported at test time"
+    when: "All wake-behavior identifiers are enumerated (catchup, answer-question, surface-risk, propose-action, plus Workroom dispositions)"
+    then:
+      - "Each identifier resolves to a module-level constant whose type is BehaviorConfig or Behavior (containing a BehaviorConfig)"
+      - "No behavior identifier resolves to a YAML file path, a parsed dict, or a lazy factory"
+      - "All required fields (role, rules, inputs, config.model, config.tools, config.max_turns) are present and typed"
+  primary_oracle:
+    type: deterministic
+    artifact: "inspect.getmembers(behaviors_module) filtered by isinstance(v, Behavior) — count == expected_behavior_count; type annotations verified via dataclasses.fields()"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-001]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-BHVR-001-NEG
+  name: "No wake-behavior is declared by parsing a YAML file at import time"
+  evidence_class: "[unit-structural]"
+  authority_refs: [R-doc04-BHVR-01]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The behaviors module and its transitive imports are loaded"
+    when: "All module-level constant definitions are inspected for YAML parsing calls"
+    then:
+      - "No call to yaml.safe_load, yaml.load, or any YAML parser appears in the module-level constant definitions"
+      - "No BehaviorConfig or Behavior instance is constructed from a parsed YAML dict"
+  primary_oracle:
+    type: deterministic
+    artifact: "AST parse of behaviors.py — assert no ast.Call nodes resolving to yaml.safe_load/yaml.load at module scope"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-001-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Behavior Dataclass Shape ──────────────────────────────────────────────────
+
+- criterion_id: AC-BHVR-002
+  name: "Behavior dataclass declares exactly the specified five typed fields"
+  evidence_class: "[unit-structural]"
+  authority_refs: [R-doc04-BHVR-20]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The Behavior dataclass is imported"
+    when: "dataclasses.fields(Behavior) is called"
+    then:
+      - "Exactly these fields are present: name (str), role (str), rules (list[str]), inputs (list[str]), config (BehaviorConfig)"
+      - "BehaviorConfig contains at minimum: model, max_turns, tools fields"
+      - "No extra mandatory fields are present that would force per-behavior subclassing"
+  primary_oracle:
+    type: deterministic
+    artifact: "dataclasses.fields(Behavior) returns exactly 5 fields with matching names and type annotations"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-002]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── One Generic Runner — No Per-Behavior Code Branches ────────────────────────
+
+- criterion_id: AC-BHVR-003
+  name: "BehaviorRunner.run() contains no per-behavior conditional branches"
+  evidence_class: "[unit-structural]"
+  authority_refs: [R-doc04-BHVR-04, R-doc04-BHVR-05]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The BehaviorRunner class source is available for static analysis"
+    when: "The AST of BehaviorRunner.run() and all methods it calls are inspected for behavior-name comparisons"
+    then:
+      - "No if/elif/match branch tests behavior_name against a string literal or enum value"
+      - "The only name-based access is a dict lookup: self._registry[behavior_name]"
+      - "All behaviors execute through the identical code path post-lookup"
+  primary_oracle:
+    type: deterministic
+    artifact: "AST walk of BehaviorRunner — assert zero ast.Compare or ast.Match nodes where a comparator is a behavior name string literal"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-003]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-BHVR-003-NEG
+  name: "Adding a new behavior via register() does not require new wiring code in BehaviorRunner"
+  evidence_class: "[unit-structural]"
+  authority_refs: [R-doc04-BHVR-03, R-doc04-BHVR-05]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A new Behavior constant is defined and register(new_behavior) is called"
+    when: "BehaviorRunner.run() is invoked with the new behavior's name"
+    then:
+      - "The new behavior executes successfully through the generic runner without any modification to BehaviorRunner source"
+      - "No new conditional, dispatch table entry, or factory registration is required in BehaviorRunner"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: define test_behavior constant, call register(test_behavior), call runner.run('test_behavior', ...) — assert execution completes via the generic path"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-003-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-BHVR-004
+  name: "BehaviorRunner resolves declared inputs and hands one context object to provider seam"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-BHVR-04]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A Behavior constant with non-empty inputs list is registered; resolved_inputs dict is provided"
+    when: "BehaviorRunner.run() is called with that behavior name and resolved_inputs"
+    then:
+      - "render_prompt(b, resolved_inputs) is called exactly once with the behavior and resolved inputs"
+      - "A single context object (ProviderQuery) is constructed and passed to provider.stream()"
+      - "No input resolution logic is duplicated outside BehaviorRunner"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test with mocked provider.stream — assert render_prompt called once; assert ProviderQuery constructed once per run() invocation"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-004]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Registry and register() ───────────────────────────────────────────────────
+
+- criterion_id: AC-BHVR-005
+  name: "REGISTRY is a plain dict and register() is a single-assignment one-liner"
+  evidence_class: "[unit-structural]"
+  authority_refs: [R-doc04-BHVR-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The registry module is imported"
+    when: "REGISTRY and register() are inspected"
+    then:
+      - "REGISTRY is declared as dict[str, Behavior] with no custom class wrapping"
+      - "register() body consists of exactly one statement: REGISTRY[b.name] = b"
+      - "register() performs no side-effects beyond the dict insertion (no file I/O, no event emission)"
+  primary_oracle:
+    type: deterministic
+    artifact: "AST inspection of register() body — exactly one ast.Assign or ast.Subscript node; no other statements present"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-005]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-BHVR-005-NEG
+  name: "Unknown behavior name raises KeyError from REGISTRY lookup, not a silent default"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-BHVR-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A behavior name that has not been registered is used"
+    when: "BehaviorRunner.run() is called with that unregistered name"
+    then:
+      - "KeyError (or a typed wrapper thereof) is raised at the registry lookup point"
+      - "No silent fallback behavior executes"
+      - "No default Behavior object is substituted"
+  primary_oracle:
+    type: deterministic
+    artifact: "pytest.raises(KeyError) (or wrapped equivalent) on BehaviorRunner.run('nonexistent_behavior', {})"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-005-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Tool Mount Enforcement — Curated Subset (§10.5) ─────────────────────────
+
+- criterion_id: AC-BHVR-006
+  name: "BehaviorRunner sets allowed_tools = b.config.tools exactly — no additions"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-BHVR-07, R-doc04-BHVR-08]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A Behavior constant with a known config.tools list of length K is registered"
+    when: "BehaviorRunner.run() constructs the ProviderQuery"
+    then:
+      - "ProviderQuery.allowed_tools equals b.config.tools exactly (same elements, same count K)"
+      - "No tool name is appended to allowed_tools inside BehaviorRunner beyond those declared in config.tools"
+      - "No tool name is removed from allowed_tools inside BehaviorRunner"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: capture ProviderQuery passed to mocked provider.stream — assert allowed_tools == behavior.config.tools"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-006]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-BHVR-006-NEG
+  name: "BehaviorRunner never mounts the union of all available Proxy tools for any behavior"
+  evidence_class: "[unit-structural]"
+  authority_refs: [R-doc04-BHVR-07]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The complete set of all available Proxy tools is enumerable at test time"
+    when: "BehaviorRunner.run() is called for any registered behavior"
+    then:
+      - "The set of tools passed as allowed_tools is a strict subset of all_proxy_tools"
+      - "len(allowed_tools) < len(all_proxy_tools) for every behavior"
+      - "No code path in BehaviorRunner constructs allowed_tools by collecting all_proxy_tools"
+  primary_oracle:
+    type: deterministic
+    artifact: "Parametrized unit test across all registered behaviors: assert len(captured_allowed_tools) < len(all_proxy_tools)"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-006-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── SDK Isolation Triad ───────────────────────────────────────────────────────
+
+- criterion_id: AC-BHVR-007
+  name: "ProviderQuery always carries strict_mcp_config=True and setting_sources=[]"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-BHVR-08]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Any registered behavior is invoked via BehaviorRunner.run()"
+    when: "ProviderQuery is constructed inside run()"
+    then:
+      - "ProviderQuery.strict_mcp_config is True"
+      - "ProviderQuery.setting_sources is [] (empty list, not None, not omitted)"
+      - "These values are not overridable by the BehaviorConfig — they are invariants"
+  primary_oracle:
+    type: deterministic
+    artifact: "Parametrized unit test: for each registered behavior, capture ProviderQuery — assert strict_mcp_config is True and setting_sources == []"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-007]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-BHVR-007-NEG
+  name: "compute_builtin_tools returns [] in sandbox mode regardless of behavior"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-BHVR-08]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Sandbox mode is active (environment flag or constructor arg)"
+    when: "compute_builtin_tools(b.config.tools) is called for any behavior"
+    then:
+      - "The return value is an empty list []"
+      - "No builtin tools are mounted even if b.config.tools is non-empty"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test with sandbox=True: assert compute_builtin_tools(any_tools_list) == []"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-007-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── ERROR Chunk Surfacing ─────────────────────────────────────────────────────
+
+- criterion_id: AC-BHVR-008
+  name: "BehaviorRunner raises ProviderError on ERROR chunk — never yields it"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-BHVR-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The provider stream yields a chunk with chunk.type == 'ERROR'"
+    when: "BehaviorRunner.run() iterates stream_deltas()"
+    then:
+      - "ProviderError is raised wrapping the ERROR chunk before any yield to the caller"
+      - "No ERROR chunk is yielded downstream to the BehaviorRunner caller"
+      - "The ProviderError is raised at the BehaviorRunner boundary (not swallowed internally)"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: mock stream yields ERROR chunk — assert pytest.raises(ProviderError) and no chunks collected by caller"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-008]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-BHVR-008-NEG
+  name: "Non-ERROR chunks are yielded without being silently dropped or raised as exceptions"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-BHVR-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The provider stream yields a sequence of non-ERROR AgentChunks"
+    when: "BehaviorRunner.run() iterates the stream"
+    then:
+      - "Every non-ERROR chunk is yielded to the caller in order"
+      - "No chunk is silently dropped"
+      - "No exception is raised for non-ERROR chunks"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: mock stream yields [TEXT, TOOL_USE, RESULT] chunks — assert collected chunks == [TEXT, TOOL_USE, RESULT]"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-008-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── answer-question Tool Mount ────────────────────────────────────────────────
+
+- criterion_id: AC-BHVR-009
+  name: "answer-question config.tools contains exactly the six code_intel tools plus six orchestration verbs"
+  evidence_class: "[unit-structural]"
+  authority_refs: [R-doc04-BHVR-10]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The answer-question Behavior constant is imported from the behaviors module"
+    when: "answer_question.config.tools is inspected"
+    then:
+      - "Exactly these six code_intel tools are present: get_dependents, who_writes, list_entry_points, grep, read, batch_read"
+      - "Exactly these six orchestration verbs are present: dispatch_workroom, speak, send_chat, show_screen, ack, cancel_task"
+      - "The total tool count is exactly 12; no additional tools are present"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert set(answer_question.config.tools) == EXPECTED_ANSWER_QUESTION_TOOLS and len(answer_question.config.tools) == 12"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-009]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-BHVR-009-NEG
+  name: "answer-question does not mount tools from other behaviors' curated subsets"
+  evidence_class: "[unit-structural]"
+  authority_refs: [R-doc04-BHVR-10, R-doc04-BHVR-07]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The complete tool lists for all registered behaviors are available"
+    when: "answer-question's config.tools is compared to tools exclusive to other behaviors"
+    then:
+      - "answer-question.config.tools contains none of the tools that are exclusively declared in other behaviors' configs"
+      - "The answer-question tool set is the curated 12-tool subset, not a superset absorbing other behaviors' tools"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert answer_question.config.tools is disjoint from tools unique to each other registered behavior"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-009-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── code_intel MCP — Factory-per-Query ───────────────────────────────────────
+
+- criterion_id: AC-BHVR-010
+  name: "code_intel MCP server is instantiated factory-per-query, not as a singleton"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-BHVR-11]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Two consecutive answer-question behavior invocations are made"
+    when: "The code_intel MCP server creation is observed for each invocation"
+    then:
+      - "A distinct server instance is created for each query (factory pattern)"
+      - "The two instances do not share state (separate objects, separate identity)"
+      - "No singleton pattern or module-level cached instance is used"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: spy on code_intel server factory — assert factory called twice for two run() invocations; assert id(instance_1) != id(instance_2)"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-010]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-BHVR-010-NEG
+  name: "code_intel tools are advertised (available to model) but not auto-invoked"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-BHVR-11]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "answer-question behavior is invoked with a grounded code question"
+    when: "ProviderQuery is constructed and passed to the provider"
+    then:
+      - "code_intel tools appear in ProviderQuery.allowed_tools (advertised)"
+      - "No code in BehaviorRunner or render_prompt forces a specific code_intel tool call (tool_choice is not forced)"
+      - "Tool invocation decisions remain entirely with the model"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: assert 'get_dependents' in captured_query.allowed_tools; assert captured_query.tool_choice not in ('get_dependents', forced_tool_names)"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-010-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── batch_read ────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-BHVR-011
+  name: "batch_read reads up to N=10 files per call with internally parallel fetches"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-BHVR-12]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A list of N file paths (N ≤ 10) is passed to batch_read"
+    when: "batch_read executes"
+    then:
+      - "All N files are fetched in parallel (e.g., asyncio.gather or equivalent) within a single round-trip"
+      - "The tool returns results for all successfully fetched files"
+      - "Execution time is bounded by the slowest individual fetch, not the sum"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test with N=5 mocked file reads — assert asyncio.gather (or equivalent) is called once with all 5 coroutines; assert single await point"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-011]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-BHVR-011-NEG
+  name: "batch_read with a failing file returns partial results, not a total failure"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-BHVR-12]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A batch of 5 file paths is passed to batch_read, where file 3 does not exist"
+    when: "batch_read executes"
+    then:
+      - "Results for files 1, 2, 4, 5 are returned successfully"
+      - "The failure of file 3 is indicated per-file (e.g., error entry) without aborting the batch"
+      - "No exception propagates out of batch_read due to the single file failure"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: 4 successful mocks + 1 FileNotFoundError mock — assert len(results) == 5; assert results[2].error is not None; assert results[0,1,3,4].content is not None"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-011-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-BHVR-011-LIMIT
+  name: "batch_read rejects requests exceeding N=10 files"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-BHVR-12]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A list of 11 file paths is passed to batch_read"
+    when: "batch_read executes"
+    then:
+      - "batch_read raises a validation error (ValueError or equivalent typed error) before any file I/O"
+      - "No partial fetch is attempted on the oversized input"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: pytest.raises(ValueError) when batch_read called with 11 paths"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-011-LIMIT]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Within-Session Tool-Result Cache (§10.8) ──────────────────────────────────
+
+- criterion_id: AC-BHVR-012
+  name: "Identical (tool, args, SHA) call returns cached result without re-executing the tool"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-BHVR-13]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting session is active with a pinned repository SHA; get_dependents('MyClass') was called and returned result R"
+    when: "get_dependents('MyClass') is called a second time in the same session with the same pinned SHA"
+    then:
+      - "The cached result R is returned without invoking the underlying code_intel implementation"
+      - "The code_intel MCP server is called exactly once (not twice) for the identical (tool, args, SHA) triple"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test with call-count spy on code_intel server — assert server.get_dependents call_count == 1 after two identical client calls"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-012]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-BHVR-012-NEG
+  name: "Cache miss when SHA changes — different SHA forces a fresh tool call"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-BHVR-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "get_dependents('MyClass') was called with SHA='abc123'; session SHA is updated to 'def456'"
+    when: "get_dependents('MyClass') is called again with the new SHA 'def456'"
+    then:
+      - "The cached result from SHA='abc123' is NOT returned"
+      - "The code_intel MCP server is called again (total call count == 2)"
+      - "The new result is stored under the ('get_dependents', 'MyClass', 'def456') cache key"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test with SHA rotation: assert server.get_dependents call_count == 2; assert result_2 == fresh_mock_result"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-012-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-BHVR-012-SCOPE
+  name: "Cache is scoped per-meeting session — cross-session contamination is impossible"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-BHVR-13]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Session S1 has cached get_dependents('MyClass') = R1; a new session S2 begins with the same SHA"
+    when: "get_dependents('MyClass') is called in session S2"
+    then:
+      - "S2 does NOT receive R1 from S1's cache"
+      - "The code_intel server is called again in S2 (not a cache hit from a different session)"
+      - "S2 builds its own independent cache from scratch"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: two separate session objects; assert each session's cache dict is independent; assert call_count == 2 across both sessions"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-012-SCOPE]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── with_proxy_guardrails Prompt Discipline (§10.9) ───────────────────────────
+
+- criterion_id: AC-BHVR-013
+  name: "with_proxy_guardrails() appends the exact standing line to every grounded wake turn"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-BHVR-15]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Any grounded wake turn prompt is being rendered"
+    when: "with_proxy_guardrails() is applied to the prompt"
+    then:
+      - "The rendered prompt contains the exact string: 'prefer the compact artifact, cheapest tool first, one gather pass — pull the map/notes summaries once, prefer them over re-exploring raw code, don\\'t re-fetch.'"
+      - "The standing line appears in the system prompt suffix (appended, not prepended)"
+      - "The line is present on every grounded wake turn without exception"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: call with_proxy_guardrails(base_prompt) — assert STANDING_LINE in result; parametrize across all grounded behavior names"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-013]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-BHVR-013-NEG
+  name: "with_proxy_guardrails() is not skipped for any grounded wake behavior"
+  evidence_class: "[unit-structural]"
+  authority_refs: [R-doc04-BHVR-15]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "All registered grounded wake behaviors are enumerated"
+    when: "render_prompt() is called for each behavior with sample inputs"
+    then:
+      - "with_proxy_guardrails() call site is present in the render_prompt() code path (not conditionally skipped)"
+      - "The standing line appears in the rendered prompt for every grounded behavior"
+      - "No behavior's render path bypasses with_proxy_guardrails()"
+  primary_oracle:
+    type: deterministic
+    artifact: "Parametrized unit test across all registered grounded behaviors — assert STANDING_LINE in render_prompt(b, sample_inputs) for each"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-013-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Spoken Register — Two Prompt Locations (AMENDMENT C2) ─────────────────────
+
+- criterion_id: AC-BHVR-014
+  name: "Spoken-register constraint appears in BOTH the role string AND the guardrails suffix"
+  evidence_class: "[unit-structural]"
+  authority_refs: [R-doc04-BHVR-16]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Any wake-behavior Behavior constant is inspected"
+    when: "The role string and with_proxy_guardrails() output are examined for the spoken-register constraint"
+    then:
+      - "The role string contains language encoding the spoken-register constraint (short sentences / contractions / no enumeration / ≤2 sentences)"
+      - "The with_proxy_guardrails() suffix independently contains language encoding the same constraint"
+      - "Both locations carry the constraint — absence from either location fails the assertion"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: for each behavior b, assert SPOKEN_REGISTER_MARKER in b.role; assert SPOKEN_REGISTER_MARKER in with_proxy_guardrails('')"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-014]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-BHVR-014-NEG
+  name: "Spoken-register constraint absent from either location is a detectable build violation"
+  evidence_class: "[unit-structural]"
+  authority_refs: [R-doc04-BHVR-16]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A test behavior is constructed with a role string that omits the spoken-register constraint"
+    when: "A validation check (lint or unit test) is run against this behavior"
+    then:
+      - "The validation raises an assertion error or returns a non-zero exit code"
+      - "The error message identifies which location (role string or guardrails suffix) is missing the constraint"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: construct Behavior with empty role string — assert validate_behavior(b) raises AssertionError citing 'role string missing spoken-register constraint'"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-014-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Spoken-Register Content Constraints ──────────────────────────────────────
+
+- criterion_id: AC-BHVR-015
+  name: "speak() utterance compliance: ≤2 sentences, contractions, no enumeration"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-BHVR-17]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A speak() utterance is produced by any wake-behavior"
+    when: "The utterance text is validated against spoken-register rules"
+    then:
+      - "Sentence count ≤ 2 (split on '.', '!', '?')"
+      - "No bullet-list markers (-, *, •, 1., 2., a.) appear in the utterance text"
+      - "No numbered list patterns appear in the utterance text"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: assert sentence_count(utterance) <= 2; assert not ENUMERATION_PATTERN.search(utterance)"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-015]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Config vs. Judgment Separation (Law 4) ────────────────────────────────────
+
+- criterion_id: AC-BHVR-016
+  name: "No rules list entry takes the form 'if <utterance pattern> then <tool call>'"
+  evidence_class: "[unit-structural]"
+  authority_refs: [R-doc04-BHVR-18]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "All Behavior.rules lists across all registered behaviors are available"
+    when: "Each rule string is inspected for prescriptive if-then patterns"
+    then:
+      - "No rule string contains conditional language of the form 'if the speaker asks X, call Y' or 'when X occurs, invoke Y'"
+      - "All rule strings are framed as examples, heuristics, or preference statements"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: for each b in REGISTRY.values(), for each rule in b.rules: assert not IF_THEN_TOOL_PATTERN.match(rule)"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-016]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-BHVR-016-NEG
+  name: "Rules list includes explicit framing that it is judgment-priming, not a bounded checklist"
+  evidence_class: "[unit-structural]"
+  authority_refs: [R-doc04-BHVR-19]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Any Behavior constant's rules list is rendered into the prompt via render_prompt()"
+    when: "The rendered prompt text is inspected"
+    then:
+      - "The rendered prompt contains explicit framing text identifying the rules as examples that prime judgment"
+      - "The framing text is present in the rendered output, not only as a Python comment in source"
+      - "The framing appears adjacent to or preceding the rules list in the prompt structure"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: rendered = render_prompt(b, {}); assert JUDGMENT_FRAMING_MARKER in rendered"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-016-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Cost Telemetry ────────────────────────────────────────────────────────────
+
+- criterion_id: AC-BHVR-017
+  name: "_cost.observe(chunk) is called on every yielded chunk before yield"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-BHVR-21]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A behavior run yields N chunks from the provider stream"
+    when: "BehaviorRunner.run() processes all N chunks"
+    then:
+      - "self._cost.observe() is called exactly N times — once per chunk"
+      - "observe() is called before the chunk is yielded to the caller (not after)"
+      - "No chunk bypasses the observe() call"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test with N=3 mock chunks and spy on _cost.observe — assert call_count == 3; assert observe called before each yield via ordering assertion"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-017]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Build-Time Manifest Generation ───────────────────────────────────────────
+
+- criterion_id: AC-BHVR-018
+  name: "JSON/TS capability manifest is generated at build time from typed BehaviorConfig constants"
+  evidence_class: "[unit-structural]"
+  authority_refs: [R-doc04-BHVR-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The build script for the capability manifest is invoked"
+    when: "The manifest generator runs against the behaviors module"
+    then:
+      - "The output manifest contains one entry per registered Behavior constant"
+      - "Each entry's label/name derives from the Behavior.name field in the typed constant (not a hand-authored string)"
+      - "The manifest file is a JSON or TypeScript artifact (not a Python file)"
+  primary_oracle:
+    type: deterministic
+    artifact: "Build-time test: run manifest generator; parse output JSON; assert len(entries) == len(REGISTRY); assert all entry.name in REGISTRY"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-018]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-BHVR-018-NEG
+  name: "Manifest entries are never hand-authored separately from the BehaviorConfig constants"
+  evidence_class: "[unit-structural]"
+  authority_refs: [R-doc04-BHVR-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A new Behavior constant is added and registered; the manifest generator is re-run"
+    when: "The generated manifest is compared to the REGISTRY"
+    then:
+      - "The new behavior appears in the manifest automatically without manual manifest edits"
+      - "If a behavior is removed from REGISTRY, it disappears from the manifest on the next build"
+      - "The manifest is never committed as a static hand-maintained file independent of the constants"
+  primary_oracle:
+    type: deterministic
+    artifact: "Build-time test: add test_behavior to REGISTRY; regenerate manifest; assert 'test_behavior' in manifest entries"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-BHVR-018-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}

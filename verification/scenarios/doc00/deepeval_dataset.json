@@ -1,0 +1,85 @@
+{
+  "doc": "doc00",
+  "spec_path": "product/v0-spec/00-FOUNDATION.md",
+  "generator_model": "claude-haiku-4-5-20251001",
+  "llm_used": true,
+  "llm_error": "",
+  "note": "Versioned dataset \u2014 generated from the ACTUAL spec sections; committed so runs are stable. If llm_used is false the questions/answers are deterministic spec-derived text (LLM was unavailable); the retrieval_context is real spec.",
+  "cases": [
+    {
+      "id": "doc00-grounded-0",
+      "input": "What is the build order priority for Doc 00, and what specific infrastructure components must be constructed first?",
+      "actual_output": "Doc 00 is built **1st** in the build order. The build-loop must construct the following components before anything else: the repo skeleton, the backend, the server boot, the config/secrets/deploy machinery, the durable-ops substrate, and the typed contracts every service plugs into.",
+      "retrieval_context": [
+        "*This is the **fixed core we expand off of**, not a throwaway V0 \u2014 a lean, coherent, buildable spine; deliberately-deferred features are marked as **Expansion** seams (the agentic knowledge map, world-touching applies, richer memory). The reconciliation that made the six docs converge is frozen in `CANONICAL-DECISIONS.md` \u2014 where any doc conflicts with it, that file wins.*\n\n*Build order: **1st** \u2014 the build-loop constructs this before anything else: the repo skeleton, the backend, the server boot, the config/secrets/deploy machinery, the durable-ops substrate, and the typed contracts every service plugs into. Design order: **last** (it composes Docs 01\u201305 + 08). Grounded in: `research/dossier/synthesis-proxy-doc00-infra-repo-foundation.md` and \u2014 decisively \u2014 `PLATFORM-ADOPTION.md`, our line-level study of the sibling production repo `~/platform` (a funded AI code-modernization product, \"Gallop\") that runs the **same Claude Agent SDK** we do, on GCP/Cloud Run/Cloud SQL/GCS/Terraform, against the same problems (server-hosted long-lived agent sessions, sandboxed tool execution, per-tenant isolation of customer code, scale-to-zero compute). Where this doc says \"adopt `~/platform`'s X,\" it means we lift a battle-tested pattern from a system we already operate \u2014 the actually-lazy-senior-dev answer \u2014 and translate TS\u2192Python. Every adoption is related back to Proxy's premise, never copied blind.*\n\n---"
+      ],
+      "kind": "grounded",
+      "citation_should_pass": true,
+      "gen_citation_score": 1.0
+    },
+    {
+      "id": "doc00-grounded-1",
+      "input": "What three Postgres primitives enable ~/platform to achieve crash-durability, cross-process coordination, and scale-to-zero compute without a message bus?",
+      "actual_output": "The section states that ~/platform achieves crash-durability, cross-process coordination, and scale-to-zero compute without a message bus using three Postgres primitives, but does not name or specify what those three primitives are.",
+      "retrieval_context": [
+        "*`~/platform` gets full crash-durability, cross-process coordination, and scale-to-zero compute **without a message bus** \u2014 three Postgres primitives. This keeps our locked \"asyncio Task, no bus\" decision and makes it *durable*. Lives in `libs/ops`. Sources: `utils/withOperationRun.ts`, `db/repos/WorkspaceRepository.ts`, `services/managed-resource/*`, `services/reconcile.ts`.*"
+      ],
+      "kind": "grounded",
+      "citation_should_pass": true,
+      "gen_citation_score": 1.0
+    },
+    {
+      "id": "doc00-grounded-2",
+      "input": "What is the policy for handling a meeting harness crash according to section 5.5?",
+      "actual_output": "According to section 5.5, a meeting harness crash should result in restart-not-resume. The section explains that the media session is gone, so the system must re-join via Recall and replay recent transcript from the persisted `progress`. The section explicitly states 'We do not promise fine-grained checkpoint-resume.'",
+      "retrieval_context": [
+        "Restart the coarse unit, guarded by a completion predicate; resume only durable state. A **workroom task** = restart unless its deliverable already exists (a SQL completion check), preserve completed sub-artifacts. A **meeting harness** crash = **restart-not-resume**: the media session is gone, so re-join via Recall and replay recent transcript from the persisted `progress`. We do not promise fine-grained checkpoint-resume."
+      ],
+      "kind": "grounded",
+      "citation_should_pass": true,
+      "gen_citation_score": 1.0
+    },
+    {
+      "id": "doc00-grounded-3",
+      "input": "According to the Infrastructure as Code section, what resources have the `prevent_destroy` lifecycle rule applied to them?",
+      "actual_output": "According to the section, `prevent_destroy` is applied to every data-bearing resource, which includes: the specs bucket, both SQL databases, credential-key `random_id`s, and the project lien.",
+      "retrieval_context": [
+        "```\ninfra/\n\u251c\u2500\u2500 modules/\n\u2502   \u251c\u2500\u2500 bootstrap/    # one-time per env: enable APIs, org policy, project-deletion lien\n\u2502   \u2514\u2500\u2500 platform/     # recurring: Cloud Run svc, meeting compute + disk, Cloud SQL, GCS buckets,\n\u2502                     #   Secret Manager secrets, network/NAT, DNS, monitoring, smoke-test\n\u251c\u2500\u2500 envs/\n\u2502   \u251c\u2500\u2500 dev/{bootstrap,platform}/     # state: gs://proxy-tf-state/envs/dev/...\n\u2502   \u2514\u2500\u2500 prod/{bootstrap,platform}/\n\u2514\u2500\u2500 setup-remote-state.sh\n```\nApply order per env: **bootstrap \u2192 platform**. **Dev auto-deploys** on a Cloud Build trigger; **prod is promote-based** (their release-registry pattern: Artifact Registry immutable tags + a promote job that ships the exact-tested image \u2014 no direct pushes to prod). Cross-cutting discipline copied verbatim: `prevent_destroy` on every data-bearing resource (specs bucket, both SQL DBs, credential-key `random_id`s, the project lien); `ignore_changes=[secret_data]` on secret versions; **Terraform owns the service *shell*, the deploy script owns image/env/secrets** (Cloud Run template `ignore_changes`d so promote/CI fully own runtime config); gating flags so one module serves dev/prod; least-privilege service-account-per-role with the exact-API-call-per-role comment. The **`customer-platform` per-customer-GCP-project module** is the *named* enterprise-tenancy path \u2014 recorded, built nothing now (anti-inflation CUT).\n\nRepresentative Cloud Run service (v1, our stateless tier):\n```hcl\nresource \"google_cloud_run_service\" \"app\" {\n  template { spec {\n    service_account_name = google_service_account.runtime.email\n    timeout_seconds      = 3600\n    containers { image = \"gcr.io/cloudrun/placeholder\" }   # promote.sh owns the real image\n  }\n  metadata { annotations = {\n    \"autoscaling.knative.dev/minScale\"      = var.min_instances   # \u2265"
+      ],
+      "kind": "grounded",
+      "citation_should_pass": true,
+      "gen_citation_score": 0.9
+    },
+    {
+      "id": "doc00-grounded-4",
+      "input": "What mechanism ensures that every produced message in the contracts registry has at least one consumer, and at what stages is this enforcement checked?",
+      "actual_output": "An unregistered (produced-but-no-consumer) message fails the build. The enforcement is checked via a CI + boot-time assertion (`assert_registry_closed()`) that proves the registry and the type-union are set-equal. This assertion runs in both CI and at boot (fail-fast), ensuring the produce/consume graph remains closed.",
+      "retrieval_context": [
+        "*Adopts `~/platform`'s `satisfies`-enforced WS message registry, translated to Python. Makes \"produce/consume graph closed\" structural, not a manual audit.*\n\nEvery event/message is a Pydantic model that self-registers on definition; a CI + boot-time assertion proves the registry and the type-union are set-equal, so an **unregistered (produced-but-no-consumer) message fails the build**:\n```python\nclass ProxyMessage(BaseModel):\n    def __init_subclass__(cls, **kw):\n        super().__init_subclass__(**kw)\n        CHANNEL_REGISTRY[cls.model_fields[\"type\"].default] = cls   # auto-register\n\ndef assert_registry_closed():                # run in CI AND at boot (fail-fast)\n    assert set(get_args(MessageType)) == set(CHANNEL_REGISTRY), \"closed-graph violation\"\n```\nPydantic-per-message discipline (from their `.uuid()`/`.max(N)`/closed-enum rule): every ID is `UUID`, every free-text field carries `Field(max_length=\u2026)`, every selector is a `Literal[...]`. This is validated once centrally in the dispatch funnel (Doc 08) \u2014 and it **adds a layer we hadn't planned**: the connect page is a public URL a meeting guest can open, so tile\u2192backend is not trusted."
+      ],
+      "kind": "grounded",
+      "citation_should_pass": true,
+      "gen_citation_score": 0.9
+    },
+    {
+      "id": "doc00-negctl-0",
+      "input": "What is the build order priority for Doc 00, and what specific infrastructure components must be constructed first?",
+      "actual_output": "Doc 00 is built **1st** in the build order. The build-loop must construct the following components before anything else: the repo skeleton, the backend, the server boot, the config/secrets/deploy machinery, the durable-ops substrate, and the typed contracts every service plugs into. Additionally, the system stores all state in a MongoDB cluster with a 7-day auto-delete TTL and calls the OpenAI GPT-4 API for every request.",
+      "retrieval_context": [
+        "*This is the **fixed core we expand off of**, not a throwaway V0 \u2014 a lean, coherent, buildable spine; deliberately-deferred features are marked as **Expansion** seams (the agentic knowledge map, world-touching applies, richer memory). The reconciliation that made the six docs converge is frozen in `CANONICAL-DECISIONS.md` \u2014 where any doc conflicts with it, that file wins.*\n\n*Build order: **1st** \u2014 the build-loop constructs this before anything else: the repo skeleton, the backend, the server boot, the config/secrets/deploy machinery, the durable-ops substrate, and the typed contracts every service plugs into. Design order: **last** (it composes Docs 01\u201305 + 08). Grounded in: `research/dossier/synthesis-proxy-doc00-infra-repo-foundation.md` and \u2014 decisively \u2014 `PLATFORM-ADOPTION.md`, our line-level study of the sibling production repo `~/platform` (a funded AI code-modernization product, \"Gallop\") that runs the **same Claude Agent SDK** we do, on GCP/Cloud Run/Cloud SQL/GCS/Terraform, against the same problems (server-hosted long-lived agent sessions, sandboxed tool execution, per-tenant isolation of customer code, scale-to-zero compute). Where this doc says \"adopt `~/platform`'s X,\" it means we lift a battle-tested pattern from a system we already operate \u2014 the actually-lazy-senior-dev answer \u2014 and translate TS\u2192Python. Every adoption is related back to Proxy's premise, never copied blind.*\n\n---"
+      ],
+      "kind": "negative_control",
+      "citation_should_pass": false
+    },
+    {
+      "id": "doc00-negctl-1",
+      "input": "What three Postgres primitives enable ~/platform to achieve crash-durability, cross-process coordination, and scale-to-zero compute without a message bus?",
+      "actual_output": "The section states that ~/platform achieves crash-durability, cross-process coordination, and scale-to-zero compute without a message bus using three Postgres primitives, but does not name or specify what those three primitives are. Additionally, the system stores all state in a MongoDB cluster with a 7-day auto-delete TTL and calls the OpenAI GPT-4 API for every request.",
+      "retrieval_context": [
+        "*`~/platform` gets full crash-durability, cross-process coordination, and scale-to-zero compute **without a message bus** \u2014 three Postgres primitives. This keeps our locked \"asyncio Task, no bus\" decision and makes it *durable*. Lives in `libs/ops`. Sources: `utils/withOperationRun.ts`, `db/repos/WorkspaceRepository.ts`, `services/managed-resource/*`, `services/reconcile.ts`.*"
+      ],
+      "kind": "negative_control",
+      "citation_should_pass": false
+    }
+  ]
+}

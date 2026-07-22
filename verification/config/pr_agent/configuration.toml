@@ -1,0 +1,29 @@
+# PR-Agent self-host configuration — Claude via litellm, no new vendor.
+#
+# Fork: github.com/The-PR-Agent/pr-agent (the community/open-source fork after the
+# 2026 org split — NOT qodo-ai/pr-agent, which is Qodo's separate commercial product).
+# Claude support is confirmed in that fork's docs (usage-guide/changing_a_model):
+# models are addressed via litellm as "anthropic/<model-id>", key via ANTHROPIC_API_KEY.
+#
+# We reuse the existing ANTHROPIC_API_KEY — no OpenAI key, no new account.
+
+[config]
+# litellm model id. claude-3-opus in the upstream example is outdated; use a current
+# Claude. Validate the exact id resolves in the pinned litellm version at run time
+# (litellm passes unknown anthropic/* ids straight through to the Anthropic API).
+model = "anthropic/claude-sonnet-4-6"
+fallback_models = ["anthropic/claude-haiku-4-5-20251001"]
+git_provider = "github"
+publish_output = false          # review to stdout; never auto-post while validating
+use_repo_settings_file = false
+max_model_tokens = 64000
+
+[pr_reviewer]
+require_score_review = true
+require_tests_review = true
+require_security_review = true
+num_code_suggestions = 4
+persistent_comment = false
+
+[pr_description]
+publish_labels = false

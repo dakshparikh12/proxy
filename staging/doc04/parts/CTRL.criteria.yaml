@@ -1,0 +1,922 @@
+# CTRL.criteria.yaml — Doc 04 (Proxy Orchestrator) — §3.10 Restart-Not-Resume + §3.11 AbortController Discipline
+# Acceptance criteria paired to CTRL.requirements.yaml.
+# ID scheme: AC-CTRL-NNN (positive), AC-CTRL-NNN-NEG (negative/off-state)
+# Test IDs: T-CTRL-NNN
+#
+# dependency_class legend:
+#   null           — pure in-process logic / static analysis; ladder: [lint, unit]
+#   db:postgres    — completion predicate or transcript plane read; ladder: [lint, unit, integration]
+#   vendor:recall  — Recall re-join after instance death; ladder: [lint, unit, reality]
+# Every non-null dependency_class MUST have a paired NEG criterion: ladder [lint, unit, negative]
+#
+# INVARIANTS:
+#   abort-is-final: P0 — a killed task MUST NOT be re-run or resurrected
+#   "Proxy, quiet": P0 — human barge-in stops the addressed task unconditionally
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FAULT MODELS
+# ─────────────────────────────────────────────────────────────────────────────
+fault_models:
+
+  - id: F-CTRL-RTP-RESUME
+    summary: "The replacement instance attempts to resume the RTP media stream instead of performing a clean re-join via Recall, causing a protocol error or silent data loss."
+
+  - id: F-CTRL-SILENT-RECOVERY
+    summary: "The replacement instance recovers without speaking any disclosure line, leaving participants unaware that audio was missed during the outage."
+
+  - id: F-CTRL-MULTI-DISCLOSURE
+    summary: "The replacement instance speaks more than one disclosure line (e.g., one per missed segment), creating noise in the meeting."
+
+  - id: F-CTRL-NO-TRANSCRIPT-REPLAY
+    summary: "The replacement instance does not read the Postgres transcript plane, rebuilding context from scratch or missing the judgment history."
+
+  - id: F-CTRL-WORKROOM-TABLE-EXISTS
+    summary: "A workroom_tasks table exists in the schema alongside operation_runs, violating the §12.10 canonical decision that workroom tasks are operation_runs rows."
+
+  - id: F-CTRL-COMPLETION-PREDICATE-SKIP
+    summary: "An interrupted workroom task is re-run even though its deliverable already exists, causing duplicate work or state corruption."
+
+  - id: F-CTRL-NO-INTERRUPTED-STATUS
+    summary: "A crashed workroom task is left in status='running' rather than 'interrupted', causing the drain loop to skip it silently."
+
+  - id: F-CTRL-ABORT-REDEFINE
+    summary: "Doc 04 or Doc 05 defines its own AbortController or AbortRegistry class locally, violating the DRY §11.9 canonical."
+
+  - id: F-CTRL-ABORT-RESULT-IGNORE
+    summary: "Abort is implemented by discarding the SDK result after completion rather than halting the model loop mid-run, burning maxTurns budget."
+
+  - id: F-CTRL-ABORT-RETRY
+    summary: "An aborted task is re-queued or resurrected by the stale-session retry path, violating the abort-is-final invariant."
+
+  - id: F-CTRL-MAKE-NO-PREEMPT
+    summary: "AbortRegistry.make() creates a new controller without cancelling the existing one, leaving a stale controller active alongside the new one."
+
+  - id: F-CTRL-MEETING-END-PARTIAL
+    summary: "cancel_meeting() only cancels some tasks for the meeting rather than all tasks whose key starts with meeting_id."
+
+  - id: F-CTRL-ABORTED-METHOD
+    summary: "AbortController.aborted is implemented as a method (requires call syntax) rather than a property, breaking callers that check .aborted as a bool."
+
+  - id: F-CTRL-TIMEOUT-HARDCODED
+    summary: "The per-task timeout is hard-coded as a constant rather than a configuration value, and does not match the ~3-4s / ~4-5s spec thresholds."
+
+  - id: F-CTRL-QUIET-IGNORED
+    summary: "The 'Proxy, quiet' / barge-in signal is received but the AbortController is not triggered, leaving the model loop running past human cancellation."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §3.10 — Restart-Not-Resume
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── AC-CTRL-001: No RTP resume attempt on crash ───────────────────────────────
+
+- criterion_id: AC-CTRL-001
+  name: "Replacement instance performs Recall re-join, never RTP stream resume"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-CTRL-01, R-doc04-CTRL-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      The orchestrator instance has died; a replacement instance has re-claimed the meeting
+      via §3.6 heartbeat expiry; the Recall vendor client is available (cassette-backed)
+    when: "The replacement instance executes its recovery sequence"
+    then:
+      - "The replacement instance calls Recall re-join (vendor) to enter the meeting"
+      - "No attempt is made to resume the RTP stream or re-connect to the previous media session"
+      - "The recovery path contains no RTP resume call site"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Static scan of recovery code path: assert zero RTP resume call sites; integration trace
+      showing Recall re-join call present and RTP resume absent
+  thresholds:
+    rtp_resume_call_sites: 0
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-RTP-RESUME]
+  test_ids: [T-CTRL-001]
+  dependency_class: vendor:recall
+  mock_boundary: "Recall re-join via cassette at call_external seam; MUST NOT replace Recall client with Mock()"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+
+- criterion_id: AC-CTRL-001-NEG
+  name: "NEG: RTP resume call site in recovery path is caught by static scan"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-CTRL-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A recovery module that contains an RTP stream resume call (simulated injection)"
+    when: "The static scan runs over the recovery code path"
+    then:
+      - "The scan reports a violation with the offending file and line number"
+      - "The build gate fails"
+  primary_oracle:
+    type: deterministic
+    artifact: "Injected RTP resume stub; assert static scan exit_code != 0 and violation reported"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-RTP-RESUME]
+  test_ids: [T-CTRL-001-NEG]
+  dependency_class: vendor:recall
+  mock_boundary: "Recall client is cassette-backed; RTP stub is synthetic injection"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ── AC-CTRL-002: Replacement instance replays transcript from Postgres ────────
+
+- criterion_id: AC-CTRL-002
+  name: "Replacement instance reads Postgres transcript plane to rebuild context before speaking"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-CTRL-02, R-doc04-CTRL-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A meeting with persisted progress and populated transcript_segments rows in Postgres;
+      a replacement orchestrator instance has re-claimed the meeting
+    when: "The replacement instance executes the §3.5 Tier-2 replay sequence"
+    then:
+      - "At least one SELECT is issued against the transcript_segments table (or equivalent Postgres transcript plane) for that meeting"
+      - "The judgment history rows are read and used to rebuild the SDK context"
+      - "The rebuild completes before any disclosure line is spoken"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Query log shows SELECT against transcript_segments with correct meeting_id;
+      SDK context build event precedes any speech event in the trace
+  thresholds:
+    transcript_reads_min: 1
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-NO-TRANSCRIPT-REPLAY]
+  test_ids: [T-CTRL-002]
+  dependency_class: db:postgres
+  mock_boundary: "Real Postgres with populated transcript_segments fixture; MUST NOT mock asyncpg"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-CTRL-002-NEG
+  name: "NEG: Missing Postgres transcript read leaves SDK context missing judgment history"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-CTRL-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The transcript replay step is monkey-patched to skip the Postgres read"
+    when: "The replacement instance runs its recovery sequence"
+    then:
+      - "The SDK context built is demonstrably missing the prior judgment history"
+      - "A test assertion detects the absent history and fails"
+  primary_oracle:
+    type: deterministic
+    artifact: "SDK context inspection after patched no-read recovery; assert judgment history rows == 0"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-NO-TRANSCRIPT-REPLAY]
+  test_ids: [T-CTRL-002-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "Real Postgres with populated fixture; transcript read step patched to no-op"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ── AC-CTRL-003: Exactly one honest disclosure line spoken on gap ──────────────
+
+- criterion_id: AC-CTRL-003
+  name: "Replacement instance speaks exactly one disclosure line when audio was missed — not zero, not many"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-CTRL-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A replacement orchestrator instance that has completed Tier-2 replay and detected that
+      audio content was missed during the outage (gap_detected=True)
+    when: "The recovery sequence completes"
+    then:
+      - "Exactly one speech event is emitted with the disclosure text"
+      - "The disclosure text honestly acknowledges the gap (contains wording equivalent to 'dropped' or 'catching back up' or similar honest gap acknowledgment)"
+      - "The disclosure does not contain internal component names (Orchestrator, Scribe, workroom)"
+      - "No second disclosure is emitted (count == 1)"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Speech event log from recovery sequence; assert count(speech_events) == 1;
+      assert disclosure_text matches honest-gap pattern; assert no internal names present
+  thresholds:
+    disclosure_lines: 1
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-SILENT-RECOVERY, F-CTRL-MULTI-DISCLOSURE]
+  test_ids: [T-CTRL-003]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-CTRL-003-A
+  name: "No disclosure line spoken when no audio was missed (gap_detected=False)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-CTRL-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A replacement instance that has completed Tier-2 replay and detected no gap (gap_detected=False)"
+    when: "The recovery sequence completes"
+    then:
+      - "Zero disclosure speech events are emitted"
+      - "The meeting continues without any gap-announcement"
+  primary_oracle:
+    type: deterministic
+    artifact: "Speech event log; assert count(disclosure_speech_events) == 0 when gap_detected=False"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-MULTI-DISCLOSURE]
+  test_ids: [T-CTRL-003-A]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-CTRL-004: No fine-grained process checkpointing (structural) ───────────
+
+- criterion_id: AC-CTRL-004
+  name: "Orchestrator harness contains no checkpoint-resume mechanism for the meeting media session"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-CTRL-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The full source tree of the orchestrator harness"
+    when: "A static scan for checkpoint-persistence or media-session-resume patterns runs"
+    then:
+      - "Zero code paths exist that serialize mid-meeting media state for later restoration"
+      - "Zero code paths exist that attempt to restore a serialized media session object"
+      - "The scan covers all .py files under the orchestrator harness package"
+  primary_oracle:
+    type: static_analysis
+    artifact: "grep/AST scan for checkpoint-write + checkpoint-restore patterns in harness; assert zero hits"
+  thresholds:
+    checkpoint_write_sites: 0
+    checkpoint_restore_sites: 0
+  fault_model_refs: [F-CTRL-RTP-RESUME]
+  test_ids: [T-CTRL-004]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-CTRL-005: No workroom_tasks table in schema ────────────────────────────
+
+- criterion_id: AC-CTRL-005
+  name: "No workroom_tasks table exists in the Postgres schema — workroom tasks are operation_runs rows"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-CTRL-06]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A Postgres database with the current Alembic migrations applied (alembic upgrade head)"
+    when: "The schema is inspected for table names"
+    then:
+      - "No table named 'workroom_tasks' exists in the public schema"
+      - "A table named 'operation_runs' exists"
+      - "Rows with operation_type LIKE 'workroom:%' exist in operation_runs (or can be inserted)"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      SELECT table_name FROM information_schema.tables WHERE table_schema='public';
+      assert 'workroom_tasks' absent; assert 'operation_runs' present
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-WORKROOM-TABLE-EXISTS]
+  test_ids: [T-CTRL-005]
+  dependency_class: db:postgres
+  mock_boundary: "Real Postgres with migrations applied; MUST NOT mock asyncpg"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-CTRL-005-NEG
+  name: "NEG: workroom_tasks table reference in source fails naming lint"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-CTRL-06]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A source file containing a SQL reference to 'workroom_tasks' table"
+    when: "The naming lint (libs.lint.naming) runs over the source tree"
+    then:
+      - "The lint reports a violation citing the forbidden table name"
+      - "The build gate fails"
+  primary_oracle:
+    type: deterministic
+    artifact: "Naming lint with injected workroom_tasks reference; assert lint exit_code != 0 and violation reported"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-WORKROOM-TABLE-EXISTS]
+  test_ids: [T-CTRL-005-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "Static analysis only; no DB required for lint tier"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ── AC-CTRL-006: Completion predicate prevents re-run of delivered workroom tasks
+
+- criterion_id: AC-CTRL-006
+  name: "Interrupted workroom task is NOT re-run when its deliverable already exists"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-CTRL-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      An operation_runs row with operation_type='workroom:abc', status='interrupted',
+      and a result_ref that points to an already-written deliverable (completion predicate == satisfied)
+    when: "The drain loop or boot-recovery processes this row"
+    then:
+      - "The task is NOT re-executed (no new SDK turn is initiated for it)"
+      - "The operation_runs row status is updated to reflect the already-completed state"
+      - "Exactly zero additional work is performed for this task instance"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Drain loop integration test: pre-populate operation_runs with interrupted+completed row;
+      run drain loop; assert no SDK invocation for that task_id; assert operation status reflects done
+  thresholds:
+    duplicate_executions_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-COMPLETION-PREDICATE-SKIP]
+  test_ids: [T-CTRL-006]
+  dependency_class: db:postgres
+  mock_boundary: "Real Postgres; SDK run is mocked with call-count assertion; MUST NOT mock asyncpg"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-CTRL-006-NEG
+  name: "NEG: Interrupted task without deliverable IS re-run by drain loop"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-CTRL-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      An operation_runs row with operation_type='workroom:xyz', status='interrupted',
+      and no deliverable (completion predicate == not satisfied, result_ref is null)
+    when: "The drain loop or boot-recovery processes this row"
+    then:
+      - "The task IS re-executed (a new SDK turn is initiated)"
+      - "This confirms the completion predicate gate is the deciding factor, not status alone"
+  primary_oracle:
+    type: deterministic
+    artifact: "Drain loop integration test; assert SDK invocation count == 1 for the undelivered interrupted task"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-COMPLETION-PREDICATE-SKIP]
+  test_ids: [T-CTRL-006-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "Real Postgres with null result_ref fixture; SDK run mocked to record invocations; MUST NOT mock asyncpg"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ── AC-CTRL-007: Crashed task → status='interrupted' ─────────────────────────
+
+- criterion_id: AC-CTRL-007
+  name: "A workroom task that crashes mid-execution is written to status='interrupted' in operation_runs"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-CTRL-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An in-progress workroom task (status='running') that encounters an unhandled exception"
+    when: "The exception propagates out of the task executor"
+    then:
+      - "The operation_runs row for that task is updated to status='interrupted'"
+      - "The row is not left in status='running'"
+      - "The update happens in the exception handler / finally block, not conditionally"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Integration test: inject RuntimeError into task executor after session start;
+      assert SELECT status FROM operation_runs WHERE id=<task_id> returns 'interrupted'
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-NO-INTERRUPTED-STATUS]
+  test_ids: [T-CTRL-007]
+  dependency_class: db:postgres
+  mock_boundary: "Real Postgres; SDK session start mocked; MUST NOT mock asyncpg"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-CTRL-007-NEG
+  name: "NEG: Task left in status='running' after crash is invisible to drain loop recovery"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-CTRL-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An operation_runs row stuck in status='running' (simulating a missing interrupted-status write)"
+    when: "The drain loop runs its WHERE operation_type LIKE 'workroom:%' AND status='interrupted' query"
+    then:
+      - "The stuck row is NOT picked up for recovery"
+      - "This confirms that the drain-loop query correctly requires status='interrupted', not 'running'"
+  primary_oracle:
+    type: deterministic
+    artifact: "Query drain-loop SELECT with status='running' fixture; assert row count returned == 0"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-NO-INTERRUPTED-STATUS]
+  test_ids: [T-CTRL-007-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "Real Postgres with status='running' fixture; MUST NOT mock asyncpg"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §3.11 — AbortController Discipline
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── AC-CTRL-008: AbortController imported, never redefined (structural) ───────
+
+- criterion_id: AC-CTRL-008
+  name: "AbortController and AbortRegistry are imported from libs/agentkit/abort.py — no local redefinition"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-CTRL-10]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The complete source tree of services/ and libs/ (excluding libs/agentkit/abort.py itself)"
+    when: "A static scan for class AbortController and class AbortRegistry definitions runs"
+    then:
+      - "Zero class definition sites for AbortController exist outside libs/agentkit/abort.py"
+      - "Zero class definition sites for AbortRegistry exist outside libs/agentkit/abort.py"
+      - "The scan covers all .py files under services/ and libs/"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      grep/AST scan: 'class AbortController' and 'class AbortRegistry' across all .py files;
+      assert each pattern matches exactly one file: libs/agentkit/abort.py
+  thresholds:
+    abort_controller_definition_sites: 1
+    abort_registry_definition_sites: 1
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-ABORT-REDEFINE]
+  test_ids: [T-CTRL-008]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-CTRL-008-NEG
+  name: "NEG: Local AbortController class definition in any service is caught by static scan"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-CTRL-10]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A service module containing a local 'class AbortController:' definition"
+    when: "The static scan runs"
+    then:
+      - "The scan reports a violation with the offending file and line number"
+      - "The build gate fails"
+  primary_oracle:
+    type: deterministic
+    artifact: "Injected local AbortController class; assert static scan exit_code != 0 and violation reported"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-ABORT-REDEFINE]
+  test_ids: [T-CTRL-008-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ── AC-CTRL-009: abort() halts the model loop, not just discards result ───────
+
+- criterion_id: AC-CTRL-009
+  name: "Triggering abort() stops the model loop mid-run — the SDK does not continue to maxTurns"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-CTRL-11]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A running model loop with maxTurns=1000; an AbortController whose abort() is called
+      after the first model turn completes (simulated via asyncio task cancellation or
+      abort-check insertion)
+    when: "abort() is triggered during an in-progress model loop"
+    then:
+      - "The model loop exits within at most 1 additional turn after abort() is called"
+      - "The total number of turns executed is far below maxTurns (e.g., <= 2)"
+      - "No further model API calls are issued after the abort is detected"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test with mocked SDK: inject abort after turn 1; assert total_turns <= 2;
+      assert model_api_call_count stops increasing after abort detection
+  thresholds:
+    max_turns_after_abort: 1
+    model_calls_after_abort: 0
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-ABORT-RESULT-IGNORE]
+  test_ids: [T-CTRL-009]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-CTRL-010: Abort-is-final — aborted task never retried (P0 invariant) ──
+
+- criterion_id: AC-CTRL-010
+  name: "Aborted task is never retried, resumed, or resurrected — abort-is-final"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-CTRL-12]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A task whose AbortController has been triggered (aborted==True)"
+    when: "Any retry, stale-session-resume, or drain-loop recovery path inspects the task"
+    then:
+      - "The task is not re-queued, re-run, or resumed by any code path"
+      - "The aborted==True state is checked before any retry or resume attempt"
+      - "Zero new SDK turns are initiated for the aborted task instance"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: abort a task; run retry path + stale-session-resume path + drain-loop recovery;
+      assert SDK turn count == 0 across all three paths for the aborted task
+  thresholds:
+    retry_executions_after_abort: 0
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-ABORT-RETRY]
+  test_ids: [T-CTRL-010]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-CTRL-011: AbortRegistry.make() cancels existing controller first ────────
+
+- criterion_id: AC-CTRL-011
+  name: "AbortRegistry.make(key) aborts the existing controller before creating the new one"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-CTRL-13]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An AbortRegistry with an existing controller registered under key 'task-123'"
+    when: "AbortRegistry.make('task-123') is called a second time"
+    then:
+      - "The existing controller's .aborted property is True before make() returns"
+      - "A new, un-aborted controller is returned by make()"
+      - "The registry holds exactly one controller for 'task-123' after the call (not two)"
+      - "The sequence is: cancel existing → create new (never create new → then cancel existing)"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: make('k'), capture ref c1; make('k'), capture ref c2;
+      assert c1.aborted==True; assert c2.aborted==False; assert registry['k'] is c2
+  thresholds:
+    simultaneous_live_controllers_per_key: 1
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-MAKE-NO-PREEMPT]
+  test_ids: [T-CTRL-011]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-CTRL-012: Meeting-end triggers cancel_meeting (P0 — all tasks killed) ──
+
+- criterion_id: AC-CTRL-012
+  name: "Meeting-end event triggers cancel_meeting, aborting ALL in-flight tasks for that meeting"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-CTRL-14, R-doc04-CTRL-17]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      An AbortRegistry with controllers registered for keys:
+      'meeting-abc:task-1', 'meeting-abc:task-2', 'meeting-xyz:task-3'
+    when: "A meeting-end event for meeting 'meeting-abc' is received"
+    then:
+      - "AbortRegistry.cancel_meeting('meeting-abc') is called"
+      - "Both 'meeting-abc:task-1' and 'meeting-abc:task-2' controllers have .aborted==True"
+      - "The 'meeting-xyz:task-3' controller is NOT aborted (prefix mismatch)"
+      - "The registry no longer holds keys starting with 'meeting-abc'"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: populate registry with three keys; fire meeting-end for meeting-abc;
+      assert c1.aborted==True, c2.aborted==True, c3.aborted==False
+  thresholds:
+    tasks_surviving_meeting_end: 0
+    collateral_abort_of_other_meetings: 0
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-MEETING-END-PARTIAL]
+  test_ids: [T-CTRL-012]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-CTRL-013: "Proxy, quiet" aborts the addressed task (P0 — human control)
+
+- criterion_id: AC-CTRL-013
+  name: '"Proxy, quiet" barge-in cancels the addressed task immediately — human control is absolute'
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-CTRL-15]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "An in-flight task with an active AbortController under key task_id"
+    when: "The whisper-stop / 'Proxy, quiet' signal for that task is received"
+    then:
+      - "AbortRegistry.cancel(task_id) is called"
+      - "The task's AbortController.aborted becomes True"
+      - "The model loop for that task stops at or before the next tool boundary"
+      - "No further speech is emitted after the abort signal is processed"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: start model loop mock; inject 'Proxy, quiet' signal;
+      assert abort fired; assert loop exits within 1 turn; assert speech_after_abort_count == 0
+  thresholds:
+    speech_events_after_abort: 0
+    model_turns_after_abort: 1
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-QUIET-IGNORED]
+  test_ids: [T-CTRL-013]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-CTRL-014: Hard per-task timeout fires abort (boundary values) ──────────
+
+- criterion_id: AC-CTRL-014
+  name: "Per-task timeout fires AbortController at ~4s for Orchestrator answer turns"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-CTRL-16]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      An Orchestrator answer wake turn with an AbortController and a timeout configured
+      at the p95 deadline (approximately 4–5 seconds); the model loop is stalled
+      (simulated by blocking the SDK call)
+    when: "The per-task timeout elapses"
+    then:
+      - "The AbortController.abort() is called by the timeout handler"
+      - "The model loop exits"
+      - "The elapsed time from turn start to abort fires is within [4s, 5s]"
+  primary_oracle:
+    type: latency_measurement
+    artifact: >
+      Unit test with mocked clock: block SDK call; advance clock to 4.5s;
+      assert AbortController.aborted==True; assert abort fired between 4000ms and 5000ms
+  thresholds:
+    timeout_floor_ms: 4000
+    timeout_ceiling_ms: 5000
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-TIMEOUT-HARDCODED]
+  test_ids: [T-CTRL-014]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-CTRL-014-B
+  name: "Per-task timeout fires AbortController at ~3–4s for Scribe turns (skip-the-window)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-CTRL-16]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A Scribe wake turn with an AbortController and a timeout configured at the
+      Scribe deadline (approximately 3–4 seconds); the Scribe loop is stalled
+    when: "The per-task timeout elapses"
+    then:
+      - "The AbortController.abort() is called"
+      - "The window is skipped (skip-the-window semantics: no partial note written)"
+      - "The elapsed time from turn start to abort fires is within [3s, 4s]"
+  primary_oracle:
+    type: latency_measurement
+    artifact: >
+      Unit test with mocked clock: block Scribe loop; advance clock to 3.5s;
+      assert AbortController.aborted==True; assert abort fired between 3000ms and 4000ms;
+      assert partial_note_written == False
+  thresholds:
+    timeout_floor_ms: 3000
+    timeout_ceiling_ms: 4000
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-TIMEOUT-HARDCODED]
+  test_ids: [T-CTRL-014-B]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-CTRL-015: AbortController.aborted is a property, not a method ──────────
+
+- criterion_id: AC-CTRL-015
+  name: "AbortController.aborted is a @property returning bool, not a callable method"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-CTRL-18]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "An AbortController instance c"
+    when: "c.aborted is accessed without calling it"
+    then:
+      - "c.aborted returns False before abort() is called"
+      - "c.aborted returns True after abort() is called"
+      - "Accessing c.aborted does not raise TypeError (i.e., it is not a method requiring ()')"
+      - "c.aborted is not callable (callable(c.aborted) == False after abort)"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: import AbortController from libs/agentkit/abort.py; c = AbortController();
+      assert c.aborted == False; assert callable(c.aborted) == False;
+      c.abort(); assert c.aborted == True
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-ABORTED-METHOD]
+  test_ids: [T-CTRL-015]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-CTRL-016: aborted state is permanent — cannot be unset ─────────────────
+
+- criterion_id: AC-CTRL-016
+  name: "AbortController.aborted stays True once set — no reset mechanism exists"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-CTRL-18, R-doc04-CTRL-12]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "An AbortController instance c on which abort() has been called"
+    when: "Any further operation is performed on c (additional abort() calls, attribute access)"
+    then:
+      - "c.aborted remains True after a second call to c.abort()"
+      - "No reset(), clear(), or un-abort method exists on AbortController"
+      - "The asyncio.Event underlying the controller has no clear() call in the implementation"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: c.abort(); c.abort(); assert c.aborted == True;
+      AST scan: assert no evt.clear() call in AbortController implementation
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-ABORT-RETRY]
+  test_ids: [T-CTRL-016]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-CTRL-017: Every wake turn and Workroom run carries an abort handle ─────
+
+- criterion_id: AC-CTRL-017
+  name: "Every wake turn and dispatched Workroom run creates and holds an AbortController via AbortRegistry.make()"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-CTRL-19]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The orchestrator harness processing a wake turn or dispatching a Workroom run"
+    when: "A wake turn or Workroom dispatch begins"
+    then:
+      - "AbortRegistry.make(key) is called to obtain a fresh AbortController"
+      - "The controller is threaded into the execution (passed to the model loop or run wrapper)"
+      - "The key used is meeting_id for meeting-scoped turns or task_id for Workroom tasks"
+      - "No wake turn or Workroom dispatch proceeds without a registered AbortController"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: mock AbortRegistry.make(); fire a wake turn and a Workroom dispatch;
+      assert make() called exactly once per turn/dispatch with the correct key;
+      assert controller is passed into the execution context
+  thresholds:
+    turns_without_abort_handle: 0
+    violations_allowed: 0
+  fault_model_refs: [F-CTRL-QUIET-IGNORED]
+  test_ids: [T-CTRL-017]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-CTRL-018: Golden path — crash → reclaim → Recall re-join → disclosure ──
+
+- criterion_id: AC-CTRL-018
+  name: "Golden path: orchestrator crash → heartbeat expiry → Recall re-join → transcript replay → honest disclosure"
+  evidence_class: "[eval]"
+  authority_refs:
+    - R-doc04-CTRL-01
+    - R-doc04-CTRL-02
+    - R-doc04-CTRL-03
+    - R-doc04-CTRL-04
+    - R-doc04-CTRL-05
+  criticality: P1
+  blocking: true
+  golden_path: true
+  behavior:
+    given: >
+      A live meeting whose primary orchestrator instance has died (heartbeat went stale);
+      a populated Postgres transcript plane (Doc 03) with persisted progress;
+      Recall vendor available (cassette); a replacement instance ready to reclaim
+    when: "The replacement instance completes the full §3.10 recovery sequence"
+    then:
+      - "The replacement instance re-claims the meeting via §3.6 (heartbeat expiry check)"
+      - "Recall re-join is called and succeeds (cassette-backed)"
+      - "The Postgres transcript plane is read to rebuild SDK context via §3.5 Tier-2 replay"
+      - "Exactly one honest disclosure line is spoken (gap acknowledged)"
+      - "No RTP stream resume is attempted"
+      - "No workroom tasks are re-run if their deliverables already exist"
+      - "The meeting continues with full judgment history intact"
+  primary_oracle:
+    type: integration_trace
+    artifact: >
+      End-to-end trace showing: (1) heartbeat-expired event, (2) reclaim event,
+      (3) Recall re-join call, (4) Postgres transcript read, (5) SDK context rebuild,
+      (6) exactly one disclosure speech event, (7) meeting continuation event — all ordered
+  thresholds:
+    recall_rejoin_calls: 1
+    disclosure_lines: 1
+    rtp_resume_attempts: 0
+    violations_allowed: 0
+  fault_model_refs:
+    - F-CTRL-RTP-RESUME
+    - F-CTRL-SILENT-RECOVERY
+    - F-CTRL-NO-TRANSCRIPT-REPLAY
+  test_ids: [T-CTRL-018]
+  dependency_class: [vendor:recall, db:postgres]
+  mock_boundary: >
+    Recall re-join via cassette at call_external seam; Postgres with real transcript fixture;
+    MUST NOT replace Recall client or asyncpg with Mock()
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: reality}

@@ -1,0 +1,474 @@
+# projector.requirements.yaml — Doc 08 Behavior · §4.5
+# Streaming render frames + the per-channel projector (pure rendering, tools are the delivery authority)
+# Source: product/v0-spec/08-BEHAVIOR.md §4.5 (CANONICAL §1.1 / §11.3 / §12.3); AMENDMENT C2 2026-07-17
+# ID scheme: R-doc08-PROJ-NN
+#
+# Scope: ChannelProjector event routing (TOOL_USE → VoiceSpeak / ResponseChunk / CanvasPatch / ToolStart;
+#        TOOL_RESULT structured → CanvasPatch; TEXT/INIT/ERROR/RESULT → not projected);
+#        stream_deltas applied exactly once; field discriminator invariants; carry_turn ordering;
+#        conn.ready guard; serialization via model_dump(); ProxyMessage registration;
+#        projector-must-not rules (no auto-headline, no channel-decision, no re-accumulation).
+# NOT in scope here: BehaviorRunner.run() internals beyond stream_deltas call-site; cost meter;
+#        transcript logger; canvas layout (§2.5); TTS synthesis downstream of VoiceSpeak;
+#        barge-in wire (Doc 02).
+
+# ── stream_deltas applied exactly once ──────────────────────────────────────────
+
+- requirement_id: R-doc08-PROJ-01
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 2, sentence 1"
+  source_quote: "stream_deltas is applied exactly once, inside BehaviorRunner.run() (Doc 04); every downstream consumer — the projector, the cost meter, the transcript logger — receives deltas and MUST NOT re-wrap"
+  normalized_statement: >
+    THE SYSTEM SHALL call stream_deltas exactly once, inside BehaviorRunner.run(), and SHALL
+    NOT call stream_deltas again in any downstream consumer (projector, cost meter, transcript
+    logger, or carry_turn); static analysis SHALL confirm a single call-site.
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── chunk.text is already a true delta ──────────────────────────────────────────
+
+- requirement_id: R-doc08-PROJ-02
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 2, sentence 2"
+  source_quote: "On that delta stream chunk.text is already a true delta, forwarded as-is and never re-accumulated."
+  normalized_statement: >
+    WHEN the projector receives a chunk OVER THE DELTA STREAM, THE SYSTEM SHALL forward
+    chunk.text as-is to the frame payload and SHALL NOT accumulate, concatenate, or buffer
+    chunk.text values across multiple chunks; chunk.text is always a delta, never a running total.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Field discriminator: chunk.type, not .kind ──────────────────────────────────
+
+- requirement_id: R-doc08-PROJ-03
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 2, sentence 3"
+  source_quote: "Field access is chunk.type (the discriminator — never .kind)"
+  normalized_statement: >
+    THE SYSTEM SHALL use chunk.type as the sole discriminator field when routing AgentChunk
+    events in ChannelProjector.project(), and SHALL NEVER access chunk.kind; any reference
+    to the .kind attribute in projector or carry_turn source SHALL be a build error.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Field access: chunk.metadata["name"] for TOOL_USE name ────────────────────
+
+- requirement_id: R-doc08-PROJ-04
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 2, sentence 3"
+  source_quote: "chunk.metadata[\"name\"] for a TOOL_USE (never .tool)"
+  normalized_statement: >
+    WHEN the projector processes a TOOL_USE chunk THE SYSTEM SHALL read the tool name from
+    chunk.metadata["name"] and SHALL NEVER access chunk.tool or any other top-level tool
+    name attribute; any reference to the deprecated .tool attribute in projector source SHALL
+    be a build error.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Field access: chunk.metadata["structured"] for TOOL_RESULT ─────────────────
+
+- requirement_id: R-doc08-PROJ-05
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 2, sentence 3"
+  source_quote: "chunk.metadata[\"structured\"] for a TOOL_RESULT (never .tool / .structured as top-level attrs)"
+  normalized_statement: >
+    WHEN the projector processes a TOOL_RESULT chunk THE SYSTEM SHALL read the structured
+    payload from chunk.metadata["structured"] and SHALL NEVER access chunk.structured or
+    chunk.tool as top-level attributes; any reference to these deprecated field names in
+    projector source SHALL be a build error.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── TOOL_USE + delivery tool "speak" → VoiceSpeak ──────────────────────────────
+
+- requirement_id: R-doc08-PROJ-06
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 4 (projector code), TOOL_USE branch, speak case"
+  source_quote: "if name == \"speak\": yield VoiceSpeak(text=text)   # → TTS"
+  normalized_statement: >
+    WHEN ChannelProjector.project() receives a chunk with chunk.type == "TOOL_USE" AND
+    chunk.metadata["name"] == "speak" THE SYSTEM SHALL yield exactly one VoiceSpeak instance
+    with text set to chunk.metadata.get("text_delta", "") and SHALL yield no other frame
+    type for this event.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── TOOL_USE + delivery tool "send_chat" → ResponseChunk ───────────────────────
+
+- requirement_id: R-doc08-PROJ-07
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 4 (projector code), TOOL_USE branch, send_chat case"
+  source_quote: "elif name == \"send_chat\": yield ResponseChunk(chunk=text)   # → chat"
+  normalized_statement: >
+    WHEN ChannelProjector.project() receives a chunk with chunk.type == "TOOL_USE" AND
+    chunk.metadata["name"] == "send_chat" THE SYSTEM SHALL yield exactly one ResponseChunk
+    instance with chunk set to chunk.metadata.get("text_delta", "") and SHALL yield no other
+    frame type for this event.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── TOOL_USE + delivery tool "show_screen" → CanvasPatch ───────────────────────
+
+- requirement_id: R-doc08-PROJ-08
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 4 (projector code), TOOL_USE branch, show_screen case"
+  source_quote: "else:   # show_screen\n    yield CanvasPatch(patch=chunk.metadata.get(\"artifact\"))"
+  normalized_statement: >
+    WHEN ChannelProjector.project() receives a chunk with chunk.type == "TOOL_USE" AND
+    chunk.metadata["name"] == "show_screen" THE SYSTEM SHALL yield exactly one CanvasPatch
+    instance with patch set to chunk.metadata.get("artifact") and SHALL yield no other frame
+    type for this event.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── TOOL_USE + work tool (non-delivery) → ToolStart "working…" only ────────────
+
+- requirement_id: R-doc08-PROJ-09
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 4 (projector code), work-tool else branch"
+  source_quote: "# work tool → tile \"working…\" line only\nyield ToolStart(line=humanize_tool(name))"
+  normalized_statement: >
+    WHEN ChannelProjector.project() receives a chunk with chunk.type == "TOOL_USE" AND
+    chunk.metadata["name"] is NOT in DELIVERY_TOOLS THE SYSTEM SHALL yield exactly one
+    ToolStart instance with line set to humanize_tool(chunk.metadata["name"]); it SHALL NOT
+    yield any delivery frame (VoiceSpeak, ResponseChunk, or CanvasPatch) for this event.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── TOOL_RESULT + structured non-null → CanvasPatch ────────────────────────────
+
+- requirement_id: R-doc08-PROJ-10
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 4 (projector code), TOOL_RESULT branch"
+  source_quote: "if chunk.type == \"TOOL_RESULT\" and chunk.metadata.get(\"structured\") is not None:\n    yield CanvasPatch(patch=chunk.metadata[\"structured\"])"
+  normalized_statement: >
+    WHEN ChannelProjector.project() receives a chunk with chunk.type == "TOOL_RESULT" AND
+    chunk.metadata.get("structured") is not None THE SYSTEM SHALL yield exactly one
+    CanvasPatch instance with patch set to chunk.metadata["structured"] and SHALL yield
+    no other frame type for this event.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── TOOL_RESULT + structured=None → yields nothing ──────────────────────────────
+
+- requirement_id: R-doc08-PROJ-11
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 4 (projector code), TOOL_RESULT branch guard"
+  source_quote: "if chunk.type == \"TOOL_RESULT\" and chunk.metadata.get(\"structured\") is not None:"
+  normalized_statement: >
+    WHEN ChannelProjector.project() receives a chunk with chunk.type == "TOOL_RESULT" AND
+    chunk.metadata.get("structured") is None THE SYSTEM SHALL yield zero frames; a
+    TOOL_RESULT with no structured payload is silently dropped by the projector.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── TEXT chunk → not projected to any surface ────────────────────────────────────
+
+- requirement_id: R-doc08-PROJ-12
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 4 (projector code), final comment; paragraph 3, sentence 4"
+  source_quote: "# TEXT / everything else: NOT projected"
+  normalized_statement: >
+    WHEN ChannelProjector.project() receives a chunk with chunk.type == "TEXT" THE SYSTEM
+    SHALL yield zero frames; raw TEXT (the model's own reasoning) SHALL NOT be projected
+    to any surface — voice, chat, or canvas — by the projector.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── INIT chunk → not projected ───────────────────────────────────────────────────
+
+- requirement_id: R-doc08-PROJ-13
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 4 (projector code), final comment"
+  source_quote: "# TEXT / everything else: NOT projected"
+  normalized_statement: >
+    WHEN ChannelProjector.project() receives a chunk with chunk.type == "INIT" THE SYSTEM
+    SHALL yield zero frames; INIT chunks are internal and SHALL NOT be projected to any surface.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── ERROR chunk → not projected (no crash) ──────────────────────────────────────
+
+- requirement_id: R-doc08-PROJ-14
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 4 (projector code), final comment"
+  source_quote: "# TEXT / everything else: NOT projected"
+  normalized_statement: >
+    WHEN ChannelProjector.project() receives a chunk with chunk.type == "ERROR" THE SYSTEM
+    SHALL yield zero frames and SHALL NOT raise an exception; error handling is the
+    responsibility of upstream harness code, not the projector.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── RESULT chunk → not projected ────────────────────────────────────────────────
+
+- requirement_id: R-doc08-PROJ-15
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 4 (projector code), final comment"
+  source_quote: "# TEXT / everything else: NOT projected"
+  normalized_statement: >
+    WHEN ChannelProjector.project() receives a chunk with chunk.type == "RESULT" THE SYSTEM
+    SHALL yield zero frames; RESULT chunks are handled elsewhere and SHALL NOT be projected
+    by ChannelProjector.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Projector MUST NOT auto-extract headline from TEXT ─────────────────────────
+
+- requirement_id: R-doc08-PROJ-16
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 3, sentence 3"
+  source_quote: "It never auto-extracts a headline from raw text and decides to speak — that was a chat-product habit; here the wake turn is the sole delivery authority."
+  normalized_statement: >
+    THE SYSTEM SHALL NOT contain any code path in ChannelProjector that reads TEXT chunk
+    content and decides to speak or post that content to a channel; no headline-extraction,
+    summarization, or voice-decision logic SHALL exist in the projector; delivery channel
+    decisions belong exclusively to the model's wake-turn tool calls.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Projector MUST NOT decide which channel to use ──────────────────────────────
+
+- requirement_id: R-doc08-PROJ-17
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 1, sentence 2"
+  source_quote: "Delivery is decided by the model's own wake-turn TOOL CALLS (CANONICAL §12.3): Proxy communicates only by speak(text) / send_chat(text, dm?) / show_screen(artifact) — the model chooses the channel."
+  normalized_statement: >
+    THE SYSTEM SHALL NOT contain any logic in ChannelProjector that selects a delivery
+    channel (voice, public chat, DM, or canvas) based on content analysis; the projector
+    SHALL only map already-chosen tool events to render frames; channel selection is the
+    sole authority of the model's explicit TOOL_USE events.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── carry_turn: ResponseStart sent FIRST ────────────────────────────────────────
+
+- requirement_id: R-doc08-PROJ-18
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 5 (carry_turn code), line 2"
+  source_quote: "await send(conn, ResponseStart(meeting_id=meeting.id))     # resolve FIRST"
+  normalized_statement: >
+    WHEN carry_turn is invoked THE SYSTEM SHALL send ResponseStart(meeting_id=meeting.id)
+    as the very first frame, before iterating over any chunk in the delta stream and before
+    yielding any projected frame to the client connection.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── carry_turn: ResponseEnd sent LAST ───────────────────────────────────────────
+
+- requirement_id: R-doc08-PROJ-19
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 5 (carry_turn code), final line"
+  source_quote: "await send(conn, ResponseEnd(meeting_id=meeting.id))"
+  normalized_statement: >
+    WHEN carry_turn has finished iterating over all delta chunks THE SYSTEM SHALL send
+    ResponseEnd(meeting_id=meeting.id) as the final frame; no projected frame SHALL be
+    sent after ResponseEnd, and ResponseEnd SHALL NOT be sent before the delta stream
+    is fully consumed.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── carry_turn: DO NOT re-wrap deltas ───────────────────────────────────────────
+
+- requirement_id: R-doc08-PROJ-20
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 5 (carry_turn code), comment on line 4"
+  source_quote: "async for chunk in deltas:   # already stream_deltas output — DO NOT re-wrap"
+  normalized_statement: >
+    WHEN carry_turn iterates over its deltas argument THE SYSTEM SHALL iterate it directly
+    without passing it through stream_deltas or any other wrapping adapter; the deltas
+    argument is already the output of the single stream_deltas call in BehaviorRunner.run().
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── conn.ready guard: drop frame, don't crash ───────────────────────────────────
+
+- requirement_id: R-doc08-PROJ-21
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 6 (send function), conn.ready guard"
+  source_quote: "if conn.ready:   # readyState guard — tab closed mid-generation ⇒ drop, don't crash"
+  normalized_statement: >
+    WHEN send() is called with a frame and conn.ready is False THE SYSTEM SHALL drop the
+    frame silently and SHALL NOT raise an exception, crash carry_turn, or attempt a retry;
+    carry_turn SHALL continue to consume and project remaining chunks after a dropped frame.
+  requirement_type: robustness
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Serialization: every outbound frame is a registered ProxyMessage ─────────────
+
+- requirement_id: R-doc08-PROJ-22
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 3, final sentence"
+  source_quote: "Every projected frame is a registered ProxyMessage instance (never a hand-built dict, never an unregistered \"speak\" type); send() serializes it via model_dump()."
+  normalized_statement: >
+    WHEN the projector yields a frame and send() transmits it THE SYSTEM SHALL construct
+    that frame as a registered ProxyMessage subclass instance and SHALL serialize it by
+    calling frame.model_dump(); no frame SHALL be a hand-built dict, a raw JSON literal,
+    or an instance of any unregistered type.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── send() calls frame.model_dump(), not raw dict ────────────────────────────────
+
+- requirement_id: R-doc08-PROJ-23
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 6 (send function), body"
+  source_quote: "await conn.send_json(frame.model_dump())   # registered instance → serialized via model_dump()"
+  normalized_statement: >
+    THE SYSTEM SHALL implement send() to call conn.send_json(frame.model_dump()) and SHALL
+    NOT construct the JSON payload by any other means (e.g., vars(), asdict(), manual dict
+    construction, or json.dumps()).
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── MESSAGE_PROJECTORS registered for all outbound types ────────────────────────
+
+- requirement_id: R-doc08-PROJ-24
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 2, bullet 'MESSAGE_PROJECTORS registered for each OUTBOUND type'"
+  source_quote: "MESSAGE_PROJECTORS registered for each OUTBOUND type (so assert_registry_closed sees a projector)"
+  normalized_statement: >
+    THE SYSTEM SHALL register a MESSAGE_PROJECTORS entry for each outbound frame type that
+    the projector can yield: VOICE_SPEAK → project_voice, RESPONSE_CHUNK → project_chat,
+    CANVAS_PATCH → project_canvas, TOOL_START → project_tile; assert_registry_closed SHALL
+    pass for all four types; any missing registration IS a build failure.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── DELIVERY_TOOLS set: exactly {speak, send_chat, show_screen} ─────────────────
+
+- requirement_id: R-doc08-PROJ-25
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 4 (projector code), DELIVERY_TOOLS constant"
+  source_quote: "DELIVERY_TOOLS = {\"speak\", \"send_chat\", \"show_screen\"}"
+  normalized_statement: >
+    THE SYSTEM SHALL define DELIVERY_TOOLS as exactly the set {"speak", "send_chat",
+    "show_screen"} and SHALL use this constant to distinguish delivery TOOL_USE events from
+    work TOOL_USE events; any tool name not in DELIVERY_TOOLS SHALL be routed to the
+    ToolStart (working…) branch.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── humanize_tool: non-empty human label for every tool name ────────────────────
+
+- requirement_id: R-doc08-PROJ-26
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 4 (projector code), work-tool else branch"
+  source_quote: "yield ToolStart(line=humanize_tool(name))"
+  normalized_statement: >
+    WHEN humanize_tool(name) is called with any valid tool name THE SYSTEM SHALL return a
+    non-empty human-readable string for the tile line; it SHALL NOT return the raw internal
+    tool identifier directly, and SHALL NOT return an empty string or None.
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  status: qualified
+
+# ── Barge-in: speak stream stops, send_chat posts remainder — nothing lost ───────
+
+- requirement_id: R-doc08-PROJ-27
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 2, bullet 'barge-in behaviour'"
+  source_quote: "The barge-in behaviour: speak stream stops (Doc 02), model calls send_chat → nothing is lost"
+  normalized_statement: >
+    WHEN a barge-in event stops the active voice stream (Doc 02) AND the model subsequently
+    calls send_chat with the remaining content THE SYSTEM SHALL project that send_chat
+    TOOL_USE as a ResponseChunk frame and deliver it to the chat channel, ensuring that no
+    answer content is silently dropped on barge-in.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── User turn persisted before stream starts ────────────────────────────────────
+
+- requirement_id: R-doc08-PROJ-28
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.5, paragraph 2, final bullet"
+  source_quote: "Persisting the user turn BEFORE the stream (upstream in the harness) — the notes file reads a turn that a mid-stream crash would otherwise have dropped"
+  normalized_statement: >
+    THE SYSTEM SHALL persist the user's turn to the durable store (Postgres + GCS) BEFORE
+    beginning to stream delta chunks in carry_turn; a crash or connection loss during the
+    stream SHALL NOT result in the user turn being absent from the notes or transcript.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified

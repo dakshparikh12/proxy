@@ -1,0 +1,871 @@
+# Doc 09 — §2 Cross-doc contract checks: requirements
+# Proves the seams from CANONICAL-DECISIONS actually close.
+
+- requirement_id: R-doc09-S2-01
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§2 bullet 1"
+  source_quote: "assert_registry_closed() — set(MessageType) == set(CHANNEL_REGISTRY); a produced-but-unconsumed message fails the build (Doc 00 §12, Doc 08 §4.1). Runs in CI and at boot."
+  normalized_statement: >
+    WHEN the CI build executes
+    THE SYSTEM SHALL run assert_registry_closed() and fail the build if any
+    produced MessageType is absent from CHANNEL_REGISTRY.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S2-02
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§2 bullet 1"
+  source_quote: "assert_registry_closed() — set(MessageType) == set(CHANNEL_REGISTRY); a produced-but-unconsumed message fails the build. Runs in CI and at boot."
+  normalized_statement: >
+    WHEN the meeting_runtime process starts
+    THE SYSTEM SHALL call assert_registry_closed() at boot and abort startup
+    if the registry is not closed.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S2-03
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§2 bullet 2"
+  source_quote: "The contract types resolve to libs/contracts — every doc's wire shape (the bundle, envelope, signal surface, notes deltas, readiness, AgentChunk) imports the literal type; a grep proves no doc re-declares a shared type's shape locally."
+  normalized_statement: >
+    WHEN any service module uses a shared wire type (Bundle, Envelope, AgentChunk,
+    NotesDelta, Readiness, or signal surface types)
+    THE SYSTEM SHALL import that type from libs/contracts and SHALL NOT define
+    a structurally equivalent local copy of the type's shape.
+  requirement_type: contract
+  criticality: P1
+  testability: analyzable
+  status: qualified
+
+- requirement_id: R-doc09-S2-04
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§2 bullet 3"
+  source_quote: "One operation_runs — exactly one table definition across the repo (no meeting_harness); the reconcile sweep reaps it (CANONICAL §2)."
+  normalized_statement: >
+    WHEN the repository is scanned for SQL CREATE TABLE statements
+    THE SYSTEM SHALL contain exactly one CREATE TABLE operation_runs definition
+    and zero CREATE TABLE meeting_harness definitions.
+  requirement_type: contract
+  criticality: P1
+  testability: analyzable
+  status: qualified
+
+- requirement_id: R-doc09-S2-05
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§2 bullet 4"
+  source_quote: "AgentChunk consumers use stream_deltas — no consumer reads a raw TEXT chunk (the accumulation-vs-delta bug); field access is .type/.metadata[...] (CANONICAL §1.1)."
+  normalized_statement: >
+    WHEN any module consumes AgentChunk events
+    THE SYSTEM SHALL route the stream through stream_deltas before consuming
+    and SHALL NOT access .kind, .tool, or .structured as top-level AgentChunk
+    attributes; access is via .type and .metadata[key].
+  requirement_type: contract
+  criticality: P1
+  testability: analyzable
+  status: qualified
+
+- requirement_id: R-doc09-S2-06
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§2 bullet 5"
+  source_quote: "Cost + drafts persist — meeting_cost and staged_drafts rows exist and survive a simulated process kill (CANONICAL §3, §4)."
+  normalized_statement: >
+    WHEN meeting_cost and staged_drafts rows are written to Postgres and the
+    owning process is subsequently killed (SIGKILL)
+    THE SYSTEM SHALL retain those rows intact and readable by a replacement
+    process after recovery.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S2-07
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "CANONICAL §3"
+  source_quote: "A crashed orchestrator must not reset the meter to 0 (it would silently defeat the $1/hr SLA at exactly the recovery moment)."
+  normalized_statement: >
+    WHEN a replacement orchestrator re-claims a meeting after a process kill
+    THE SYSTEM SHALL reload meeting_cost columns from the existing Postgres row
+    and SHALL NOT reset any cost column to zero.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+# Doc 09 — §3 Scenarios S1–S4: requirements
+# Each requirement is one atomic observable obligation.
+
+# ════════════════════════════════════════════════════════════════════════════
+# S1 — THE HAPPY ARC
+# ════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc09-S3-01
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S1"
+  source_quote: "Answer cites file:line from the live clone in ≤ the latency target"
+  normalized_statement: >
+    WHEN a grounded question is asked aloud in a meeting
+    THE SYSTEM SHALL return an answer that cites at least one file:line reference
+    drawn from the live repository clone.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-02
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "CANONICAL §12.8"
+  source_quote: "ack-audible p95≤500ms"
+  normalized_statement: >
+    WHEN a grounded question is asked aloud
+    THE SYSTEM SHALL emit an audible acknowledgement within 500ms at the p95
+    percentile on the direct-answer path.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-03
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "CANONICAL §12.8"
+  source_quote: "first-grounded-text p50≤2s/p95≤4s"
+  normalized_statement: >
+    WHEN a grounded question is answered on the direct-answer path
+    THE SYSTEM SHALL deliver the first grounded text token with p50 ≤ 2000ms
+    and p95 ≤ 4000ms.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-04
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "CANONICAL §12.8"
+  source_quote: "first-grounded-audio p50≤2.5s/p95≤5s"
+  normalized_statement: >
+    WHEN a grounded question is answered on the direct-answer path
+    THE SYSTEM SHALL deliver the first grounded audio token with p50 ≤ 2500ms
+    and p95 ≤ 5000ms.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-05
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S1"
+  source_quote: "get a cited voice-headline + chat-detail answer"
+  normalized_statement: >
+    WHEN Proxy answers a grounded question
+    THE SYSTEM SHALL produce a voice headline (spoken via speak()) and a separate
+    chat-detail answer (sent via send_chat()); these are two distinct outputs.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-06
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S1"
+  source_quote: "notes file lands with decisions/actions/questions + receipts"
+  normalized_statement: >
+    WHEN a meeting ends
+    THE SYSTEM SHALL post a notes file containing all four required sections:
+    decisions, actions, questions, and receipts.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-07
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "CANONICAL §1.3"
+  source_quote: "The bundle carries notes_ref — a handle to the live notes object. It never re-serializes the growing notes object per ask."
+  normalized_statement: >
+    WHEN the Orchestrator sends a Bundle to the Workroom
+    THE SYSTEM SHALL set notes_ref equal to the meeting_id UUID and SHALL NOT
+    embed a serialized copy of the notes object in the bundle payload.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ════════════════════════════════════════════════════════════════════════════
+# S2 — DEP-GRAPH MOMENT
+# ════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc09-S3-08
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S2"
+  source_quote: "Proxy answers from the dependency graph in ~1 tool call, grounded, honest about coverage"
+  normalized_statement: >
+    WHEN a meeting participant asks "what breaks if we change this table?"
+    THE SYSTEM SHALL answer using get_dependents() or who_writes() against the
+    dependency graph, producing a grounded response within approximately one
+    tool-call round-trip.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-09
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "CANONICAL §12.6"
+  source_quote: "tier-1 exact-supported = Django ORM, SQLAlchemy, Rails ActiveRecord → resolved; tier-2 symbol-exact-but-writes-lower-bound; tier-3 search-only. Unsupported stacks never emit an exact who_writes"
+  normalized_statement: >
+    WHEN who_writes() or get_dependents() is called on a repository whose ORM is
+    not in the tier-1 supported set
+    THE SYSTEM SHALL label the result as lower-bound and SHALL NOT emit an exact
+    resolved answer.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-10
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S2"
+  source_quote: "Proxy answers from the dependency graph in ~1 tool call"
+  normalized_statement: >
+    WHEN a direct dep-graph answer is available
+    THE SYSTEM SHALL not require more than approximately one tool-call round-trip
+    to produce the grounded answer on the direct-answer path.
+  requirement_type: performance
+  criticality: P2
+  testability: executable
+  status: qualified
+
+# ════════════════════════════════════════════════════════════════════════════
+# S3 — REAL WORK → STAGED DRAFT → ACCEPT AFTER THE CALL
+# ════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc09-S3-11
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "CANONICAL §4"
+  source_quote: "propose_change must persist at creation (the sandbox's in-memory review_session dies at teardown, so a human accepting after the call needs durable storage)"
+  normalized_statement: >
+    WHEN the Workroom's propose_change() is invoked
+    THE SYSTEM SHALL write the full content to GCS (Object-Versioned) and insert
+    a staged_drafts row in Postgres before returning the draft_id.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-12
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S3"
+  source_quote: "'verified' only past the separate critic + evidence gate"
+  normalized_statement: >
+    WHEN the Workroom completes a build task
+    THE SYSTEM SHALL set verification: "verified" on the Envelope only after
+    passing the separate critic evaluation and the deterministic evidence gate;
+    it SHALL NOT auto-set verification: "verified" absent that gate.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-13
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S3"
+  source_quote: "a human accept after teardown applies it"
+  normalized_statement: >
+    WHEN a human POSTs to /m/{meeting_id}/drafts/{draft_id}/accept after
+    the meeting sandbox has been torn down
+    THE SYSTEM SHALL read the staged_drafts row and the GCS artifact and apply
+    the draft (notes-edit for core), sourcing data entirely from durable storage.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-14
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "CANONICAL §1.2"
+  source_quote: "a staged draft awaiting a human click → needs_review (carries artifact + receipts)"
+  normalized_statement: >
+    WHEN propose_change() creates a staged draft
+    THE SYSTEM SHALL return an Envelope with status = "needs_review" and a
+    populated draft_id and artifact fields.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-15
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "CANONICAL §12.9"
+  source_quote: "Core apply = 'code-change draft,' not 'PR' (rename every core 'PR'; propose_change persists the diff bundle; accept records approval + exposes the branch bundle for download; push = Expansion)"
+  normalized_statement: >
+    WHEN a staged draft of kind file-change is accepted in the core product
+    THE SYSTEM SHALL apply it as a local code-change draft (record approval,
+    expose the diff bundle) and SHALL NOT push to a remote Git repository.
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  status: qualified
+
+# ════════════════════════════════════════════════════════════════════════════
+# S4 — BARGE-IN + HUMAN CONTROL
+# ════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc09-S3-16
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "AGENTS.md Law 3"
+  source_quote: "barge-in stops speech <200ms"
+  normalized_statement: >
+    WHEN a barge-in signal is received while Proxy is speaking
+    THE SYSTEM SHALL stop audio output within 200ms of the barge-in event.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-17
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S4"
+  source_quote: "the in-flight wake/build aborts (abort-is-final)"
+  normalized_statement: >
+    WHEN an abort signal is issued to an in-flight wake turn or Workroom build
+    THE SYSTEM SHALL terminate that operation and SHALL NOT resume it; the abort
+    decision is final.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-18
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "AGENTS.md Law 3"
+  source_quote: "'quiet' silences"
+  normalized_statement: >
+    WHEN a "Proxy, quiet" command is received
+    THE SYSTEM SHALL silence all Proxy audio and chat output immediately.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-19
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "AGENTS.md Law 3"
+  source_quote: "a human ask preempts everything"
+  normalized_statement: >
+    WHEN a human ask arrives while a Workroom build is running
+    THE SYSTEM SHALL preempt the running build and process the human ask first.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+# Doc 09 — Section 3: Scenario criteria S5–S9
+# Requirements slice (paired with s3cd.criteria.yaml).
+# Scope: instance recycle / resume, concurrency isolation, cost circuit-breaker,
+#        honest failure, tenant isolation.
+
+# ─── S5: Hours-long meeting survives an instance recycle ───────────────────────
+
+- requirement_id: R-doc09-S3-50
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S5"
+  source_quote: "Kill the orchestrator mid-meeting → a replacement re-claims the meeting (atomic claim frees after reap) → replays recent transcript → continues; meeting_cost reloads (budget not reset to 0)"
+  normalized_statement: >
+    WHEN the orchestrator process is killed mid-meeting THE SYSTEM SHALL free the
+    operation_runs row (via mark_stale_operations_interrupted()) so that a replacement
+    orchestrator can perform an INSERT ... ON CONFLICT DO NOTHING RETURNING id that
+    succeeds; the stale row SHALL transition out of the running state before the
+    replacement claim attempt is made.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-51
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S5"
+  source_quote: "Kill the orchestrator mid-meeting → a replacement re-claims the meeting (atomic claim frees after reap) → replays recent transcript → continues; meeting_cost reloads (budget not reset to 0)"
+  normalized_statement: >
+    WHEN a replacement orchestrator re-claims a recycled meeting THE SYSTEM SHALL
+    replay recent transcript content from the transcript_segments table (Tier-3 replay)
+    so that continuity of context is restored before serving resumes.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-52
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S5"
+  source_quote: "meeting_cost reloads (budget not reset to 0)"
+  normalized_statement: >
+    WHEN a replacement orchestrator reclaims a meeting after an instance recycle
+    THE SYSTEM SHALL reload the meeting_cost row (model_usd + transport_usd + e2b_usd)
+    from Postgres and SHALL NOT reset any cost column to zero; previously accrued cost
+    SHALL be the starting budget for continued cost-check evaluation.
+  requirement_type: state_consistency
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-53
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S5"
+  source_quote: "Kill the orchestrator mid-meeting → a replacement re-claims the meeting (atomic claim frees after reap) → replays recent transcript → continues"
+  normalized_statement: >
+    WHEN an orchestrator recycle completes (atomic claim succeeds + transcript replay
+    finishes) THE SYSTEM SHALL resume serving meeting participants with no permanent
+    user-visible gap; the only allowable interruption is a brief reconnect window
+    bounded by STALE_AFTER_S (≈40 s) plus replay latency.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ─── S6: Concurrency — several meetings on one host at once ────────────────────
+
+- requirement_id: R-doc09-S3-54
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S6"
+  source_quote: "No cross-meeting starvation; each meeting's tenant isolation holds; sandboxes provisioned/reaped independently"
+  normalized_statement: >
+    WHEN multiple meetings run concurrently on one host THE SYSTEM SHALL prevent
+    cross-meeting LLM-budget starvation; each meeting's in-flight work SHALL make
+    forward progress independently of other meetings on the same host up to the
+    per-host in-flight bound.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-55
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S6"
+  source_quote: "No cross-meeting starvation; each meeting's tenant isolation holds; sandboxes provisioned/reaped independently"
+  normalized_statement: >
+    WHEN multiple meetings with distinct tenant_ids run concurrently THE SYSTEM SHALL
+    enforce per-meeting tenant isolation so that no meeting reads data (code, notes,
+    cost rows, transcript segments) belonging to another meeting's tenant.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-56
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S6"
+  source_quote: "sandboxes provisioned/reaped independently"
+  normalized_statement: >
+    WHEN a meeting's sandbox (e2b) is created or destroyed THE SYSTEM SHALL provision
+    and reap that sandbox independently of other meetings' sandboxes; termination or
+    failure of one meeting's sandbox SHALL NOT affect any other meeting's sandbox.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ─── S7: Cost circuit-breaker ──────────────────────────────────────────────────
+
+- requirement_id: R-doc09-S3-57
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S7"
+  source_quote: "Soft cap degrades (Orchestrator→Haiku, widen Scribe interval) with a spoken disclosure; hard cap → notes-only; never a silent cliff"
+  normalized_statement: >
+    WHEN check_meeting_budget() detects that cumulative cost (model_usd + transport_usd
+    + e2b_usd) has crossed the soft cap threshold THE SYSTEM SHALL downgrade the
+    Orchestrator model to Haiku AND widen the Scribe interval AND emit a spoken
+    disclosure to meeting participants before or simultaneously with executing the
+    downgrade; the disclosure SHALL NOT be deferred or omitted.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-58
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S7"
+  source_quote: "hard cap → notes-only; never a silent cliff"
+  normalized_statement: >
+    WHEN check_meeting_budget() detects that cumulative cost has crossed the hard cap
+    threshold ($1/hr envelope) THE SYSTEM SHALL switch to notes-only mode; no further
+    tool invocations or LLM inference beyond note accumulation SHALL be allowed until
+    the meeting ends; the hard-cap transition SHALL emit a spoken disclosure.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-59
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S7"
+  source_quote: "never a silent cliff"
+  normalized_statement: >
+    WHEN any cost-cap transition occurs (soft or hard) THE SYSTEM SHALL always emit a
+    spoken disclosure; a silent transition (cap crossed without a spoken participant
+    notification) is prohibited regardless of meeting state or concurrency.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-60
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S7 / CANONICAL §3"
+  source_quote: "check_meeting_budget() reads model_usd + transport_usd + e2b_usd"
+  normalized_statement: >
+    WHEN check_meeting_budget() evaluates the current meeting spend THE SYSTEM SHALL
+    compute total cost as the sum of model_usd, transport_usd, and e2b_usd from the
+    meeting_cost row; it SHALL NOT omit any of these three columns from the sum.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ─── S8: Honest failure ────────────────────────────────────────────────────────
+
+- requirement_id: R-doc09-S3-61
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S8"
+  source_quote: "Proxy says what it can't see; never a confident wrong answer (Law 1); a failed build returns needs_review/failed, never done"
+  normalized_statement: >
+    WHEN the codebase index readiness is not_ready or contains gaps THE SYSTEM SHALL
+    surface the list of gaps (labeled lower-bound) to the user and SHALL NOT answer
+    questions about code in those gaps as though the index were complete; a confident
+    answer about unseen code is prohibited (Law 1: Grounded or silent).
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-62
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S8"
+  source_quote: "a failed build returns needs_review/failed, never done"
+  normalized_statement: >
+    WHEN a tool invocation or build step fails THE SYSTEM SHALL return an EnvelopeStatus
+    of needs_review or failed; the status SHALL never be set to done when the tool
+    errored or the build did not pass the critic+evidence gate (Law 2: Never overstate).
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-63
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S8"
+  source_quote: "Proxy says what it can't see; never a confident wrong answer (Law 1)"
+  normalized_statement: >
+    WHEN a speech-to-text gap occurs in the transcript THE SYSTEM SHALL acknowledge
+    the gap to participants and SHALL NOT fabricate or infer transcript content to fill
+    the gap; any response about content in the gap SHALL be labeled as unheard.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ─── S9: Tenant isolation ──────────────────────────────────────────────────────
+
+- requirement_id: R-doc09-S3-64
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S9"
+  source_quote: "A message without a valid owned meeting_id is rejected; no cross-tenant read of customer code"
+  normalized_statement: >
+    WHEN a message arrives at the dispatch funnel without a valid meeting_id that is
+    owned by the authenticated principal THE SYSTEM SHALL reject the message at the
+    funnel boundary; the message SHALL NOT be forwarded to any tenant-scoped handler
+    or result in any read of customer data.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-65
+  authority_type: architecture_invariant
+  authority_document: DOC-09
+  source_location: "§3 table row S9 / Invariant 9"
+  source_quote: "no cross-tenant read of customer code"
+  normalized_statement: >
+    WHEN any query is executed against tenant-scoped tables THE SYSTEM SHALL include
+    tenant_id in every predicate that touches customer data; a query path that could
+    return rows belonging to a different tenant_id is a P0 breach (Invariant 9) and
+    SHALL be prevented by schema-level constraints or application-level enforcement.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-66
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S9 / §11.5"
+  source_quote: "entity→owner→tenant server-side resolution"
+  normalized_statement: >
+    WHEN an inbound message references an entity (tile, connect-page token, or similar)
+    THE SYSTEM SHALL resolve entity→owner→tenant server-side using the authoritative
+    Postgres lookup; the tenant_id SHALL NOT be accepted from client-supplied fields
+    in the message payload.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+# DOC-09 §1 + §4 Requirements
+# §1 — The End Goal (framing + normative behaviors)
+# §4 — The Full Demo Arc (atomized per clause)
+
+# ── §1 normative requirements ─────────────────────────────────────────────────
+
+- requirement_id: R-doc09-S4-01
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§1 end goal"
+  source_quote: "answers grounded in their actual code within a second or two"
+  normalized_statement: >
+    WHEN Proxy answers a code question during a live meeting THE SYSTEM SHALL
+    return a grounded answer with at least one file:line citation in ≤ 2 seconds
+    of wall-clock time from question receipt.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-02
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§1 end goal"
+  source_quote: "verified draft they approve with one click"
+  normalized_statement: >
+    WHEN Proxy produces a world-touching draft THE SYSTEM SHALL gate it as a
+    staged draft with Envelope.status=needs_review and require exactly one human
+    approval action before the draft is applied.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-03
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§1 end goal"
+  source_quote: "clean, honest notes"
+  normalized_statement: >
+    WHEN a meeting ends THE SYSTEM SHALL persist a notes artifact that contains
+    no invented claims and covers every major topic discussed; gaps MUST be
+    flagged rather than silently omitted.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-04
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§1 end goal"
+  source_quote: "none of that should break when a server restarts mid-call"
+  normalized_statement: >
+    WHEN the orchestrator process is terminated and restarted during an active
+    meeting THE SYSTEM SHALL resume the meeting without data loss, correctly
+    reloading accumulated cost and state from the durable substrate.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-05
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§1 end goal"
+  source_quote: "several meetings run at once"
+  normalized_statement: >
+    WHEN multiple meetings are active concurrently THE SYSTEM SHALL maintain
+    complete tenant isolation such that no data, cost, or state from one meeting
+    leaks into another.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-06
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§1 end goal"
+  source_quote: "no seam between the documents silently fails"
+  normalized_statement: >
+    WHEN the assembled product runs the connect→meet→close arc THE SYSTEM SHALL
+    verify that every cross-doc contract (message types, status enums, artifact
+    refs) satisfies the contracts registry with zero silent failures at any seam.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §4 full demo arc requirements ─────────────────────────────────────────────
+
+- requirement_id: R-doc09-S4-07
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§4 full demo arc"
+  source_quote: "connect a real repo → Proxy reaches `ready` with a coverage %"
+  normalized_statement: >
+    WHEN a real repository is connected THE SYSTEM SHALL transition through the
+    readiness enum (connecting → cloning → indexing → ready) and emit a
+    readiness payload containing coverage_pct as a float and gaps as a list of
+    strings before the meeting begins.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-08
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§4 full demo arc"
+  source_quote: "answers two grounded questions (one via grep/read, one via `get_dependents`)"
+  normalized_statement: >
+    WHEN Proxy is asked a code question that resolves via grep or file read THE
+    SYSTEM SHALL invoke the grep/read tool path and return an answer with a
+    file:line citation.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-09
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§4 full demo arc"
+  source_quote: "answers two grounded questions (one via grep/read, one via `get_dependents`)"
+  normalized_statement: >
+    WHEN Proxy is asked a question requiring dependency traversal THE SYSTEM
+    SHALL invoke the get_dependents tool path and return an answer with a
+    file:line citation derived from the dependency graph.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-10
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§4 full demo arc"
+  source_quote: "asked to draft an impact summary → does it in the Workroom, verifies it, leaves it as a `needs_review` draft card"
+  normalized_statement: >
+    WHEN Proxy is asked to draft an impact summary THE SYSTEM SHALL execute the
+    draft in the Workroom, self-verify the draft, and persist it with
+    Envelope.status=needs_review as a staged draft card without applying it.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-11
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§4 full demo arc"
+  source_quote: "the meeting recycles the orchestrator once (chaos test) and continues seamlessly"
+  normalized_statement: >
+    WHEN the orchestrator is recycled (process kill + restart) once during the
+    demo arc THE SYSTEM SHALL reload meeting_cost from the durable substrate
+    (not reset it) and continue the meeting without any participant-visible
+    interruption or data loss.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-12
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§4 full demo arc"
+  source_quote: "cost stays in-envelope"
+  normalized_statement: >
+    WHEN the full demo arc completes THE SYSTEM SHALL report a total meeting_cost
+    that does not exceed the configured budget envelope, with cost telemetry
+    present for every external call.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-13
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§4 full demo arc"
+  source_quote: "notes file + the staged draft persist"
+  normalized_statement: >
+    WHEN the meeting ends THE SYSTEM SHALL persist both the notes artifact (keyed
+    by meeting_id, readable via GET /internal/notes/{meeting_id}) and the staged
+    draft (in Postgres + GCS) such that both survive past meeting teardown.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-14
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§4 full demo arc"
+  source_quote: "a human accepts the draft after the call and it applies"
+  normalized_statement: >
+    WHEN a human calls POST /m/{meeting_id}/drafts/{draft_id}/accept after
+    meeting teardown THE SYSTEM SHALL apply the staged draft (notes-edit or
+    push as appropriate) and transition its status from needs_review to done.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-15
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§4 full demo arc"
+  source_quote: "Every law observed; every claim cited; every world-touching act gated"
+  normalized_statement: >
+    WHEN the full demo arc runs THE SYSTEM SHALL produce zero uncited confident
+    answers (Law 1), zero ungated world-touching acts (Law 3), and adhere to all
+    five AGENTS.md laws throughout the arc as verified by simulation trace.
+  requirement_type: law_adherence
+  criticality: P1
+  testability: executable
+  status: qualified

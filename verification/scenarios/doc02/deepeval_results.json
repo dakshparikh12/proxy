@@ -1,0 +1,93 @@
+{
+  "doc": "doc02",
+  "judge_model": "claude-haiku-4-5-20251001",
+  "n_cases": 7,
+  "grounded_pass": 5,
+  "grounded_total": 5,
+  "negative_controls_caught": 2,
+  "negative_controls_total": 2,
+  "metric_accuracy": 1.0,
+  "passed": true,
+  "citation_grounded_pass": 5,
+  "citation_negctl_caught": 2,
+  "citation_verdict_passed": true,
+  "results": [
+    {
+      "id": "doc02-grounded-0",
+      "kind": "grounded",
+      "citation_score": 1.0,
+      "hallucination_score": 0.0,
+      "citation_grounded": true,
+      "grounded_ok": true,
+      "citation_should_pass": true,
+      "metric_correct": true,
+      "citation_reason": "All factual claims in ACTUAL_OUTPUT are directly supported by RETRIEVAL_CONTEXT. The output correctly identifies: (1) build order position as 3rd, (2) reads from Doc 00 with the specific descriptors (runtime, hosting), (3) consumed by three"
+    },
+    {
+      "id": "doc02-grounded-1",
+      "kind": "grounded",
+      "citation_score": 0.9,
+      "hallucination_score": 0.0,
+      "citation_grounded": true,
+      "grounded_ok": true,
+      "citation_should_pass": true,
+      "metric_correct": true,
+      "citation_reason": "The actual output extracts and accurately represents the three output destinations controlled by Doc 04 from the retrieval context's data flow diagram. All three claims are explicitly supported: (1) TTS (Cartesia) for audio output plus text"
+    },
+    {
+      "id": "doc02-grounded-2",
+      "kind": "grounded",
+      "citation_score": 1.0,
+      "hallucination_score": 0.0,
+      "citation_grounded": true,
+      "grounded_ok": true,
+      "citation_should_pass": true,
+      "metric_correct": true,
+      "citation_reason": "All factual claims in ACTUAL_OUTPUT are directly supported by RETRIEVAL_CONTEXT. The claim about '~40ms time-to-first-audio' with voice starting 'effectively instantly' is explicitly stated in the context. The brand voice characteristic 'te"
+    },
+    {
+      "id": "doc02-grounded-3",
+      "kind": "grounded",
+      "citation_score": 1.0,
+      "hallucination_score": 0.0,
+      "citation_grounded": true,
+      "grounded_ok": true,
+      "citation_should_pass": true,
+      "metric_correct": true,
+      "citation_reason": "All factual claims in ACTUAL_OUTPUT are explicitly supported by RETRIEVAL_CONTEXT. The three signal mechanisms are correctly identified: (1) Silero VAD with <200ms stopping requirement for TTS is directly stated in context, (2) AssemblyAI U"
+    },
+    {
+      "id": "doc02-grounded-4",
+      "kind": "grounded",
+      "citation_score": 0.8,
+      "hallucination_score": 0.0,
+      "citation_grounded": true,
+      "grounded_ok": true,
+      "citation_should_pass": true,
+      "metric_correct": true,
+      "citation_reason": "The actual output claims that section 3.9, step 2 contains information about three types of webhooks (roster, meeting-end, and bot-status). The retrieval context does contain these exact three webhook types in step 2 (Events), and the claim"
+    },
+    {
+      "id": "doc02-negctl-0",
+      "kind": "negative_control",
+      "citation_score": 0.5,
+      "hallucination_score": 1.0,
+      "citation_grounded": false,
+      "grounded_ok": false,
+      "citation_should_pass": false,
+      "metric_correct": true,
+      "citation_reason": "The response correctly grounds the first part of its claims in the retrieval context: build order (3rd), reads from Doc 00, and consumed by Doc 03, Doc 04, and Doc 08 are all explicitly stated. However, two significant factual claims are co"
+    },
+    {
+      "id": "doc02-negctl-1",
+      "kind": "negative_control",
+      "citation_score": 0.3,
+      "hallucination_score": 1.0,
+      "citation_grounded": false,
+      "grounded_ok": false,
+      "citation_should_pass": false,
+      "metric_correct": true,
+      "citation_reason": "The response makes several factual claims, but most are unsupported by the retrieval context. Supported claims: Doc 04 controls three output destinations (TTS/Cartesia, chat broadcast/DM, canvas webpage rendering) and the specific output ty"
+    }
+  ]
+}

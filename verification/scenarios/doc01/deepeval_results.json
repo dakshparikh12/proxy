@@ -1,0 +1,93 @@
+{
+  "doc": "doc01",
+  "judge_model": "claude-haiku-4-5-20251001",
+  "n_cases": 7,
+  "grounded_pass": 4,
+  "grounded_total": 5,
+  "negative_controls_caught": 2,
+  "negative_controls_total": 2,
+  "metric_accuracy": 0.857,
+  "passed": false,
+  "citation_grounded_pass": 5,
+  "citation_negctl_caught": 2,
+  "citation_verdict_passed": true,
+  "results": [
+    {
+      "id": "doc01-grounded-0",
+      "kind": "grounded",
+      "citation_score": 0.9,
+      "hallucination_score": 0.0,
+      "citation_grounded": true,
+      "grounded_ok": true,
+      "citation_should_pass": true,
+      "metric_correct": true,
+      "citation_reason": "The ACTUAL_OUTPUT makes five key factual claims: (1) Doc 01 Code Intelligence is the 2nd build item after Doc 00 scaffold, (2) it reads from Doc 00 (runtime, tenancy, hosting), (3) it is consumed by Doc 03, Doc 04, Doc 05, and Doc 06, (4) D"
+    },
+    {
+      "id": "doc01-grounded-1",
+      "kind": "grounded",
+      "citation_score": 1.0,
+      "hallucination_score": 1.0,
+      "citation_grounded": true,
+      "grounded_ok": false,
+      "citation_should_pass": true,
+      "metric_correct": false,
+      "citation_reason": "The actual output extracts two factual claims: (1) that section 2.2 lists five edge types (`calls`, `imports`, `reads`, `writes`, `extends`), and (2) that `implements` is mentioned as a sixth edge type. Both claims are directly supported by"
+    },
+    {
+      "id": "doc01-grounded-2",
+      "kind": "grounded",
+      "citation_score": 0.7,
+      "hallucination_score": 0.0,
+      "citation_grounded": true,
+      "grounded_ok": true,
+      "citation_should_pass": true,
+      "metric_correct": true,
+      "citation_reason": "The actual output makes several factual claims that are directly supported by the retrieval context: (1) the GitHub App requests exactly `contents:read` + `metadata:read`, (2) these are read-only scopes, (3) they provide access to code and "
+    },
+    {
+      "id": "doc01-grounded-3",
+      "kind": "grounded",
+      "citation_score": 1.0,
+      "hallucination_score": 0.0,
+      "citation_grounded": true,
+      "grounded_ok": true,
+      "citation_should_pass": true,
+      "metric_correct": true,
+      "citation_reason": "The actual output claims 'The clone and substrate live host-side in the `code_intel` service.' This claim is explicitly supported by the retrieval context, which states 'The clone and the substrate live host-side in the `code_intel` service"
+    },
+    {
+      "id": "doc01-grounded-4",
+      "kind": "grounded",
+      "citation_score": 0.9,
+      "hallucination_score": 0.0,
+      "citation_grounded": true,
+      "grounded_ok": true,
+      "citation_should_pass": true,
+      "metric_correct": true,
+      "citation_reason": "The actual output accurately extracts and describes the core factual claims from the retrieval context: the function signature (tuple[float, list[str]]), the coverage_pct calculation formula (len(indexed) / total with 1.0 fallback when tota"
+    },
+    {
+      "id": "doc01-negctl-0",
+      "kind": "negative_control",
+      "citation_score": 0.3,
+      "hallucination_score": 1.0,
+      "citation_grounded": false,
+      "grounded_ok": false,
+      "citation_should_pass": false,
+      "metric_correct": true,
+      "citation_reason": "The actual output makes several claims that are either unsupported or contradicted by the retrieval context. Supported claims include: Doc 01 Code Intelligence is the 2nd build item, reads from Doc 00, and is consumed by Doc 03, 04, 05, and"
+    },
+    {
+      "id": "doc01-negctl-1",
+      "kind": "negative_control",
+      "citation_score": 0.2,
+      "hallucination_score": 1.0,
+      "citation_grounded": false,
+      "grounded_ok": false,
+      "citation_should_pass": false,
+      "metric_correct": true,
+      "citation_reason": "The actual output makes three major factual claims. First, it correctly identifies five edge types (`calls`, `imports`, `reads`, `writes`, `extends`) from the retrieval context. Second, it accurately cites that `implements` is mentioned as "
+    }
+  ]
+}

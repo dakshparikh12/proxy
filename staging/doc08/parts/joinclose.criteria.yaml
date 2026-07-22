@@ -1,0 +1,996 @@
+# Acceptance Criteria — Doc 08 Experience, UI & Surfaces · §2.6 Join, consent, and close
+# ID prefix: AC-JOINCLOSE-NNN / AC-JOINCLOSE-NNN-NEG
+# Paired requirements: R-doc08-JOINCLOSE-01 through R-doc08-JOINCLOSE-23
+# Authority: DOC-08 §2.6
+#
+# Dependency classes in use:
+#   db:postgres    — codebase index metadata (freshness), note_deltas, staged_drafts,
+#                    revocation registry, task log
+#   vendor:recall  — platform roster events (late-joiner), meeting-end signal, chat/pin API
+#   gcs:objects    — transcript storage (transcript pointer section)
+#
+# Five laws enforced:
+#   Law 1 (Grounded or silent)  — consent line carries repo name + computed freshness
+#   Law 2 (Never overstate)     — notes file is a designed artifact, not a dump
+#   Law 3 (Human control)       — accept/reject protected(); token is read-only
+#   Law 4 (Dynamic not hardcoded) — repo name and freshness computed at runtime
+#   Law 5 (Talk-and-glance)     — close line posted before bot leaves; notes scannable in 30s
+#
+# Golden paths: AC-JOINCLOSE-002 (E2E join consent), AC-JOINCLOSE-016 (close line + drafts)
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · JOIN — TILE BREATHING STATE
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-001
+  name: "Tile transitions to Listening (breathing) state immediately on join, before consent line"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy is joining a meeting"
+    when: "The join event is processed"
+    then:
+      - "Tile state transitions to Listening (breathing) state"
+      - "tile_state_listening_at is recorded before consent_line_posted_at in the event log"
+      - "No consent line post occurs before the tile reaches Listening state"
+  primary_oracle: {type: deterministic, artifact: "Event log: assert tile_state_listening_at < consent_line_posted_at; assert TileState == LISTENING after join event; assert no post_chat call precedes tile_state_transition in event sequence"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-001]
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · JOIN — CONSENT LINE CONTENT (GOLDEN PATH)
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-002
+  name: "Join consent line posted with exact template, live repo name, and computed freshness (E2E)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-02, R-doc08-JOINCLOSE-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy is joining a meeting; tenant codebase is repo=acme/checkout; index was completed 20 minutes ago"
+    when: "The join flow executes and posts the consent line"
+    then:
+      - "Posted line matches: \"Hi — I'm Proxy, an AI participant. I can see the `acme/checkout` codebase (indexed 20 minutes ago). I'm observing and taking notes, and anyone here can ask me anything — out loud or with @proxy.\""
+      - "The repo name is the live tenant repo name, not a placeholder string"
+      - "The freshness string is computed from the actual index timestamp, not hard-coded"
+      - "Exactly one consent line is posted on join"
+  primary_oracle: {type: deterministic, artifact: "Assert posted_chat_line matches consent template regex with captured {repo} == live_repo_name and {freshness} == computed_elapsed_minutes; assert no hard-coded string literals for repo or freshness in template builder; assert count(join_consent_posts) == 1"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: db:postgres
+  mock_boundary: "Stub codebase_index row returning repo=acme/checkout, last_indexed_at=NOW()-20m"
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: e2e}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-002]
+
+- criterion_id: AC-JOINCLOSE-002-NEG
+  name: "Consent line degrades honestly when db:postgres (index metadata) errors"
+  authority_refs: [R-doc08-JOINCLOSE-02, R-doc08-JOINCLOSE-03]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy is joining a meeting"
+    when: "db:postgres errors when fetching codebase index metadata (repo name or last_indexed_at)"
+    then:
+      - "Honest failure spoken or posted (e.g., 'could not confirm codebase index state')"
+      - "No silent proceed posting a consent line with placeholder or stale repo/freshness values"
+      - "join_line_posted is false OR an explicit fallback failure message is posted"
+  primary_oracle: {type: deterministic, artifact: "assert honest failure message emitted; assert no placeholder string posted as live repo or freshness data; assert join_line_posted == false or fallback_message_present == true"}
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-002-NEG]
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · JOIN — CONSENT LINE PINNED
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-003
+  name: "Consent line is pinned when platform supports pinning; pin failure is non-blocking"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-04]
+  criticality: P2
+  blocking: false
+  behavior:
+    given: "The platform chat API supports message pinning"
+    when: "The join consent line is posted"
+    then:
+      - "The system calls the platform pin API for the posted consent message"
+      - "Join flow completes regardless of the pin API response (success or failure)"
+      - "Pin failure is logged but not surfaced to participants"
+  primary_oracle: {type: deterministic, artifact: "Spy on chat API: assert pin_message called with consent_line message_id; assert join flow completes (consent_line_posted_at set) regardless of pin_api_response; assert no participant-visible error on pin failure"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: vendor:recall
+  mock_boundary: "Stub platform chat API with pin_success=true; also run with pin_success=false to confirm non-blocking"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: reality}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-003]
+
+- criterion_id: AC-JOINCLOSE-003-NEG
+  name: "Consent pin degrades honestly when vendor:recall (platform pin API) errors"
+  authority_refs: [R-doc08-JOINCLOSE-04]
+  dependency_class: vendor:recall
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P2
+  blocking: false
+  behavior:
+    given: "The platform pin API is called after posting the join consent line"
+    when: "The platform pin API errors or times out"
+    then:
+      - "Pin failure is logged with reason"
+      - "Join flow proceeds normally (non-blocking)"
+      - "No error is surfaced to participants for a pin failure"
+  primary_oracle: {type: deterministic, artifact: "assert pin_failure logged with reason; assert join_flow_completed == true; assert no participant-visible error emitted for pin failure"}
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-003-NEG]
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · JOIN — NO INTERNAL NAMES IN CONSENT LINE
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-004
+  name: "Consent line contains no internal component name (Orchestrator, Scribe, workroom, sandbox)"
+  evidence_class: "[static]"
+  authority_refs: [R-doc08-JOINCLOSE-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The consent line template and any dynamic substitution paths"
+    when: "Static analysis and runtime rendering of the consent line are inspected"
+    then:
+      - "The string 'Orchestrator' does not appear in any user-visible consent line output"
+      - "The string 'Scribe' does not appear in any user-visible consent line output"
+      - "The string 'workroom' does not appear in any user-visible consent line output"
+      - "The string 'sandbox' does not appear in any user-visible consent line output"
+      - "Only 'Proxy' is used as the product/agent name"
+  primary_oracle: {type: deterministic, artifact: "Static grep on consent line template source: assert no string literal matching [Orchestrator|Scribe|workroom|sandbox] in consent_line_builder module; runtime render of consent line: assert rendered text matches negative regex for forbidden names"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-004]
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · JOIN — LATE-JOINER CONSENT RE-POST (P0)
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-005
+  name: "Consent line is re-posted for each late joiner on Doc 02 roster-participant-joined event"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-06]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A meeting is in progress with Proxy already joined and the initial consent line already posted"
+    when: "A Doc 02 roster-participant-joined event is received for a participant not present at join time"
+    then:
+      - "The consent line is re-posted to chat for that late joiner"
+      - "The re-post content matches the same consent template (repo name + freshness)"
+      - "One re-post is emitted per late-joiner event — not batched or omitted"
+      - "Re-post is triggered by the roster event, not a periodic timer"
+  primary_oracle: {type: deterministic, artifact: "Assert re-post emitted within one event-loop tick of roster_participant_joined event; assert re-post content matches consent template regex; assert count(re_posts) == count(late_joiner_events) in trace; assert no timer-based trigger in late-joiner dispatch code"}
+  thresholds: {missed_repost_allowed: 0}
+  dependency_class: vendor:recall
+  mock_boundary: "Stub roster event stream emitting two sequential participant_joined events for late joiners"
+  golden_path: true
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: reality}
+    - {tier: e2e}
+  fault_model_refs: [F-LATE-JOINER-CONSENT-GAP]
+  test_ids: [T-JOINCLOSE-005]
+
+- criterion_id: AC-JOINCLOSE-005-NEG
+  name: "Late-joiner consent degrades honestly when vendor:recall (roster event stream) errors"
+  authority_refs: [R-doc08-JOINCLOSE-06]
+  dependency_class: vendor:recall
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Proxy is monitoring the Doc 02 roster event stream for late joiners"
+    when: "The vendor:recall roster stream errors or disconnects"
+    then:
+      - "Honest failure spoken or posted (e.g., 'lost roster feed — late joiners may not have received consent')"
+      - "No silent proceed where the system assumes no late joiners arrived"
+  primary_oracle: {type: deterministic, artifact: "assert honest failure message emitted on roster stream error; assert no silent-success path when roster stream is down"}
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: [F-LATE-JOINER-CONSENT-GAP]
+  test_ids: [T-JOINCLOSE-005-NEG]
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · CLOSE — CLOSE LINE POSTED BEFORE BOT LEAVES
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-006
+  name: "Close line is posted to chat before bot-leave action executes"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting is ending"
+    when: "The meeting-end signal is received"
+    then:
+      - "The close line is posted to chat"
+      - "The bot-leave action is executed only after close_line_posted_at is recorded"
+      - "close_line_posted_at < bot_left_at in the event log"
+  primary_oracle: {type: deterministic, artifact: "Event log: assert close_line_posted_at < bot_left_at; assert close_line_content is non-empty; assert bot_left_at is set only after post confirmation receipt"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: vendor:recall
+  mock_boundary: "Stub meeting-end signal; spy on chat post and bot-leave calls to confirm ordering"
+  golden_path: true
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: reality}
+    - {tier: e2e}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-006]
+
+- criterion_id: AC-JOINCLOSE-006-NEG
+  name: "Close flow degrades honestly when vendor:recall (chat post API) errors"
+  authority_refs: [R-doc08-JOINCLOSE-07]
+  dependency_class: vendor:recall
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The system is attempting to post the close line on meeting end"
+    when: "The vendor:recall chat post API errors or times out"
+    then:
+      - "Failure is logged with reason (e.g., 'close line post failed — chat API unavailable')"
+      - "Bot leaves after the failure (does not hang indefinitely)"
+      - "close_line_post_failed flag is set in telemetry; no silent proceed without logging"
+  primary_oracle: {type: deterministic, artifact: "assert failure logged with reason; assert bot_left_at is set (bot eventually leaves); assert close_line_post_failed == true in telemetry; assert no silent-success path"}
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-006-NEG]
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · CLOSE — LINK IS /m/{meeting_id}, NEVER RAW GCS URI
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-007
+  name: "Close line link is /m/{meeting_id} home URL, never a raw GCS URI"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The close line is being constructed for a meeting with meeting_id=mtg-abc123"
+    when: "The link field is generated by the close line builder"
+    then:
+      - "Link matches pattern /m/mtg-abc123 (application home URL)"
+      - "Link does NOT match pattern gs:// or https://storage.googleapis.com or any raw GCS form"
+  primary_oracle: {type: deterministic, artifact: "Assert link_url matches regex ^/m/[a-zA-Z0-9_-]+$; assert link_url does NOT match regex ^(gs://|https://storage\\.googleapis\\.com); static check: no raw GCS URI construction in close_line_builder module"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: [F-GCS-URI-LEAKED-TO-USER]
+  test_ids: [T-JOINCLOSE-007]
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · CLOSE — PENDING DRAFTS IN CLOSE LINE
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-008
+  name: "Close line names each pending draft when staged_drafts exist"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting is ending with two staged_drafts pending (e.g., rate-limiter change and cache config)"
+    when: "The close line is constructed"
+    then:
+      - "Close line includes the name of each pending draft"
+      - "Close line states each draft is waiting for approval"
+      - "No draft is silently omitted"
+  primary_oracle: {type: deterministic, artifact: "Assert close_line_text contains each draft.name from staged_drafts for this meeting_id; assert 'waiting for approval' or equivalent phrase present for each draft; assert count(draft_mentions) == count(staged_drafts)"}
+  thresholds: {violations_allowed: 0, omitted_drafts_allowed: 0}
+  dependency_class: db:postgres
+  mock_boundary: "Stub staged_drafts returning two draft rows; assert both names appear in close line"
+  golden_path: true
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: e2e}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-008]
+
+- criterion_id: AC-JOINCLOSE-008-NEG
+  name: "Close line degrades honestly when db:postgres (staged_drafts fetch) errors"
+  authority_refs: [R-doc08-JOINCLOSE-09]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The close line builder fetches staged_drafts from db:postgres"
+    when: "db:postgres errors when fetching staged_drafts"
+    then:
+      - "Honest failure notice included in close line or spoken channel (e.g., 'could not check pending drafts — database unavailable')"
+      - "No silent proceed where close line omits any mention of the draft-fetch failure"
+  primary_oracle: {type: deterministic, artifact: "assert honest failure notice in close_line_text or spoken channel on db error; assert no silent omission of draft status; assert close_line_draft_check_failed == true in telemetry"}
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-008-NEG]
+
+- criterion_id: AC-JOINCLOSE-009
+  name: "Close line omits draft mention when no staged_drafts exist"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-10]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting is ending with zero staged_drafts for this meeting_id"
+    when: "The close line is constructed"
+    then:
+      - "Close line does not contain any draft mention or approval prompt"
+      - "Close line contains only the notes link (and any other mandated content)"
+  primary_oracle: {type: deterministic, artifact: "Assert close_line_text does not match draft-mention pattern when staged_drafts count == 0 for this meeting_id; stub staged_drafts returning empty result"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: db:postgres
+  mock_boundary: "Stub staged_drafts returning empty result set for this meeting_id"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-009]
+
+- criterion_id: AC-JOINCLOSE-009-NEG
+  name: "Close line (no-drafts path) degrades honestly when db:postgres errors"
+  authority_refs: [R-doc08-JOINCLOSE-10]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The close line builder attempts to confirm zero staged_drafts"
+    when: "db:postgres errors on the staged_drafts count query"
+    then:
+      - "Honest failure notice included (e.g., 'could not verify draft status — database unavailable')"
+      - "No silent proceed posting a clean close line as if confirmed no drafts exist"
+  primary_oracle: {type: deterministic, artifact: "assert failure notice present; assert no clean-close-line emitted without explicit db confirmation; assert no false 'no drafts' claim when db is unavailable"}
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-009-NEG]
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · CLOSE — AUTHENTICATED /m/{meeting_id} ACCESS
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-010
+  name: "Signed-in tenant member GET /m/{meeting_id} returns notes and drafts with accept/reject via protected()"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-11]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A signed-in tenant member with a valid session for the tenant"
+    when: "They make GET /m/{meeting_id} with their session credential"
+    then:
+      - "Response returns the meeting notes"
+      - "Response includes staged drafts with accept/reject controls"
+      - "The request is handled by the protected() authorization path"
+  primary_oracle: {type: deterministic, artifact: "Integration test: GET /m/mtg-abc123 with valid session → 200 with notes and drafts; assert protected() guard applied; assert accept/reject controls present in response"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: db:postgres
+  mock_boundary: "Stub session validator returning tenant member; stub note_deltas and staged_drafts"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-010]
+
+- criterion_id: AC-JOINCLOSE-010-NEG
+  name: "Authenticated /m/ endpoint degrades honestly when db:postgres errors"
+  authority_refs: [R-doc08-JOINCLOSE-11]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A signed-in tenant member requests GET /m/{meeting_id}"
+    when: "db:postgres errors when fetching note_deltas or staged_drafts"
+    then:
+      - "Honest error returned to caller (e.g., HTTP 503 or 500 with descriptive message)"
+      - "No partial or empty response silently returned"
+  primary_oracle: {type: deterministic, artifact: "assert response status in {500, 503} on db error; assert no partial notes body returned; assert no silent empty response"}
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-010-NEG]
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · CAPABILITY TOKEN — PROPERTIES (signed, TTL, meeting-scoped, revocable)
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-011
+  name: "Capability token is cryptographically signed, short-TTL, meeting-scoped, and in revocation registry"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-12]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A capability token is generated for the close line of meeting_id=mtg-abc123"
+    when: "The token is created and stored"
+    then:
+      - "Token has a valid cryptographic signature (HMAC over {meeting_id, scope:'notes', exp}) verifiable by the token service"
+      - "Token carries an expiry (exp) claim set to at most policy-defined short TTL"
+      - "Token carries a meeting_id claim equal to mtg-abc123"
+      - "Token is stored in the revocation registry so an admin can invalidate it"
+  primary_oracle: {type: deterministic, artifact: "Token decode: assert signature valid via token service; assert exp <= NOW() + policy_max_ttl_seconds; assert claims.meeting_id == 'mtg-abc123'; assert claims.scope == 'notes'; assert token_id present in revocation_registry table"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: db:postgres
+  mock_boundary: "Stub token signing key and revocation registry write; assert token fields"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-011]
+
+- criterion_id: AC-JOINCLOSE-011-NEG
+  name: "Capability token generation fails closed when db:postgres (revocation registry write) errors"
+  authority_refs: [R-doc08-JOINCLOSE-12]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The system is generating a capability token for the close line"
+    when: "db:postgres errors when writing to the revocation registry"
+    then:
+      - "Token is NOT issued (fail-closed)"
+      - "Close line falls back to authenticated-only link (no token appended)"
+      - "Failure is logged; no un-revocable token is silently issued"
+  primary_oracle: {type: deterministic, artifact: "assert token_issued == false on registry write error; assert fallback to auth-only link in close line; assert failure logged with reason; assert no token returned to caller"}
+  thresholds: {silent_failures_allowed: 0, unrevocable_tokens_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-011-NEG]
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · CAPABILITY TOKEN — READ-ONLY SCOPE (P0 security)
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-012
+  name: "Capability token grants read-only notes for its specific meeting — never accept/reject"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-13]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A non-signed-in recipient presents a valid capability token for meeting_id=mtg-abc123"
+    when: "The GET /m/mtg-abc123 endpoint is called with the token"
+    then:
+      - "Endpoint returns notes for mtg-abc123 (HTTP 200, read granted)"
+      - "Any POST to accept or reject a draft with this token returns HTTP 403 (forbidden)"
+  primary_oracle: {type: deterministic, artifact: "Integration test: GET /m/mtg-abc123 with valid token → 200 notes; POST /m/mtg-abc123/drafts/accept with same token → 403; POST /m/mtg-abc123/drafts/reject with same token → 403"}
+  thresholds: {accept_reject_with_token_allowed: 0}
+  dependency_class: db:postgres
+  mock_boundary: "Stub token validation returning meeting_id=mtg-abc123, scope=notes; stub note_deltas"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  fault_model_refs: [F-TOKEN-GRANTS-WRITE]
+  test_ids: [T-JOINCLOSE-012]
+
+- criterion_id: AC-JOINCLOSE-012-NEG
+  name: "Token authorization fails closed when db:postgres errors during scope or revocation check"
+  authority_refs: [R-doc08-JOINCLOSE-13]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A non-signed-in recipient presents a capability token"
+    when: "db:postgres errors during the revocation or scope check"
+    then:
+      - "Request is denied (fail-closed, not fail-open); HTTP 503 or 500 returned"
+      - "No notes data is returned to the token holder"
+  primary_oracle: {type: deterministic, artifact: "assert response status in {500, 503} on db error; assert no notes in response body; assert fail-closed behavior (deny on error, never pass-through)"}
+  thresholds: {silent_failures_allowed: 0, data_leaked_on_error: 0}
+  fault_model_refs: [F-TOKEN-FAIL-OPEN]
+  test_ids: [T-JOINCLOSE-012-NEG]
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · CAPABILITY TOKEN — MEETING SCOPE BOUNDARY (P0 security)
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-013
+  name: "Capability token for meeting A cannot read meeting B (meeting_id in signed body enforced)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-14]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A non-signed-in recipient presents a valid capability token issued for meeting_id=mtg-A"
+    when: "The /m/mtg-B endpoint is called with that token"
+    then:
+      - "The endpoint returns HTTP 403 (meeting scope enforced)"
+      - "The meeting_id claim in the signed token body is verified against the request path"
+      - "No notes for mtg-B are returned"
+  primary_oracle: {type: deterministic, artifact: "Integration test: GET /m/mtg-B with token signed for mtg-A → 403; assert authz layer checks claims.meeting_id == path.meeting_id before granting access; assert no cross-meeting data returned"}
+  thresholds: {cross_meeting_access_allowed: 0}
+  dependency_class: db:postgres
+  mock_boundary: "Stub token validation with meeting_id=mtg-A; issue request to /m/mtg-B; assert 403"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  fault_model_refs: [F-TOKEN-CROSS-MEETING]
+  test_ids: [T-JOINCLOSE-013]
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · CAPABILITY TOKEN — ACCEPT/REJECT ALWAYS protected() (P0 security)
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-014
+  name: "Accept/reject actions are always protected() — capability token never reaches those routes"
+  evidence_class: "[static]"
+  authority_refs: [R-doc08-JOINCLOSE-15]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The routing table and authorization guards for /m/{meeting_id} accept and reject endpoints"
+    when: "Static analysis and integration test inspect all dispatch paths for accept/reject"
+    then:
+      - "Every accept and reject route applies the protected() authorization guard"
+      - "No code path exists where a capability token (PublicAuthzCtx) satisfies the protected() guard"
+      - "Static analysis finds no accept/reject handler that falls through without a protected() check"
+  primary_oracle: {type: deterministic, artifact: "Static analysis: assert every accept/reject route handler is annotated or wrapped with protected(); assert PublicAuthzCtx type never satisfies protected() guard in type system or runtime check; integration test: POST /m/mtg-abc123/drafts/accept with capability token → 403"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: [F-TOKEN-GRANTS-WRITE]
+  test_ids: [T-JOINCLOSE-014]
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · NOTES FILE — SEVEN SECTIONS IN ORDER
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-015
+  name: "Notes file contains exactly seven sections in specified order"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-16]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting has ended and the notes file is generated"
+    when: "The notes file markdown is parsed for top-level section headers"
+    then:
+      - "Exactly seven top-level sections are present in order: title/date/attendees, five-line summary, decisions, action items, open questions, what Proxy did, transcript pointer"
+      - "No section is absent"
+      - "No extra section appears at the top level"
+      - "Section order matches the spec exactly"
+  primary_oracle: {type: deterministic, artifact: "Parse notes markdown: extract h1/h2 section headers in order; assert ordered list == [title, summary, decisions, action_items, open_questions, what_proxy_did, transcript]; assert len == 7; assert no extra top-level sections"}
+  thresholds: {missing_sections_allowed: 0, extra_sections_allowed: 0, order_violations_allowed: 0}
+  dependency_class: db:postgres
+  mock_boundary: "Stub note_deltas and staged_drafts for a complete test meeting fixture"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-015]
+
+- criterion_id: AC-JOINCLOSE-015-NEG
+  name: "Notes generation degrades honestly when db:postgres (note_deltas) errors"
+  authority_refs: [R-doc08-JOINCLOSE-16]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The notes file generator fetches note_deltas from db:postgres"
+    when: "db:postgres errors when fetching note_deltas"
+    then:
+      - "Honest failure spoken or posted (e.g., 'could not generate notes — database unavailable')"
+      - "No partial notes file silently written with empty sections"
+  primary_oracle: {type: deterministic, artifact: "assert honest failure message emitted; assert notes_file_written == false or error section explicitly present in output; assert no silent empty-section file"}
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-015-NEG]
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · NOTES FILE — CLOSE LINE INCLUDES LINK (E2E golden path)
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-016
+  name: "Close line includes /m/{meeting_id} link and pending draft names (E2E)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-07, R-doc08-JOINCLOSE-08, R-doc08-JOINCLOSE-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting is ending with one staged draft ('the rate-limiter change') and meeting_id=mtg-abc123"
+    when: "The close line is composed and posted"
+    then:
+      - "Close line contains a link matching /m/mtg-abc123"
+      - "Close line mentions the draft name 'rate-limiter change' and states it is waiting for approval"
+      - "Link does not match any GCS URI pattern"
+      - "Close line is posted before bot-leave action"
+  primary_oracle: {type: deterministic, artifact: "Assert close_line_text matches pattern containing /m/mtg-abc123 and 'rate-limiter change' and 'waiting for approval'; assert no gs:// or storage.googleapis.com in text; assert close_line_posted_at < bot_left_at in event log"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: db:postgres
+  mock_boundary: "Stub staged_drafts returning one draft row with name='rate-limiter change'; stub meeting_id=mtg-abc123"
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: e2e}
+  fault_model_refs: [F-GCS-URI-LEAKED-TO-USER]
+  test_ids: [T-JOINCLOSE-016]
+
+- criterion_id: AC-JOINCLOSE-016-NEG
+  name: "Close line composition degrades honestly when db:postgres errors on staged_drafts + notes link"
+  authority_refs: [R-doc08-JOINCLOSE-07, R-doc08-JOINCLOSE-08, R-doc08-JOINCLOSE-09]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The close line builder runs on meeting end"
+    when: "db:postgres errors on both the notes link metadata and staged_drafts fetch"
+    then:
+      - "Honest failure notice posted or spoken (e.g., 'could not generate close summary — database unavailable')"
+      - "No close line with a placeholder or stale link is silently posted"
+  primary_oracle: {type: deterministic, artifact: "assert honest failure notice emitted; assert no placeholder close line posted; assert close_line_failed == true in telemetry"}
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-016-NEG]
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · NOTES FILE — WORST NEWS FIRST IN SUMMARY
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-017
+  name: "Worst news first: blocker or risk leads the five-line summary when present"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-17]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting that produced a live blocker and three positive outcomes"
+    when: "The five-line summary section is generated"
+    then:
+      - "Line 1 of the summary contains the blocker or risk item"
+      - "Positive outcomes appear after line 1"
+      - "No positive outcome marker appears before the blocker mention"
+  primary_oracle: {type: deterministic, artifact: "Parse summary section lines: assert lines[0] contains blocker text from golden fixture; assert no positive_outcome_marker occurs in lines[0] when a blocker exists; tested with a golden meeting fixture containing a known blocker and known positive outcomes"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-017]
+
+- criterion_id: AC-JOINCLOSE-018
+  name: "Five-line summary does not exceed five lines"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-18]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting with many discussion points and a large transcript"
+    when: "The five-line summary section is generated"
+    then:
+      - "The summary section contains at most five non-empty lines"
+      - "No line-wrapping, padding, or semicolon-separated multi-point line disguises a longer summary"
+  primary_oracle: {type: deterministic, artifact: "Parse summary section: assert count(non_empty_lines) <= 5; assert no line contains multiple semantic points separated by semicolons or em-dashes masking over-length; property test with large transcript fixture"}
+  thresholds: {max_summary_lines: 5}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-018]
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · NOTES FILE — DECISIONS (four fields each)
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-019
+  name: "Each decision entry contains all four fields: what, who, when, moment it landed"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-19]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting that produced two decisions"
+    when: "The decisions section of the notes file is parsed"
+    then:
+      - "Each decision entry contains a 'what' field (the decision text)"
+      - "Each decision entry contains a 'who' field (the decision maker)"
+      - "Each decision entry contains a 'when' field (timestamp or time reference)"
+      - "Each decision entry contains a 'moment it landed' field (conversational anchor)"
+      - "No decision entry is missing any of the four fields"
+  primary_oracle: {type: deterministic, artifact: "Parse decisions section: for each entry assert presence of [what, who, when, moment] sub-fields or equivalent structural markers; tested with a golden fixture of two known decisions; assert count(complete_entries) == count(decision_events)"}
+  thresholds: {missing_decision_fields_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-019]
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · NOTES FILE — ACTION ITEMS (three fields each)
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-020
+  name: "Each action item entry contains all three fields: who, what, when"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-20]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting that produced three action items"
+    when: "The action items section of the notes file is parsed"
+    then:
+      - "Each action item entry contains a 'who' field (the responsible party)"
+      - "Each action item entry contains a 'what' field (the action)"
+      - "Each action item entry contains a 'when' field (due date or deadline)"
+      - "No action item is missing any of the three fields"
+  primary_oracle: {type: deterministic, artifact: "Parse action_items section: for each entry assert presence of [who, what, when] sub-fields; tested with a golden fixture of three known action items; assert count(complete_entries) == count(action_item_events)"}
+  thresholds: {missing_action_item_fields_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-020]
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · NOTES FILE — WHAT PROXY DID (each entry with receipt)
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-021
+  name: "What Proxy did section enumerates every ask, work item, and draft with a receipt for each"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-21]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting where Proxy handled 2 asks, performed 1 work item, and staged 1 draft"
+    when: "The 'what Proxy did' section of the notes file is parsed"
+    then:
+      - "Section contains exactly 2 ask entries, 1 work entry, and 1 draft entry"
+      - "Each entry carries a receipt (unique identifier or timestamp linking to the artifact or task record)"
+      - "No entry is present without a receipt"
+      - "No ask, work item, or draft is silently omitted"
+  primary_oracle: {type: deterministic, artifact: "Parse what_proxy_did section: assert entry counts match event log counts for asks/work/drafts; for each entry assert receipt field present and non-empty; cross-reference against task_log and staged_drafts fixture"}
+  thresholds: {missing_receipt_allowed: 0, missing_entries_allowed: 0}
+  dependency_class: db:postgres
+  mock_boundary: "Stub task_log and staged_drafts with known entry counts (2 asks, 1 work, 1 draft)"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-021]
+
+- criterion_id: AC-JOINCLOSE-021-NEG
+  name: "What Proxy did section degrades honestly when db:postgres (task log or staged_drafts) errors"
+  authority_refs: [R-doc08-JOINCLOSE-21]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The notes generator fetches task log and staged_drafts for the 'what Proxy did' section"
+    when: "db:postgres errors when fetching the task log or staged_drafts"
+    then:
+      - "Honest failure noted in the section (e.g., 'could not retrieve task log — database unavailable')"
+      - "No silent empty section written as if Proxy did nothing"
+  primary_oracle: {type: deterministic, artifact: "assert error notice present in what_proxy_did section on db error; assert section contains error notice and not a blank list; assert no silent empty section"}
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-021-NEG]
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · NOTES FILE — CLEAN MARKDOWN
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-022
+  name: "Notes file passes markdown lint (valid heading hierarchy, list syntax, no broken syntax)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-22]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A completed meeting notes file"
+    when: "A markdown linter is run on the generated notes file"
+    then:
+      - "Markdown linter reports zero errors"
+      - "Heading hierarchy is valid (no skipped levels)"
+      - "All list items use consistent valid syntax"
+      - "No broken link references, unclosed code fences, or malformed tables"
+  primary_oracle: {type: deterministic, artifact: "Run markdown lint tool (e.g., markdownlint or equivalent) on notes file; assert zero lint errors; assert heading levels are monotonic (no h4 directly under h1); assert all code fences are closed"}
+  thresholds: {lint_errors_allowed: 0}
+  dependency_class: db:postgres
+  mock_boundary: "Stub note_deltas, staged_drafts, task_log for a complete test meeting; run linter on output"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-022]
+
+- criterion_id: AC-JOINCLOSE-022-NEG
+  name: "Notes markdown generation degrades honestly when db:postgres errors during full generation"
+  authority_refs: [R-doc08-JOINCLOSE-22]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The notes markdown generator runs on meeting end"
+    when: "db:postgres errors mid-generation (e.g., during decisions or action_items fetch)"
+    then:
+      - "Honest failure notice emitted (not a partial file that passes lint by omission)"
+      - "No partial notes file silently written and served as if complete"
+  primary_oracle: {type: deterministic, artifact: "assert failure notice emitted on mid-generation db error; assert notes_file_complete == false flagged; assert no partial file served as complete"}
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-022-NEG]
+
+# ════════════════════════════════════════════════════════════════
+# §2.6 · NOTES FILE — TRANSCRIPT POINTER
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-JOINCLOSE-023
+  name: "Transcript pointer resolves to actual transcript — not a placeholder and not a raw GCS URI"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-JOINCLOSE-23]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A completed meeting with a stored transcript in GCS"
+    when: "The transcript pointer section is generated and the pointer URL is inspected"
+    then:
+      - "Transcript pointer URL resolves to the actual stored transcript record"
+      - "Pointer URL is not a placeholder (e.g., 'TBD', 'N/A', empty string)"
+      - "Pointer URL does not contain a raw GCS URI (gs:// or https://storage.googleapis.com) where an application-layer route exists"
+  primary_oracle: {type: deterministic, artifact: "Assert transcript_pointer_url is non-placeholder (not in {TBD, N/A, empty}); assert URL does not match ^(gs://|https://storage\\.googleapis\\.com); assert URL resolves to transcript record in storage layer via stub"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: gcs:objects
+  mock_boundary: "Stub GCS transcript object returning known content; assert pointer URL resolves to it via application route"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  fault_model_refs: [F-GCS-URI-LEAKED-TO-USER]
+  test_ids: [T-JOINCLOSE-023]
+
+- criterion_id: AC-JOINCLOSE-023-NEG
+  name: "Transcript pointer degrades honestly when gcs:objects errors"
+  authority_refs: [R-doc08-JOINCLOSE-23]
+  dependency_class: gcs:objects
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The notes generator attempts to generate or verify the transcript pointer"
+    when: "gcs:objects errors when fetching or confirming the transcript"
+    then:
+      - "Honest failure noted in the transcript pointer section (e.g., 'transcript unavailable — storage error')"
+      - "No placeholder or fake URL written as if the transcript is accessible"
+  primary_oracle: {type: deterministic, artifact: "assert error notice present in transcript section on gcs error; assert no live-looking URL written when GCS unavailable; assert no placeholder URL matches a valid route pattern"}
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-JOINCLOSE-023-NEG]

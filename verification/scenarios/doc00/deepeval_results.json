@@ -1,0 +1,93 @@
+{
+  "doc": "doc00",
+  "judge_model": "claude-haiku-4-5-20251001",
+  "n_cases": 7,
+  "grounded_pass": 5,
+  "grounded_total": 5,
+  "negative_controls_caught": 2,
+  "negative_controls_total": 2,
+  "metric_accuracy": 1.0,
+  "passed": true,
+  "citation_grounded_pass": 5,
+  "citation_negctl_caught": 2,
+  "citation_verdict_passed": true,
+  "results": [
+    {
+      "id": "doc00-grounded-0",
+      "kind": "grounded",
+      "citation_score": 0.9,
+      "hallucination_score": 0.0,
+      "citation_grounded": true,
+      "grounded_ok": true,
+      "citation_should_pass": true,
+      "metric_correct": true,
+      "citation_reason": "The actual output extracts and accurately represents the core factual claims from the retrieval context. All key assertions are explicitly supported: Doc 00 is built 1st (stated verbatim), and the six components listed (repo skeleton, backe"
+    },
+    {
+      "id": "doc00-grounded-1",
+      "kind": "grounded",
+      "citation_score": 0.9,
+      "hallucination_score": 0.0,
+      "citation_grounded": true,
+      "grounded_ok": true,
+      "citation_should_pass": true,
+      "metric_correct": true,
+      "citation_reason": "The actual output accurately extracts and reports the factual claims from the retrieval context: that ~/platform achieves crash-durability, cross-process coordination, and scale-to-zero compute without a message bus using three Postgres pri"
+    },
+    {
+      "id": "doc00-grounded-2",
+      "kind": "grounded",
+      "citation_score": 0.9,
+      "hallucination_score": 0.0,
+      "citation_grounded": true,
+      "grounded_ok": true,
+      "citation_should_pass": true,
+      "metric_correct": true,
+      "citation_reason": "The actual output accurately extracts and presents all key factual claims from the retrieval context: the restart-not-resume behavior for meeting harness crashes, the reason (media session is gone), the mechanism (re-join via Recall and rep"
+    },
+    {
+      "id": "doc00-grounded-3",
+      "kind": "grounded",
+      "citation_score": 0.9,
+      "hallucination_score": 0.0,
+      "citation_grounded": true,
+      "grounded_ok": true,
+      "citation_should_pass": true,
+      "metric_correct": true,
+      "citation_reason": "The actual output extracts and accurately represents the factual claims from the retrieval context. All five specific items listed\u2014specs bucket, both SQL databases, credential-key `random_id`s, and the project lien\u2014are explicitly mentioned "
+    },
+    {
+      "id": "doc00-grounded-4",
+      "kind": "grounded",
+      "citation_score": 0.9,
+      "hallucination_score": 0.0,
+      "citation_grounded": true,
+      "grounded_ok": true,
+      "citation_should_pass": true,
+      "metric_correct": true,
+      "citation_reason": "The ACTUAL_OUTPUT makes several factual claims that are all explicitly supported by the RETRIEVAL_CONTEXT. Specifically: (1) 'unregistered (produced-but-no-consumer) message fails the build' appears verbatim in the context; (2) 'CI + boot-t"
+    },
+    {
+      "id": "doc00-negctl-0",
+      "kind": "negative_control",
+      "citation_score": 0.4,
+      "hallucination_score": 1.0,
+      "citation_grounded": false,
+      "grounded_ok": false,
+      "citation_should_pass": false,
+      "metric_correct": true,
+      "citation_reason": "The actual output correctly extracts and supports the claim that Doc 00 is built 1st and accurately lists all the components that must be constructed first (repo skeleton, backend, server boot, config/secrets/deploy machinery, durable-ops s"
+    },
+    {
+      "id": "doc00-negctl-1",
+      "kind": "negative_control",
+      "citation_score": 0.2,
+      "hallucination_score": 1.0,
+      "citation_grounded": false,
+      "grounded_ok": false,
+      "citation_should_pass": false,
+      "metric_correct": true,
+      "citation_reason": "The actual output correctly identifies that ~/platform achieves crash-durability, cross-process coordination, and scale-to-zero compute without a message bus using three Postgres primitives, and accurately notes that the specific primitives"
+    }
+  ]
+}

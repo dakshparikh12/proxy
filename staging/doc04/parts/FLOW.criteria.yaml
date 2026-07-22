@@ -1,0 +1,1248 @@
+# FLOW.criteria.yaml — Doc 04 (Proxy Orchestrator) — §1 (End Goal) + §2 (Design) + The Reactive Flow
+# Acceptance criteria. ID scheme: AC-FLOW-NNN (NEG pairs: AC-FLOW-NNN-NEG).
+# authority_refs point at R-doc04-FLOW-NN in FLOW.requirements.yaml.
+#
+# dependency_class conventions:
+#   null          → pure in-process logic; ladder: [lint, unit]
+#   vendor:*      → cassette-backed; ladder: [lint, unit, reality]; MUST have NEG pair
+#   db:postgres   → real Postgres; ladder: [lint, unit, integration]; MUST have NEG pair
+#   fs:git        → git clone; ladder: [lint, unit, integration]; MUST have NEG pair
+#
+# golden_path: true on 3 criteria (ask→ack→answer direct, ask→ack→dispatch→result workroom, parallel no-collision)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DYNAMISM GUARANTEE — no branching on event_type in harness code
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-001
+  name: "No if/elif/switch on event_type anywhere in orchestrator harness code"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-FLOW-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The orchestrator harness source files are statically analysed"
+    when: "An AST or grep scan is run over the harness package for branching constructs conditioned on event_type"
+    then:
+      - "Zero matches for if/elif/switch/match constructs whose condition references event_type or an equivalent event-kind discriminator"
+      - "The scan covers all .py files under the orchestrator harness package"
+  primary_oracle:
+    type: static_analysis
+    artifact: "AST-level lint rule (libs.lint.naming or equivalent) that fails on event_type branch patterns; zero violations"
+  thresholds:
+    event_type_branches_allowed: 0
+  fault_model_refs: [F-HARDCODED-ROUTING]
+  test_ids: [T-FLOW-001]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-FLOW-001-B
+  name: "New tool + BehaviorConfig constant is the ONLY mechanism to add routing capability"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-FLOW-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A simulated new capability is added by registering a new tool and a BehaviorConfig constant"
+    when: "The orchestrator harness is exercised with an event that maps to the new capability"
+    then:
+      - "The agent selects the new tool via model judgment without any new code branch in the harness"
+      - "No harness file was modified to wire the new capability"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: add mock tool + BehaviorConfig; send novel event; assert harness code diff == 0 lines changed"
+  thresholds:
+    harness_lines_changed_for_new_capability: 0
+  fault_model_refs: [F-HARDCODED-ROUTING]
+  test_ids: [T-FLOW-001-B]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ACK REFLEX — 0.5s canned "on it"
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-002
+  name: "Canned 'on it' ack fires within 0.5s of confirmed address (reflex, not agent)"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc04-FLOW-03, R-doc04-FLOW-13]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The orchestrator is running and the audio pipeline is active"
+    when: "A confirmed address to Proxy is detected by the STT/address-detection layer"
+    then:
+      - "The 'on it' ack is emitted within 500ms of the confirmed-address timestamp"
+      - "The ack fires from the reflex layer, before the agent wake turn completes"
+      - "The ack text is the canned phrase, not a model-generated response"
+  primary_oracle:
+    type: latency_measurement
+    artifact: "Timestamp delta between confirmed-address event and ack-emitted event; assert delta <= 500ms; ack content matches canned string"
+  thresholds:
+    ack_latency_ms: 500
+    violations_allowed: 0
+  fault_model_refs: [F-ACK-LATE, F-ACK-FROM-AGENT]
+  test_ids: [T-FLOW-002]
+  dependency_class: vendor:assemblyai
+  mock_boundary: "AssemblyAI STT cassette; confirmed-address detection is replayed from cassette"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+
+- criterion_id: AC-FLOW-002-NEG
+  name: "NEG: Ack DOES NOT arrive after 0.5s or from within agent wake turn"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-FLOW-03, R-doc04-FLOW-13]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A patched reflex layer that delays ack emission by 600ms OR routes ack through the agent"
+    when: "A confirmed address is detected"
+    then:
+      - "The latency test detects the violation (>500ms or agent-generated) and fails"
+      - "This confirms the production reflex path is genuinely sub-500ms and pre-agent"
+  primary_oracle:
+    type: deterministic
+    artifact: "Latency probe catches >500ms; content-source check catches model-generated text"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-ACK-LATE]
+  test_ids: [T-FLOW-002-NEG]
+  dependency_class: vendor:assemblyai
+  mock_boundary: "AssemblyAI STT cassette; patched reflex layer introduces artificial delay"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DIRECT ANSWER PATH — wake turn, code_intel only, no E2B, no Workroom
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-003
+  name: "Direct answer path uses only code_intel tools — no E2B, no Workroom session opened"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-FLOW-04, R-doc04-FLOW-14]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Proxy is running with mounted code_intel tools and a mock code_intel internal API"
+    when: "A simple grounded lookup ask is confirmed (e.g., 'Proxy, where is the auth handler?')"
+    then:
+      - "The agent wake turn calls only code_intel tool(s) against the host-side internal API"
+      - "No E2B sandbox is opened or invoked"
+      - "No Workroom session (dispatch_workroom) is called"
+      - "The answer is returned within the single wake turn, approximately 1–2 seconds"
+  primary_oracle:
+    type: deterministic
+    artifact: "Tool-call log from wake turn; assert: code_intel_* calls present; dispatch_workroom absent; e2b calls absent; total elapsed <= 2000ms"
+  thresholds:
+    e2b_calls_allowed: 0
+    workroom_dispatch_calls_allowed: 0
+    wake_turn_latency_ms: 2000
+    violations_allowed: 0
+  fault_model_refs: [F-DIRECT-HITS-E2B, F-DIRECT-OPENS-WORKROOM]
+  test_ids: [T-FLOW-003]
+  dependency_class: fs:git
+  mock_boundary: "code_intel internal API backed by local git clone; no live LLM needed for tool dispatch assertion"
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: e2e}
+
+- criterion_id: AC-FLOW-003-NEG
+  name: "NEG: Direct path that opens E2B or Workroom is detected and fails"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-FLOW-04]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A patched agent that calls dispatch_workroom or an E2B tool on a simple lookup"
+    when: "The simple grounded lookup ask is confirmed"
+    then:
+      - "The tool-call monitor detects dispatch_workroom or e2b call and fails the criterion"
+      - "This confirms the production direct path is genuinely E2B/Workroom-free"
+  primary_oracle:
+    type: deterministic
+    artifact: "Tool-call monitor asserts no dispatch_workroom / e2b calls; fails if present"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-DIRECT-HITS-E2B]
+  test_ids: [T-FLOW-003-NEG]
+  dependency_class: fs:git
+  mock_boundary: "code_intel internal API backed by local git clone; patched agent injects forbidden calls"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WORKROOM DISPATCH PATH — bundle + notes_ref, mutually exclusive with direct
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-004
+  name: "Workroom dispatch bundles ask with notes_ref and calls dispatch_workroom"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-FLOW-05, R-doc04-FLOW-14]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Proxy receives a non-trivial ask (e.g., 'Proxy, refactor the auth module') that is not a simple grounded lookup"
+    when: "The agent wake turn executes"
+    then:
+      - "The agent calls dispatch_workroom(bundle) where bundle contains the ask text and a notes_ref"
+      - "No code_intel-only direct answer is produced"
+      - "The dispatch call is mutually exclusive with a direct-answer code_intel call for the same ask"
+  primary_oracle:
+    type: deterministic
+    artifact: "Tool-call log; assert dispatch_workroom called with notes_ref field non-null; no code_intel answer emitted for same ask"
+  thresholds:
+    violations_allowed: 0
+    notes_ref_missing_allowed: 0
+  fault_model_refs: [F-MISSING-NOTES-REF, F-DUAL-PATH-COLLISION]
+  test_ids: [T-FLOW-004]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres for notes_ref resolution; workroom endpoint mocked for dispatch receipt"
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: e2e}
+
+- criterion_id: AC-FLOW-004-NEG
+  name: "NEG: dispatch_workroom called without notes_ref is detected and rejected"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-FLOW-05]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A patched agent that calls dispatch_workroom with notes_ref=None or omitted"
+    when: "A non-trivial ask arrives"
+    then:
+      - "The contract boundary rejects the call or the test harness detects the missing notes_ref"
+      - "An error or assertion failure is raised, not a silent dispatch"
+  primary_oracle:
+    type: deterministic
+    artifact: "Contract assertion in dispatch_workroom stub: raises ValueError if notes_ref is absent"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-MISSING-NOTES-REF]
+  test_ids: [T-FLOW-004-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "Postgres for notes lookup; workroom stub enforces notes_ref contract"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GOLDEN PATH — full reactive flow (direct): ask → ack → answer
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-005
+  name: "GOLDEN: Full reactive flow — spoken ask → 0.5s ack → direct answer within ~2s"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-FLOW-03, R-doc04-FLOW-04, R-doc04-FLOW-14]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A live meeting session with audio pipeline active and code_intel mounted"
+    when: "A participant says 'Proxy, where is the auth handler?' (simple grounded lookup)"
+    then:
+      - "The 'on it' ack is emitted within 500ms of the confirmed address"
+      - "The agent wake turn completes with a code_intel tool call (no E2B, no dispatch_workroom)"
+      - "The spoken answer is delivered within approximately 2000ms of the confirmed address"
+      - "The answer is tagged resolved (not lower-bound) if the result was exactly verified"
+      - "No internal component names appear in the spoken output"
+  primary_oracle:
+    type: latency_measurement
+    artifact: "End-to-end timestamp trace: confirmed_address → ack_emitted (≤500ms) → answer_spoken (≤2000ms); tool log shows code_intel only"
+  thresholds:
+    ack_latency_ms: 500
+    answer_latency_ms: 2000
+    e2b_calls_allowed: 0
+    workroom_dispatch_calls_allowed: 0
+    internal_name_leaks_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-ACK-LATE, F-DIRECT-HITS-E2B, F-NAMING-LEAK]
+  test_ids: [T-FLOW-005]
+  dependency_class: fs:git
+  mock_boundary: "code_intel API backed by local git clone; vendor:assemblyai and vendor:cartesia via cassette"
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: e2e}
+
+- criterion_id: AC-FLOW-005-NEG
+  name: "NEG: Direct-path golden flow fails if ack exceeds 500ms or E2B is touched"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-FLOW-04]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A patched environment where ack reflex is delayed to 600ms or E2B is invoked on a simple lookup"
+    when: "The golden direct-path flow is exercised"
+    then:
+      - "The e2e latency probe detects the ack violation (>500ms) and fails"
+      - "OR the tool-call monitor detects E2B invocation and fails"
+      - "The failure is reported explicitly, not silently ignored"
+  primary_oracle:
+    type: deterministic
+    artifact: "Latency probe + tool-call monitor; either violation causes test failure"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-ACK-LATE, F-DIRECT-HITS-E2B]
+  test_ids: [T-FLOW-005-NEG]
+  dependency_class: fs:git
+  mock_boundary: "code_intel API backed by local git clone; reflex layer patched to inject violation"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GOLDEN PATH — full reactive flow (workroom): ask → ack → dispatch → result
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-006
+  name: "GOLDEN: Full reactive flow — non-trivial ask → ack → workroom dispatch → async result delivery"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-FLOW-05, R-doc04-FLOW-24, R-doc04-FLOW-25]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A live meeting session with workroom endpoint available and notes substrate connected"
+    when: "A participant says 'Proxy, refactor the auth module' (non-trivial, minutes-scale work)"
+    then:
+      - "The 'on it' ack fires within 500ms of confirmed address"
+      - "The agent calls dispatch_workroom(bundle) with notes_ref; no E2B is touched"
+      - "An async-etiquette message is spoken (e.g., 'that'll take ~20 minutes')"
+      - "When the workroom result returns, Proxy re-checks relevance before delivering"
+      - "The result is persisted to the notes such that a follow-up ask can reference it by notes_ref"
+      - "No internal component names appear in any delivered message"
+  primary_oracle:
+    type: deterministic
+    artifact: "Tool-call log: dispatch_workroom present with notes_ref; etiquette speak present; result delivery tagged; notes write confirmed; naming lint passes"
+  thresholds:
+    ack_latency_ms: 500
+    e2b_calls_allowed: 0
+    notes_ref_missing_allowed: 0
+    internal_name_leaks_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-MISSING-NOTES-REF, F-NO-ETIQUETTE, F-NAMING-LEAK]
+  test_ids: [T-FLOW-006]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres for notes persistence; workroom endpoint mocked with configurable latency; vendor STT/TTS via cassette"
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: e2e}
+
+- criterion_id: AC-FLOW-006-NEG
+  name: "NEG: Workroom path without notes persistence fails follow-up compose"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-FLOW-25]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A patched orchestrator that skips writing the workroom result to notes"
+    when: "A follow-up ask referencing the prior result arrives"
+    then:
+      - "The notes lookup returns no notes_ref for the prior result"
+      - "The test harness detects the missing persistence and fails"
+  primary_oracle:
+    type: deterministic
+    artifact: "notes_ref lookup after patched result delivery returns null; test asserts this is a failure"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-MISSING-NOTES-PERSIST]
+  test_ids: [T-FLOW-006-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres; notes write path patched to no-op to simulate missing persistence"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JUDGE-CLEARED CONTRIBUTION — boundary delivery, human-first
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-007
+  name: "Judge-cleared contribution delivered at turn boundary only, never over a human speaker"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-FLOW-06, R-doc04-FLOW-21]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The proactive judge emits a cleared contribution while a human is speaking"
+    when: "The orchestrator receives the judge-cleared event during an active human utterance"
+    then:
+      - "Proxy does NOT begin voice delivery during the human utterance"
+      - "Proxy queues the contribution and delivers it at the next detected turn boundary"
+      - "The human's utterance is not interrupted"
+  primary_oracle:
+    type: deterministic
+    artifact: "Timing log: human_speaking_start < judge_cleared < human_speaking_end < proxy_voice_start; assert proxy_voice_start > human_speaking_end"
+  thresholds:
+    mid-utterance_deliveries_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-OVER-HUMAN, F-MID-UTTERANCE-DELIVERY]
+  test_ids: [T-FLOW-007]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-FLOW-007-NEG
+  name: "NEG: Contribution delivered mid-utterance is detected as a violation"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-FLOW-06]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A patched orchestrator that delivers judge-cleared contributions immediately without boundary check"
+    when: "A judge-cleared event arrives during an active human utterance"
+    then:
+      - "The timing monitor detects mid-utterance delivery and fails the test"
+  primary_oracle:
+    type: deterministic
+    artifact: "Timing monitor: proxy_voice_start < human_speaking_end → assert failure"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-OVER-HUMAN]
+  test_ids: [T-FLOW-007-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PARALLEL TASKS — no collision
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-008
+  name: "Concurrent tasks (long build + quick ask + Scribe) execute without collision or data loss"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc04-FLOW-07]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A meeting session with an in-flight workroom dispatch (long build), an active Scribe ticking, and a new simple ask arriving simultaneously"
+    when: "All three tasks are in progress concurrently"
+    then:
+      - "The long workroom build continues uninterrupted and eventually delivers its result"
+      - "The Scribe continues ticking without gaps or lost transcript segments"
+      - "The new quick ask is acked within 500ms and answered in its own wake turn"
+      - "No task's output is dropped, duplicated, or corrupted by another task"
+  primary_oracle:
+    type: deterministic
+    artifact: "Concurrency integration test: inject three simultaneous tasks; assert all three produce their expected outputs with no interleaving corruption; Scribe segment count correct"
+  thresholds:
+    dropped_outputs_allowed: 0
+    corrupted_outputs_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-TASK-COLLISION, F-SCRIBE-GAP]
+  test_ids: [T-FLOW-008]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres for Scribe segment storage; workroom endpoint mocked; STT cassette"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-FLOW-008-NEG
+  name: "NEG: Shared mutable state causes task collision — detected by property test"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-FLOW-07]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A patched orchestrator with a shared mutable state object accessible from all task coroutines"
+    when: "Three tasks run concurrently and all write to the shared state"
+    then:
+      - "The property test detects at least one lost-write or corruption event"
+      - "This confirms the production path uses isolated state per task"
+  primary_oracle:
+    type: deterministic
+    artifact: "Property-based concurrency test with injected shared mutation; assert collision detected"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-TASK-COLLISION]
+  test_ids: [T-FLOW-008-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres; shared-state patch injected at test layer"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BARGE-IN — speech killed in <200ms
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-009
+  name: "Barge-in kills Proxy voice output within 200ms of human speech onset"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc04-FLOW-13, R-doc04-FLOW-16]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Proxy is actively speaking (TTS streaming)"
+    when: "A human begins to speak (VAD onset detected)"
+    then:
+      - "TTS output is terminated within 200ms of the VAD onset timestamp"
+      - "The termination occurs in the reflex layer, not via the agent"
+      - "No partial audio frame after the 200ms window is delivered to the meeting room"
+  primary_oracle:
+    type: latency_measurement
+    artifact: "Timestamp delta: vad_onset → tts_terminated; assert delta <= 200ms; confirmed via audio-frame log"
+  thresholds:
+    barge_in_latency_ms: 200
+    violations_allowed: 0
+  fault_model_refs: [F-BARGE-IN-SLOW]
+  test_ids: [T-FLOW-009]
+  dependency_class: vendor:cartesia
+  mock_boundary: "Cartesia TTS cassette; VAD onset injected synthetically"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+
+- criterion_id: AC-FLOW-009-NEG
+  name: "NEG: Barge-in latency > 200ms is detected and fails"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-FLOW-16]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A patched reflex layer that delays barge-in termination by 250ms"
+    when: "A human begins to speak while Proxy is mid-sentence"
+    then:
+      - "The latency probe detects >200ms termination delay and fails the test"
+  primary_oracle:
+    type: latency_measurement
+    artifact: "Latency probe: delta > 200ms triggers assertion failure"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-BARGE-IN-SLOW]
+  test_ids: [T-FLOW-009-NEG]
+  dependency_class: vendor:cartesia
+  mock_boundary: "Cartesia TTS cassette; reflex layer patched to introduce 250ms delay"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FAILURE HANDLING — spoken plainly, never silent
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-010
+  name: "Any component failure produces a plain spoken disclosure — no silent failure"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-FLOW-08, R-doc04-FLOW-20]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A meeting session running with all components active"
+    when: "A component failure is injected (e.g., STT disconnect, workroom timeout, Scribe crash)"
+    then:
+      - "Proxy produces a spoken or chat disclosure to the room within one wake turn"
+      - "The disclosure is plain text describing the failure — not a stack trace or internal name"
+      - "No internal component name (Orchestrator, Scribe, workroom) appears in the disclosure"
+      - "The system does NOT remain silent on the failure"
+  primary_oracle:
+    type: deterministic
+    artifact: "Failure injection test: inject each failure class; assert speak() or send_chat() called within one wake turn; content contains no internal names"
+  thresholds:
+    silent_failures_allowed: 0
+    internal_name_leaks_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-SILENT-FAILURE, F-NAMING-LEAK]
+  test_ids: [T-FLOW-010]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-FLOW-010-NEG
+  name: "NEG: Swallowed exception (no disclosure) is detected as silent failure"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-FLOW-20]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A patched error handler that catches component failures and takes no action"
+    when: "A component failure is injected"
+    then:
+      - "The test harness detects that speak() and send_chat() were never called"
+      - "The silent failure is reported as a test failure, not passed"
+  primary_oracle:
+    type: deterministic
+    artifact: "Mock speak/send_chat call count == 0 after failure injection; assert failure"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-SILENT-FAILURE]
+  test_ids: [T-FLOW-010-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STANDING PIPES — wired once at join, run continuously without agent
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-011
+  name: "Standing pipes wired exactly once at join; audio→STT→transcript→Scribe→judge runs without agent"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-FLOW-10]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A meeting session join event fires"
+    when: "The session setup completes"
+    then:
+      - "The audio→STT→transcript pipe is wired exactly once (not per-event)"
+      - "The transcript→Scribe pipe is wired exactly once"
+      - "The Scribe→material-change-events→proactive-judge pipe is wired exactly once"
+      - "Component heartbeat monitoring is active"
+      - "These pipes propagate events without invoking the agent wake turn"
+  primary_oracle:
+    type: deterministic
+    artifact: "Session setup trace: pipe-wiring calls counted == 1 each; agent wake-turn not triggered by pipe events alone"
+  thresholds:
+    extra_pipe_wirings_allowed: 0
+    agent_wakes_from_pipe_events_alone_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-PIPE-REWIRED, F-AGENT-WOKEN-BY-PIPE]
+  test_ids: [T-FLOW-011]
+  dependency_class: vendor:assemblyai
+  mock_boundary: "AssemblyAI STT cassette; Recall.ai join cassette; Scribe mocked"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+
+- criterion_id: AC-FLOW-011-NEG
+  name: "NEG: Re-wiring a pipe on every event is detected as a violation"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-FLOW-10]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A patched session manager that re-wires the STT→transcript pipe on every transcript event"
+    when: "Ten transcript events arrive"
+    then:
+      - "The pipe-wiring counter shows > 1 wiring calls, triggering an assertion failure"
+  primary_oracle:
+    type: deterministic
+    artifact: "pipe-wiring call counter > 1 → assert failure"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-PIPE-REWIRED]
+  test_ids: [T-FLOW-011-NEG]
+  dependency_class: vendor:assemblyai
+  mock_boundary: "AssemblyAI STT cassette; pipe-wiring counter injected"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WAKE EVENTS — exactly six classes; no wake on pipe events
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-012
+  name: "Agent wakes for exactly: confirmed ask, result returning, judge-cleared, anomaly, control command, meeting end"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-FLOW-11]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The orchestrator harness is running with all event sources active"
+    when: "Each of the six defined wake-event classes is emitted in isolation"
+    then:
+      - "Each of the six event classes triggers exactly one agent wake turn"
+      - "Pipe events (raw audio, raw transcript lines, raw heartbeats) do NOT trigger agent wake turns"
+  primary_oracle:
+    type: deterministic
+    artifact: "Event injection test for each of the 6 wake classes: assert wake_count == 1; inject 10 raw transcript events: assert wake_count == 0"
+  thresholds:
+    missed_wakes_per_class_allowed: 0
+    spurious_wakes_from_pipe_events_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-MISSED-WAKE, F-SPURIOUS-WAKE]
+  test_ids: [T-FLOW-012]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TOOL CONTRACT — defined tool set; one message per wake
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-013
+  name: "Wake turn sends exactly one message (event + state); agent responds only via defined tool set"
+  evidence_class: "[contract]"
+  authority_refs: [R-doc04-FLOW-12]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The agent SDK is invoked for a wake turn"
+    when: "Any wake-class event is processed"
+    then:
+      - "The harness sends exactly one message per wake turn containing event + current state"
+      - "All agent responses are delivered as calls to the defined tool set: dispatch_workroom, speak, send_chat, show_screen, ack, cancel_task, patch_notes, restart_component, run_close"
+      - "No response outside the defined tool set is accepted or routed"
+  primary_oracle:
+    type: deterministic
+    artifact: "SDK call trace: message_count == 1 per wake; tool names in response subset of defined tool set; unknown tool names cause harness rejection"
+  thresholds:
+    extra_messages_per_wake_allowed: 0
+    undefined_tool_calls_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-EXTRA-WAKE-MESSAGES, F-UNDEFINED-TOOL]
+  test_ids: [T-FLOW-013]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SDK ISOLATION — strict_mcp_config=True, setting_sources=[]
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-014
+  name: "Every SDK invocation passes strict_mcp_config=True and setting_sources=[]"
+  evidence_class: "[contract]"
+  authority_refs: [R-doc04-FLOW-26]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The orchestrator harness is configured to invoke the agent SDK"
+    when: "Any wake turn invokes the SDK"
+    then:
+      - "The SDK call includes strict_mcp_config=True"
+      - "The SDK call includes setting_sources=[]"
+      - "The SDK call uses only the computed built-in tools list (no ambient tool injection)"
+  primary_oracle:
+    type: deterministic
+    artifact: "SDK call interceptor logs all keyword arguments; assert strict_mcp_config=True and setting_sources==[] on every invocation; violations == 0"
+  thresholds:
+    sdk_calls_without_isolation_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-SDK-NOT-ISOLATED]
+  test_ids: [T-FLOW-014]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-FLOW-014-NEG
+  name: "NEG: SDK call without strict_mcp_config=True is detected and rejected"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-FLOW-26]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A patched harness that omits strict_mcp_config from an SDK call"
+    when: "A wake turn fires"
+    then:
+      - "The SDK call interceptor detects the missing parameter and raises an assertion error"
+      - "No agent response is processed from an unisolated SDK call"
+  primary_oracle:
+    type: deterministic
+    artifact: "Interceptor: strict_mcp_config not in kwargs → AssertionError raised"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-SDK-NOT-ISOLATED]
+  test_ids: [T-FLOW-014-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NAMING LINT — internal names never in user-visible strings
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-015
+  name: "No internal component name (Orchestrator/Scribe/workroom) appears in any user-visible string"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-FLOW-09, R-doc04-FLOW-27]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The full set of speak(), send_chat(), show_screen() outputs generated during any session"
+    when: "The naming lint rule (libs.lint.naming) scans all user-visible string paths"
+    then:
+      - "Zero occurrences of 'Orchestrator', 'Scribe', 'workroom' (case-insensitive) in speak text"
+      - "Zero occurrences in send_chat text (direct messages or room messages)"
+      - "Zero occurrences in show_screen artifact content"
+      - "The only agent identity presented is 'Proxy'"
+  primary_oracle:
+    type: static_analysis
+    artifact: "libs.lint.naming rule scans user-visible string literals and runtime speak/chat/screen outputs; violation count == 0"
+  thresholds:
+    naming_violations_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-NAMING-LEAK]
+  test_ids: [T-FLOW-015]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LETHAL TRIFECTA — transcript does NOT auto-reach outward side-effects
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-016
+  name: "Transcript-triggered path CANNOT reach speak/send_chat/dispatch_workroom without a human click"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-FLOW-28]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The transcript pipeline is active and delivers transcript events to the orchestrator"
+    when: "A crafted transcript event (adversarial or injected) arrives with content that would normally trigger an outward action"
+    then:
+      - "No outward side-effect (speak, send_chat, show_screen, dispatch_workroom) fires without a human-initiated confirmation click"
+      - "The transcript content is treated as untrusted input and delimited before any routing decision"
+  primary_oracle:
+    type: deterministic
+    artifact: "Adversarial transcript injection: inject crafted transcript event; assert speak/send_chat/dispatch call count == 0 unless preceded by human_click event"
+  thresholds:
+    outward_side_effects_without_human_click_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-LETHAL-TRIFECTA, F-TRANSCRIPT-INJECTION]
+  test_ids: [T-FLOW-016]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-FLOW-016-NEG
+  name: "NEG: Transcript that bypasses human-click gate is caught and quarantined"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-FLOW-28]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A patched gate that allows transcript events to flow directly to speak() without a human click"
+    when: "A transcript event is injected"
+    then:
+      - "The security test detects the unauthorized outward side-effect and fails the criterion"
+  primary_oracle:
+    type: deterministic
+    artifact: "Side-effect monitor: speak() called without preceding human_click → assertion failure"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-LETHAL-TRIFECTA]
+  test_ids: [T-FLOW-016-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DELIVERY CHANNEL ROUTING — headline→voice+text, detail→chat, artifact→screen
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-017
+  name: "Result delivery channel determined by result structure: headline→voice+text, detail→chat, artifact→screen"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-FLOW-22]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The orchestrator receives a structured result with headline, detail, and artifact fields"
+    when: "The result is delivered"
+    then:
+      - "The headline field is delivered via speak() AND a simultaneous send_chat() text copy"
+      - "The detail field is delivered via send_chat() (DM if supported by the channel)"
+      - "The artifact field is delivered via show_screen()"
+      - "No channel selection is hard-coded per event type; the routing reads from the result's own structure"
+  primary_oracle:
+    type: deterministic
+    artifact: "Result delivery test: construct headline/detail/artifact result; assert speak + send_chat for headline; send_chat for detail; show_screen for artifact; no extra hard-coded branches"
+  thresholds:
+    wrong_channel_deliveries_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-WRONG-CHANNEL, F-HARDCODED-ROUTING]
+  test_ids: [T-FLOW-017]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LATE RESULT RELEVANCE CHECK
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-018
+  name: "Late workroom result is re-evaluated for relevance before delivery; stale result routes to chat not voice"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-FLOW-23]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A workroom task was dispatched and the meeting conversation has since moved to a different topic"
+    when: "The workroom result returns"
+    then:
+      - "The agent performs a relevance check before delivery (comparing result context to current room state)"
+      - "If the room has moved on, delivery is via send_chat() not speak()"
+      - "speak() is NOT called for a stale result"
+  primary_oracle:
+    type: deterministic
+    artifact: "Relevance-check test: inject stale result with diverged room state; assert send_chat called; speak not called"
+  thresholds:
+    voice_deliveries_for_stale_results_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-STALE-VOICE-DELIVERY]
+  test_ids: [T-FLOW-018]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ASYNC ETIQUETTE — time-to-completion disclosure
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-019
+  name: "Async-etiquette duration estimate spoken before long workroom task begins"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-FLOW-24]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A non-trivial ask is confirmed and routed to the workroom"
+    when: "dispatch_workroom is called"
+    then:
+      - "A speak() call with an estimated duration (e.g., 'that'll take ~20 minutes') fires before or immediately after dispatch"
+      - "The duration estimate is present in the user-visible output for every workroom dispatch"
+  primary_oracle:
+    type: deterministic
+    artifact: "Tool-call log: speak() containing duration estimate called within the same wake turn as dispatch_workroom; no dispatch without etiquette speak"
+  thresholds:
+    dispatches_without_etiquette_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-NO-ETIQUETTE]
+  test_ids: [T-FLOW-019]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CORRECTION ASK — routed as notes patch
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-020
+  name: "Correction ask ('that's wrong') routes as patch_notes, not workroom dispatch"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-FLOW-15]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A participant says 'that's wrong' or similar correction phrase referencing a prior Proxy output"
+    when: "The orchestrator's wake turn processes the correction ask"
+    then:
+      - "The agent calls patch_notes(correction) to update the notes substrate"
+      - "dispatch_workroom is NOT called for a correction ask"
+      - "The correction is acknowledged to the room"
+  primary_oracle:
+    type: deterministic
+    artifact: "Correction-ask test: inject correction event; assert patch_notes called; dispatch_workroom not called"
+  thresholds:
+    workroom_dispatches_for_corrections_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-CORRECTION-MISMATCH]
+  test_ids: [T-FLOW-020]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres for notes patch persistence; no live LLM required for routing assertion"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-FLOW-020-NEG
+  name: "NEG: Correction ask that dispatches to workroom is detected as wrong routing"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-FLOW-15]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A patched agent that routes all asks (including corrections) to dispatch_workroom"
+    when: "A correction ask arrives"
+    then:
+      - "The tool-call monitor detects dispatch_workroom was called instead of patch_notes"
+      - "The test fails, confirming the production path correctly routes corrections"
+  primary_oracle:
+    type: deterministic
+    artifact: "Tool-call monitor: dispatch_workroom on correction event → assertion failure"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-CORRECTION-MISMATCH]
+  test_ids: [T-FLOW-020-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres; agent patched to wrong routing"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SOURCE HONESTY — resolved vs lower-bound tagging
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-021
+  name: "Exact results tagged resolved; search-derived results tagged lower-bound; no mismatch"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-FLOW-19]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy produces results of varying confidence: one from a direct code_intel lookup (exact), one from a best-effort search (uncertain)"
+    when: "Each result is delivered to the room"
+    then:
+      - "The exact lookup result carries the 'resolved' tag in its delivery"
+      - "The search-derived result carries the 'lower-bound' tag in its delivery"
+      - "No exact result is tagged lower-bound and no uncertain result is tagged resolved"
+  primary_oracle:
+    type: deterministic
+    artifact: "Result tagging test: produce both result types; assert tag field == 'resolved' for exact; 'lower-bound' for uncertain; no cross-tagging"
+  thresholds:
+    cross_tagging_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-OVERSTATEMENT]
+  test_ids: [T-FLOW-021]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HUMAN ASK PREEMPTION
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-022
+  name: "Human ask preempts all in-progress Proxy activity (voice, dispatch queue, etc.)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-FLOW-18]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Proxy is mid-speech or processing a prior task"
+    when: "A new human ask arrives"
+    then:
+      - "The current Proxy voice output is halted (barge-in reflex fires)"
+      - "The new human ask is acked within 500ms"
+      - "The prior in-progress task is either suspended or yielded priority to the human ask's wake turn"
+      - "The human ask wake turn completes before resuming any prior work"
+  primary_oracle:
+    type: deterministic
+    artifact: "Preemption test: inject human ask during mid-speech and mid-dispatch; assert barge-in fired; ack within 500ms; human ask processed first"
+  thresholds:
+    ack_latency_ms: 500
+    preemption_failures_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-HUMAN-PREEMPTION-MISSED]
+  test_ids: [T-FLOW-022]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TASK SEMAPHORE / DUPLICATE-ATTACH BOOKKEEPING
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-023
+  name: "Task semaphore prevents duplicate attachment of the same task ID"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-FLOW-30]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A task with a known ID is already in-flight (held by semaphore)"
+    when: "A duplicate request arrives with the same task ID"
+    then:
+      - "The semaphore rejects the duplicate attach; no second workroom dispatch fires"
+      - "The in-flight task count remains correct (not double-counted)"
+      - "This bookkeeping executes in code, not via agent judgment"
+  primary_oracle:
+    type: deterministic
+    artifact: "Duplicate-attach test: dispatch same task ID twice; assert dispatch_workroom call count == 1; semaphore hold count == 1"
+  thresholds:
+    duplicate_dispatches_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-DUPLICATE-TASK]
+  test_ids: [T-FLOW-023]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PROJECTOR / SCREEN — pure rendering, never auto-speaks
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-024
+  name: "Projector renders artifacts only; it never autonomously emits speech or chat"
+  evidence_class: "[contract]"
+  authority_refs: [R-doc04-FLOW-29]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "show_screen(artifact) is called to render content on the projector"
+    when: "The projector component processes the artifact"
+    then:
+      - "The projector renders the artifact visually"
+      - "The projector does NOT call speak() or send_chat() autonomously"
+      - "Any spoken announcement accompanying a screen share is issued by the orchestrator via speak(), not by the projector"
+  primary_oracle:
+    type: deterministic
+    artifact: "Projector unit test: call show_screen; assert speak/send_chat call count from projector component == 0"
+  thresholds:
+    projector_auto_speaks_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-PROJECTOR-AUTO-SPEAK]
+  test_ids: [T-FLOW-024]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QUIET COMMAND — silences voice, does not resume without new turn
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-FLOW-025
+  name: "'Proxy, quiet' control command silences voice and does not auto-resume"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-FLOW-17]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy is speaking or is about to speak"
+    when: "The spoken control command 'Proxy, quiet' is recognized"
+    then:
+      - "Voice output is immediately silenced (within barge-in latency bounds)"
+      - "Proxy does NOT resume voice on its own within the same session"
+      - "Voice only resumes when a new wake turn explicitly calls speak()"
+  primary_oracle:
+    type: deterministic
+    artifact: "Quiet-command test: inject quiet command during speech; assert TTS terminated; assert no autonomous speak() called until new wake turn"
+  thresholds:
+    autonomous_resume_after_quiet_allowed: 0
+    violations_allowed: 0
+  fault_model_refs: [F-QUIET-IGNORED]
+  test_ids: [T-FLOW-025]
+  dependency_class: vendor:cartesia
+  mock_boundary: "Cartesia TTS cassette; quiet-command injected synthetically"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+
+- criterion_id: AC-FLOW-025-NEG
+  name: "NEG: Voice auto-resuming after 'Proxy, quiet' is detected as a violation"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-FLOW-17]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A patched orchestrator that resumes voice 2 seconds after a quiet command without a new wake turn"
+    when: "The quiet command is issued"
+    then:
+      - "The monitor detects the unauthorized speak() call and fails the test"
+  primary_oracle:
+    type: deterministic
+    artifact: "Speak call monitor: speak() invoked within 10s of quiet command without intervening human ask → assertion failure"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-QUIET-IGNORED]
+  test_ids: [T-FLOW-025-NEG]
+  dependency_class: vendor:cartesia
+  mock_boundary: "Cartesia TTS cassette; auto-resume patch injected"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}

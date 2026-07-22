@@ -1,0 +1,926 @@
+# Acceptance Criteria — Doc 08 Behavior · §2.7 Connect page + §2.8 /m/{meeting_id} home
+# Source: product/v0-spec/08-BEHAVIOR.md §2.7–§2.8
+# ID scheme: AC-SURF-NNN
+# Authority: DOC-08
+#
+# dependency_class values used in this file:
+#   db:postgres  — meetings, sessions, note_deltas, staged_drafts, revoked_tokens, audit log
+#   fs:git       — readiness status from code_intel (connect page status poll)
+#
+# mock_boundary rules (MANDATORY):
+#   db:postgres  : real Postgres; MUST NOT mock asyncpg
+#   fs:git       : real or test-fixture clone; MUST NOT stub the code_intel Readiness enum value
+#
+# NEG criteria are required for every non-null dependency_class per the format rules.
+# Golden-path items are marked golden_path: true.
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.7 · THE CONNECT PAGE
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Three sections only ───────────────────────────────────────────────────────
+
+- criterion_id: AC-SURF-001
+  name: "Connect page renders exactly three sections and nothing else in V0"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-01, R-doc08-SURF-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A fully rendered connect page response"
+    when: "The page HTML is inspected"
+    then:
+      - "Exactly three top-level sections are present: GitHub App install, readiness status, and invite instructions"
+      - "No analytics section, no settings section, and no meeting history section is rendered"
+      - "No other named content sections beyond the three exist"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert rendered page contains exactly three named section landmarks; assert no element with data-section in [analytics, settings, history]"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-SURF-001]
+
+# ── Five readiness states ─────────────────────────────────────────────────────
+
+- criterion_id: AC-SURF-002
+  name: "Connect page renders all five Readiness enum states and no others"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-02, R-doc08-SURF-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The readiness-status widget is parameterized with each value of the Doc 01 Readiness enum"
+    when: "Each state value is passed to the widget renderer in turn"
+    then:
+      - "State 'connecting' renders a connecting indicator"
+      - "State 'cloning' renders a cloning indicator"
+      - "State 'indexing' renders an indexing indicator"
+      - "State 'ready' renders a ready indicator"
+      - "State 'not_ready' renders a not_ready terminal indicator"
+      - "No 'mapping' state is handled or displayed; passing 'mapping' is either rejected or falls through to an unrecognized-state error"
+  primary_oracle:
+    type: deterministic
+    artifact: "parameterized unit test over all five enum values; assert each produces a distinct, named rendered block; assert 'mapping' produces no valid render"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-SURF-002]
+
+# ── not_ready: gaps list rendered ────────────────────────────────────────────
+
+- criterion_id: AC-SURF-003
+  name: "not_ready state renders the gaps list explicitly, not a vague error"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A Readiness value of not_ready with gaps: ['LSP index failed', 'dep-graph incomplete']"
+    when: "The connect page renders the readiness widget"
+    then:
+      - "Both gap strings 'LSP index failed' and 'dep-graph incomplete' appear verbatim in the rendered output"
+      - "No vague error placeholder (e.g., 'Something went wrong', 'Setup failed') is used instead"
+      - "The gaps list is rendered as a readable list, not as an internal identifier or stack trace"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert rendered HTML contains each gap string from the gaps list verbatim; assert no generic error string present"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-SURF-003]
+
+# ── ready: coverage number + flagged files ────────────────────────────────────
+
+- criterion_id: AC-SURF-004
+  name: "ready state displays the real coverage percentage and flagged file count"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A Readiness value of ready with coverage_pct=94 and flagged_files=['gen/api.pb.go', 'gen/types.py', ...] (12 total)"
+    when: "The connect page renders the readiness widget"
+    then:
+      - "The rendered output contains '94%' as the coverage number"
+      - "The rendered output states '12 files flagged' (or equivalent count from the actual list)"
+      - "The flagged file reason label appears (e.g., 'generated')"
+      - "No hard-coded placeholder percentage (e.g., '100%' or 'N/A') is used"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test asserting coverage_pct and len(flagged_files) appear in rendered output; assert no placeholder string present"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-SURF-004]
+
+# ── GET /connect/status is a public REST poll ─────────────────────────────────
+
+- criterion_id: AC-SURF-005
+  name: "GET /connect/status responds without session auth and returns a Readiness value"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A request to GET /connect/status with no session cookie and no auth header"
+    when: "The request is processed"
+    then:
+      - "The response is 200 (not 401 or 403)"
+      - "The response body contains a readiness field whose value is one of: connecting, cloning, indexing, ready, not_ready"
+      - "The response is not delivered over a WebSocket — it is a plain HTTP response"
+  primary_oracle:
+    type: deterministic
+    artifact: "integration test: unauthenticated GET /connect/status; assert 200; assert response.readiness in valid_enum_values"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: fs:git
+  mock_boundary: "real or fixture clone at code_intel; MUST NOT stub Readiness enum value directly in the route handler"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  fault_model_refs: []
+  test_ids: [T-SURF-005]
+
+- criterion_id: AC-SURF-005-NEG
+  name: "GET /connect/status degrades honestly when code_intel is unavailable"
+  authority_refs: [R-doc08-SURF-06]
+  dependency_class: fs:git
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The code_intel service is unreachable when GET /connect/status is called"
+    when: "code_intel errors or times out"
+    then:
+      - "The response body returns a readiness value of not_ready or an explicit error payload"
+      - "The route does NOT return 200 with a stale or fabricated ready state"
+      - "No silent proceed; the caller can observe the degraded state"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert response body does not contain readiness=ready when code_intel faults; assert honest failure displayed"
+  thresholds:
+    silent_failures_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SURF-005-NEG]
+
+# ── POST /connect/install/start: public, untrusted ───────────────────────────
+
+- criterion_id: AC-SURF-006
+  name: "POST /connect/install/start launches install flow without session auth"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-07, R-doc08-SURF-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A POST to /connect/install/start with no session cookie and a valid request body"
+    when: "The request is processed"
+    then:
+      - "The response is a redirect or 200 initiating the GitHub App install flow"
+      - "The route does NOT return 401 or 403 for a missing session"
+      - "The route validates the request as untrusted per §4.6 before acting"
+  primary_oracle:
+    type: deterministic
+    artifact: "integration test: unauthenticated POST /connect/install/start; assert response is redirect or 200 to install URL; assert no 401/403"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  fault_model_refs: []
+  test_ids: [T-SURF-006]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.8 · /m/{meeting_id} — AUTHENTICATED HOME
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Golden path: authenticated tenant member sees notes + drafts ──────────────
+
+- criterion_id: AC-SURF-007
+  name: "Golden path: authenticated tenant member GETs /m/{meeting_id} and receives notes markdown + draft cards"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-10, R-doc08-SURF-12]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A session authenticated as a tenant member; the meeting belongs to that tenant;
+      note_deltas exist for the meeting; staged_drafts rows exist for the meeting.
+    when: "GET /m/{meeting_id} is requested"
+    then:
+      - "The response is 200"
+      - "The rendered body contains the §2.6 notes markdown, folded via GET /internal/notes/{meeting_id}"
+      - "The rendered body contains at least one staged_drafts card with its draft_id"
+      - "Accept and reject buttons are present on each draft card"
+      - "The page does not contain a cross-meeting list, analytics, or history index"
+  primary_oracle:
+    type: deterministic
+    artifact: "integration test: assert 200; assert notes section present; assert draft cards present; assert no cross-meeting content"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres; MUST NOT mock asyncpg"
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: e2e}
+  fault_model_refs: []
+  test_ids: [T-SURF-007]
+
+- criterion_id: AC-SURF-007-NEG
+  name: "GET /m/{meeting_id} degrades honestly when Postgres is unavailable"
+  authority_refs: [R-doc08-SURF-10, R-doc08-SURF-12]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An authenticated session with meeting→tenant membership verified; Postgres is unreachable"
+    when: "Postgres errors or times out during note_deltas or staged_drafts fetch"
+    then:
+      - "The response is an honest error page or 5xx — not a partially rendered page with missing content"
+      - "No stale or empty notes section is silently rendered as if data were present"
+      - "No silent proceed"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert honest failure displayed; assert no silently empty notes section returned as 200"
+  thresholds:
+    silent_failures_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SURF-007-NEG]
+
+# ── Cross-tenant access → Not found (indistinguishable from absent) ───────────
+
+- criterion_id: AC-SURF-008
+  name: "Cross-tenant GET /m/{meeting_id} returns identical Not found as absent meeting"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-11]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      Session A belongs to Tenant A; meeting_id M belongs to Tenant B (cross-tenant).
+      A separate request with a valid session but meeting_id that does not exist at all.
+    when: "Both requests are made: cross-tenant GET and absent-meeting GET"
+    then:
+      - "Both responses have the same HTTP status code (404 or equivalent Not found)"
+      - "Both responses have the same response body shape — no field distinguishes cross-tenant from absent"
+      - "No timing side-channel distinguishes the two (within a reasonable tolerance)"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert response_cross_tenant.status == response_absent.status; assert response bodies are structurally identical; assert no tenant or meeting detail leaked"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres; MUST NOT mock asyncpg"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  fault_model_refs: []
+  test_ids: [T-SURF-008]
+
+- criterion_id: AC-SURF-008-NEG
+  name: "GET /m/{meeting_id} degrades honestly when tenant membership check query fails"
+  authority_refs: [R-doc08-SURF-11]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A valid authenticated session; the meeting→tenant membership check query fails with a DB error"
+    when: "Postgres errors during the membership check"
+    then:
+      - "The response is an error (5xx or honest error page), not a 200 with content"
+      - "Access is NOT granted by default when the membership check cannot be completed"
+      - "No silent proceed to content rendering"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert response is not 200 when membership check errors; assert no content rendered; assert honest failure displayed"
+  thresholds:
+    silent_failures_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SURF-008-NEG]
+
+# ── Unauthenticated (no token, no session) → Not found ───────────────────────
+
+- criterion_id: AC-SURF-009
+  name: "GET /m/{meeting_id} with no session and no capability token returns Not found"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-10]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A request to GET /m/{meeting_id} with no session cookie and no capability token parameter"
+    when: "The request is processed"
+    then:
+      - "The response is Not found (same shape as cross-tenant and absent-meeting responses)"
+      - "No content is rendered"
+      - "No redirect to a login page that leaks the meeting_id in the redirect URL"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert 404 (or configured Not found response); assert no meeting content in body; assert redirect URL (if any) does not leak meeting_id"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-SURF-009]
+
+# ── Notes folded via existing reader, not re-implemented ─────────────────────
+
+- criterion_id: AC-SURF-010
+  name: "Notes rendering calls GET /internal/notes/{meeting_id} — does not re-implement folding"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-12]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The /m/{meeting_id} route handler source code"
+    when: "The source is statically analyzed for note folding logic"
+    then:
+      - "The handler calls GET /internal/notes/{meeting_id} (or an equivalent direct function call to the same reader) to obtain folded notes"
+      - "No independent note-delta folding loop, accumulator, or merge logic appears in the /m/ route handler or its page component"
+      - "The reader in CANONICAL §11.4 is the sole folding seam"
+  primary_oracle:
+    type: deterministic
+    artifact: "grep for delta fold / accumulate / merge patterns in the /m/ route handler; assert zero independent fold implementations; assert call to internal notes reader present"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-SURF-010]
+
+# ── Capability token: golden path (forwarded recipient reads notes) ────────────
+
+- criterion_id: AC-SURF-011
+  name: "Golden path: capability token holder GETs /m/{meeting_id} and sees notes-only (no drafts)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-13, R-doc08-SURF-21, R-doc08-SURF-22]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A valid, non-expired, non-revoked capability token scoped to scope=\"notes\" for meeting_id M;
+      note_deltas exist for meeting M; staged_drafts exist for meeting M;
+      the request has no session cookie — only the capability token.
+    when: "GET /m/{meeting_id} is requested with the capability token"
+    then:
+      - "The response is 200"
+      - "The rendered body contains the notes markdown"
+      - "The rendered body does NOT contain staged_drafts cards"
+      - "The rendered body does NOT contain accept or reject buttons"
+      - "No draft content of any kind is present in the response"
+  primary_oracle:
+    type: deterministic
+    artifact: "integration test: token-only GET /m/{meeting_id}; assert 200; assert notes section present; assert zero draft card elements; assert zero accept/reject button elements"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres; MUST NOT mock asyncpg"
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: e2e}
+  fault_model_refs: []
+  test_ids: [T-SURF-011]
+
+- criterion_id: AC-SURF-011-NEG
+  name: "Capability token read degrades honestly when Postgres (revocation check or notes fetch) errors"
+  authority_refs: [R-doc08-SURF-13, R-doc08-SURF-21, R-doc08-SURF-23]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A valid capability token; Postgres is unavailable (revocation check or note_deltas fetch fails)"
+    when: "Postgres errors or times out"
+    then:
+      - "The response is an honest error (5xx or error page) — not a 200 with content"
+      - "Access is NOT granted by default when revocation cannot be confirmed"
+      - "No silent proceed"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert honest failure displayed; assert no notes content returned as 200 when revocation check errors"
+  thresholds:
+    silent_failures_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SURF-011-NEG]
+
+# ── Cross-meeting token forgery blocked ───────────────────────────────────────
+
+- criterion_id: AC-SURF-012
+  name: "Capability token for meeting A is rejected on GET /m/{meeting_id_B}"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-22]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A valid, non-expired capability token whose signed body contains meeting_id=A;
+      the request URL path is /m/{meeting_id_B} where B != A.
+    when: "The request is validated"
+    then:
+      - "The token validation rejects the token because signed meeting_id A != path meeting_id B"
+      - "The response is Not found or 403 — NOT a 200 with meeting B's notes"
+      - "No content from meeting B is disclosed"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert response is not 200; assert no meeting B notes in response body; assert token cross-meeting check fires before any data fetch"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres; MUST NOT mock asyncpg"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  fault_model_refs: []
+  test_ids: [T-SURF-012]
+
+# ── Revoked capability token rejected ─────────────────────────────────────────
+
+- criterion_id: AC-SURF-013
+  name: "Revoked capability token is rejected even when HMAC and expiry are valid"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-23]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A capability token with a valid HMAC and a future expiry (not yet expired);
+      the token has been revoked (revoked_tokens row or meeting epoch incremented).
+    when: "GET /m/{meeting_id} is requested with the revoked token"
+    then:
+      - "The revocation check fires before content is fetched"
+      - "The response is Not found or 401 — NOT a 200 with notes content"
+      - "No notes are disclosed to the revoked-token holder"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert response is not 200; assert revocation check logged before any data query; assert no notes in response"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres; MUST NOT mock asyncpg"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  fault_model_refs: []
+  test_ids: [T-SURF-013]
+
+- criterion_id: AC-SURF-013-NEG
+  name: "Revocation check degrades honestly when revoked_tokens table is unavailable"
+  authority_refs: [R-doc08-SURF-23]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A capability token whose HMAC and expiry are valid; the revoked_tokens table query fails"
+    when: "Postgres errors on the revocation check"
+    then:
+      - "Access is DENIED by default (fail-closed) — the system does not proceed as if not-revoked"
+      - "The response is an honest error, not a 200 with notes"
+      - "No silent proceed"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert response is not 200 when revocation query errors; assert fail-closed behavior; assert honest failure displayed"
+  thresholds:
+    silent_failures_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SURF-013-NEG]
+
+# ── Expired capability token rejected ─────────────────────────────────────────
+
+- criterion_id: AC-SURF-014
+  name: "Expired capability token is rejected regardless of HMAC validity"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-21]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A capability token with a valid HMAC but with exp in the past (expired)"
+    when: "GET /m/{meeting_id} is requested with the expired token"
+    then:
+      - "The response is Not found or 401 — NOT a 200 with notes"
+      - "The expiry check fires before any content is fetched"
+      - "No notes are disclosed"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert response is not 200 for expired token; assert expiry check precedes data fetch in trace"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-SURF-014]
+
+# ── Wrong-scope capability token rejected ─────────────────────────────────────
+
+- criterion_id: AC-SURF-015
+  name: "Capability token with scope != 'notes' is rejected on GET /m/{meeting_id}"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-21]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A capability token with a valid HMAC, valid expiry, correct meeting_id, but scope != 'notes' (e.g., scope='admin')"
+    when: "GET /m/{meeting_id} is requested"
+    then:
+      - "The scope check fires and rejects the token"
+      - "The response is Not found or 401"
+      - "No notes are disclosed"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert response is not 200 for wrong-scope token; assert scope field validated against 'notes' literal"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-SURF-015]
+
+# ── accept/reject: NEVER reachable by capability token ────────────────────────
+
+- criterion_id: AC-SURF-016
+  name: "POST accept/reject is rejected when presented a capability token (no session)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-14, R-doc08-SURF-15]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A valid, non-expired, non-revoked capability token with scope='notes' for the correct meeting_id;
+      no session cookie is present.
+    when: "POST /m/{meeting_id}/drafts/{draft_id}/accept is requested with only the capability token"
+    then:
+      - "The protected() check fires and rejects the request before any handler logic runs"
+      - "The response is 401 or 403"
+      - "No accept handler is invoked; no database state is changed"
+      - "The same behavior applies to the reject route"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert response is 401 or 403 for token-only POST accept; assert no Doc 04 handler invocation in trace; assert no DB write"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-SURF-016]
+
+# ── accept/reject: CSRF validation ────────────────────────────────────────────
+
+- criterion_id: AC-SURF-017
+  name: "POST accept/reject without a valid CSRF token is rejected without modifying state"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-16]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "An authenticated session with valid meeting→tenant membership; the CSRF token is absent or invalid in the POST body"
+    when: "POST /m/{meeting_id}/drafts/{draft_id}/accept is submitted"
+    then:
+      - "The response is 400 or 403"
+      - "No accept handler logic is invoked"
+      - "No database write is performed"
+      - "No audit record is created for the rejected attempt"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert 400 or 403 response; assert no staged_drafts row mutation; assert no Doc 04 handler call in trace"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-SURF-017]
+
+# ── accept/reject: idempotency ────────────────────────────────────────────────
+
+- criterion_id: AC-SURF-018
+  name: "Duplicate POST accept for the same draft_id is idempotent — no second handler invocation"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-17]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      An authenticated session with valid meeting→tenant membership and a valid CSRF token;
+      a POST /m/{meeting_id}/drafts/{draft_id}/accept has already succeeded once.
+    when: "The identical POST is submitted a second time"
+    then:
+      - "The response is the same success outcome as the first submission (2xx)"
+      - "The Doc 04 accept handler is NOT invoked a second time"
+      - "No duplicate audit records are created"
+      - "No error is returned to the caller"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert Doc 04 handler call count == 1 across both submissions; assert audit record count == 1; assert second response is 2xx"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres; MUST NOT mock asyncpg"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  fault_model_refs: []
+  test_ids: [T-SURF-018]
+
+- criterion_id: AC-SURF-018-NEG
+  name: "POST accept degrades honestly when Postgres write fails (audit or state change)"
+  authority_refs: [R-doc08-SURF-17, R-doc08-SURF-18]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An authenticated session with valid CSRF; Postgres is unavailable during the accept write"
+    when: "Postgres errors or times out during the state change or audit write"
+    then:
+      - "The response is a 5xx error — not a 200 claiming success"
+      - "The Doc 04 handler is NOT called before the DB write is confirmed (or the full operation is rolled back)"
+      - "No silent proceed"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert response is 5xx when Postgres errors; assert honest failure displayed; assert no partial state change without audit"
+  thresholds:
+    silent_failures_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SURF-018-NEG]
+
+# ── accept: audit record written in same transaction ─────────────────────────
+
+- criterion_id: AC-SURF-019
+  name: "Successful accept writes an audit record atomically with the state change"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-18]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An authenticated session; a valid accept POST with CSRF; Postgres is available"
+    when: "POST /m/{meeting_id}/drafts/{draft_id}/accept succeeds"
+    then:
+      - "An audit row exists in Postgres containing: meeting_id, draft_id, action='accept', actor identity, and a timestamp"
+      - "The audit row is present in the same transaction as the staged_drafts state change (committed together)"
+      - "No accepted draft lacks a corresponding audit row"
+  primary_oracle:
+    type: deterministic
+    artifact: "DB assertion: SELECT * FROM audit WHERE draft_id=$1 AND action='accept'; assert row exists with all required fields; assert committed in same Postgres transaction as staged_drafts update"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres; MUST NOT mock asyncpg"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  fault_model_refs: []
+  test_ids: [T-SURF-019]
+
+# ── accept calls Doc 04 handler; code-change drafts never push ────────────────
+
+- criterion_id: AC-SURF-020
+  name: "Accept handler invokes Doc 04 handler; code-change drafts never push to remote"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-19]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A code-change draft type; accept POST submitted with valid session, CSRF, and tenant membership"
+    when: "The accept handler runs"
+    then:
+      - "Doc 04's accept handler is invoked (not an in-memory operation)"
+      - "The diff bundle is recorded as available for download"
+      - "No git push, no remote repository write, and no deploy is triggered"
+      - "For a core-edit draft, the notes edit is applied via the same Doc 04 handler path"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert Doc 04 accept handler called in trace; assert no git-push command or remote-write event; assert diff_bundle_available flag set on the staged_drafts row"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres; MUST NOT mock asyncpg"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  fault_model_refs: []
+  test_ids: [T-SURF-020]
+
+# ── draft_id must be a persisted Envelope.draft_id ───────────────────────────
+
+- criterion_id: AC-SURF-021
+  name: "accept/reject with a non-persisted draft_id returns Not found without touching state"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-20]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An authenticated session with valid CSRF and meeting→tenant membership; draft_id is a valid UUID format but is not present in staged_drafts"
+    when: "POST /m/{meeting_id}/drafts/{unknown_draft_id}/accept is submitted"
+    then:
+      - "The response is Not found (404)"
+      - "No Doc 04 handler is invoked"
+      - "No database state is changed"
+      - "No audit record is written for the invalid request"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert 404 response; assert zero Doc 04 handler calls; assert no staged_drafts mutation; assert no audit row for unknown_draft_id"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres; MUST NOT mock asyncpg"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  fault_model_refs: []
+  test_ids: [T-SURF-021]
+
+# ── /m/ home: no cross-meeting list, no analytics, no history index ───────────
+
+- criterion_id: AC-SURF-022
+  name: "/m/{meeting_id} contains no cross-meeting list, no analytics, no history index in V0"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-24]
+  criticality: P2
+  blocking: false
+  behavior:
+    given: "The /m/{meeting_id} page template and route handler source code"
+    when: "The source is statically analyzed"
+    then:
+      - "No code path renders a list of meetings beyond the single named meeting"
+      - "No analytics widgets, event counts, or aggregate statistics appear in the template"
+      - "No history index or meeting-list endpoint is wired to the /m/ page"
+      - "These absences are correct; their presence would be a V0 over-implementation"
+  primary_oracle:
+    type: deterministic
+    artifact: "grep for meeting_list / history_index / analytics in /m/ route handler and page template; assert zero occurrences; code review assertion"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-SURF-022]
+
+# ── Cross-tenant accept/reject rejected ──────────────────────────────────────
+
+- criterion_id: AC-SURF-023
+  name: "POST accept for a draft belonging to another tenant returns Not found"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SURF-14]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      Session for Tenant A; the draft_id belongs to Tenant B's meeting;
+      valid CSRF token present.
+    when: "POST /m/{meeting_id_B}/drafts/{draft_id_B}/accept is submitted"
+    then:
+      - "The server-side meeting/draft→tenant check fires and identifies the cross-tenant mismatch"
+      - "The response is Not found (identical to absent draft)"
+      - "No Doc 04 handler is invoked"
+      - "No database state is changed"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert Not found response; assert no Doc 04 handler call; assert no staged_drafts mutation; assert response indistinguishable from absent draft_id"
+  thresholds:
+    violations_allowed: 0
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres; MUST NOT mock asyncpg"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  fault_model_refs: []
+  test_ids: [T-SURF-023]
+
+- criterion_id: AC-SURF-023-NEG
+  name: "POST accept degrades honestly when meeting/draft→tenant check query fails"
+  authority_refs: [R-doc08-SURF-14]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "An authenticated session; the meeting/draft→tenant membership check query fails with a DB error"
+    when: "Postgres errors during the tenant check on the accept route"
+    then:
+      - "Access is DENIED by default (fail-closed)"
+      - "The response is a 5xx or honest error — not a 200 claiming success"
+      - "No Doc 04 handler is called"
+      - "No silent proceed"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert response is not 200 when tenant check errors; assert fail-closed; assert no Doc 04 handler call; assert honest failure displayed"
+  thresholds:
+    silent_failures_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SURF-023-NEG]

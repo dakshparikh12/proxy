@@ -1,0 +1,285 @@
+# Doc 09 — §3 Scenarios S1–S4: requirements
+# Each requirement is one atomic observable obligation.
+
+# ════════════════════════════════════════════════════════════════════════════
+# S1 — THE HAPPY ARC
+# ════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc09-S3-01
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S1"
+  source_quote: "Answer cites file:line from the live clone in ≤ the latency target"
+  normalized_statement: >
+    WHEN a grounded question is asked aloud in a meeting
+    THE SYSTEM SHALL return an answer that cites at least one file:line reference
+    drawn from the live repository clone.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-02
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "CANONICAL §12.8"
+  source_quote: "ack-audible p95≤500ms"
+  normalized_statement: >
+    WHEN a grounded question is asked aloud
+    THE SYSTEM SHALL emit an audible acknowledgement within 500ms at the p95
+    percentile on the direct-answer path.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-03
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "CANONICAL §12.8"
+  source_quote: "first-grounded-text p50≤2s/p95≤4s"
+  normalized_statement: >
+    WHEN a grounded question is answered on the direct-answer path
+    THE SYSTEM SHALL deliver the first grounded text token with p50 ≤ 2000ms
+    and p95 ≤ 4000ms.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-04
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "CANONICAL §12.8"
+  source_quote: "first-grounded-audio p50≤2.5s/p95≤5s"
+  normalized_statement: >
+    WHEN a grounded question is answered on the direct-answer path
+    THE SYSTEM SHALL deliver the first grounded audio token with p50 ≤ 2500ms
+    and p95 ≤ 5000ms.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-05
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S1"
+  source_quote: "get a cited voice-headline + chat-detail answer"
+  normalized_statement: >
+    WHEN Proxy answers a grounded question
+    THE SYSTEM SHALL produce a voice headline (spoken via speak()) and a separate
+    chat-detail answer (sent via send_chat()); these are two distinct outputs.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-06
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S1"
+  source_quote: "notes file lands with decisions/actions/questions + receipts"
+  normalized_statement: >
+    WHEN a meeting ends
+    THE SYSTEM SHALL post a notes file containing all four required sections:
+    decisions, actions, questions, and receipts.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-07
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "CANONICAL §1.3"
+  source_quote: "The bundle carries notes_ref — a handle to the live notes object. It never re-serializes the growing notes object per ask."
+  normalized_statement: >
+    WHEN the Orchestrator sends a Bundle to the Workroom
+    THE SYSTEM SHALL set notes_ref equal to the meeting_id UUID and SHALL NOT
+    embed a serialized copy of the notes object in the bundle payload.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ════════════════════════════════════════════════════════════════════════════
+# S2 — DEP-GRAPH MOMENT
+# ════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc09-S3-08
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S2"
+  source_quote: "Proxy answers from the dependency graph in ~1 tool call, grounded, honest about coverage"
+  normalized_statement: >
+    WHEN a meeting participant asks "what breaks if we change this table?"
+    THE SYSTEM SHALL answer using get_dependents() or who_writes() against the
+    dependency graph, producing a grounded response within approximately one
+    tool-call round-trip.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-09
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "CANONICAL §12.6"
+  source_quote: "tier-1 exact-supported = Django ORM, SQLAlchemy, Rails ActiveRecord → resolved; tier-2 symbol-exact-but-writes-lower-bound; tier-3 search-only. Unsupported stacks never emit an exact who_writes"
+  normalized_statement: >
+    WHEN who_writes() or get_dependents() is called on a repository whose ORM is
+    not in the tier-1 supported set
+    THE SYSTEM SHALL label the result as lower-bound and SHALL NOT emit an exact
+    resolved answer.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-10
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S2"
+  source_quote: "Proxy answers from the dependency graph in ~1 tool call"
+  normalized_statement: >
+    WHEN a direct dep-graph answer is available
+    THE SYSTEM SHALL not require more than approximately one tool-call round-trip
+    to produce the grounded answer on the direct-answer path.
+  requirement_type: performance
+  criticality: P2
+  testability: executable
+  status: qualified
+
+# ════════════════════════════════════════════════════════════════════════════
+# S3 — REAL WORK → STAGED DRAFT → ACCEPT AFTER THE CALL
+# ════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc09-S3-11
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "CANONICAL §4"
+  source_quote: "propose_change must persist at creation (the sandbox's in-memory review_session dies at teardown, so a human accepting after the call needs durable storage)"
+  normalized_statement: >
+    WHEN the Workroom's propose_change() is invoked
+    THE SYSTEM SHALL write the full content to GCS (Object-Versioned) and insert
+    a staged_drafts row in Postgres before returning the draft_id.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-12
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S3"
+  source_quote: "'verified' only past the separate critic + evidence gate"
+  normalized_statement: >
+    WHEN the Workroom completes a build task
+    THE SYSTEM SHALL set verification: "verified" on the Envelope only after
+    passing the separate critic evaluation and the deterministic evidence gate;
+    it SHALL NOT auto-set verification: "verified" absent that gate.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-13
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S3"
+  source_quote: "a human accept after teardown applies it"
+  normalized_statement: >
+    WHEN a human POSTs to /m/{meeting_id}/drafts/{draft_id}/accept after
+    the meeting sandbox has been torn down
+    THE SYSTEM SHALL read the staged_drafts row and the GCS artifact and apply
+    the draft (notes-edit for core), sourcing data entirely from durable storage.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-14
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "CANONICAL §1.2"
+  source_quote: "a staged draft awaiting a human click → needs_review (carries artifact + receipts)"
+  normalized_statement: >
+    WHEN propose_change() creates a staged draft
+    THE SYSTEM SHALL return an Envelope with status = "needs_review" and a
+    populated draft_id and artifact fields.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-15
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "CANONICAL §12.9"
+  source_quote: "Core apply = 'code-change draft,' not 'PR' (rename every core 'PR'; propose_change persists the diff bundle; accept records approval + exposes the branch bundle for download; push = Expansion)"
+  normalized_statement: >
+    WHEN a staged draft of kind file-change is accepted in the core product
+    THE SYSTEM SHALL apply it as a local code-change draft (record approval,
+    expose the diff bundle) and SHALL NOT push to a remote Git repository.
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  status: qualified
+
+# ════════════════════════════════════════════════════════════════════════════
+# S4 — BARGE-IN + HUMAN CONTROL
+# ════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc09-S3-16
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "AGENTS.md Law 3"
+  source_quote: "barge-in stops speech <200ms"
+  normalized_statement: >
+    WHEN a barge-in signal is received while Proxy is speaking
+    THE SYSTEM SHALL stop audio output within 200ms of the barge-in event.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-17
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S4"
+  source_quote: "the in-flight wake/build aborts (abort-is-final)"
+  normalized_statement: >
+    WHEN an abort signal is issued to an in-flight wake turn or Workroom build
+    THE SYSTEM SHALL terminate that operation and SHALL NOT resume it; the abort
+    decision is final.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-18
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "AGENTS.md Law 3"
+  source_quote: "'quiet' silences"
+  normalized_statement: >
+    WHEN a "Proxy, quiet" command is received
+    THE SYSTEM SHALL silence all Proxy audio and chat output immediately.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-19
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "AGENTS.md Law 3"
+  source_quote: "a human ask preempts everything"
+  normalized_statement: >
+    WHEN a human ask arrives while a Workroom build is running
+    THE SYSTEM SHALL preempt the running build and process the human ask first.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified

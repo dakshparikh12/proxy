@@ -1,0 +1,1024 @@
+# Doc 05 (Workroom) — §3.9 / §3.10 / §3.11 / §3.12 acceptance criteria
+# Coverage:
+#   §3.9  Cost & latency
+#   §3.10 Safety wiring
+#   §3.11 Abort discipline
+#   §3.12 The envelope
+# ID scheme: AC-S9-NNN  (NEG pairs: AC-S9-NNN-NEG)
+# Verification ladder rules:
+#   dependency_class null → lint + unit
+#   dependency_class db:/gcs: → add integration
+#   dependency_class vendor:* → add reality
+#   golden_path: true → add e2e
+#   Every non-null dependency_class → pair with -NEG criterion
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §3.9 COST & LATENCY
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S9-001
+  name: "Sandbox pre-provisioned at meeting creation, not first dispatch"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc05-S9-01, R-doc05-S9-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A meeting is being created via the meeting-creation API endpoint"
+    when: "The meeting-creation handler completes"
+    then:
+      - "A sandbox is allocated and in RUNNING state before any task is dispatched"
+      - "The sandbox allocation timestamp precedes the meeting's first task dispatch timestamp"
+  primary_oracle:
+    type: deterministic
+    artifact: "meeting-creation handler emits a sandbox_provisioned event before returning; integration test asserts event timestamp < first task dispatch timestamp"
+  thresholds: {cold_boots_mid_meeting: 0}
+  dependency_class: vendor:e2b
+  mock_boundary: "e2b sandbox calls mocked; provisioning hook under test"
+  golden_path: true
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: reality}
+    - {tier: e2e}
+  test_ids: [T-S9-001]
+
+- criterion_id: AC-S9-001-NEG
+  name: "NEG: Mid-meeting cold boot detected and rejected"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S9-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A task is dispatched to a meeting whose sandbox allocation was skipped during meeting creation"
+    when: "The task dispatch path executes"
+    then:
+      - "The system raises an error or emits a telemetry event flagging the cold-boot condition"
+      - "The cold-boot path does NOT silently succeed"
+  primary_oracle:
+    type: deterministic
+    artifact: "test stubs sandbox as unprovisioned; asserts runtime guard raises ColdBootError or equivalent"
+  thresholds: {}
+  dependency_class: vendor:e2b
+  mock_boundary: "e2b mocked as unprovisioned; dispatch logic under test"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S9-001-NEG]
+
+- criterion_id: AC-S9-002
+  name: "Heartbeat activity-bump prevents sandbox reaping during silent build"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S9-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A build task is running and the sandbox activity timer would expire in the next heartbeat window"
+    when: "The II.1 heartbeat fires"
+    then:
+      - "The heartbeat handler calls the sandbox keep-alive / activity-bump API"
+      - "The sandbox activity timestamp is extended beyond the previous expiry"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test spies on sandbox keep-alive call; asserts it is invoked on every heartbeat cycle while a task is active"
+  thresholds: {missed_keep_alive_during_active_build: 0}
+  dependency_class: vendor:e2b
+  mock_boundary: "e2b keep-alive endpoint mocked; heartbeat handler under test"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: reality}
+  test_ids: [T-S9-002]
+
+- criterion_id: AC-S9-002-NEG
+  name: "NEG: Absent heartbeat allows sandbox to be reaped"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S9-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A build task is running but the heartbeat handler is disabled"
+    when: "The sandbox TTL expires"
+    then:
+      - "The sandbox provider reaps the sandbox (mock confirms no keep-alive was sent)"
+      - "This proves the keep-alive path is genuinely necessary"
+  primary_oracle:
+    type: deterministic
+    artifact: "test disables heartbeat; mock confirms zero keep-alive calls; sandbox mock transitions to REAPED state"
+  thresholds: {}
+  dependency_class: vendor:e2b
+  mock_boundary: "e2b keep-alive mocked; heartbeat disabled via feature flag"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S9-002-NEG]
+
+- criterion_id: AC-S9-003
+  name: "/health preflight returns 200 + non-null code-hash before expensive run"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc05-S9-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A big build is about to be dispatched to the sandbox"
+    when: "The dispatch path executes"
+    then:
+      - "A GET /health request is issued to the sandbox before the expensive run call"
+      - "The dispatch proceeds only if the response is HTTP 200 with a non-null code_hash field"
+      - "If /health returns non-200 or null code_hash, the dispatch is aborted"
+  primary_oracle:
+    type: deterministic
+    artifact: "integration test intercepts /health call; asserts it precedes any expensive-run invocation; asserts abort on unhealthy response"
+  thresholds: {skipped_health_preflight_before_big_build: 0}
+  dependency_class: vendor:e2b
+  mock_boundary: "sandbox /health endpoint mocked; dispatch logic under test"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: reality}
+  test_ids: [T-S9-003]
+
+- criterion_id: AC-S9-003-NEG
+  name: "NEG: Dispatch aborted when /health returns unhealthy"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S9-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A big build dispatch is triggered and the sandbox /health endpoint returns 503"
+    when: "The preflight check evaluates the response"
+    then:
+      - "The expensive run is NOT invoked"
+      - "An appropriate error is surfaced to the caller"
+  primary_oracle:
+    type: deterministic
+    artifact: "mock returns 503; test asserts expensive-run method was never called and error is propagated"
+  thresholds: {}
+  dependency_class: vendor:e2b
+  mock_boundary: "sandbox /health mocked to return 503"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S9-003-NEG]
+
+- criterion_id: AC-S9-004
+  name: "Output tokens clamped to min(MAX_OUTPUT_TOKENS, model_ceiling) per role"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S9-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "MAX_OUTPUT_TOKENS env is set to value E and the role's model has ceiling C"
+    when: "A model call is constructed for that role"
+    then:
+      - "max_tokens in the API request equals min(E, C)"
+      - "If E > C, the model ceiling wins; if E < C, the env value wins"
+  primary_oracle:
+    type: deterministic
+    artifact: "parametric unit test with (E=low, C=high), (E=high, C=low), (E=C) cases; asserts correct min() selection in request object"
+  thresholds: {tokens_exceeding_min_clamp: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-004]
+
+- criterion_id: AC-S9-005
+  name: "Context-overflow retry uses attempt-2 shrink hint on second attempt"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S9-06, R-doc05-S9-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A query fails with a context-length overflow error on the first attempt"
+    when: "The retry logic constructs the second attempt"
+    then:
+      - "The prompt for attempt 2 includes the hint: 'grep first; always read with start/end lines; max 10 files'"
+      - "The context window size is NOT widened relative to attempt 1"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test injects context-overflow error on attempt 1; captures prompt sent on attempt 2; asserts hint string present and no window-widen directive"
+  thresholds: {missing_shrink_hint_on_attempt_2: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-005]
+
+- criterion_id: AC-S9-006
+  name: "Context-overflow retry uses attempt-3 shrink hint on third attempt"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S9-06, R-doc05-S9-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A query fails with context-length overflow on both attempts 1 and 2"
+    when: "The retry logic constructs the third attempt"
+    then:
+      - "The prompt for attempt 3 includes the hint: 'max 5 files, 100 lines each; grep exclusively — do not browse'"
+      - "The context window is NOT widened"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test injects overflow on attempts 1 and 2; asserts attempt-3 prompt contains the exact hint string"
+  thresholds: {missing_shrink_hint_on_attempt_3: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-006]
+
+- criterion_id: AC-S9-007
+  name: "Retry bounded to 3 attempts; non-recoverable errors fail fast without retry"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S9-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A query encounters repeated context-overflow errors on all three attempts"
+    when: "The fourth overflow would occur"
+    then:
+      - "The retry loop terminates and raises a terminal error after exactly 3 attempts"
+      - "No fourth attempt is issued"
+    and_given: "A query encounters a non-recoverable error class (e.g., auth failure)"
+    and_when: "The error is first raised"
+    and_then:
+      - "The error propagates immediately with no retry"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test counts attempts via spy; asserts exactly 3 for overflow; asserts exactly 1 for auth-failure error class"
+  thresholds: {retries_beyond_cap: 0, retries_of_non_recoverable_errors: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-007]
+
+- criterion_id: AC-S9-008
+  name: "Prompt cache breakpoint placed at stable/volatile boundary with 1-hr TTL"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S9-10, R-doc05-S9-11]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The Workroom is building a prompt for a model call"
+    when: "The prompt is assembled"
+    then:
+      - "Exactly one cache_control block with type='ephemeral' and ttl=3600 is placed at the boundary between (system prompt + map prefix) and (bundle + transcript tail + subtask turns)"
+      - "No cache_control block appears after bundle/transcript content"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test inspects constructed prompt messages; asserts single cache_control at correct position; asserts no cache_control in volatile tail"
+  thresholds: {misplaced_cache_breakpoints: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-008]
+
+- criterion_id: AC-S9-009
+  name: "Per-task cost telemetry emits total_cost_usd + cache-read/creation split"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc05-S9-12]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A Workroom task completes (success or failure)"
+    when: "The task teardown runs"
+    then:
+      - "A telemetry event is emitted containing: task_id, meeting_id, total_cost_usd, cache_read_tokens, cache_creation_tokens"
+      - "Values are derived from the model API response usage fields, not hardcoded"
+      - "Meeting-level aggregation accumulates these fields across all tasks in the meeting"
+  primary_oracle:
+    type: deterministic
+    artifact: "integration test captures telemetry events; asserts all five fields present; asserts meeting aggregate increments correctly across two tasks"
+  thresholds: {tasks_missing_cost_telemetry: 0}
+  dependency_class: db:postgres
+  mock_boundary: "model API responses mocked with usage data; DB write under test"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  test_ids: [T-S9-009]
+
+- criterion_id: AC-S9-009-NEG
+  name: "NEG: Missing cache_read_tokens field causes telemetry validation to fail"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S9-12]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "A model response omits the cache_read_tokens field (e.g., older SDK version)"
+    when: "The telemetry emitter processes the response"
+    then:
+      - "The emitter raises a validation error or emits a zero/null sentinel clearly distinguishable from a legitimate zero"
+      - "The telemetry record is NOT silently emitted with a missing field"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test mocks model response without cache_read_tokens; asserts ValidationError or explicit null sentinel"
+  thresholds: {}
+  dependency_class: db:postgres
+  mock_boundary: "model response mocked; DB write skipped"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S9-009-NEG]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §3.10 SAFETY WIRING
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S9-010
+  name: "Sandbox environment built from allow-list, not deny-list"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S10-04]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The sandbox environment assembly function is invoked"
+    when: "The result is inspected"
+    then:
+      - "Only variables present in the declared allow-list appear in the environment"
+      - "No variable-stripping or deny-list logic is used to produce the final environment"
+  primary_oracle:
+    type: static_analysis
+    artifact: "grep/AST check confirms no deny-list pattern (e.g., no 'if key not in DENY_LIST'); unit test asserts injected env equals allow-list projection of input env"
+  thresholds: {deny_list_patterns_found: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-010]
+
+- criterion_id: AC-S9-011
+  name: "Mutually-exclusive auth keys stripped from sandbox environment"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S10-05]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The host environment contains both the intended SDK auth key and a mutually-exclusive alternative key"
+    when: "The allow-list environment projector runs"
+    then:
+      - "The mutually-exclusive alternative key is absent from the sandbox environment"
+      - "The intended auth key is present"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test seeds input env with conflicting key pair; asserts only the canonical auth key survives allow-list projection"
+  thresholds: {conflicting_auth_keys_leaked_to_sandbox: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-011]
+
+- criterion_id: AC-S9-012
+  name: "SDK stderr passed through secret redactor before logging"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S10-06]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The SDK emits stderr containing a string matching sk-ant-api03-*, a Bearer token, and a token= parameter"
+    when: "The stderr capture pipeline processes the output"
+    then:
+      - "Each of the three secret patterns is replaced by a redaction placeholder in the log output"
+      - "The raw secret string does NOT appear in any log sink"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test feeds synthetic secrets through the redactor; asserts none of the three patterns survive to the log string"
+  thresholds: {secrets_in_logs: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-012]
+
+- criterion_id: AC-S9-012-NEG
+  name: "NEG: Unredacted secret in stderr causes test failure"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S10-06]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The redactor is bypassed (e.g., a log handler writes stderr directly)"
+    when: "A synthetic sk-ant-* secret passes through the unguarded path"
+    then:
+      - "A secret-detection scanner in the test pipeline flags the leaked secret"
+      - "This proves the production redactor is genuinely on the critical path"
+  primary_oracle:
+    type: deterministic
+    artifact: "test writes synthetic sk-ant-* token to log sink directly; secret scanner asserts detection; confirms redactor is necessary"
+  thresholds: {}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S9-012-NEG]
+
+- criterion_id: AC-S9-013
+  name: "with_proxy_guardrails() is the last element appended to every prompt with transcript content"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S10-08]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A prompt is assembled that includes any transcript-derived content"
+    when: "The prompt construction function returns"
+    then:
+      - "with_proxy_guardrails() output appears as the final message or system block in the prompt"
+      - "No transcript-derived text appears after the guardrails block"
+  primary_oracle:
+    type: static_analysis
+    artifact: "unit test inspects final assembled prompt structure; asserts guardrails block is last; asserts no transcript content follows it"
+  thresholds: {prompts_without_trailing_guardrails: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-013]
+
+- criterion_id: AC-S9-014
+  name: "No long-lived secrets injected into sandbox; only scoped short-lived tokens"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S10-07]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A sandbox job is being started"
+    when: "The credential injection step runs"
+    then:
+      - "The credential provided is a short-lived scoped token (e.g., has an expiry within the job TTL)"
+      - "No static API keys or long-lived credentials appear in the sandbox environment"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test inspects credential injected into sandbox; asserts it has an expiry field and the expiry is within a job-length window; asserts no ANTHROPIC_API_KEY or equivalent long-lived key present"
+  thresholds: {long_lived_secrets_in_sandbox: 0}
+  dependency_class: vendor:e2b
+  mock_boundary: "e2b environment inspection mocked; token-issuer mocked to return short-lived token"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: reality}
+  test_ids: [T-S9-014]
+
+- criterion_id: AC-S9-014-NEG
+  name: "NEG: Long-lived key in sandbox environment is detected"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S10-07]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The credential injector is misconfigured and passes a static API key into the sandbox environment"
+    when: "A runtime invariant check or CI scanner inspects the environment"
+    then:
+      - "The scan detects the long-lived key pattern and raises an alert"
+      - "The job does NOT proceed silently with a leaked long-lived credential"
+  primary_oracle:
+    type: deterministic
+    artifact: "test seeds ANTHROPIC_API_KEY into injected env; scanner asserts detection and raises error"
+  thresholds: {}
+  dependency_class: vendor:e2b
+  mock_boundary: "e2b mocked; scanner logic under test"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S9-014-NEG]
+
+- criterion_id: AC-S9-015
+  name: "Full tool-call telemetry retained for every tool call in a task"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc05-S10-10]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A Workroom task executes and makes N tool calls"
+    when: "The task completes"
+    then:
+      - "The telemetry store contains N tool-call records each with: tool_name, inputs, output, invocation_timestamp"
+      - "No tool call is omitted from the trace"
+  primary_oracle:
+    type: deterministic
+    artifact: "integration test runs a task with a known number of mock tool calls; asserts telemetry store contains exactly N records with all required fields"
+  thresholds: {tool_calls_missing_from_trace: 0}
+  dependency_class: db:postgres
+  mock_boundary: "model API mocked; tool calls from synthetic response; DB write under test"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  test_ids: [T-S9-015]
+
+- criterion_id: AC-S9-015-NEG
+  name: "NEG: Tool call missing from telemetry causes trace integrity check to fail"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S10-10]
+  criticality: P0
+  blocking: false
+  behavior:
+    given: "The telemetry emitter drops one tool-call record (simulated bug)"
+    when: "A post-task trace integrity check runs"
+    then:
+      - "The integrity check detects the discrepancy between model response tool_use count and telemetry records"
+      - "An alert or error is raised"
+  primary_oracle:
+    type: deterministic
+    artifact: "test intercepts telemetry write for one call; asserts integrity check detects count mismatch"
+  thresholds: {}
+  dependency_class: db:postgres
+  mock_boundary: "telemetry write partially suppressed; integrity checker under test"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S9-015-NEG]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §3.11 ABORT DISCIPLINE
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S9-016
+  name: "AbortRegistry imported from libs/agentkit/abort.py — no local reimplementation"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S11-01]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The Workroom service source tree is inspected"
+    when: "A static analysis pass runs"
+    then:
+      - "AbortRegistry is imported from libs.agentkit.abort or agentkit.abort (the canonical module)"
+      - "No class named AbortRegistry is defined anywhere in services/workroom/"
+  primary_oracle:
+    type: static_analysis
+    artifact: "grep/AST check: (a) finds 'from.*agentkit.*abort import AbortRegistry' in workroom source; (b) finds zero class definitions of AbortRegistry in services/workroom/"
+  thresholds: {local_abort_registry_definitions: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-016]
+
+- criterion_id: AC-S9-017
+  name: "Abort signal threaded into every query() call"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S11-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A Workroom task is dispatched with an AbortController registered in the AbortRegistry"
+    when: "The task calls query() for any model invocation"
+    then:
+      - "The abort signal from the task's AbortController is passed as a parameter to query()"
+      - "No call to query() omits the abort_signal parameter"
+  primary_oracle:
+    type: static_analysis
+    artifact: "AST/grep check confirms every query() call site in Workroom passes abort_signal; unit test with spy asserts signal is non-None on each call"
+  thresholds: {query_calls_missing_abort_signal: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-017]
+
+- criterion_id: AC-S9-018
+  name: "Meeting-end event cancels all tasks in the meeting via AbortRegistry"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S11-03, R-doc05-S11-04]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A meeting has two active tasks registered in the AbortRegistry"
+    when: "A meeting-end event is received"
+    then:
+      - "Both tasks' AbortControllers have abort() called on them"
+      - "Both tasks terminate without producing a final result"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test registers two mock tasks; fires meeting-end event; asserts both AbortController.abort() calls were made via spies"
+  thresholds: {tasks_surviving_meeting_end: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-018]
+
+- criterion_id: AC-S9-019
+  name: "Whisper 'stop' command aborts the active task"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S11-04]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A task is running and registered in the AbortRegistry"
+    when: "A whisper 'stop' command is received"
+    then:
+      - "The task's AbortController.abort() is called"
+      - "The in-flight query() call is cancelled"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test fires whisper-stop event; asserts AbortController.abort() called on active task's controller"
+  thresholds: {stop_whisper_events_not_wired_to_abort: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-019]
+
+- criterion_id: AC-S9-020
+  name: "Per-task hard timeout aborts the task via AbortRegistry"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S11-04]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A task has a configured hard timeout and the timeout expires before the task completes"
+    when: "The timeout fires"
+    then:
+      - "The task's AbortController.abort() is called"
+      - "The task does NOT continue executing past the timeout"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test uses accelerated clock; fires timeout; asserts abort() called and task enters terminal state"
+  thresholds: {timeout_expiry_not_wired_to_abort: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-020]
+
+- criterion_id: AC-S9-021
+  name: "Aborted task is never retried or resurrected by session-resume or JSON-retry"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S11-05]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A task has been aborted (user-initiated)"
+    when: "Any retry or session-resume mechanism evaluates the task"
+    then:
+      - "The mechanism detects the ABORTED terminal state and does NOT schedule a retry"
+      - "The task remains in ABORTED state permanently"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test marks task ABORTED; invokes session-resume and JSON-retry code paths; asserts neither path re-queues the task"
+  thresholds: {aborted_tasks_resurrected: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-021]
+
+- criterion_id: AC-S9-022
+  name: "Every query() call supplies an explicit max_turns (not relying on SDK default)"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S11-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The Workroom service source tree is inspected"
+    when: "A static analysis pass enumerates all query() call sites"
+    then:
+      - "Every call site passes an explicit max_turns argument"
+      - "No call site omits max_turns (which would default to SDK's 1000)"
+  primary_oracle:
+    type: static_analysis
+    artifact: "AST/grep check confirms every query() call in services/workroom/ includes max_turns=<integer> as a keyword argument"
+  thresholds: {query_calls_missing_max_turns: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-022]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §3.12 THE ENVELOPE
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S9-023
+  name: "EnvelopeStatus enum contains exactly the five canonical values"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S12-02, R-doc05-S12-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The EnvelopeStatus enum definition is inspected"
+    when: "The enum members are enumerated"
+    then:
+      - "The enum contains exactly: done, partial, failed, needs_clarification, needs_review"
+      - "No additional members such as 'verified' or 'draft' are present"
+  primary_oracle:
+    type: static_analysis
+    artifact: "unit test asserts set(EnvelopeStatus) == {'done', 'partial', 'failed', 'needs_clarification', 'needs_review'}; lint rule flags any added member"
+  thresholds: {extra_status_values: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-023]
+
+- criterion_id: AC-S9-023-NEG
+  name: "NEG: Adding 'verified' as an EnvelopeStatus value is rejected at lint"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S12-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A developer adds VERIFIED = 'verified' to the EnvelopeStatus enum"
+    when: "The lint / enum-guard check runs"
+    then:
+      - "The check fails and reports the illegal member"
+      - "The invalid enum definition is NOT merged"
+  primary_oracle:
+    type: static_analysis
+    artifact: "test temporarily adds VERIFIED member; asserts lint/enum-guard produces a failure"
+  thresholds: {}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+  test_ids: [T-S9-023-NEG]
+
+- criterion_id: AC-S9-024
+  name: "Staged-draft envelope has status=needs_review and carries artifact + receipts"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S12-04]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A propose_change call produces a staged draft"
+    when: "The Workroom emits the resulting envelope"
+    then:
+      - "envelope.status == EnvelopeStatus.needs_review"
+      - "envelope.artifact is non-null (contains the draft_id or reference)"
+      - "envelope.receipts is non-null and non-empty"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test mocks propose_change returning a draft_id; asserts envelope fields per spec"
+  thresholds: {staged_draft_envelopes_with_wrong_status: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-024]
+
+- criterion_id: AC-S9-025
+  name: "Completed read-only answer envelope has status=done"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S12-05]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A Workroom task completes with a read-only answer (no side effects)"
+    when: "The envelope is emitted"
+    then:
+      - "envelope.status == EnvelopeStatus.done"
+      - "envelope.artifact is null (no draft was created)"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test runs a read-only task; asserts envelope.status == done and artifact is None"
+  thresholds: {read_only_answers_with_wrong_status: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-025]
+
+- criterion_id: AC-S9-026
+  name: "Failed build (critic/evidence-gate failure) envelope has status=failed"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S12-06]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A build task's critic check or evidence gate returns a failure"
+    when: "The envelope is emitted"
+    then:
+      - "envelope.status == EnvelopeStatus.failed"
+      - "envelope.receipts contains the failure evidence"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test mocks critic check returning failure; asserts envelope.status == failed and receipts non-empty"
+  thresholds: {failed_builds_with_wrong_status: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-026]
+
+- criterion_id: AC-S9-027
+  name: "Verification field expresses proof state; status field does not"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S12-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A build result has been verified by the evidence gate"
+    when: "The envelope is constructed"
+    then:
+      - "envelope.verification == 'verified' and envelope.status == EnvelopeStatus.done"
+      - "envelope.status is NOT set to any value that encodes proof state"
+    and_given: "A build result has not been verified"
+    and_then:
+      - "envelope.verification == 'unverified' and status is set per the normal status mapping"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test checks both verified and unverified paths; asserts verification field carries proof state and status is independent of it"
+  thresholds: {proof_state_encoded_in_status: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-027]
+
+- criterion_id: AC-S9-028
+  name: "headline is ≤ two sentences (speakable constraint)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S12-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An envelope is constructed by the Workroom"
+    when: "The headline field is validated"
+    then:
+      - "The headline contains at most two sentences (sentence count ≤ 2 using a simple period/question/exclamation split)"
+      - "Envelopes with headlines exceeding two sentences are rejected by the envelope validator"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test submits a three-sentence headline and asserts ValidationError; submits two-sentence headline and asserts acceptance"
+  thresholds: {envelopes_with_headline_exceeding_two_sentences: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-028]
+
+- criterion_id: AC-S9-029
+  name: "needs_clarification envelope carries exactly one question"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S12-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A Workroom task cannot proceed without clarification"
+    when: "The envelope with status=needs_clarification is emitted"
+    then:
+      - "envelope.question is a non-empty string (exactly one question)"
+      - "Envelopes with status=needs_clarification and question=None are rejected"
+      - "Envelopes with status=needs_clarification and a list of questions (>1) are rejected"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit tests: (a) None question → ValidationError; (b) list of 2 questions → ValidationError; (c) single string → accepted"
+  thresholds: {clarification_envelopes_with_wrong_question_count: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-029]
+
+- criterion_id: AC-S9-030
+  name: "Every envelope (final and progress) contains a non-null task_id"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S12-10]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Any envelope is emitted — whether a final result or a progress event"
+    when: "The envelope is validated"
+    then:
+      - "envelope.task_id is a non-null, non-empty string"
+      - "Envelopes with task_id=None or task_id='' are rejected by the envelope validator"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test: (a) constructs envelope without task_id → ValidationError; (b) constructs with task_id → accepted"
+  thresholds: {envelopes_missing_task_id: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-030]
+
+- criterion_id: AC-S9-031
+  name: "Progress events use envelope shape but do not carry terminal status"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S12-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A Workroom task emits a progress event mid-execution"
+    when: "The progress envelope is validated"
+    then:
+      - "All required envelope fields are present (headline, detail, receipts, status, task_id)"
+      - "status is NOT done or failed (non-terminal; may be partial or needs_review)"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test captures progress events during a running mock task; asserts all fields present; asserts status not in {done, failed}"
+  thresholds: {progress_events_with_terminal_status: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S9-031]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GOLDEN PATH — end-to-end envelope lifecycle
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S9-032
+  name: "Golden path: task lifecycle emits correct envelope sequence (progress → final)"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc05-S12-01, R-doc05-S12-09, R-doc05-S12-10]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A Workroom task is dispatched for a read-only question in a pre-provisioned meeting"
+    when: "The task runs to completion"
+    then:
+      - "One or more progress envelopes are emitted with task_id set and non-terminal status"
+      - "A final envelope is emitted with status=done, task_id set, headline ≤ 2 sentences, and receipts present"
+      - "Cost telemetry (total_cost_usd, cache_read_tokens, cache_creation_tokens) is emitted after the final envelope"
+  primary_oracle:
+    type: deterministic
+    artifact: "integration test with mocked model; captures envelope sequence; asserts structural invariants on each envelope in order"
+  thresholds: {golden_path_failures: 0}
+  dependency_class: db:postgres
+  mock_boundary: "model API mocked; DB writes live in integration test DB"
+  golden_path: true
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: e2e}
+  test_ids: [T-S9-032]
+
+- criterion_id: AC-S9-032-NEG
+  name: "NEG: Missing task_id on final envelope causes integration test to fail"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S12-10]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A bug causes the final envelope to be emitted without a task_id"
+    when: "The integration test envelope validator runs"
+    then:
+      - "The validator raises an error for the missing task_id"
+      - "The golden-path test fails, preventing merge"
+  primary_oracle:
+    type: deterministic
+    artifact: "test patches envelope emitter to omit task_id; asserts integration test validator catches it"
+  thresholds: {}
+  dependency_class: db:postgres
+  mock_boundary: "envelope emitter patched; DB in integration test DB"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S9-032-NEG]

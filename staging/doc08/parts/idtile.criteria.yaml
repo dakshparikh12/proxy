@@ -1,0 +1,994 @@
+# Acceptance Criteria — Doc 08 Experience, UI & Surfaces · §2.1 Identity + §2.2 Tile state machine
+# Source: product/v0-spec/08-BEHAVIOR.md §2.1, §2.2, §3
+# ID scheme: AC-IDTILE-NNN
+# Authority: DOC-08
+#
+# dependency_class values used in this file:
+#   vendor:cartesia  — Cartesia TTS HTTP API (voice synthesis)
+#   db:postgres      — meeting-scoped bearer token validation
+#
+# mock_boundary rules (MANDATORY when non-null):
+#   vendor:cartesia : mock ONLY via vcrpy cassette at call_external layer;
+#                     MUST NOT replace the call_external seam with Mock()
+#   db:postgres     : real Postgres; MUST NOT mock asyncpg
+#
+# NEG criteria are MANDATORY for every non-null dependency_class per format rules.
+# Golden-path: AC-IDTILE-016 is the core E2E presence promise (Listening state driven by real session-live event).
+#
+# Verification ladder derivation:
+#   lint + unit         : always present
+#   integration         : iff dependency_class is db:postgres or gcs:objects
+#   reality             : iff dependency_class is vendor:*
+#   negative            : ONLY on -NEG criteria
+#   e2e                 : ONLY iff golden_path: true
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.1 — IDENTITY
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Presence orb: visual form ─────────────────────────────────────────────────
+
+- criterion_id: AC-IDTILE-001
+  name: "Tile renders exactly one presence orb with teal-ink seed colour on near-black"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A rendered tile page"
+    when: "The tile DOM/canvas is inspected at any point during a session"
+    then:
+      - "Exactly one orb element is present"
+      - "The orb fill/stroke colour resolves to #35c2b8 (or a value within delta-E < 2 of the seed)"
+      - "The background colour is near-black (luminance < 0.05 in sRGB)"
+      - "No face, avatar, or mascot element is present anywhere in the tile"
+  primary_oracle: {type: deterministic, artifact: "snapshot test of rendered tile DOM: assert orb count == 1, assert background luminance, assert no face/avatar/mascot selector present"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-001]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Presence orb: breathing idle animation ───────────────────────────────────
+
+- criterion_id: AC-IDTILE-002
+  name: "Orb continuously animates with a breathing motion at idle"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A tile in the default Listening state (session live, no other driver active)"
+    when: "The tile is rendered over at least one full breath cycle"
+    then:
+      - "The orb scale, opacity, or equivalent breathing parameter oscillates continuously"
+      - "The oscillation is smooth (no step jumps) and periodic"
+      - "No static, frozen, or unanimated orb is ever rendered while the session is live"
+  primary_oracle: {type: deterministic, artifact: "unit animation test: record orb scale/opacity over 2 s at 60 fps equivalent; assert amplitude > 0 and at least one complete oscillation cycle"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-002]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── The hard ceiling: no forbidden code paths (structural static analysis) ────
+
+- criterion_id: AC-IDTILE-003
+  name: "Tile renderer source contains zero code paths for facial features, character animation, or theatrical effects"
+  evidence_class: "[static]"
+  authority_refs: [R-doc08-IDTILE-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The full source of the tile renderer (HTML, JS, CSS, and any imported modules)"
+    when: "Static analysis is applied to the renderer code tree"
+    then:
+      - "No function, class, or identifier name containing 'face', 'avatar', 'mascot', 'character', 'costume', 'theatrical' is present"
+      - "No animation controller accepts a keyframe set named for a facial or character expression"
+      - "No branch or conditional selects rendering behaviour based on a forbidden expressive form"
+  primary_oracle: {type: deterministic, artifact: "AST-level grep + identifier pattern match over tile renderer source tree; assert zero hits for forbidden symbols"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-003]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Orb expressive axes: exactly five ────────────────────────────────────────
+
+- criterion_id: AC-IDTILE-004
+  name: "Orb expressive API exposes exactly five axes: breath rate, firmness, shimmer, dim, pulse"
+  evidence_class: "[static]"
+  authority_refs: [R-doc08-IDTILE-04]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The orb renderer's public styling/animation API or parameter set"
+    when: "All configurable animation parameters are enumerated"
+    then:
+      - "Exactly five parameters are present: breath_rate, firmness, shimmer, dim, pulse"
+      - "No sixth parameter is present in the public API surface"
+      - "No parameter is unnamed or positional-only (each is identifiable by the canonical five names)"
+  primary_oracle: {type: deterministic, artifact: "static analysis: enumerate public orb API parameters; assert set == {breath_rate, firmness, shimmer, dim, pulse}"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-004]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Single Cartesia voice — positive ─────────────────────────────────────────
+
+- criterion_id: AC-IDTILE-005
+  name: "All TTS speech uses a single Cartesia voice configuration; no voice switching"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-05, R-doc08-IDTILE-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A sequence of TTS synthesis calls spanning different response types (technical, brief, conversational)"
+    when: "All calls are observed at the call_external Cartesia seam"
+    then:
+      - "Every call carries the same Cartesia voice_id parameter"
+      - "No call carries a voice_id that differs from the configured single voice"
+      - "No call carries a voice_id derived from question type, mode, or any runtime variable"
+  primary_oracle: {type: deterministic, artifact: "vcrpy cassette over 3+ synthesis calls across response types; assert voice_id is constant across all requests"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-005]
+  dependency_class: vendor:cartesia
+  mock_boundary: "may mock Cartesia HTTP response via vcrpy cassette at call_external layer; MUST NOT replace the call_external seam with Mock()"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+
+- criterion_id: AC-IDTILE-005-NEG
+  name: "Single-voice dispatch degrades honestly when Cartesia errors or times out"
+  authority_refs: [R-doc08-IDTILE-05, R-doc08-IDTILE-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The Cartesia TTS seam is configured to return a 503 or connection timeout"
+    when: "A TTS synthesis call is made"
+    then:
+      - "The error is surfaced to the caller as a structured failure (not a silent empty audio)"
+      - "No fallback voice or alternative TTS provider is silently substituted"
+      - "Retry + cost telemetry are triggered per the call_external contract"
+  primary_oracle: {type: deterministic, artifact: "negative cassette at call_external layer simulating 503; assert error propagated, no fallback voice selected"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-005-NEG]
+  dependency_class: vendor:cartesia
+  mock_boundary: "negative cassette / real fault at seam only; MUST NOT replace the call_external seam with Mock()"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ── No character or per-mode voices (static guard) ───────────────────────────
+
+- criterion_id: AC-IDTILE-006
+  name: "No code path selects a TTS voice based on mode, question type, or character"
+  evidence_class: "[static]"
+  authority_refs: [R-doc08-IDTILE-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The full source of the TTS dispatch layer"
+    when: "The voice_id selection logic is statically analysed"
+    then:
+      - "voice_id is a single configuration constant, never derived from a runtime variable"
+      - "No conditional branch selects voice_id based on question_type, mode, intent, or any other runtime signal"
+  primary_oracle: {type: deterministic, artifact: "AST analysis of TTS dispatch: assert voice_id assignment has no data dependency on runtime variables; assert single assignment site"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-006]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Copy-voice: plain, specific, warm, confident register ────────────────────
+
+- criterion_id: AC-IDTILE-007
+  name: "Proxy output never begins with 'As an AI' or contains filler / exclamation marks"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-07, R-doc08-IDTILE-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A set of Proxy-generated responses covering technical, brief, and uncertain answer types"
+    when: "Each response text is scanned"
+    then:
+      - "Zero occurrences of the phrase 'As an AI' in any form"
+      - "Zero occurrences of standalone filler phrases: 'Certainly!', 'Great question!', 'Of course!', 'Absolutely!'"
+      - "Zero exclamation marks in the response text"
+      - "Uncertainty is stated at most once per response and is quantified or qualified specifically"
+  primary_oracle: {type: deterministic, artifact: "regex scan of response corpus: forbidden_phrases == 0, exclamation_marks == 0, uncertainty_repetitions_per_response <= 1"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-007]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-IDTILE-008
+  name: "Spoken sentences contain exactly one thought each"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A Proxy spoken response split at sentence boundaries"
+    when: "Each sentence is parsed for clause count"
+    then:
+      - "No sentence contains more than one independent clause joined by 'and', 'but', or 'however' where both halves are independent thoughts"
+      - "Numbers and proper names are used in place of vague adjectives (e.g. 'p95 is 340ms' not 'it's pretty slow')"
+  primary_oracle: {type: deterministic, artifact: "unit test on a fixed spoken response fixture: clause-count parser asserts max 1 independent clause per sentence; adjective-over-number detector asserts zero vague-quantity adjectives"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-008]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Naming: no internal words in user-visible strings ────────────────────────
+
+- criterion_id: AC-IDTILE-009
+  name: "No user-visible string contains Orchestrator, Scribe, workroom, or sandbox"
+  evidence_class: "[static]"
+  authority_refs: [R-doc08-IDTILE-10]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "All user-visible strings: tile captions, TTS text, chat messages, UI labels across the codebase"
+    when: "The naming lint (libs.lint.naming) is applied"
+    then:
+      - "Zero occurrences of 'Orchestrator', 'Scribe', 'workroom', or 'sandbox' in any user-visible string"
+      - "All self-references by Proxy use the first-person pronoun 'I'"
+  primary_oracle: {type: deterministic, artifact: "libs.lint.naming lint gate: scan all user-visible string literals; assert forbidden_word_count == 0"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-009]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.2 — TILE STATE MACHINE
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Platform-agnostic behaviour ───────────────────────────────────────────────
+
+- criterion_id: AC-IDTILE-010
+  name: "Tile renders identically on Meet, Zoom, and Teams with no native-button dependency"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-11]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The tile renderer configured for each of three platform contexts (Meet, Zoom, Teams)"
+    when: "Each configuration is rendered and the output is compared"
+    then:
+      - "All three render outputs are pixel-identical (or within tolerance of rounding) for the same tile state"
+      - "No tile state or signal is derived from a platform-native button event or SDK call"
+  primary_oracle: {type: deterministic, artifact: "parameterised unit test over three platform contexts: diff rendered tile snapshots; assert no platform-specific signal import in tile code"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-010]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Outbound-only render WebSocket (CANONICAL §12.9) ─────────────────────────
+
+- criterion_id: AC-IDTILE-011
+  name: "Tile render WS authenticates via URL bearer token and never sends a message"
+  evidence_class: "[static]"
+  authority_refs: [R-doc08-IDTILE-12]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The tile's WebSocket client code and any event handlers registered on it"
+    when: "All ws.send / socket.send call sites are searched in the tile source"
+    then:
+      - "Zero ws.send or socket.send call sites exist in the tile renderer source"
+      - "The WS URL construction code reads a meeting-scoped bearer token from the URL parameter"
+      - "No inbound message handler attempts to echo or reply to the server"
+  primary_oracle: {type: deterministic, artifact: "static analysis: grep tile renderer source for send call sites; assert count == 0; assert URL includes bearer token parameter"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-011]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── TileState driven by backend ProxyMessage frames only ─────────────────────
+
+- criterion_id: AC-IDTILE-012
+  name: "All tile state transitions are driven exclusively by received tile.state ProxyMessage frames"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-13]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A tile renderer with an internal state machine"
+    when: "All state transition call sites are inspected"
+    then:
+      - "Every state transition is invoked inside a tile.state frame handler"
+      - "No state transition is invoked from a timer, a user-interaction handler, or a self-generated event"
+      - "Sending a tile.state frame for each of the 8 states in turn causes the correct state to activate"
+  primary_oracle: {type: deterministic, artifact: "static analysis + unit test: enumerate transition call sites, assert all are inside the tile.state frame handler; parameterised dispatch test for all 8 states"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-012]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Exactly 8 states, no more ────────────────────────────────────────────────
+
+- criterion_id: AC-IDTILE-013
+  name: "State machine has exactly 8 states matching the §2.2 set; no extra states exist"
+  evidence_class: "[static]"
+  authority_refs: [R-doc08-IDTILE-14, R-doc08-IDTILE-15]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The tile state machine definition (enum, discriminated union, or equivalent)"
+    when: "All defined states are enumerated"
+    then:
+      - "Exactly 8 states are defined: Listening, Listening-to, Working, Checking-ACK, Has-something, Speaking, Muted, Reaction"
+      - "No 9th or further state is present in the definition"
+      - "Every state has a documented named driving event"
+  primary_oracle: {type: deterministic, artifact: "static analysis: enumerate state type members; assert count == 8 and names match canonical set; assert each state is annotated with its driving event source"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-013]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── State: Listening — GOLDEN PATH ───────────────────────────────────────────
+
+- criterion_id: AC-IDTILE-014
+  name: "Listening state: orb breathes slowly when session is live and no other driver is active"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-16]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A live session (Doc 04 session-live event received) with no competing state driver active"
+    when: "The tile state machine processes the session-live event"
+    then:
+      - "The tile enters Listening state"
+      - "The orb animation breath rate is at slow setting (the slowest among all states)"
+      - "No caption overlay is displayed"
+  primary_oracle: {type: deterministic, artifact: "unit test: dispatch session-live tile.state frame; assert state == Listening; assert breath_rate param == SLOW constant; assert no caption element visible"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-014]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# Golden-path: proves the tile renders Listening driven by a real session-live event
+
+- criterion_id: AC-IDTILE-015
+  name: "End-to-end: tile enters and sustains Listening state driven by a real session-live backend event"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc08-IDTILE-16, R-doc08-IDTILE-13]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A real backend session is started and a tile.state{Listening} ProxyMessage frame is emitted over the render WS"
+    when: "The tile page receives the frame"
+    then:
+      - "The tile transitions to Listening state within 200 ms of frame receipt"
+      - "The orb breathes slowly for the duration of the session"
+      - "No internal name (Orchestrator/Scribe/workroom) appears in any rendered string"
+  primary_oracle: {type: deterministic, artifact: "E2E headless browser test: real WS frame dispatch, screenshot + DOM assertion confirming Listening state orb and absence of forbidden strings"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-015]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres for session creation; MUST NOT mock asyncpg; tile render WS may use an in-process test server"
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: e2e}
+
+- criterion_id: AC-IDTILE-015-NEG
+  name: "Listening E2E degrades honestly when Postgres is unavailable at session creation"
+  authority_refs: [R-doc08-IDTILE-16, R-doc08-IDTILE-13]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The Postgres connection is severed before the session-live event is persisted"
+    when: "The backend attempts to create the session and emit the tile.state frame"
+    then:
+      - "The error is returned to the caller as a structured failure"
+      - "The tile does not enter a spurious state (it remains in a safe default or shows no active session)"
+      - "No forbidden internal name leaks into any error message rendered on the tile"
+  primary_oracle: {type: deterministic, artifact: "negative cassette / real fault at db:postgres seam; assert tile shows no spurious active state; assert no forbidden name in rendered strings"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-015-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at seam only; MUST NOT replace the seam with Mock()"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ── State: Listening-to ───────────────────────────────────────────────────────
+
+- criterion_id: AC-IDTILE-016
+  name: "Listening-to state: caption '◉ listening to <name>' appears on address detection"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-17]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A tile in Listening state"
+    when: "A tile.state{Listening-to, speaker='Maya'} frame is received"
+    then:
+      - "The tile enters Listening-to state"
+      - "A caption matching '◉ listening to Maya' is displayed"
+      - "The name in the caption matches the speaker field of the received frame exactly"
+  primary_oracle: {type: deterministic, artifact: "unit test: dispatch Listening-to frame with speaker='Maya'; assert caption text == '◉ listening to Maya'"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-016]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── State: Working ────────────────────────────────────────────────────────────
+
+- criterion_id: AC-IDTILE-017
+  name: "Working state: quiet shimmer + one line of task-progress text from Doc 05 envelope"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-18]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A tile receiving a tile.state{Working, progress_text='checking the checkout retry logic…'} frame"
+    when: "The frame is processed"
+    then:
+      - "The tile enters Working state"
+      - "The orb shimmer parameter is active (non-zero)"
+      - "Exactly one line of progress text is displayed, matching the progress_text field of the frame"
+      - "The progress text does not contain any internal name (Orchestrator/Scribe/workroom)"
+  primary_oracle: {type: deterministic, artifact: "unit test: dispatch Working frame; assert state == Working; assert shimmer > 0; assert single progress-text element with correct content; naming lint on text"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-017]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-IDTILE-017-ACC
+  name: "Working state is also carried in speech or chat (accessibility law)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-18, R-doc08-IDTILE-25]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A system entering Working state"
+    when: "The state change occurs"
+    then:
+      - "The progress event that drives the tile Working state also results in a speech or chat output carrying the same progress information"
+      - "A participant receiving only audio or a screen-reader user can determine that Proxy is working on a task"
+  primary_oracle: {type: deterministic, artifact: "unit test: assert Working state transition triggers a speech/chat event carrying progress_text; assert the event is not suppressed"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-017-ACC]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── State: Checking (ACK) — timing boundary values ───────────────────────────
+
+- criterion_id: AC-IDTILE-018
+  name: "Checking-ACK state fires within 500 ms of LSP-bound direct-answer event"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-19, R-doc08-IDTILE-20]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A tile receiving a tile.state{Checking-ACK} frame triggered by an LSP-bound direct-answer event"
+    when: "The frame is processed"
+    then:
+      - "The 'checking…' line is rendered within 500 ms of the triggering event timestamp"
+      - "A transition at exactly 500 ms is compliant"
+      - "A transition at 501 ms or later is a violation"
+  primary_oracle: {type: deterministic, artifact: "timing unit test: record event timestamp and render timestamp; assert render_ts - event_ts <= 500ms"}
+  thresholds: {violations_allowed: 0, latency_budget_ms: 500}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-018]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-IDTILE-019
+  name: "Checking-ACK boundary values: 499 ms (pass), 500 ms (pass), 501 ms (fail)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc08-IDTILE-20]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A tile state machine and a synthetic event with a controlled timestamp offset"
+    when: "The render delay is set to 499 ms, 500 ms, and 501 ms in turn"
+    then:
+      - "At 499 ms: render is compliant (no violation)"
+      - "At 500 ms: render is compliant (exact boundary is inclusive)"
+      - "At 501 ms: render is a violation (exceeds budget)"
+  primary_oracle: {type: deterministic, artifact: "parameterised boundary test over three offsets; assert pass/pass/fail as specified"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-019]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-IDTILE-020
+  name: "Checking-ACK withholds speech until LSP returns; tile ACKs immediately"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-19]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A Checking-ACK event has been received and the tile has entered Checking-ACK state"
+    when: "The LSP response has not yet arrived"
+    then:
+      - "No TTS synthesis call is made before the LSP response arrives"
+      - "The 'checking…' line remains displayed throughout the wait"
+      - "When the LSP response arrives, speech synthesis is triggered exactly once"
+  primary_oracle: {type: deterministic, artifact: "unit test with delayed LSP mock: assert zero TTS calls before LSP response; assert exactly one TTS call after LSP response; assert tile stays in Checking-ACK state during wait"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-020]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-IDTILE-020-ACC
+  name: "Checking-ACK state is also carried in speech or chat (accessibility law)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-19, R-doc08-IDTILE-25]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A system entering Checking-ACK state"
+    when: "The state change occurs"
+    then:
+      - "A chat message or deferred speech event is queued confirming that Proxy is checking the answer"
+      - "A dial-in participant is not left without any signal that work is in progress"
+  primary_oracle: {type: deterministic, artifact: "unit test: assert Checking-ACK transition queues a chat or deferred speech event with non-empty checking acknowledgement text"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-020-ACC]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── State: Has-something ──────────────────────────────────────────────────────
+
+- criterion_id: AC-IDTILE-021
+  name: "Has-something state: orb firms, caption 'have the answer when there's a moment'"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-21]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A finished result is waiting and no turn boundary has arrived"
+    when: "A tile.state{Has-something} frame is received"
+    then:
+      - "The tile enters Has-something state"
+      - "The orb firmness parameter increases (firmer than the Listening idle)"
+      - "The caption 'have the answer when there's a moment' is displayed verbatim"
+  primary_oracle: {type: deterministic, artifact: "unit test: dispatch Has-something frame; assert state == Has-something; assert firmness > LISTENING_FIRMNESS; assert caption text exact match"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-021]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-IDTILE-022
+  name: "Has-something state: Proxy does not interrupt; waits for turn boundary"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-21, R-doc08-IDTILE-26]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The tile is in Has-something state and a participant is speaking"
+    when: "No turn boundary (Doc 04 end_of_turn) has arrived"
+    then:
+      - "No TTS speech output is produced"
+      - "No action is taken to interrupt the speaking participant"
+      - "The tile remains in Has-something state until a turn boundary arrives"
+  primary_oracle: {type: deterministic, artifact: "unit test: set tile to Has-something; inject speaker-active signal; assert zero TTS calls; assert tile stays in Has-something until turn-boundary event injected"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-022]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-IDTILE-022-ACC
+  name: "Has-something state is also carried in chat (accessibility law)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-21, R-doc08-IDTILE-25]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A system entering Has-something state"
+    when: "The state change occurs"
+    then:
+      - "A chat message is posted indicating Proxy has an answer ready"
+      - "A dial-in or screen-reader participant can determine that Proxy is waiting to speak"
+  primary_oracle: {type: deterministic, artifact: "unit test: assert Has-something state transition posts a non-empty chat message; assert message does not contain internal names"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-022-ACC]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── State: Speaking ───────────────────────────────────────────────────────────
+
+- criterion_id: AC-IDTILE-023
+  name: "Speaking state: orb pulses in sync with Doc 02 speaking signal"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-22]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A tile receiving a tile.state{Speaking} frame while Doc 02's speaking signal is active"
+    when: "The frame is processed"
+    then:
+      - "The tile enters Speaking state"
+      - "The orb pulse parameter is active and synchronized to the speaking signal amplitude or cadence"
+      - "The pulse is gentle (not a high-frequency flash)"
+  primary_oracle: {type: deterministic, artifact: "unit test: dispatch Speaking frame with speaking signal amplitude trace; assert pulse parameter changes in phase with amplitude events; assert pulse frequency within calm range"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-023]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── State: Muted ─────────────────────────────────────────────────────────────
+
+- criterion_id: AC-IDTILE-024
+  name: "Muted state: orb dimmed and 'muted' label shown; visually distinct from broken audio"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-23]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A tile receiving a tile.state{Muted} frame driven by Doc 02's hard-mute signal"
+    when: "The frame is processed"
+    then:
+      - "The tile enters Muted state"
+      - "The orb dim parameter is at maximum (or clearly below normal luminance)"
+      - "A 'muted' label is rendered visibly"
+      - "The visual presentation is clearly distinguishable from the Listening-but-no-audio-received silent state"
+  primary_oracle: {type: deterministic, artifact: "unit test: dispatch Muted frame; assert dim == MAX_DIM; assert 'muted' label element present and visible; snapshot diff vs Listening state confirms visual distinction"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-024]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-IDTILE-024-ACC
+  name: "Muted state is also carried in speech or chat (accessibility law)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-23, R-doc08-IDTILE-25]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A system entering Muted state"
+    when: "The hard-mute signal fires"
+    then:
+      - "A chat message is posted indicating Proxy is muted"
+      - "A dial-in participant can determine that the silence is chosen, not a fault"
+  primary_oracle: {type: deterministic, artifact: "unit test: assert Muted transition posts a chat message; assert message contains 'muted' or equivalent confirmation"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-024-ACC]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── State: Reaction ───────────────────────────────────────────────────────────
+
+- criterion_id: AC-IDTILE-025
+  name: "Reaction state: brief drawn ✓ appears on task-completed event; state is transient"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-24]
+  criticality: P2
+  blocking: false
+  behavior:
+    given: "A tile receiving a tile.state{Reaction} frame from a task-completed-and-delivered event"
+    when: "The frame is processed"
+    then:
+      - "The tile enters Reaction state"
+      - "A checkmark or small acknowledgement indicator is rendered"
+      - "The state is transient: the tile returns to the prior state within a short fixed duration (e.g. ≤ 3 s)"
+      - "The Reaction state is not entered for non-delivery events"
+  primary_oracle: {type: deterministic, artifact: "unit test: dispatch Reaction frame; assert checkmark element present; assert state reverts to previous state within 3 s"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-025]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Accessibility law (cross-cutting, per state) ──────────────────────────────
+
+- criterion_id: AC-IDTILE-026
+  name: "Every tile state change is accompanied by a speech or chat signal (accessibility cross-cut)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc08-IDTILE-25]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The tile state machine is parameterised over all 8 states"
+    when: "Each state transition is triggered in turn"
+    then:
+      - "For each of the 8 states, at least one speech event or chat message is produced carrying the semantic meaning of the state"
+      - "No state transition silently changes tile appearance with zero audio/chat signal"
+  primary_oracle: {type: deterministic, artifact: "property test over all 8 state enum values: assert each dispatch produces >= 1 non-empty speech or chat event"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-026]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── State-exclusivity: no state without a real named source ───────────────────
+
+- criterion_id: AC-IDTILE-027
+  name: "Every state is bound to a named real system event; no decorative or timer-only states"
+  evidence_class: "[static]"
+  authority_refs: [R-doc08-IDTILE-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The tile state machine definition and its event bindings"
+    when: "Each state's driving event declaration is inspected"
+    then:
+      - "Every state has exactly one declared driving event referencing a named real system source (Doc 02, Doc 04, or Doc 05)"
+      - "No state's only trigger is a timer, animation completion, or self-generated event"
+  primary_oracle: {type: deterministic, artifact: "static analysis: for each of 8 states, assert driving_event annotation present and non-null; assert annotation references a doc-sourced event type"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-027]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Legibility at distance ────────────────────────────────────────────────────
+
+- criterion_id: AC-IDTILE-028
+  name: "All state indicators meet minimum contrast and scale for across-room legibility"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-27]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A rendered tile snapshot for each of the 8 states"
+    when: "Contrast ratio and element size are measured"
+    then:
+      - "All text captions have a contrast ratio >= 4.5:1 against their background (WCAG AA)"
+      - "All text captions have a computed font size >= 16px at the tile's reference resolution"
+      - "The orb diameter is at least 30% of the tile's shorter dimension"
+  primary_oracle: {type: deterministic, artifact: "snapshot-based contrast and size checks for all 8 state renders; assert contrast >= 4.5:1 and font-size >= 16px and orb diameter >= 0.3 * min(width, height)"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-028]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Listening-to ACC ──────────────────────────────────────────────────────────
+
+- criterion_id: AC-IDTILE-029
+  name: "Listening-to state is also carried in speech or chat (accessibility law)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-17, R-doc08-IDTILE-25]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A system entering Listening-to state for speaker 'Maya'"
+    when: "The address-detection event fires"
+    then:
+      - "A chat message or speech event announces that Proxy is now listening to Maya"
+      - "A dial-in participant can determine who Proxy is attending to"
+  primary_oracle: {type: deterministic, artifact: "unit test: assert Listening-to transition produces a chat or speech event containing the speaker name"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-029]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Speaking ACC ──────────────────────────────────────────────────────────────
+
+- criterion_id: AC-IDTILE-030
+  name: "Speaking state visual pulse is not the only signal — speech itself carries the substance"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-22, R-doc08-IDTILE-25]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A system in Speaking state"
+    when: "The speaking signal is active"
+    then:
+      - "The audio TTS stream is simultaneously active"
+      - "A participant receiving audio only receives the spoken content (the pulse is enhancement only)"
+      - "The speaking state itself has no information that exists only in the visual pulse"
+  primary_oracle: {type: deterministic, artifact: "unit test: assert Speaking state always co-occurs with an active TTS audio stream event; no Speaking state without audio content"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-030]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Tenant isolation guard ────────────────────────────────────────────────────
+
+- criterion_id: AC-IDTILE-031
+  name: "Meeting-scoped bearer token is validated before any tile render frame is accepted"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-IDTILE-12]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A render WS connection attempt with a bearer token from a different meeting scope"
+    when: "The connection is processed"
+    then:
+      - "The connection is rejected with an authentication error"
+      - "No tile.state frame from that connection is processed"
+      - "No cross-meeting tile state leakage occurs"
+  primary_oracle: {type: deterministic, artifact: "unit test: present a mismatched meeting-scoped token; assert WS connection rejected with 401/403; assert zero state transitions processed"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-031]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres for token scope validation; MUST NOT mock asyncpg"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-IDTILE-031-NEG
+  name: "Bearer token validation degrades honestly when Postgres is unavailable"
+  authority_refs: [R-doc08-IDTILE-12]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Postgres is unavailable when the render WS connection bearer token must be validated"
+    when: "A connection attempt is made"
+    then:
+      - "The connection is rejected (fail-closed, not fail-open)"
+      - "No tile is rendered without a valid token"
+  primary_oracle: {type: deterministic, artifact: "negative cassette at db:postgres seam; assert WS connection refused; assert fail-closed behaviour"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-IDTILE-031-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at seam only; MUST NOT replace the seam with Mock()"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}

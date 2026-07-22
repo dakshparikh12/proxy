@@ -95,8 +95,22 @@ def parse_criteria(path: pathlib.Path) -> list[dict]:
             in_ladder = False
             cur["golden_path"] = _strip(gp.group(1)).lower() == "true"
             continue
-        if re.match(r"\s*verification_ladder:\s*$", line):
-            in_ladder = True
+        vl = re.match(r"\s*verification_ladder:\s*(.*)$", line)
+        if vl:
+            rest = vl.group(1).strip()
+            if rest.startswith("["):
+                # INLINE FLOW form: `verification_ladder: [lint, unit]` (bare scalars) or
+                # `[{tier: lint}, {tier: unit}]` (flow mappings) — both are valid YAML and
+                # semantically identical to the block form. Capture the tier names directly.
+                inner = rest.strip("[]")
+                if "tier:" in inner:
+                    cur["ladder"].update(re.findall(r"tier:\s*([A-Za-z0-9_]+)", inner))
+                else:
+                    cur["ladder"].update(re.findall(r"[A-Za-z0-9_]+", inner))
+                in_ladder = False
+            else:
+                # BLOCK form: an empty value here; tiers follow on subsequent `- {tier: X}` lines.
+                in_ladder = True
             continue
         if in_ladder:
             # Accept `- {tier: lint}` or `- tier: lint` ; a non-list, less-indented key ends the block.

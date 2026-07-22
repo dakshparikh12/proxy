@@ -1,0 +1,791 @@
+# Doc 09 — Section 3: Scenario acceptance criteria S5–S9
+# Paired with s3cd.requirements.yaml.
+# AC-S3-NNN starting from 501; fault/test IDs mirror AC number.
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# S5: Hours-long meeting survives an instance recycle
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-501
+  name: "Stale operation_runs row is reaped before replacement claim"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S3-50]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An orchestrator holds an operation_runs row in running state; HEARTBEAT_S≈10, STALE_AFTER_S≈40; the orchestrator process is killed (SIGKILL)"
+    when: "The reconcile sweep (mark_stale_operations_interrupted()) runs after STALE_AFTER_S elapses"
+    then:
+      - "The stale operation_runs row transitions out of the running state"
+      - "A replacement orchestrator's INSERT ... ON CONFLICT DO NOTHING RETURNING id succeeds and returns a row id"
+      - "The replacement orchestrator holds the claim exclusively (no second row for the same meeting_id in running state)"
+  primary_oracle: {type: deterministic_state_check, artifact: "operation_runs row state after reconcile sweep"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-501]
+  test_ids: [T-S3-501]
+  dependency_class: db:postgres
+  mock_boundary: "may replace Postgres responses via asyncpg test pool; MUST NOT skip the real schema/query path"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-501
+
+- criterion_id: AC-S3-501-NEG
+  name: "Atomic-claim reap degrades gracefully when Postgres is unavailable"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S3-50]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An orchestrator process has been killed; the reconcile sweep attempts to contact Postgres"
+    when: "Postgres refuses the connection or returns a transient error during mark_stale_operations_interrupted()"
+    then:
+      - "The reconcile sweep logs the failure and retries with backoff; it does NOT panic"
+      - "No new claim is granted until Postgres is available and the reap completes successfully"
+      - "The meeting remains in a safe suspended state; no duplicate running claim is created"
+  primary_oracle: {type: deterministic_state_check, artifact: "operation_runs row state and reconcile retry log"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-501-NEG]
+  test_ids: [T-S3-501-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "inject asyncpg connection failure; MUST exercise real retry/backoff path"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-501-NEG
+
+- criterion_id: AC-S3-502
+  name: "Replacement orchestrator replays recent transcript via Tier-3 replay"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S3-51]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting has transcript_segments rows persisted in Postgres; the original orchestrator has been killed and the replacement has claimed the operation_runs row"
+    when: "The replacement orchestrator initializes the meeting context"
+    then:
+      - "transcript_segments rows for the meeting are fetched in sequence order"
+      - "The replacement orchestrator's context window contains the replayed transcript before any new participant input is processed"
+      - "No transcript segment that was committed to the DB before the kill is omitted from replay"
+  primary_oracle: {type: deterministic_state_check, artifact: "replacement orchestrator context vs transcript_segments table content"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-502]
+  test_ids: [T-S3-502]
+  dependency_class: db:postgres
+  mock_boundary: "may replace Postgres responses via asyncpg test pool; MUST NOT skip the real query path for transcript_segments"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-502
+
+- criterion_id: AC-S3-502-NEG
+  name: "Transcript replay degrades gracefully when Postgres is unavailable"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S3-51]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A replacement orchestrator has claimed the meeting; transcript_segments query fails with a Postgres error"
+    when: "The replacement attempts Tier-3 replay against an unavailable Postgres"
+    then:
+      - "The replacement logs the replay failure and surfaces a not_ready / partial-context state to participants"
+      - "The replacement does NOT fabricate transcript content to fill the gap"
+      - "The meeting does NOT crash; it either retries replay or proceeds in degraded mode with an explicit acknowledgment"
+  primary_oracle: {type: deterministic_state_check, artifact: "orchestrator state log and participant-facing disclosure"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-502-NEG]
+  test_ids: [T-S3-502-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "inject asyncpg failure on transcript_segments query; MUST exercise real error-handling path"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-502-NEG
+
+- criterion_id: AC-S3-503
+  name: "meeting_cost reloads from Postgres on reclaim — never reset to zero"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S3-52]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting has accrued non-zero model_usd, transport_usd, and e2b_usd in its meeting_cost row; the orchestrator is killed"
+    when: "A replacement orchestrator reclaims the meeting and initializes check_meeting_budget()"
+    then:
+      - "The replacement reads the existing meeting_cost row from Postgres"
+      - "model_usd, transport_usd, and e2b_usd values are loaded from the DB row without modification"
+      - "The in-memory budget state starts from the loaded values, not from zero"
+  primary_oracle: {type: deterministic_state_check, artifact: "in-memory budget state vs meeting_cost Postgres row after reclaim"}
+  thresholds: {cost_reset_to_zero_violations: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-503]
+  test_ids: [T-S3-503]
+  dependency_class: db:postgres
+  mock_boundary: "may replace Postgres responses via asyncpg test pool; MUST NOT skip the real meeting_cost read path"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-503
+
+- criterion_id: AC-S3-503-NEG
+  name: "Budget reload fails safe when meeting_cost row is unreadable"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S3-52]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A replacement orchestrator has claimed the meeting; the meeting_cost SELECT fails with a Postgres error"
+    when: "check_meeting_budget() is called during reclaim initialization"
+    then:
+      - "The orchestrator does NOT default budget to zero or infinity; it enters a safe suspended state"
+      - "The failure is logged with full context"
+      - "Participants receive an explicit degraded-mode notification; the meeting does NOT silently continue as though budget is unconstrained"
+  primary_oracle: {type: deterministic_state_check, artifact: "orchestrator budget state and participant notification on DB error"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-503-NEG]
+  test_ids: [T-S3-503-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "inject asyncpg failure on meeting_cost SELECT; MUST exercise real error-handling path"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-503-NEG
+
+- criterion_id: AC-S3-504
+  name: "Meeting resumes serving participants after recycle with no permanent gap"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S3-53]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An orchestrator is killed mid-meeting; atomic claim, transcript replay, and budget reload all complete successfully"
+    when: "The replacement orchestrator finishes initialization"
+    then:
+      - "Participants can submit new input and receive responses within STALE_AFTER_S plus replay latency"
+      - "The meeting session remains logically continuous (meeting_id, tenant_id, and cost context unchanged)"
+      - "No permanent user-visible gap exists in meeting functionality after the recycle window closes"
+  primary_oracle: {type: deterministic_state_check, artifact: "meeting session continuity and first successful response after reclaim"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-504]
+  test_ids: [T-S3-504]
+  dependency_class: db:postgres
+  mock_boundary: "may replace Postgres responses via asyncpg test pool; MUST NOT skip the full reclaim sequence"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-504
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# S6: Concurrency — several meetings on one host at once
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-510
+  name: "No cross-meeting LLM-budget starvation under concurrent load"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S3-54]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "N meetings (N ≥ 2) are running concurrently on one host, each with active participants; the per-host in-flight bound is set to a value ≥ N"
+    when: "All N meetings submit work simultaneously"
+    then:
+      - "Each meeting makes measurable forward progress (receives at least one LLM response) within the concurrency window"
+      - "No meeting is blocked indefinitely while other meetings consume all available LLM budget"
+      - "Per-meeting in-flight tracking is independent; one meeting's slowness does NOT block others beyond the configured bound"
+  primary_oracle: {type: deterministic_state_check, artifact: "per-meeting response timestamps and in-flight counters under concurrent load"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-510]
+  test_ids: [T-S3-510]
+  dependency_class: null
+  mock_boundary: "no external dependency required; may use in-process mock LLM responders"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-510
+
+- criterion_id: AC-S3-511
+  name: "Per-meeting tenant isolation holds under concurrent meetings"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S3-55]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Two meetings with distinct tenant_ids (tenant_A and tenant_B) run concurrently; each has its own code index, notes, and cost rows"
+    when: "Each meeting queries or writes tenant-scoped data"
+    then:
+      - "tenant_A's queries never return rows with tenant_B's tenant_id"
+      - "tenant_B's queries never return rows with tenant_A's tenant_id"
+      - "Concurrent writes by tenant_A do NOT affect tenant_B's readable state"
+  primary_oracle: {type: deterministic_state_check, artifact: "tenant_id on all rows returned by each meeting's queries under concurrency"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-511]
+  test_ids: [T-S3-511]
+  dependency_class: db:postgres
+  mock_boundary: "may replace Postgres responses via asyncpg test pool; MUST NOT skip the real tenant_id predicate path"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-511
+
+- criterion_id: AC-S3-511-NEG
+  name: "Concurrent isolation holds when Postgres returns mixed-tenant data"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S3-55]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Two concurrent meetings; a simulated Postgres bug returns a row with the wrong tenant_id to meeting A's query"
+    when: "The application layer processes the query result"
+    then:
+      - "The application detects the tenant_id mismatch and rejects the row (does NOT surface wrong-tenant data to meeting A)"
+      - "An isolation-breach alert is logged at ERROR level"
+      - "Meeting A enters a safe degraded state rather than silently presenting cross-tenant data"
+  primary_oracle: {type: deterministic_state_check, artifact: "application-layer tenant_id validation and rejection log"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-511-NEG]
+  test_ids: [T-S3-511-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "inject wrong-tenant_id row via asyncpg test pool; MUST exercise real application-level tenant_id guard"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-511-NEG
+
+- criterion_id: AC-S3-512
+  name: "Sandboxes provisioned and reaped independently per meeting"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S3-56]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Two meetings with separate e2b sandboxes are running concurrently"
+    when: "One meeting's sandbox is terminated (either normally or via error injection)"
+    then:
+      - "The other meeting's sandbox continues running without interruption"
+      - "The terminated meeting's sandbox is reaped and its e2b_usd cost row is finalized independently"
+      - "No sandbox lifecycle event for one meeting is observable as a state change in another meeting's sandbox"
+  primary_oracle: {type: deterministic_state_check, artifact: "sandbox lifecycle events and e2b_usd cost rows per meeting_id"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-512]
+  test_ids: [T-S3-512]
+  dependency_class: null
+  mock_boundary: "may use in-process mock e2b sandbox responders; per-meeting independence is the invariant under test"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-512
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# S7: Cost circuit-breaker
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-520
+  name: "Soft-cap triggers Haiku downgrade + spoken disclosure before execution"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc09-S3-57]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting's cumulative cost (model_usd + transport_usd + e2b_usd) is below the soft cap; the next cost increment crosses the soft cap"
+    when: "check_meeting_budget() runs and detects the soft-cap breach"
+    then:
+      - "A speak() call with a cost-disclosure message is emitted to participants before or simultaneously with the model downgrade"
+      - "The orchestrator model is switched to Haiku for subsequent LLM calls"
+      - "The Scribe interval is widened"
+      - "The disclosure is not deferred, suppressed, or omitted under any execution order"
+  primary_oracle: {type: simulation_trace, artifact: "event trace showing speak() call happens before or at the same tick as model-config change to Haiku"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-520]
+  test_ids: [T-S3-520]
+  dependency_class: db:postgres
+  mock_boundary: "may replace Postgres responses via asyncpg test pool; MUST NOT skip real check_meeting_budget() path"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-520
+
+- criterion_id: AC-S3-520-NEG
+  name: "Soft-cap check fails safe when meeting_cost is unreadable"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S3-57]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "check_meeting_budget() is invoked; Postgres returns an error on the meeting_cost SELECT"
+    when: "The budget check cannot determine current spend"
+    then:
+      - "The orchestrator does NOT assume budget is under the soft cap and continue at full model capacity"
+      - "The orchestrator either applies the soft-cap degradation conservatively or suspends LLM calls until the check succeeds"
+      - "The failure is logged; participants receive a disclosure that the meeting is operating in degraded mode"
+  primary_oracle: {type: deterministic_state_check, artifact: "orchestrator model config and participant disclosure on budget-check DB error"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-520-NEG]
+  test_ids: [T-S3-520-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "inject asyncpg failure on meeting_cost SELECT; MUST exercise real budget-check error path"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-520-NEG
+
+- criterion_id: AC-S3-521
+  name: "Hard-cap triggers notes-only mode with spoken disclosure"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc09-S3-58]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting's cumulative cost crosses the hard-cap threshold ($1/hr envelope)"
+    when: "check_meeting_budget() detects the hard-cap breach"
+    then:
+      - "The meeting transitions to notes-only mode; no further tool invocations or LLM inference calls are submitted"
+      - "A speak() call with a hard-cap disclosure message is emitted before or simultaneously with the mode transition"
+      - "Notes accumulation continues until the meeting ends"
+  primary_oracle: {type: simulation_trace, artifact: "event trace showing speak() call at hard-cap transition and subsequent absence of tool/LLM calls"}
+  thresholds: {budget_exceeded_before_action_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-521]
+  test_ids: [T-S3-521]
+  dependency_class: db:postgres
+  mock_boundary: "may replace Postgres responses via asyncpg test pool; MUST NOT skip real check_meeting_budget() path"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-521
+
+- criterion_id: AC-S3-521-NEG
+  name: "Hard-cap check fails safe when meeting_cost is unreadable"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S3-58]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The meeting is near the hard-cap threshold; Postgres returns an error on the meeting_cost SELECT"
+    when: "check_meeting_budget() cannot determine current spend"
+    then:
+      - "The orchestrator applies hard-cap (notes-only) conservatively rather than continuing full operation"
+      - "Participants receive a disclosure that the meeting is in degraded/notes-only mode due to a budget-check failure"
+      - "No tool invocations or LLM inference calls proceed while the budget is unknown"
+  primary_oracle: {type: deterministic_state_check, artifact: "orchestrator mode (notes-only enforced) and participant disclosure on DB error"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-521-NEG]
+  test_ids: [T-S3-521-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "inject asyncpg failure on meeting_cost SELECT; MUST exercise real hard-cap error path"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-521-NEG
+
+- criterion_id: AC-S3-522
+  name: "No silent cost-cap transition — every transition emits a spoken disclosure"
+  evidence_class: "[simulation]"
+  authority_refs: [R-doc09-S3-59]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Any meeting approaches a soft or hard cost-cap boundary under any concurrency or meeting state"
+    when: "The cap transition executes (soft or hard)"
+    then:
+      - "A speak() call with a disclosure message is present in the execution trace for every cap transition"
+      - "No cap transition path exists in the code that does not include a speak() call"
+      - "Static analysis (lint) confirms no code path from check_meeting_budget() cap-branch exits without calling speak()"
+  primary_oracle: {type: simulation_trace, artifact: "exhaustive trace of cap-transition code paths confirming speak() is always called"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-522]
+  test_ids: [T-S3-522]
+  dependency_class: null
+  mock_boundary: "no DB dependency; this criterion tests the speak() call presence in the code path, not DB state"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-522
+
+- criterion_id: AC-S3-523
+  name: "check_meeting_budget() sums all three cost columns — none omitted"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S3-60]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting_cost row has non-zero values in model_usd, transport_usd, and e2b_usd"
+    when: "check_meeting_budget() computes total spend"
+    then:
+      - "The computed total equals model_usd + transport_usd + e2b_usd from the meeting_cost row"
+      - "Omitting any single column causes the total to differ and the test to fail"
+      - "The function does NOT include undocumented columns in the sum (no phantom cost inflation)"
+  primary_oracle: {type: deterministic_state_check, artifact: "check_meeting_budget() return value vs explicit column-sum from meeting_cost row"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-523]
+  test_ids: [T-S3-523]
+  dependency_class: db:postgres
+  mock_boundary: "may replace Postgres responses via asyncpg test pool; MUST use the real query path for column selection"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-523
+
+- criterion_id: AC-S3-523-NEG
+  name: "check_meeting_budget() column-sum fails safe when meeting_cost row is missing"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S3-60]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "check_meeting_budget() is invoked; the meeting_cost row does not exist (first invocation race or DB delete)"
+    when: "The SELECT returns no row"
+    then:
+      - "The function does NOT treat a missing row as zero spend; it raises or returns an explicit missing-row sentinel"
+      - "The caller receives a clear error signal and enters a safe degraded state"
+      - "No LLM call or tool invocation proceeds as though budget is unlimited"
+  primary_oracle: {type: deterministic_state_check, artifact: "check_meeting_budget() return/raise behavior on empty SELECT result"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-523-NEG]
+  test_ids: [T-S3-523-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "inject empty asyncpg result set for meeting_cost SELECT; MUST exercise real missing-row code path"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-523-NEG
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# S8: Honest failure
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-530
+  name: "Index not_ready surfaces gap list labeled lower-bound — no fabricated answer"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-61]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The codebase index readiness is not_ready or partial (coverage_pct < 100, gaps list non-empty)"
+    when: "A participant asks a question about code that falls within a gap"
+    then:
+      - "Proxy's response includes the gap list or a description of what is not indexed"
+      - "The response is labeled lower-bound (Law 2: Never overstate)"
+      - "Proxy does NOT provide a confident answer about code in the gap"
+      - "No response for gap-affected code is tagged resolved"
+  primary_oracle: {type: state_machine, artifact: "readiness state (not_ready / gaps) and response label in participant output"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-530]
+  test_ids: [T-S3-530]
+  dependency_class: null
+  mock_boundary: "no external dependency; readiness state machine is in-process"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-530
+
+- criterion_id: AC-S3-531
+  name: "Tool error returns partial/failed status — never done"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-62]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A tool handler is invoked and encounters an error (exception, non-zero exit, or upstream failure)"
+    when: "The tool handler returns to its caller"
+    then:
+      - "The returned EnvelopeStatus is needs_review or failed"
+      - "The returned EnvelopeStatus is never done"
+      - "The tool handler does NOT throw; it returns the error status (never-throw boundary enforced by libs.agentkit.tools)"
+  primary_oracle: {type: contract_check, artifact: "EnvelopeStatus value returned by tool handler under injected error conditions"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-531]
+  test_ids: [T-S3-531]
+  dependency_class: null
+  mock_boundary: "no external dependency; inject error within tool handler; test the return contract"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-531
+
+- criterion_id: AC-S3-532
+  name: "STT gap acknowledged — transcript content not fabricated to fill gap"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-63]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The transcript plane reports a speech-to-text gap (a time interval with no segments)"
+    when: "Proxy processes input that spans or follows the gap"
+    then:
+      - "Proxy acknowledges the gap to participants (e.g. 'I missed some audio')"
+      - "Proxy does NOT infer or fabricate what was said during the gap"
+      - "Any response about content in the gap is explicitly labeled as unheard or unknown"
+  primary_oracle: {type: state_machine, artifact: "participant-facing output and gap-acknowledgment presence in response"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-532]
+  test_ids: [T-S3-532]
+  dependency_class: null
+  mock_boundary: "no external dependency; inject transcript gap via in-process transcript plane mock"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-532
+
+- criterion_id: AC-S3-533
+  name: "Failed build returns needs_review or failed — never done"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-62]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A build step executes and fails (compiler error, test failure, or critic gate not passed)"
+    when: "The build result is mapped to an EnvelopeStatus"
+    then:
+      - "EnvelopeStatus is needs_review or failed"
+      - "EnvelopeStatus is never done when the build has not passed the critic+evidence gate"
+      - "The result is communicated to participants with enough context to understand the failure"
+  primary_oracle: {type: contract_check, artifact: "EnvelopeStatus on build failure vs criterion that build has not passed critic gate"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-533]
+  test_ids: [T-S3-533]
+  dependency_class: null
+  mock_boundary: "no external dependency; inject build failure in-process"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-533
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# S9: Tenant isolation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-540
+  name: "Message without valid owned meeting_id rejected at dispatch funnel"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S3-64]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A message arrives at the dispatch funnel from an unauthenticated user, a public connect page, or a crafted tile; the message either carries no meeting_id or a meeting_id not owned by the authenticated principal"
+    when: "The dispatch funnel processes the message"
+    then:
+      - "The message is rejected at the funnel boundary with an authorization error"
+      - "No tenant-scoped handler receives the message"
+      - "No customer code, notes, cost rows, or transcript segments are read as a result of the message"
+  primary_oracle: {type: deterministic_state_check, artifact: "dispatch funnel rejection decision and absence of downstream tenant-data reads"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-540]
+  test_ids: [T-S3-540]
+  dependency_class: null
+  mock_boundary: "no external dependency; meeting_id ownership check is in-process at funnel boundary"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-540
+
+- criterion_id: AC-S3-541
+  name: "No cross-tenant read of customer code — P0 isolation invariant"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S3-65]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Two tenants (tenant_A and tenant_B) have separate code repositories indexed in the system"
+    when: "Any query or lookup is executed in the context of tenant_A's meeting"
+    then:
+      - "No row belonging to tenant_B is returned to or used by tenant_A's processing path"
+      - "tenant_id is present in every predicate touching customer-code tables"
+      - "The isolation holds for all query paths: index lookups, code retrieval, notes reads, cost checks"
+  primary_oracle: {type: deterministic_state_check, artifact: "all SQL predicates on tenant-scoped tables include tenant_id; no cross-tenant rows in any result set"}
+  thresholds: {cross_tenant_reads_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-541]
+  test_ids: [T-S3-541]
+  dependency_class: db:postgres
+  mock_boundary: "may replace Postgres responses via asyncpg test pool; MUST exercise real tenant_id predicate path on all customer-data queries"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-541
+
+- criterion_id: AC-S3-541-NEG
+  name: "Cross-tenant read is impossible even when Postgres returns wrong-tenant data"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S3-65]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Postgres is healthy but (via test injection) returns a row whose tenant_id does not match the requesting meeting's tenant_id"
+    when: "The application layer processes the query result"
+    then:
+      - "The application detects the tenant_id mismatch and REJECTS the row before it reaches any processing path"
+      - "A P0 isolation-breach event is logged at CRITICAL level"
+      - "The requesting meeting receives no data from the wrong-tenant row"
+      - "The test proves that even a malicious or buggy Postgres response cannot leak cross-tenant data to the application"
+  primary_oracle: {type: deterministic_state_check, artifact: "application-layer tenant_id guard rejection and CRITICAL-level isolation-breach log entry"}
+  thresholds: {cross_tenant_reads_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-541-NEG]
+  test_ids: [T-S3-541-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "inject wrong-tenant_id row via asyncpg test pool; MUST prove application-layer rejection is the last line of defense, not just DB predicate"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-541-NEG
+
+- criterion_id: AC-S3-542
+  name: "entity→owner→tenant resolved server-side — client-supplied tenant_id rejected"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S3-66]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "An inbound message references an entity (tile, connect-page token, or similar) and includes a client-supplied tenant_id field in the payload"
+    when: "The dispatch funnel or message handler processes the entity reference"
+    then:
+      - "The system performs entity→owner→tenant resolution using the authoritative Postgres lookup"
+      - "The client-supplied tenant_id field is ignored for authorization decisions"
+      - "If the server-side resolved tenant_id differs from the client-supplied value, the message is rejected"
+  primary_oracle: {type: deterministic_state_check, artifact: "server-side resolved tenant_id vs client-supplied tenant_id; rejection decision when they differ"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-542]
+  test_ids: [T-S3-542]
+  dependency_class: db:postgres
+  mock_boundary: "may replace Postgres entity-lookup via asyncpg test pool; MUST NOT skip the real resolution path"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-542
+
+- criterion_id: AC-S3-542-NEG
+  name: "entity→owner→tenant resolution fails safe when Postgres lookup errors"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc09-S3-66]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "An inbound message requires entity→owner→tenant resolution; the Postgres lookup returns an error or empty result"
+    when: "The dispatch funnel cannot authoritatively resolve the tenant_id"
+    then:
+      - "The message is rejected; it is NOT forwarded using the client-supplied tenant_id as a fallback"
+      - "The failure is logged"
+      - "No tenant-scoped data is accessed while the authoritative lookup is unavailable"
+  primary_oracle: {type: deterministic_state_check, artifact: "dispatch funnel rejection on resolution failure; absence of any tenant-data access with unverified tenant_id"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-S3-542-NEG]
+  test_ids: [T-S3-542-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "inject asyncpg error on entity-lookup query; MUST prove fallback to client-supplied tenant_id is impossible"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-542-NEG

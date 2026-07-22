@@ -1,0 +1,416 @@
+# Requirements — Doc 08 Experience, UI & Surfaces · §2.6 Join, consent, and close
+# Source: product/v0-spec/08-BEHAVIOR.md §2.6
+# ID prefix: R-doc08-JOINCLOSE-NN
+# Authority: DOC-08 §2.6
+# Status: qualified
+#
+# CANONICAL overrides applied:
+#   §12.9  — close link is /m/{meeting_id} home, NEVER a raw GCS URI
+#   Capability token: signed (HMAC over {meeting_id, scope:"notes", exp}), short-TTL,
+#                     meeting-scoped, revocable; grants read-only notes ONLY
+#   Late-joiner re-post: driven by Doc 02 roster events, NOT a timer
+#   Readiness signal from Doc 01: Readiness enum with coverage_pct + gaps list
+#
+# Criticality key:
+#   P0 — invariant; violation is a build failure
+#   P1 — shipping requirement; violation blocks release
+#   P2 — refinement; expected in V0 but not gating
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.6 — JOIN: TILE BREATHING STATE
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-JOINCLOSE-01
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 1"
+  source_quote: "The tile starts breathing"
+  normalized_statement: >
+    WHEN Proxy joins a meeting
+    THE SYSTEM SHALL transition the tile to the Listening (breathing) state
+    immediately upon join, before any chat line is posted.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.6 — JOIN: CONSENT LINE — CONTENT
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-JOINCLOSE-02
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 1"
+  source_quote: "one confident line posts to chat (pinned where the platform allows): \"Hi — I'm Proxy, an AI participant. I can see the `acme/checkout` codebase (indexed 20 minutes ago). I'm observing and taking notes, and anyone here can ask me anything — out loud or with @proxy.\""
+  normalized_statement: >
+    WHEN Proxy joins a meeting
+    THE SYSTEM SHALL post exactly one chat line matching the consent template
+    containing: the Proxy name, the AI participant declaration, the live codebase
+    name, the computed index freshness, the observing-and-taking-notes declaration,
+    and the @proxy invite.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-JOINCLOSE-03
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 1"
+  source_quote: "I can see the `acme/checkout` codebase (indexed 20 minutes ago)"
+  normalized_statement: >
+    WHEN the consent line is constructed
+    THE SYSTEM SHALL include the live tenant codebase name (not a placeholder) and
+    the freshness string computed from the actual index timestamp (not hard-coded).
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-JOINCLOSE-04
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 1"
+  source_quote: "pinned where the platform allows"
+  normalized_statement: >
+    WHEN the consent line is posted and the platform chat API supports message pinning
+    THE SYSTEM SHALL call the platform pin API for the consent message; pin failure
+    SHALL be logged but SHALL NOT block or abort the join flow.
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-JOINCLOSE-05
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 1"
+  source_quote: "This is a hard consent gate (our upfront-consent decision) delivered as a confident brand moment rather than legal fine print."
+  normalized_statement: >
+    WHEN the consent line is constructed
+    THE SYSTEM SHALL use the product name Proxy and SHALL NOT include any internal
+    component name (Orchestrator, Scribe, workroom, or sandbox) in any user-visible
+    string.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.6 — JOIN: LATE-JOINER CONSENT RE-POST
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-JOINCLOSE-06
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 1"
+  source_quote: "Late joiners get it re-posted (Doc 02's roster events) — consent isn't only for people who were on time."
+  normalized_statement: >
+    WHEN a Doc 02 roster-participant-joined event is received for a participant who
+    was not present at the time of the initial consent post
+    THE SYSTEM SHALL re-post the consent line (matching the same template) to chat
+    for each such late joiner, individually, driven by the roster event rather than
+    a timer.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.6 — CLOSE: CLOSE LINE POSTED BEFORE BOT LEAVES
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-JOINCLOSE-07
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 2"
+  source_quote: "As the meeting ends and before the bot leaves: \"Notes + everything I did: `<link>`. One draft is waiting for approval (the rate-limiter change).\""
+  normalized_statement: >
+    WHEN the meeting-end signal is received
+    THE SYSTEM SHALL post the close line to chat and SHALL execute the bot-leave
+    action only after the close line post has been confirmed, such that
+    close_line_posted_at < bot_left_at in the event log.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.6 — CLOSE: LINK IS /m/{meeting_id}, NEVER RAW GCS URI
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-JOINCLOSE-08
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 2"
+  source_quote: "The `<link>` is the authenticated **`/m/{meeting_id}` home (§2.8)**, not a raw GCS URI."
+  normalized_statement: >
+    WHEN the close line is constructed
+    THE SYSTEM SHALL set the link to the application home URL /m/{meeting_id} and
+    SHALL NOT use a raw GCS URI (gs:// or https://storage.googleapis.com) anywhere
+    in user-visible output.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.6 — CLOSE: PENDING DRAFTS IN CLOSE LINE
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-JOINCLOSE-09
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 2"
+  source_quote: "One draft is waiting for approval (the rate-limiter change)."
+  normalized_statement: >
+    WHEN the close line is constructed and staged_drafts exist for this meeting
+    THE SYSTEM SHALL include the name of each pending draft and state that it is
+    waiting for approval in the close line text.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-JOINCLOSE-10
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 2"
+  source_quote: "One draft is waiting for approval (the rate-limiter change)."
+  normalized_statement: >
+    WHEN the close line is constructed and zero staged_drafts exist for this meeting
+    THE SYSTEM SHALL omit any draft mention or approval prompt from the close line,
+    including only the notes link.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.6 — CLOSE: /m/{meeting_id} AUTHENTICATED ACCESS
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-JOINCLOSE-11
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 3"
+  source_quote: "A tenant member opens it signed-in and sees the notes + drafts (with accept/reject)."
+  normalized_statement: >
+    WHEN a signed-in tenant member makes a GET request to /m/{meeting_id}
+    THE SYSTEM SHALL return the meeting notes and staged drafts with accept/reject
+    controls via the protected() authorization path.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.6 — CLOSE: CAPABILITY TOKEN — PROPERTIES
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-JOINCLOSE-12
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 3"
+  source_quote: "the chat link carries a **signed, short-TTL, meeting-scoped, revocable capability token**"
+  normalized_statement: >
+    WHEN a capability token is generated for a meeting close link
+    THE SYSTEM SHALL produce a token that is: cryptographically signed (HMAC over
+    {meeting_id, scope:\"notes\", exp}), carries a short-TTL expiry claim, carries
+    the meeting_id in its signed body, and is stored in a revocation registry so
+    that an admin can invalidate it.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.6 — CLOSE: CAPABILITY TOKEN — READ-ONLY SCOPE
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-JOINCLOSE-13
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 3"
+  source_quote: "lets a *non-signed-in* recipient **read the notes only** — no accept, no other meeting."
+  normalized_statement: >
+    WHEN a non-signed-in recipient presents a valid capability token at
+    GET /m/{meeting_id}
+    THE SYSTEM SHALL return the notes for the specific meeting_id in the token and
+    SHALL deny any accept or reject action attempted with that token (HTTP 403).
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-JOINCLOSE-14
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 3"
+  source_quote: "no accept, no other meeting"
+  normalized_statement: >
+    WHEN a non-signed-in recipient presents a capability token issued for
+    meeting_id A at a request for meeting_id B
+    THE SYSTEM SHALL deny the request (HTTP 403) enforcing the meeting_id claim in
+    the signed token against the path parameter.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-JOINCLOSE-15
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 3"
+  source_quote: "accept/reject stay `protected()`"
+  normalized_statement: >
+    WHEN any accept or reject action is requested on /m/{meeting_id}
+    THE SYSTEM SHALL enforce the protected() authorization guard; a capability token
+    SHALL never satisfy the protected() guard for accept or reject.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.6 — NOTES FILE: STRUCTURE AND SECTION ORDER
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-JOINCLOSE-16
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 4"
+  source_quote: "Structure: title/date/attendees → a five-line summary → **decisions** (each: what, who, when, and the moment it landed) → **action items** (who/what/when) → **open questions** → **what Proxy did** (each ask handled, work performed, drafts staged — each with its receipt) → a pointer to the raw transcript."
+  normalized_statement: >
+    WHEN the notes file is generated for a completed meeting
+    THE SYSTEM SHALL produce exactly seven top-level sections in this order:
+    title/date/attendees, five-line summary, decisions, action items, open questions,
+    what Proxy did, transcript pointer — with no section absent and no extra section.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.6 — NOTES FILE: WORST NEWS FIRST IN SUMMARY
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-JOINCLOSE-17
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 4"
+  source_quote: "Worst news first here too: any live blocker or risk leads the five-line summary rather than sitting buried below the decisions, so a forwarded reader sees what's at stake before what went well."
+  normalized_statement: >
+    WHEN the five-line summary is generated and the meeting produced a blocker or risk
+    THE SYSTEM SHALL place the blocker or risk as the first line of the summary,
+    ahead of any positive outcome or decision.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-JOINCLOSE-18
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 4"
+  source_quote: "a five-line summary"
+  normalized_statement: >
+    WHEN the five-line summary section is generated
+    THE SYSTEM SHALL produce at most five lines, with no line-wrapping or padding
+    technique that disguises a longer summary as five lines.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.6 — NOTES FILE: DECISIONS — FOUR FIELDS
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-JOINCLOSE-19
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 4"
+  source_quote: "**decisions** (each: what, who, when, and the moment it landed)"
+  normalized_statement: >
+    WHEN a decision entry is written in the notes file
+    THE SYSTEM SHALL include all four fields for each entry: what (the decision text),
+    who (the decision maker), when (timestamp or time reference), and the moment it
+    landed (the conversational anchor); no field may be absent.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.6 — NOTES FILE: ACTION ITEMS — THREE FIELDS
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-JOINCLOSE-20
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 4"
+  source_quote: "**action items** (who/what/when)"
+  normalized_statement: >
+    WHEN an action item entry is written in the notes file
+    THE SYSTEM SHALL include all three fields for each entry: who (responsible party),
+    what (the action), and when (due date or deadline); no field may be absent.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.6 — NOTES FILE: WHAT PROXY DID — RECEIPTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-JOINCLOSE-21
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 4"
+  source_quote: "**what Proxy did** (each ask handled, work performed, drafts staged — each with its receipt)"
+  normalized_statement: >
+    WHEN the \"what Proxy did\" section is generated
+    THE SYSTEM SHALL enumerate every ask handled, work item performed, and draft
+    staged during the meeting, and each entry SHALL carry a receipt (unique identifier
+    or timestamp) linking it to the artifact or task record; no entry may appear
+    without a receipt.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.6 — NOTES FILE: CLEAN MARKDOWN AND TRANSCRIPT POINTER
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-JOINCLOSE-22
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 4"
+  source_quote: "Clean markdown, scannable in thirty seconds, complete in five minutes."
+  normalized_statement: >
+    WHEN the notes file is generated
+    THE SYSTEM SHALL produce valid, lint-clean markdown (correct heading hierarchy,
+    valid list syntax, no broken syntax) that is scannable in thirty seconds and
+    complete in five minutes.
+  requirement_type: quality
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-JOINCLOSE-23
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.6 paragraph 4"
+  source_quote: "a pointer to the raw transcript"
+  normalized_statement: >
+    WHEN the transcript pointer section is generated
+    THE SYSTEM SHALL write a URL that resolves to the actual stored transcript and
+    SHALL NOT write a placeholder or a raw GCS URI where an application-layer route
+    (/t/ or equivalent) exists.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified

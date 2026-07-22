@@ -1,0 +1,12 @@
+[project]
+name = "proxy-verification-tools"
+version = "0.0.0"
+description = "Isolated env for heavy verification tooling (DeepEval etc.) — kept OUT of the product uv.lock."
+requires-python = ">=3.12"
+dependencies = [
+    "deepeval>=2.0",
+    "anthropic>=0.40",
+]
+
+[tool.uv]
+package = false

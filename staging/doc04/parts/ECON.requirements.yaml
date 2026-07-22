@@ -1,0 +1,552 @@
+# ECON.requirements.yaml — Doc 04 (Proxy Orchestrator) — §3.12 Per-Role Model Routing + §3.13 Live Cost Circuit-Breaker
+# Atomic EARS requirements. Each carries source_location + verbatim source_quote + criticality.
+# ID scheme: R-doc04-ECON-NN
+# Authority documents: DOC-04 (§3.12, §3.13), CANONICAL-DECISIONS (§3, §10.1, §10.6, §11.9, §12.7, §12.8)
+#
+# Sections:
+#   §3.12 — Per-role model routing: one table, real model ids, cheap-first, model-router vs capability-router,
+#            output-token clamp, 1-hour TTL cache_control breakpoint, extended/adaptive thinking rules.
+#   §3.13 — Live cost circuit-breaker: persisted accumulator, meeting_cost table schema, two meters,
+#            check_meeting_budget(), estimate_gate(), soft/hard caps, disclosed degradation, notes-only hard stop.
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §3.12 — Per-Role Model Routing
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── One definition, one file ──────────────────────────────────────────────────
+
+- requirement_id: R-doc04-ECON-01
+  authority_type: canonical
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§3.12, paragraph 3; CANONICAL-DECISIONS §11.9"
+  source_quote: >
+    DRY (CANONICAL §11.9): the one per-role model table lives in libs/llm/routing.py and is imported,
+    not redefined per doc.
+  normalized_statement: >
+    THE SYSTEM SHALL define the per-role model table exactly once, in libs/llm/routing.py; no other
+    module (service, harness, doc, or test helper) SHALL redefine an inline MODELS dict, per-role
+    model mapping, or equivalent data structure; all consumers SHALL import from libs/llm/routing.py.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Model-router separate from capability-router ──────────────────────────────
+
+- requirement_id: R-doc04-ECON-02
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.12, paragraph 2"
+  source_quote: >
+    Model-router (which model runs a role) stays SEPARATE from capability-router (which behavior fires).
+  normalized_statement: >
+    THE SYSTEM SHALL implement model selection (which model runs a role) and behavior selection (which
+    behavior fires for a given event) as separate, non-entangled code paths; the model-router SHALL NOT
+    encode behavioral logic, and the capability-router SHALL NOT encode model-selection logic; no single
+    function or class SHALL conflate both concerns.
+  requirement_type: architectural
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Real model ids ────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc04-ECON-03
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.12, model seats table; paragraph 3"
+  source_quote: >
+    8 seats, REAL model ids (claude-haiku-4-5 / claude-sonnet-4-6 / claude-opus-4-8),
+    the env → tier-default → global seam.
+  normalized_statement: >
+    THE SYSTEM SHALL populate the per-role model table in libs/llm/routing.py using only the real
+    Anthropic model identifiers claude-haiku-4-5, claude-sonnet-4-6, and claude-opus-4-8; no fake,
+    placeholder, or abbreviated model identifier (e.g. "haiku", "sonnet", "opus", "claude-3", or any
+    non-canonical string) SHALL appear as a model id value in the routing table.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Cheap-first seat assignments ──────────────────────────────────────────────
+
+- requirement_id: R-doc04-ECON-04
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.12, model seats table; paragraph 4"
+  source_quote: >
+    Inverted to cheap-first (unlike the platform which defaults Opus-everywhere): cheap-first and let
+    the spend live where it earns its keep (the big build).
+    | Scribe micro-call (Doc 03) | Haiku (claude-haiku-4-5) | not agentic — one structured extraction |
+    | Proactive gate (V1 — dormant in V0) | Haiku | small structured classifier |
+    | Orchestrator wake / grounded answer | Sonnet (claude-sonnet-4-6) | fast + real reasoning |
+    | Workroom quick | Haiku / Sonnet | a lookup or pointed explanation |
+    | Workroom big build | Opus (claude-opus-4-8) | real code work, verified |
+    | Code-intel fan-out (Doc 01) | Haiku / cheap-open-weight | bounded parallel summarization |
+  normalized_statement: >
+    THE SYSTEM SHALL assign model seats cheap-first by default: the Scribe micro-call role SHALL map
+    to claude-haiku-4-5; the proactive-gate role SHALL map to claude-haiku-4-5; the orchestrator
+    wake/grounded-answer role SHALL map to claude-sonnet-4-6; the workroom-quick role SHALL map to
+    claude-haiku-4-5 or claude-sonnet-4-6; the workroom-big-build role SHALL map to claude-opus-4-8;
+    the code-intel fan-out role SHALL map to claude-haiku-4-5 or a cheap open-weight model; no role
+    SHALL default to a more expensive model than its seat specifies.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Output-token clamp ────────────────────────────────────────────────────────
+
+- requirement_id: R-doc04-ECON-05
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.12, paragraph 5"
+  source_quote: >
+    min(env_max_output, model_ceiling) output-token clamp (one MAX_OUTPUT_TOKENS, each model self-clamps).
+  normalized_statement: >
+    WHEN constructing any model call THE SYSTEM SHALL apply an output-token limit equal to
+    min(env_max_output, model_ceiling), where env_max_output is the value of the MAX_OUTPUT_TOKENS
+    environment variable and model_ceiling is the per-model ceiling defined in the routing table;
+    there SHALL be exactly one MAX_OUTPUT_TOKENS constant per model seat; no model call SHALL be
+    issued without an explicit max_tokens cap derived from this formula.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── 1-hour TTL cache_control breakpoint ──────────────────────────────────────
+
+- requirement_id: R-doc04-ECON-06
+  authority_type: canonical
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§3.12, paragraph 6; CANONICAL-DECISIONS §10.1"
+  source_quote: >
+    Manual 1-hour-TTL cache_control breakpoint on the Scribe/Orchestrator stable prefix (placed by
+    us on the raw Messages call with the volatile tail after the breakpoint — CANONICAL §10.1).
+  normalized_statement: >
+    THE SYSTEM SHALL place a cache_control breakpoint with a 1-hour TTL on the stable prefix of the
+    Scribe and Orchestrator Messages calls; the breakpoint SHALL be placed such that the stable
+    prefix (system prompt, codebase context, standing instructions) appears BEFORE the breakpoint
+    and the volatile tail (wake event, current transcript, task context) appears AFTER the breakpoint;
+    the TTL SHALL be 1 hour (3600 seconds), not the SDK default of 5 minutes.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Extended thinking: enabled only on Opus-escalated grounded-answer path ───
+
+- requirement_id: R-doc04-ECON-07
+  authority_type: canonical
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§3.12, paragraph 7; CANONICAL-DECISIONS §10.6"
+  source_quote: >
+    Targeted extended/adaptive thinking (CANONICAL §10.6): enabled ONLY on Opus-escalated
+    grounded-answer path; EXPLICITLY DISABLED on fast path (should-I-speak wake gate, quick lookups,
+    Scribe micro-call).
+  normalized_statement: >
+    THE SYSTEM SHALL enable extended/adaptive thinking exclusively on the Opus-escalated
+    grounded-answer path; extended thinking SHALL be explicitly disabled (not merely absent) on
+    the should-I-speak wake gate, all quick-lookup paths, and the Scribe micro-call; no other
+    role or path SHALL enable extended thinking.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Extended thinking: capped where on ───────────────────────────────────────
+
+- requirement_id: R-doc04-ECON-08
+  authority_type: canonical
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§3.12, paragraph 7; CANONICAL-DECISIONS §10.6"
+  source_quote: >
+    Where thinking IS on, cap it (extended thinking shares output-token budget, so uncapped preamble
+    can truncate large structured emission mid-object).
+  normalized_statement: >
+    WHEN extended thinking is enabled on the Opus-escalated grounded-answer path THE SYSTEM SHALL
+    apply a finite thinking-token budget cap; the cap SHALL be set such that the thinking preamble
+    cannot consume the entire output-token budget; no extended-thinking-enabled call SHALL be issued
+    with an uncapped or unbounded thinking budget.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §3.13 — The Live Cost Circuit-Breaker
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── meeting_cost table schema ─────────────────────────────────────────────────
+
+- requirement_id: R-doc04-ECON-09
+  authority_type: canonical
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§3.13, meeting_cost table block; CANONICAL-DECISIONS §3"
+  source_quote: >
+    meeting_cost table:
+      meeting_id uuid PRIMARY KEY
+      model_usd  numeric NOT NULL DEFAULT 0
+      cache_read_usd numeric NOT NULL DEFAULT 0
+      cache_creation_usd numeric NOT NULL DEFAULT 0
+      transport_usd numeric NOT NULL DEFAULT 0
+      e2b_usd numeric NOT NULL DEFAULT 0
+      started_at timestamptz NOT NULL DEFAULT now()
+      updated_at timestamptz NOT NULL DEFAULT now()
+  normalized_statement: >
+    THE SYSTEM SHALL define the meeting_cost table with exactly the following columns and
+    constraints: meeting_id (uuid, PRIMARY KEY), model_usd (numeric, NOT NULL, DEFAULT 0),
+    cache_read_usd (numeric, NOT NULL, DEFAULT 0), cache_creation_usd (numeric, NOT NULL,
+    DEFAULT 0), transport_usd (numeric, NOT NULL, DEFAULT 0), e2b_usd (numeric, NOT NULL,
+    DEFAULT 0), started_at (timestamptz, NOT NULL, DEFAULT now()), updated_at (timestamptz,
+    NOT NULL, DEFAULT now()); no additional columns, renamed columns, or different data
+    types SHALL be used; no meeting_cost_entries table or reserve/settle pattern SHALL exist.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Accumulator PERSISTED: crash-safe ────────────────────────────────────────
+
+- requirement_id: R-doc04-ECON-10
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.13, paragraph 4"
+  source_quote: >
+    The accumulator is PERSISTED, not in-memory — a crashed orchestrator must not reset the meter to 0.
+  normalized_statement: >
+    THE SYSTEM SHALL persist every cost increment to the meeting_cost Postgres row before acknowledging
+    that the increment is recorded; WHEN the orchestrator process crashes and restarts THE SYSTEM SHALL
+    reload the accumulated spend from the meeting_cost row; the in-process MeetingBudget.spent_usd
+    cache SHALL be treated as a write-through cache, never the source of truth; a fresh orchestrator
+    process taking over a meeting SHALL NOT start with spent_usd == 0.0 unless the meeting_cost row
+    genuinely contains zero.
+  requirement_type: safety
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── reload_from_db called on harness re-claim ─────────────────────────────────
+
+- requirement_id: R-doc04-ECON-11
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.13, MeetingBudget.reload_from_db docstring"
+  source_quote: >
+    async def reload_from_db(self, pool) -> None:
+        """On harness re-claim, reload the persisted spend so the meter survives recycle"""
+        self.spent_usd = await pool.fetchval(
+            "SELECT COALESCE(model_usd,0) + COALESCE(transport_usd,0) + COALESCE(e2b_usd,0) "
+            "FROM meeting_cost WHERE meeting_id=$1", self.meeting_id) or 0.0
+  normalized_statement: >
+    THE SYSTEM SHALL call MeetingBudget.reload_from_db(pool) at the moment a harness process
+    re-claims an existing meeting; reload_from_db SHALL set self.spent_usd to the sum of
+    COALESCE(model_usd,0) + COALESCE(transport_usd,0) + COALESCE(e2b_usd,0) from the
+    meeting_cost row for the meeting_id; cache_read_usd and cache_creation_usd SHALL NOT be
+    included in the reloaded sum (they are sub-components of model_usd, not additive meters);
+    reload_from_db SHALL NOT be called on every check_meeting_budget invocation.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Scribe role: always Tier.FULL ─────────────────────────────────────────────
+
+- requirement_id: R-doc04-ECON-12
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.13, check_meeting_budget() code block; §3.13 paragraph 6"
+  source_quote: >
+    def check_meeting_budget(b: MeetingBudget, role: str) -> "Tier":
+        if role == "scribe":
+            return Tier.FULL                       # notes are never degraded
+    Scribe is exempt from degradation (notes are the floor deliverable we never degrade),
+    though its spend still counts toward the total.
+  normalized_statement: >
+    WHEN check_meeting_budget is called with role == "scribe" THE SYSTEM SHALL return Tier.FULL
+    unconditionally, regardless of b.spent_usd relative to b.soft_usd or b.hard_usd; no budget
+    threshold SHALL cause the Scribe role to be degraded or blocked; Scribe spend SHALL still
+    increment the meeting_cost row but SHALL NOT trigger degradation.
+  requirement_type: safety
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Hard cap: BudgetExceeded raised → notes-only ─────────────────────────────
+
+- requirement_id: R-doc04-ECON-13
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.13, check_meeting_budget() code block; §3.13 paragraph 7"
+  source_quote: >
+    if b.spent_usd >= b.hard_usd:
+        raise BudgetExceeded("notes-only")
+    Hard cap goes notes-only
+  normalized_statement: >
+    WHEN check_meeting_budget is called with a non-scribe role and b.spent_usd >= b.hard_usd
+    THE SYSTEM SHALL raise BudgetExceeded with a message indicating notes-only mode; the caller
+    SHALL NOT proceed with the non-Scribe model call; the system SHALL transition to notes-only
+    operation where only Scribe continues running.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Soft cap: Tier.DEGRADED returned ─────────────────────────────────────────
+
+- requirement_id: R-doc04-ECON-14
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.13, check_meeting_budget() code block; §3.13 paragraph 7"
+  source_quote: >
+    if b.spent_usd >= b.soft_usd:
+        return Tier.DEGRADED                   # Orchestrator→Haiku, widen Scribe interval, proactive off
+    Soft cap degrades: Orchestrator drops to Haiku, Scribe summary interval widens, proactive
+    contributions stop — and SAY so in the room
+  normalized_statement: >
+    WHEN check_meeting_budget is called with a non-scribe role and b.soft_usd <= b.spent_usd < b.hard_usd
+    THE SYSTEM SHALL return Tier.DEGRADED; upon receiving Tier.DEGRADED the orchestrator SHALL switch to
+    claude-haiku-4-5 for its own model calls, widen the Scribe summary interval, and disable proactive
+    contributions; these degradation actions SHALL be announced verbally in the meeting room.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Below soft cap: Tier.FULL returned ────────────────────────────────────────
+
+- requirement_id: R-doc04-ECON-15
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.13, check_meeting_budget() code block"
+  source_quote: >
+    return Tier.FULL
+  normalized_statement: >
+    WHEN check_meeting_budget is called with a non-scribe role and b.spent_usd < b.soft_usd
+    THE SYSTEM SHALL return Tier.FULL; no degradation SHALL occur and the role SHALL proceed
+    with its assigned model seat.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Boundary values: exactly at soft_usd and hard_usd ────────────────────────
+
+- requirement_id: R-doc04-ECON-16
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.13, check_meeting_budget() code block — >= comparisons"
+  source_quote: >
+    if b.spent_usd >= b.hard_usd:
+        raise BudgetExceeded("notes-only")
+    if b.spent_usd >= b.soft_usd:
+        return Tier.DEGRADED
+  normalized_statement: >
+    THE SYSTEM SHALL treat the boundary values inclusively: WHEN b.spent_usd == b.hard_usd
+    (exactly) THE SYSTEM SHALL raise BudgetExceeded (not return Tier.DEGRADED); WHEN
+    b.spent_usd == b.soft_usd (exactly) and b.spent_usd < b.hard_usd THE SYSTEM SHALL
+    return Tier.DEGRADED (not Tier.FULL); the >= comparisons are inclusive at both boundaries.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Neither cap is silent ─────────────────────────────────────────────────────
+
+- requirement_id: R-doc04-ECON-17
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.13, paragraph 7"
+  source_quote: >
+    Two caps, both disclosed (never a silent cliff):
+    - Soft cap degrades: Orchestrator drops to Haiku, Scribe summary interval widens, proactive
+      contributions stop — and SAY so in the room
+    - Hard cap goes notes-only
+  normalized_statement: >
+    THE SYSTEM SHALL disclose every budget threshold crossing verbally in the meeting room;
+    WHEN Tier.DEGRADED is first entered THE SYSTEM SHALL emit a spoken announcement describing
+    the degradation (model switch, widened interval, disabled proactive contributions);
+    WHEN BudgetExceeded is raised THE SYSTEM SHALL emit a spoken announcement that the session
+    is switching to notes-only mode; neither threshold crossing SHALL be silent or log-only.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Pre-dispatch estimate gate ────────────────────────────────────────────────
+
+- requirement_id: R-doc04-ECON-18
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.13, paragraph 5"
+  source_quote: >
+    One pre-dispatch estimate gate on dispatch_workroom: if estimated task cost exceeds remaining
+    task budget, Proxy asks-approval or declines (disclosed) before the sandbox spins — task budget
+    can't be blown past silently.
+  normalized_statement: >
+    WHEN dispatch_workroom is called THE SYSTEM SHALL evaluate estimate_gate(b, est_task_usd) before
+    spinning up any E2B sandbox or workroom session; IF estimate_gate returns False (i.e.
+    b.spent_usd + est_task_usd > b.hard_usd) THE SYSTEM SHALL either ask the human for explicit
+    approval or decline the dispatch with a disclosed explanation; the sandbox SHALL NOT be started
+    until approval is received or the call is declined; this gate SHALL fire on every dispatch_workroom
+    call without exception.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── estimate_gate boundary value ─────────────────────────────────────────────
+
+- requirement_id: R-doc04-ECON-19
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.13, estimate_gate() code block"
+  source_quote: >
+    def estimate_gate(b: MeetingBudget, est_task_usd: float) -> bool:
+        return b.spent_usd + est_task_usd <= b.hard_usd
+  normalized_statement: >
+    THE SYSTEM SHALL implement estimate_gate to return True when b.spent_usd + est_task_usd <=
+    b.hard_usd and False otherwise; WHEN b.spent_usd + est_task_usd == b.hard_usd (exactly at
+    the boundary) THE SYSTEM SHALL return True (the task fits); WHEN b.spent_usd + est_task_usd
+    exceeds b.hard_usd by any positive amount THE SYSTEM SHALL return False.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Two meters write same row ─────────────────────────────────────────────────
+
+- requirement_id: R-doc04-ECON-20
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.13, paragraph 3"
+  source_quote: >
+    Both meters write the same row: the Scribe writes model_usd (+ cache split) directly; the
+    seam-based meter (Proxy wakes + Workroom, via AgentChunk.RESULT.total_cost_usd) also increments
+    model_usd.
+  normalized_statement: >
+    THE SYSTEM SHALL accumulate model spend in a single meeting_cost row; the Scribe SHALL write
+    model_usd (and optionally cache_read_usd, cache_creation_usd) directly via a database upsert
+    or increment; the seam-based meter SHALL increment model_usd by reading total_cost_usd from
+    AgentChunk RESULT chunks (per §3.3) and writing to the same meeting_cost row; no separate
+    ledger, subsidiary table, or duplicate row per call SHALL be created.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── In-process cache write-through ───────────────────────────────────────────
+
+- requirement_id: R-doc04-ECON-21
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.13, paragraph 8"
+  source_quote: >
+    Keep in-process cache for hot-path reads, write-through to Postgres.
+  normalized_statement: >
+    THE SYSTEM SHALL maintain MeetingBudget.spent_usd as an in-process cache for hot-path reads
+    of check_meeting_budget; every increment to spent_usd SHALL also be written through to the
+    meeting_cost Postgres row atomically (i.e. the Postgres write SHALL occur before the in-process
+    value is considered committed); reading spent_usd without a Postgres round-trip on the hot path
+    is permitted after reload_from_db has been called.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── check_meeting_budget called before every non-Scribe wake dispatch ─────────
+
+- requirement_id: R-doc04-ECON-22
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.13, paragraph 8"
+  source_quote: >
+    Harness calls check_meeting_budget() before every wake dispatch and calls reload_from_db() when
+    it re-claims a meeting; crossing a threshold is itself a wake event.
+  normalized_statement: >
+    THE SYSTEM SHALL call check_meeting_budget(b, role) before every non-Scribe model call dispatched
+    by the harness; no non-Scribe call SHALL proceed without a preceding check_meeting_budget
+    evaluation; WHEN check_meeting_budget returns Tier.DEGRADED or raises BudgetExceeded the harness
+    SHALL act on the result before initiating any model call.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Two honest meters, not a false all-in $1 ─────────────────────────────────
+
+- requirement_id: R-doc04-ECON-23
+  authority_type: canonical
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§3.13, paragraph 1; CANONICAL-DECISIONS §12.7"
+  source_quote: >
+    Two honest meters, never the false all-in $1 (CANONICAL §12.7): the listening baseline
+    (~$0.95–1.25/hr: transport + Scribe + orch idle) is the SLA ceiling for listening + notes +
+    quick answers; substantive work (Workroom builds, E2B runtime, Opus deep answers) is a separate,
+    metered, disclosed per-meeting task budget.
+  normalized_statement: >
+    THE SYSTEM SHALL operate two disclosed budget meters: (1) a listening-baseline meter covering
+    transport_usd + model_usd from Scribe + orchestrator idle, representing the SLA ceiling for
+    listening, notes, and quick answers; (2) a task-budget meter covering Workroom builds, E2B
+    runtime (e2b_usd), and Opus deep answers; these meters SHALL be disclosed separately and
+    honestly to the user; the system SHALL NOT present a single all-in cost figure that obscures
+    the distinction between baseline and task spend.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── MeetingBudget dataclass shape ────────────────────────────────────────────
+
+- requirement_id: R-doc04-ECON-24
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.13, MeetingBudget dataclass block"
+  source_quote: >
+    @dataclass
+    class MeetingBudget:
+        meeting_id: str
+        soft_usd: float          # e.g. 0.80 * projected_hours
+        hard_usd: float          # e.g. 1.00 * projected_hours (the SLA line)
+        spent_usd: float = 0.0   # in-process cache; write-through to the meeting_cost row
+  normalized_statement: >
+    THE SYSTEM SHALL implement MeetingBudget as a dataclass with exactly the fields: meeting_id
+    (str), soft_usd (float), hard_usd (float), spent_usd (float, default 0.0); spent_usd is
+    explicitly documented as an in-process cache that writes through to the meeting_cost row;
+    no additional required fields SHALL be added without spec revision; soft_usd SHALL be less
+    than hard_usd in any valid MeetingBudget instance.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── check_meeting_budget order of checks ─────────────────────────────────────
+
+- requirement_id: R-doc04-ECON-25
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.13, check_meeting_budget() code block — evaluation order"
+  source_quote: >
+    def check_meeting_budget(b: MeetingBudget, role: str) -> "Tier":
+        if role == "scribe":
+            return Tier.FULL
+        if b.spent_usd >= b.hard_usd:
+            raise BudgetExceeded("notes-only")
+        if b.spent_usd >= b.soft_usd:
+            return Tier.DEGRADED
+        return Tier.FULL
+  normalized_statement: >
+    THE SYSTEM SHALL evaluate check_meeting_budget conditions in exactly this order: (1) scribe
+    exemption check first, returning Tier.FULL immediately; (2) hard-cap check second, raising
+    BudgetExceeded; (3) soft-cap check third, returning Tier.DEGRADED; (4) default return of
+    Tier.FULL; this order SHALL NOT be changed; the hard-cap check SHALL occur before the soft-cap
+    check to avoid a DEGRADED return when the hard cap has already been breached.
+  normalized_statement: >
+    THE SYSTEM SHALL evaluate check_meeting_budget in the prescribed order: scribe exemption first,
+    hard cap second, soft cap third, FULL last; the hard-cap branch SHALL be evaluated before the
+    soft-cap branch so that a session at or above hard_usd always raises BudgetExceeded rather than
+    returning Tier.DEGRADED.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified

@@ -1,0 +1,300 @@
+# Requirements — Doc 08 Experience, UI & Surfaces · §2.7 The connect page
+# Source: product/v0-spec/08-BEHAVIOR.md §2.7
+# ID prefix: R-doc08-CONN-NN
+# Authority: DOC-08
+# Status: qualified
+#
+# Criticality key:
+#   P0 — security / tenant isolation / public-URL access control
+#   P1 — honesty invariants, state rendering completeness, V0 scope
+#   P2 — liveness / operational concerns
+#
+# dependency_class values:
+#   db:postgres — readiness status polled from code_intel via /connect/status (reads Postgres)
+#
+# Canonical overrides applied:
+#   CANONICAL §1.5: Readiness = Literal["connecting","cloning","indexing","ready","not_ready"]
+#                   + coverage_pct: float + gaps: list[str]. NO "mapping" state.
+#   Connect page polls GET /connect/status — REST, NOT WebSocket.
+#   Connect page is a PUBLIC URL; calls are untrusted + validated like a public API.
+#   CANONICAL §6: No dynamic PROXY_CAPABILITIES HTTP catalog — static CAPABILITIES dict only.
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §2.7 ¶1 — THREE SECTIONS ONLY (V0 SCOPE)
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-CONN-01
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.7 paragraph 1"
+  source_quote: "A single minimal web page, same teal identity, for setup only"
+  normalized_statement: >
+    WHEN the connect page is rendered THE SYSTEM SHALL present exactly three
+    top-level sections — GitHub App install flow, readiness status, and invite
+    instructions — and SHALL NOT present any additional sections or navigation
+    elements beyond those three.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-CONN-02
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.7 paragraph 3 (V0 scope)"
+  source_quote: "Nothing else lives here. It is a door, not a dashboard — no analytics, no settings, no meeting history in V0."
+  normalized_statement: >
+    WHEN the connect page is rendered THE SYSTEM SHALL NOT include analytics
+    widgets, settings controls, or meeting history content; the page SHALL be
+    limited to the three setup sections in V0.
+  requirement_type: structural
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §2.7 ¶1 item 1 — GITHUB APP INSTALL FLOW
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-CONN-03
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.7 paragraph 1 item 1"
+  source_quote: "Connect: the "install the GitHub App" flow (launched from here — Doc 01's requirement)."
+  normalized_statement: >
+    WHEN a user visits the connect page THE SYSTEM SHALL present a control that
+    launches the GitHub App install flow as specified in Doc 01; the install flow
+    SHALL be initiatable from the connect page without requiring the user to
+    navigate to a separate setup surface.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §2.7 ¶1 item 2 — FIVE READINESS STATES
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-CONN-04
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.7 paragraph 1 item 2"
+  source_quote: "The page renders all five readiness states of Doc 01's Readiness enum (CANONICAL §1.5) — connecting → cloning → indexing → ready, plus an explicit not_ready terminal state"
+  normalized_statement: >
+    WHEN the connect page readiness widget receives any value from the Readiness
+    enum (CANONICAL §1.5) THE SYSTEM SHALL render a distinct, named indicator
+    for each of the five values: connecting, cloning, indexing, ready, and
+    not_ready; all five SHALL be renderable without error.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-CONN-05
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.7 paragraph 1 item 2 + CANONICAL §1.5"
+  source_quote: "Note: there is no mapping state — the agentic map is deferred, so indexing = clone + tree-sitter + LSP + dep-graph."
+  normalized_statement: >
+    WHEN the connect page readiness widget is inspected THE SYSTEM SHALL NOT
+    define, handle, or render a mapping state; the Readiness enum SHALL contain
+    exactly the five values enumerated in CANONICAL §1.5 and no others.
+  requirement_type: structural
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-CONN-06
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.7 paragraph 1 item 2 + §3 build rule"
+  source_quote: "a REST status poll (GET /connect/status, §4.6 — not a WS message)"
+  normalized_statement: >
+    WHEN the connect page polls for readiness status THE SYSTEM SHALL use a
+    REST HTTP GET request to /connect/status; a WebSocket message or any other
+    transport SHALL NOT be used for this status poll.
+  requirement_type: structural
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §2.7 ¶1 item 2 — NOT_READY STATE HONESTY
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-CONN-07
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.7 paragraph 1 item 2"
+  source_quote: "an explicit not_ready terminal state that shows the gaps (gaps: list[str]) when the repo can't be fully grounded"
+  normalized_statement: >
+    WHEN the connect page readiness widget receives a not_ready state value THE
+    SYSTEM SHALL render the gaps list verbatim, naming each gap string returned
+    by the Readiness payload; the page SHALL NOT substitute a generic error
+    message or omit the gaps list.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-CONN-08
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.7 paragraph 1 item 2"
+  source_quote: "not_ready names what's missing rather than pretending"
+  normalized_statement: >
+    WHEN the connect page readiness widget renders the not_ready state THE
+    SYSTEM SHALL NOT render a ready indicator, a synthetic coverage number, or
+    any UI element that could be misread as a successful-readiness state; the
+    visual rendering of not_ready SHALL be unambiguously terminal.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §2.7 ¶1 item 2 — READY STATE HONESTY (coverage + flagged files)
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-CONN-09
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.7 paragraph 1 item 2"
+  source_quote: "The happy path carries the coverage number and any flagged files ("94% indexed · 12 files flagged: generated")"
+  normalized_statement: >
+    WHEN the connect page readiness widget receives a ready state value THE
+    SYSTEM SHALL display the coverage_pct from the Readiness payload and, when
+    flagged files are present, SHALL display the count of flagged files and
+    their reason label; the coverage number SHALL be the real value returned by
+    the readiness response and SHALL NOT be a hard-coded placeholder.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-CONN-10
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.7 paragraph 4"
+  source_quote: "Readiness is the first trust moment — showing the honest number, including what's flagged or missing, is the brand working before any meeting happens."
+  normalized_statement: >
+    WHEN GET /connect/status returns a coverage_pct THE SYSTEM SHALL derive that
+    value from the real indexing result stored in the readiness record; the
+    coverage number SHALL NOT be hard-coded, defaulted to 100, or fabricated in
+    the route handler or the widget renderer.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §2.7 ¶1 item 3 — INVITE INSTRUCTIONS
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-CONN-11
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.7 paragraph 1 item 3"
+  source_quote: "Invite instructions: how to bring Proxy into a meeting (paste the meeting link / calendar invite address)."
+  normalized_statement: >
+    WHEN the connect page is rendered THE SYSTEM SHALL present invite
+    instructions explaining how to bring Proxy into a meeting, including both
+    the meeting link and calendar invite address methods; the instructions SHALL
+    be present regardless of the current readiness state.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §2.7 ¶4 — PUBLIC URL / UNTRUSTED CALLS
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-CONN-12
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.7 paragraph 4"
+  source_quote: "Anyone with the link can open it, so its calls to the backend are untrusted and validated like any public API"
+  normalized_statement: >
+    WHEN the connect page backend receives any request THE SYSTEM SHALL treat
+    every call as untrusted; no session assumption or implicit authentication
+    SHALL be applied to GET /connect/status or to the install flow initiation
+    endpoint unless the request carries explicit credentials or a valid HMAC.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-CONN-13
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.7 paragraph 4 + §3 build rule"
+  source_quote: "HMAC-gated where a webhook, credentials-only and allowlisted where an authenticated read"
+  normalized_statement: >
+    WHEN the connect page backend processes a webhook-type request THE SYSTEM
+    SHALL gate access with an HMAC check; WHEN it processes an authenticated
+    read THE SYSTEM SHALL require explicit credentials on an allowlisted
+    endpoint; the two security patterns SHALL NOT be mixed or omitted.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-CONN-14
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§3 build rule + CANONICAL override (PUBLIC_ROUTES)"
+  source_quote: "GET /connect/status is in PUBLIC_ROUTES (unauthenticated); but backend validates with credentials/HMAC where needed"
+  normalized_statement: >
+    WHEN GET /connect/status is requested without a session cookie or
+    Authorization header THE SYSTEM SHALL return a valid readiness response
+    (HTTP 200) without requiring authentication; the route SHALL be listed in
+    PUBLIC_ROUTES and SHALL NOT return 401 or 403 for an unauthenticated caller.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STATE MACHINE TRANSITIONS
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-CONN-15
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.7 paragraph 1 item 2 — state sequence"
+  source_quote: "connecting → cloning → indexing → ready"
+  normalized_statement: >
+    WHEN the connect page polls /connect/status during GitHub App installation
+    and initial clone THE SYSTEM SHALL progress through the states connecting,
+    then cloning, then indexing, then ready in that forward order; no state
+    SHALL be skipped on the happy path, and the page SHALL render each
+    intermediate state accurately as it is returned by the API.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-CONN-16
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.7 paragraph 1 item 2 — not_ready terminal"
+  source_quote: "plus an explicit not_ready terminal state that shows the gaps (gaps: list[str]) when the repo can't be fully grounded"
+  normalized_statement: >
+    WHEN the /connect/status API returns not_ready from any preceding state
+    THE SYSTEM SHALL render the not_ready terminal indicator with the gaps
+    list; the transition to not_ready SHALL be possible from connecting,
+    cloning, or indexing and SHALL be treated as a final, non-transient state
+    until the user takes corrective action.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
