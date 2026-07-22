@@ -97,6 +97,7 @@
   mock_boundary: null
   golden_path: false
   verification_ladder:
+    - {tier: lint}
     - {tier: unit}
 
 # ════════════════════════════════════════════════════════════════
