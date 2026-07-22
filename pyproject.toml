@@ -75,6 +75,7 @@ markers = [
     "reality: seam-exercise vs a recorded real vendor response (vcrpy cassette)",
     "negative: dependency errors/times out/returns garbage -> honest degradation (negative cassette / real fault)",
     "e2e: golden-path end-to-end over recorded real vendor traffic (--record-mode=none in CI)",
+    "integration: assembled-tree db+gcs integration (needs live Postgres/GCS; excluded from the offline tier)",
 ]
 
 [dependency-groups]
@@ -86,6 +87,8 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-recording>=0.13.4",
+    "pytest-testmon>=2.1.3",
+    "pip-audit>=2.7.3",
     "ruff>=0.15.22",
     "vcrpy>=8.3.0",
 ]
@@ -99,4 +102,11 @@ dev = [
 reality = [
     "anthropic>=0.39",
     "google-cloud-storage>=2.14",
+]
+# Real-data eval harness (v2 build-loop rung-2). Kept OUT of the default install:
+# deepeval pulls a heavy transitive set that would perturb the shared lock. Opt in with
+#   uv sync --group eval
+# Used only by tests/eval/ + the `done-check` real-data-eval conjunct.
+eval = [
+    "deepeval>=1.0",
 ]
