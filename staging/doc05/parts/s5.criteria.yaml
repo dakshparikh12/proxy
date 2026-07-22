@@ -1,0 +1,1167 @@
+# Doc 05 (Workroom) — S5 acceptance criteria slice
+# Coverage: §3.5 (The sandbox tool transport — JWT-gated MCP-over-HTTP)
+# ID scheme: AC-S5-NNN  (NEG pairs: AC-S5-NNN-NEG)
+# All security criteria are P0 / blocking: true.
+# vendor:e2b criteria include {tier: reality} + NEG pair per rule 2.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TRANSPORT — stateless per-request server
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S5-001
+  name: "Stateless: no session state leaks between consecutive POST requests"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-01]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Two sequential POST requests to the sandbox MCP endpoint carrying distinct request bodies"
+    when: "The second request is processed"
+    then:
+      - "The server creates a fresh MCP server and transport for the second request"
+      - "No state from the first request (tool results, context variables) is visible in the second response"
+  primary_oracle: {type: deterministic, artifact: "server logs show fresh server instantiation per POST; no shared transport object across requests"}
+  thresholds: {cross_request_state_leak_allowed: 0}
+  dependency_class: vendor:e2b
+  mock_boundary: null
+  golden_path: true
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: reality}
+  test_ids: [T-S5-001]
+
+- criterion_id: AC-S5-001-NEG
+  name: "NEG: Stateless — shared transport object fails request isolation"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-01]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A patched server that re-uses the same transport object across requests"
+    when: "Two sequential POST requests are sent"
+    then:
+      - "The test harness detects state leakage (e.g., tool result from request 1 appears in request 2)"
+      - "This confirms that the production stateless path is genuinely enforced"
+  primary_oracle: {type: deterministic, artifact: "state-leakage detection in integration test harness"}
+  thresholds: {}
+  dependency_class: vendor:e2b
+  mock_boundary: "e2b sandbox mocked; only Node server under test"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S5-001-NEG]
+
+- criterion_id: AC-S5-002
+  name: "Server binds to port 8081 inside the sandbox"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A freshly started sandbox MCP server with JWT_SECRET set"
+    when: "The process initializes"
+    then:
+      - "The server is listening on port 8081"
+      - "A TCP connection to localhost:8081 succeeds from within the sandbox"
+  primary_oracle: {type: deterministic, artifact: "netstat / ss output inside sandbox confirms port 8081 LISTEN"}
+  thresholds: {}
+  dependency_class: vendor:e2b
+  mock_boundary: null
+  golden_path: true
+  verification_ladder:
+    - {tier: unit}
+    - {tier: reality}
+  test_ids: [T-S5-002]
+
+- criterion_id: AC-S5-002-NEG
+  name: "NEG: Server startup with wrong port fails /health from host"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A patched server bound to port 9999 instead of 8081"
+    when: "The host preflight calls /health at port 8081"
+    then:
+      - "Connection refused — confirming that port 8081 is the required binding"
+  primary_oracle: {type: deterministic, artifact: "connection-refused error at 8081 from host preflight"}
+  thresholds: {}
+  dependency_class: vendor:e2b
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: reality}
+  test_ids: [T-S5-002-NEG]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JWT SECURITY — per-sandbox secret
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S5-003
+  name: "Per-sandbox HS256 secret: each provisioned sandbox receives a distinct secret"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-04, R-doc05-S5-05]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Two sandboxes provisioned for different meetings"
+    when: "Their JWT secrets are compared"
+    then:
+      - "The two secrets are distinct (probability-one randomness from provision-time generation)"
+      - "The host sandbox-to-secret map holds both entries separately"
+  primary_oracle: {type: deterministic, artifact: "provisioning unit test asserts secrets are distinct UUIDs/random bytes"}
+  thresholds: {shared_secret_reuse_allowed: 0}
+  dependency_class: vendor:e2b
+  mock_boundary: "E2B sandbox provisioning mocked; secret generation logic tested directly"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: reality}
+  test_ids: [T-S5-003]
+
+- criterion_id: AC-S5-003-NEG
+  name: "NEG: Fleet-shared secret rejected — in-sandbox code cannot exfiltrate cross-sandbox token"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-04, R-doc05-S5-05]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A simulated in-sandbox attacker that reads the JWT_SECRET environment variable of sandbox A"
+    when: "The attacker mints a JWT using that secret and presents it to sandbox B"
+    then:
+      - "Sandbox B returns 401 (signature verification fails against its own distinct secret)"
+  primary_oracle: {type: deterministic, artifact: "integration test: sandbox B returns 401 for sandbox A–minted token"}
+  thresholds: {cross_sandbox_auth_allowed: 0}
+  dependency_class: vendor:e2b
+  mock_boundary: "Two sandbox instances instantiated with distinct secrets in test harness"
+  golden_path: false
+  verification_ladder:
+    - {tier: integration}
+    - {tier: reality}
+  test_ids: [T-S5-003-NEG]
+
+- criterion_id: AC-S5-004
+  name: "JWT_SECRET missing → exit(1) at boot, no requests served"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-06]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The sandbox MCP server is started with JWT_SECRET absent from the environment"
+    when: "The process initializes"
+    then:
+      - "The process exits with code 1"
+      - "No HTTP port is opened; no requests are accepted"
+  primary_oracle: {type: deterministic, artifact: "process exit code == 1; port 8081 not bound (connection refused)"}
+  thresholds: {silent_startup_without_secret_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  test_ids: [T-S5-004]
+
+- criterion_id: AC-S5-005
+  name: "Valid JWT with correct session_id: request succeeds (200)"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-07, R-doc05-S5-08]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A sandbox with JWT_SECRET set and SESSION_ID=meeting-abc"
+    when: "A POST with Authorization: Bearer <HS256-JWT session_id=meeting-abc> is sent"
+    then:
+      - "The server accepts the request and processes the MCP call"
+      - "HTTP 200 is returned"
+  primary_oracle: {type: deterministic, artifact: "HTTP 200 response with valid MCP payload"}
+  thresholds: {}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: true
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  test_ids: [T-S5-005]
+
+- criterion_id: AC-S5-006
+  name: "JWT with wrong session_id claim returns 403 (second wall)"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-08, R-doc05-S5-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A sandbox with SESSION_ID=meeting-abc and JWT_SECRET=secret-X"
+    when: "A POST with a valid HS256 JWT signed with secret-X but session_id=meeting-zzz is sent"
+    then:
+      - "The server returns HTTP 403"
+      - "No MCP tool is invoked"
+  primary_oracle: {type: deterministic, artifact: "HTTP 403 response; no tool handler called (verified via spy/log)"}
+  thresholds: {wrong_claim_requests_served: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S5-006]
+
+- criterion_id: AC-S5-007
+  name: "JWT signed with wrong secret returns 401 (first wall)"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-07, R-doc05-S5-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A sandbox with JWT_SECRET=secret-A"
+    when: "A POST with a JWT signed with secret-B (even if session_id matches) is sent"
+    then:
+      - "The server returns HTTP 401"
+      - "No MCP tool is invoked"
+  primary_oracle: {type: deterministic, artifact: "HTTP 401 response; no tool handler called"}
+  thresholds: {invalid_sig_requests_served: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S5-007]
+
+- criterion_id: AC-S5-008
+  name: "Cross-sandbox token: meeting-A token rejected by meeting-B sandbox (403 or 401)"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-10]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Sandbox A with secret-A/SESSION_ID=meeting-A; Sandbox B with secret-B/SESSION_ID=meeting-B"
+    when: "A token minted for sandbox A (signed with secret-A, session_id=meeting-A) is presented to sandbox B"
+    then:
+      - "Sandbox B returns 401 (signature invalid against secret-B)"
+      - "No MCP tool in sandbox B is invoked"
+  primary_oracle: {type: deterministic, artifact: "integration test confirms 401 from sandbox B; tool call count == 0"}
+  thresholds: {cross_sandbox_auth_allowed: 0}
+  dependency_class: vendor:e2b
+  mock_boundary: "Two sandbox Node server instances with distinct secrets run in test"
+  golden_path: false
+  verification_ladder:
+    - {tier: integration}
+    - {tier: reality}
+  test_ids: [T-S5-008]
+
+- criterion_id: AC-S5-008-NEG
+  name: "NEG: Cross-sandbox acceptance with shared secret violates isolation"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-10]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A patched provisioner that uses the same secret for both sandboxes"
+    when: "Meeting-A token is presented to sandbox B"
+    then:
+      - "The server accepts the token — demonstrating that distinct-secret enforcement is required"
+      - "This test failure (acceptance by sandbox B) confirms the guard is necessary"
+  primary_oracle: {type: deterministic, artifact: "test asserts that patched (shared-secret) server returns 200 — i.e., the NEG test verifies the threat is real"}
+  thresholds: {}
+  dependency_class: vendor:e2b
+  mock_boundary: "Both sandboxes in-process with shared secret"
+  golden_path: false
+  verification_ladder:
+    - {tier: integration}
+  test_ids: [T-S5-008-NEG]
+
+- criterion_id: AC-S5-009
+  name: "Missing Authorization header returns 401"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-07]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A running sandbox MCP server"
+    when: "A POST to /mcp is sent with no Authorization header"
+    then:
+      - "The server returns HTTP 401"
+      - "No MCP tool is invoked"
+  primary_oracle: {type: deterministic, artifact: "HTTP 401 response body and no tool-call log entry"}
+  thresholds: {unauthenticated_requests_served: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S5-009]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# /health ENDPOINT
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S5-010
+  name: "/health returns 200 without authentication and includes code-hash + clone status"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-11, R-doc05-S5-12]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A running sandbox MCP server with baked code-hash stamped in the image"
+    when: "GET /health is called with no Authorization header"
+    then:
+      - "HTTP 200 is returned"
+      - "Response body contains the baked code-hash (sha256 of MCP bundle + build recipe)"
+      - "Response body contains the current clone status"
+  primary_oracle: {type: deterministic, artifact: "HTTP 200 with JSON fields code_hash and clone_status present"}
+  thresholds: {}
+  dependency_class: vendor:e2b
+  mock_boundary: null
+  golden_path: true
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: reality}
+  test_ids: [T-S5-010]
+
+- criterion_id: AC-S5-010-NEG
+  name: "NEG: /health returns stale/absent code-hash when image not baked correctly"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-11]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "A sandbox started from an image where code-hash was not stamped at build"
+    when: "GET /health is called"
+    then:
+      - "The response contains a null or placeholder code-hash value, signalling a build failure"
+  primary_oracle: {type: deterministic, artifact: "health response code_hash field is null or 'MISSING'"}
+  thresholds: {}
+  dependency_class: vendor:e2b
+  mock_boundary: "Template image built without hash-stamping step"
+  golden_path: false
+  verification_ladder:
+    - {tier: reality}
+  test_ids: [T-S5-010-NEG]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATH VALIDATION — null bytes
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S5-011
+  name: "Null byte in path argument is rejected before any filesystem access"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-13]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A sandbox tool invocation (any of the 8) where the path argument contains a null byte (e.g., '/workspace/foo\x00/../etc/passwd')"
+    when: "validate_path is called"
+    then:
+      - "The tool returns an error response without touching the filesystem"
+      - "No filesystem syscall for the supplied path is made"
+  primary_oracle: {type: deterministic, artifact: "strace / fs-mock confirms zero filesystem calls; error message contains 'null byte' or equivalent"}
+  thresholds: {null_byte_paths_processed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S5-011]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATH VALIDATION — realpath + allowed roots
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S5-012
+  name: "Path that resolves outside allowed roots via realpath is rejected"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-14]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A path argument that normalizes to a location outside allowed roots (e.g., '/workspace/../etc/shadow')"
+    when: "validate_path resolves it via realpath"
+    then:
+      - "The realpath falls outside the allowed roots"
+      - "The tool returns an error; no read or write is performed"
+  primary_oracle: {type: deterministic, artifact: "unit test with mocked realpath confirms error return; no I/O on /etc/shadow"}
+  thresholds: {out_of_root_accesses_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S5-012]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATH VALIDATION — symlink escape via ancestor walk
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S5-013
+  name: "Symlink escape via not-yet-existing path is caught by ancestor walk"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-15]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A symlink at /workspace/link → /etc; a write_file call targeting /workspace/link/newfile (which does not exist)"
+    when: "validate_path walks up to the nearest existing ancestor (/workspace/link) and resolves its realpath"
+    then:
+      - "realpath of /workspace/link resolves to /etc"
+      - "The check against allowed roots fails"
+      - "The tool returns an error; /etc/newfile is never created"
+  primary_oracle: {type: deterministic, artifact: "unit test with controlled symlink confirms error and no file creation at escape path"}
+  thresholds: {symlink_escapes_allowed: 0}
+  dependency_class: fs:git
+  mock_boundary: "tmpdir with controlled symlink structure"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  test_ids: [T-S5-013]
+
+- criterion_id: AC-S5-013-NEG
+  name: "NEG: Without ancestor walk, symlink escape is possible (confirms guard necessity)"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-15]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A patched validate_path that skips the ancestor walk for non-existing paths"
+    when: "write_file is called with /workspace/link/newfile"
+    then:
+      - "The write proceeds and creates /etc/newfile — confirming that the ancestor walk is the decisive guard"
+  primary_oracle: {type: deterministic, artifact: "patched test creates file at escape path; confirms guard is non-redundant"}
+  thresholds: {}
+  dependency_class: fs:git
+  mock_boundary: "tmpdir with controlled symlink; patched validate_path"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S5-013-NEG]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ATOMIC WRITES — exclusive-create for new files
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S5-014
+  name: "New file write uses exclusive-create (wx): concurrent creation fails gracefully"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-16]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Two concurrent write_file calls targeting the same new file path"
+    when: "Both execute simultaneously"
+    then:
+      - "Exactly one succeeds; the other receives an error (file already exists)"
+      - "No partial or corrupt file is produced"
+  primary_oracle: {type: deterministic, artifact: "concurrent test: one success + one EEXIST error; file integrity verified by hash"}
+  thresholds: {partial_write_allowed: 0}
+  dependency_class: fs:git
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  test_ids: [T-S5-014]
+
+- criterion_id: AC-S5-014-NEG
+  name: "NEG: Without wx flag, concurrent creates silently overwrite — confirming atomic guard"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-16]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "A patched write_file using 'w' (non-exclusive) mode"
+    when: "Two concurrent creates run"
+    then:
+      - "Both succeed but one silently overwrites the other — data loss confirmed"
+      - "This demonstrates that wx is the required mode"
+  primary_oracle: {type: deterministic, artifact: "patched test detects silent overwrite (hash comparison)"}
+  thresholds: {}
+  dependency_class: fs:git
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S5-014-NEG]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ATOMIC WRITES — temp+rename for overwrite
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S5-015
+  name: "File overwrite uses temp-file + rename: reader never sees partial content"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-17]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An existing file being overwritten via write_file or edit_file"
+    when: "A concurrent reader reads the file during the write operation"
+    then:
+      - "The reader sees either the old complete content or the new complete content — never a partial intermediate state"
+  primary_oracle: {type: deterministic, artifact: "concurrent read/write test: all observed file hashes match either pre or post state"}
+  thresholds: {partial_write_allowed: 0}
+  dependency_class: fs:git
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  test_ids: [T-S5-015]
+
+- criterion_id: AC-S5-015-NEG
+  name: "NEG: Direct overwrite (no temp+rename) exposes partial writes under concurrency"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-17]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "A patched overwrite that writes directly to the target file"
+    when: "A concurrent reader reads mid-write"
+    then:
+      - "The reader observes partial content — confirming that temp+rename is the required guard"
+  primary_oracle: {type: deterministic, artifact: "concurrent test detects partial-file hash in patched path"}
+  thresholds: {}
+  dependency_class: fs:git
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S5-015-NEG]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# run_command — output truncation
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S5-016
+  name: "run_command output auto-truncated: head 200 lines + tail 300 lines"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-18]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A command that produces exactly 1000 lines of output"
+    when: "run_command executes it with default truncation settings"
+    then:
+      - "The result contains the first 200 lines verbatim"
+      - "The result contains the last 300 lines verbatim"
+      - "The middle 500 lines are absent from the result"
+  primary_oracle: {type: deterministic, artifact: "unit test: output line count == 500; first line matches line 1, last line matches line 1000"}
+  thresholds: {truncation_line_count: 500}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: true
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S5-016]
+
+- criterion_id: AC-S5-017
+  name: "run_command tail_lines param overrides default tail-300 truncation"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-18]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "A command producing 1000 lines"
+    when: "run_command is called with tail_lines=50"
+    then:
+      - "Result contains first 200 lines (head unchanged)"
+      - "Result contains last 50 lines (tail overridden)"
+  primary_oracle: {type: deterministic, artifact: "unit test: total output lines == 250; last line == line 1000"}
+  thresholds: {}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S5-017]
+
+- criterion_id: AC-S5-018
+  name: "run_command enforces 5-minute default timeout"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-18]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A command that would run indefinitely (e.g., sleep 9999)"
+    when: "run_command executes it with default timeout"
+    then:
+      - "The command is killed after approximately 5 minutes"
+      - "The receipt includes a non-zero exit code indicating timeout"
+  primary_oracle: {type: deterministic, artifact: "elapsed time ≈ 300s; receipt exit_code indicates kill/timeout"}
+  thresholds: {timeout_seconds: 300}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  test_ids: [T-S5-018]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# run_command — structured receipt
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S5-019
+  name: "run_command emits structured receipt with all required fields"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-19, R-doc05-S5-20]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A successful run_command invocation"
+    when: "The tool result is returned to the host-side transport"
+    then:
+      - "Receipt contains: command_id (string), argv (list), exit_code (int), stdout_ref (string), artifact_hashes (object or null)"
+      - "Receipt is present as structured data in the transport layer, not embedded in prose"
+  primary_oracle: {type: deterministic, artifact: "host-side transport test asserts schema of tools/result matches expected receipt shape"}
+  thresholds: {}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: true
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  test_ids: [T-S5-019]
+
+- criterion_id: AC-S5-020
+  name: "Host transport captures receipt directly — not parsed from model prose"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-20]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A run_command whose prose description omits or misreports the exit_code"
+    when: "The evidence gate (§3.7②) reads the command result"
+    then:
+      - "The gate reads the structured receipt field, not the prose"
+      - "The correct exit_code from the receipt is used for gate logic"
+  primary_oracle: {type: deterministic, artifact: "evidence gate test: prose reports exit_code=0 but receipt says exit_code=1 → gate uses 1"}
+  thresholds: {}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S5-020]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# artifact_hashes — write_file / edit_file / ast_grep
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S5-021
+  name: "write_file emits artifact_hashes for every file it writes"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-21]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A write_file call that creates or overwrites a file"
+    when: "The tool result is returned"
+    then:
+      - "The result payload contains artifact_hashes with an entry for the written file path"
+      - "The hash value matches the sha256 (or equivalent) of the final file contents"
+  primary_oracle: {type: deterministic, artifact: "unit test: artifact_hashes[target_path] == sha256(written_content)"}
+  thresholds: {}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: true
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S5-021]
+
+- criterion_id: AC-S5-022
+  name: "edit_file emits artifact_hashes after unique-match replacement"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-21, R-doc05-S5-22]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A file containing exactly one occurrence of the target string"
+    when: "edit_file is called with a unique match string"
+    then:
+      - "The file is updated and artifact_hashes contains the new file hash"
+  primary_oracle: {type: deterministic, artifact: "unit test: hash in result == sha256(file after replacement)"}
+  thresholds: {}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: true
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S5-022]
+
+- criterion_id: AC-S5-023
+  name: "edit_file fails when match string is not unique"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-22]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A file containing two occurrences of the target string"
+    when: "edit_file is called without replace_all"
+    then:
+      - "The tool returns an error indicating non-unique match"
+      - "The file is not modified"
+  primary_oracle: {type: deterministic, artifact: "unit test: error response; file hash unchanged"}
+  thresholds: {ambiguous_edit_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S5-023]
+
+- criterion_id: AC-S5-024
+  name: "ast_grep emits artifact_hashes and uses atomic-write path"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-21, R-doc05-S5-23]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An ast_grep call with a valid pattern and rewrite that matches one or more nodes"
+    when: "The tool completes"
+    then:
+      - "artifact_hashes contains an entry for each modified file"
+      - "The write was performed via temp-file + rename (no partial write visible)"
+  primary_oracle: {type: deterministic, artifact: "unit test: artifact_hashes present; fs-spy confirms rename syscall used"}
+  thresholds: {partial_write_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S5-024]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# grep — 100-match cap + totalMatches
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S5-025
+  name: "grep caps results at 100 matches and reports totalMatches"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-25]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A grep call on a corpus that contains 500 matching lines"
+    when: "The tool returns its result"
+    then:
+      - "The matches array contains exactly 100 entries"
+      - "The totalMatches field equals 500"
+  primary_oracle: {type: deterministic, artifact: "unit test: len(matches)==100; result.totalMatches==500"}
+  thresholds: {max_grep_results: 100}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: true
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S5-025]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# tools/call journaling — 100 KB cap
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S5-026
+  name: "Every tools/call and tools/result is journaled to sandbox log"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-26]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A sequence of 3 tool calls made against the sandbox"
+    when: "The sandbox log is inspected after all calls"
+    then:
+      - "The log contains 3 tools/call records and 3 tools/result records in order"
+  primary_oracle: {type: deterministic, artifact: "integration test: log parser finds 6 journal entries matching the 3 invocations"}
+  thresholds: {}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: true
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  test_ids: [T-S5-026]
+
+- criterion_id: AC-S5-027
+  name: "Sandbox log is capped at 100 KB"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-26]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Enough tool calls to produce more than 100 KB of journal data"
+    when: "The sandbox log is inspected"
+    then:
+      - "The log file size does not exceed 100 KB (102400 bytes)"
+      - "Older entries are dropped or truncated rather than exceeding the cap"
+  primary_oracle: {type: deterministic, artifact: "unit test: after excess calls, os.path.getsize(log_path) <= 102400"}
+  thresholds: {sandbox_log_max_bytes: 102400}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S5-027]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# always_load — GAL-383 prevention
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S5-028
+  name: "always_load=True blocks agent turn 1 until MCP handshake completes"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-28]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The Workroom agent is initialized and the code MCP server handshake is in flight"
+    when: "The SDK would otherwise start turn 1"
+    then:
+      - "The SDK blocks turn 1 until the handshake completes (up to ~5 s cap)"
+      - "The agent's first turn has the full tool list available (no tool-less turn)"
+  primary_oracle: {type: deterministic, artifact: "integration test: SDK turn-1 start timestamp is after MCP connect timestamp; tool list non-empty at turn 1"}
+  thresholds: {toolless_first_turns_allowed: 0}
+  dependency_class: vendor:claude-sdk
+  mock_boundary: null
+  golden_path: true
+  verification_ladder:
+    - {tier: integration}
+    - {tier: reality}
+  test_ids: [T-S5-028]
+
+- criterion_id: AC-S5-028-NEG
+  name: "NEG: Without always_load, turn 1 can start before MCP connects (GAL-383 reproduced)"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-28]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "The code server registration has always_load omitted (defaulting to false)"
+    when: "The agent starts in a slow-network environment where MCP handshake takes > 1s"
+    then:
+      - "Turn 1 starts before the MCP server is connected"
+      - "The agent's tool list at turn 1 is empty — GAL-383 reproduced"
+  primary_oracle: {type: deterministic, artifact: "integration test with delayed MCP server: turn-1 tool list is empty"}
+  thresholds: {}
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Delayed-start MCP stub"
+  golden_path: false
+  verification_ladder:
+    - {tier: integration}
+  test_ids: [T-S5-028-NEG]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DISPOSITION CURATED SUBSETS
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S5-029
+  name: "quick disposition: only read + map tools advertised; no write, no propose_change"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-29, R-doc05-S5-33]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Workroom configured for quick disposition"
+    when: "get_agent_tool_config is called and disallowed_tools is inspected"
+    then:
+      - "allowed_tools contains only: mcp__code__read_file, mcp__code__list_files, mcp__code__grep, mcp__code__glob, and all map tools"
+      - "disallowed_tools contains all write tools and mcp__propose_change__propose_change"
+      - "The agent cannot invoke write_file, edit_file, run_command, ast_grep, or propose_change"
+  primary_oracle: {type: deterministic, artifact: "unit test: allowed_tools set equality; disallowed_tools set contains all write+propose names"}
+  thresholds: {write_tool_leak_to_read_only_disposition: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: lint}
+  test_ids: [T-S5-029]
+
+- criterion_id: AC-S5-030
+  name: "plan disposition: same read + map subset as quick; no write tools"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-30, R-doc05-S5-33]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Workroom configured for plan disposition"
+    when: "get_agent_tool_config is called"
+    then:
+      - "allowed_tools and disallowed_tools match the quick disposition exactly (read + map only)"
+  primary_oracle: {type: deterministic, artifact: "unit test: plan and quick tool configs are identical sets"}
+  thresholds: {write_tool_leak_to_read_only_disposition: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: lint}
+  test_ids: [T-S5-030]
+
+- criterion_id: AC-S5-031
+  name: "critic/verifier disposition: read + map + run_command; no write_file/edit_file/ast_grep/propose_change"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-31, R-doc05-S5-33]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Workroom configured for critic or verifier disposition"
+    when: "get_agent_tool_config is called"
+    then:
+      - "allowed_tools includes run_command plus read and map tools"
+      - "disallowed_tools contains write_file, edit_file, ast_grep, and mcp__propose_change__propose_change"
+      - "The verifier can re-run tests but cannot edit files"
+  primary_oracle: {type: deterministic, artifact: "unit test: disallowed set includes write_file, edit_file, ast_grep, propose_change; run_command in allowed_tools"}
+  thresholds: {write_tool_leak_to_verifier_disposition: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: lint}
+  test_ids: [T-S5-031]
+
+- criterion_id: AC-S5-032
+  name: "worker disposition: full read + map + write set + propose_change"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-32]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Workroom configured for worker disposition with readwrite access"
+    when: "get_agent_tool_config is called"
+    then:
+      - "allowed_tools contains all read tools, all map tools, all sandbox write tools (run_command, write_file, edit_file, ast_grep), and mcp__propose_change__propose_change"
+      - "disallowed_tools is empty for worker disposition"
+  primary_oracle: {type: deterministic, artifact: "unit test: allowed_tools set union matches full expected set; disallowed_tools empty"}
+  thresholds: {}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: true
+  verification_ladder:
+    - {tier: unit}
+    - {tier: lint}
+  test_ids: [T-S5-032]
+
+- criterion_id: AC-S5-033
+  name: "Write/propose_change block uses disallowed_tools, not just omission from allowed_tools"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-33]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A read-only disposition where write tools are omitted from allowed_tools but NOT in disallowed_tools"
+    when: "The MCP server registration is inspected"
+    then:
+      - "The MCP tools are still callable by the agent (SDK does not filter them via allowed_tools)"
+      - "This demonstrates that the guard is only effective via disallowed_tools"
+  primary_oracle: {type: deterministic, artifact: "adversarial SDK test: agent with omit-only config can invoke MCP write tool; disallowed_tools config prevents it"}
+  thresholds: {write_tool_leak_via_omit_only: 0}
+  dependency_class: vendor:claude-sdk
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  test_ids: [T-S5-033]
+
+- criterion_id: AC-S5-033-NEG
+  name: "NEG: disallowed_tools absent → MCP write tool callable in read-only disposition"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-33]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A read-only disposition with write tools absent from allowed_tools but disallowed_tools not set"
+    when: "The agent in that disposition attempts to call mcp__code__write_file"
+    then:
+      - "The SDK allows the call — confirming that allowed_tools alone does not block MCP tools"
+  primary_oracle: {type: deterministic, artifact: "SDK integration test: write_file call succeeds despite omission from allowed_tools"}
+  thresholds: {}
+  dependency_class: vendor:claude-sdk
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: integration}
+  test_ids: [T-S5-033-NEG]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# token_provider — cached re-mint
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S5-034
+  name: "token_provider caches JWT and does not re-mint before 5-min expiry margin"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-34]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "A newly minted JWT with a 30-minute TTL"
+    when: "token_provider is called twice within the first 24 minutes"
+    then:
+      - "The same cached JWT is returned both times (no re-mint)"
+      - "No new HS256 signing operation occurs"
+  primary_oracle: {type: deterministic, artifact: "unit test: sign-call count == 1 after two token_provider() calls within non-expiry window"}
+  thresholds: {}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: true
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S5-034]
+
+- criterion_id: AC-S5-035
+  name: "token_provider re-mints JWT when within ~5-min expiry margin"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-34]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A cached JWT whose exp is 4 minutes from now (within ~5-min margin)"
+    when: "token_provider is called"
+    then:
+      - "A new JWT is minted transparently"
+      - "The returned token has a fresh exp further in the future"
+  primary_oracle: {type: deterministic, artifact: "unit test with mocked clock: sign-call count == 2; second token.exp > first token.exp"}
+  thresholds: {}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  test_ids: [T-S5-035]
+
+- criterion_id: AC-S5-036
+  name: "token_provider reads exp from token — no separate TTL constant"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-34]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "A token_provider implementation"
+    when: "The source code is linted"
+    then:
+      - "No hardcoded TTL or expiry constant is used alongside or duplicating the JWT exp field"
+      - "The expiry decision derives exclusively from parsing the cached token's exp claim"
+  primary_oracle: {type: deterministic, artifact: "lint rule or AST check: no standalone TTL constant referenced next to token cache logic"}
+  thresholds: {}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+  test_ids: [T-S5-036]
+
+- criterion_id: AC-S5-037
+  name: "Long-running session never hits token expiry mid-run"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-35]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A workroom session running for 2 hours, token TTL = 30 minutes"
+    when: "The agent makes tool calls at t=0, t=28min, t=58min, t=88min, t=118min"
+    then:
+      - "Each tool call succeeds (no 401/403 due to token expiry)"
+      - "token_provider transparently re-minted at each 5-min margin before expiry"
+  primary_oracle: {type: deterministic, artifact: "integration test with mocked clock: all 5 tool calls return 200; token re-mint count >= 3"}
+  thresholds: {mid_run_expiry_failures_allowed: 0}
+  dependency_class: vendor:e2b
+  mock_boundary: "E2B sandbox mocked; JWT clock mocked; real token_provider under test"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  test_ids: [T-S5-037]
+
+- criterion_id: AC-S5-037-NEG
+  name: "NEG: Without re-mint, token expires mid-run and tool calls fail"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-35]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "A patched token_provider that never re-mints (returns the original cached token always)"
+    when: "A tool call is made after the token's exp has passed"
+    then:
+      - "The sandbox MCP server returns 401 — confirming that re-minting is required for long runs"
+  primary_oracle: {type: deterministic, artifact: "integration test with expired token: sandbox returns 401"}
+  thresholds: {}
+  dependency_class: vendor:e2b
+  mock_boundary: "Sandbox with real JWT gate; mocked clock"
+  golden_path: false
+  verification_ladder:
+    - {tier: integration}
+  test_ids: [T-S5-037-NEG]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ast_grep — blocked for read-only dispositions
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S5-038
+  name: "ast_grep is blocked in quick, plan, and critic dispositions via disallowed_tools"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S5-24]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Workroom configured for quick, plan, or critic/verifier disposition"
+    when: "The agent attempts to call mcp__code__ast_grep"
+    then:
+      - "The SDK blocks the call via disallowed_tools"
+      - "An error is returned to the agent; no ast_grep execution occurs"
+  primary_oracle: {type: deterministic, artifact: "unit test: disallowed_tools contains 'mcp__code__ast_grep' for all read-only dispositions; SDK rejects the call"}
+  thresholds: {ast_grep_leak_to_read_only_disposition: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: lint}
+  test_ids: [T-S5-038]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# /health as preflight target (§3.9 wiring)
+# ─────────────────────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S5-039
+  name: "§3.9 preflight targets /health and passes only when it returns 200 with non-null code_hash"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-12]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The Workroom preflight check runs before the first agent turn"
+    when: "GET /health on the sandbox returns 200 with a non-null code_hash"
+    then:
+      - "Preflight passes and the agent is allowed to proceed"
+  primary_oracle: {type: deterministic, artifact: "integration test: preflight passes when health returns valid body; fails when health returns 503 or null code_hash"}
+  thresholds: {}
+  dependency_class: vendor:e2b
+  mock_boundary: "Sandbox health endpoint stubbed"
+  golden_path: true
+  verification_ladder:
+    - {tier: integration}
+    - {tier: reality}
+  test_ids: [T-S5-039]
+
+- criterion_id: AC-S5-039-NEG
+  name: "NEG: Preflight fails when /health is unreachable"
+  evidence_class: ""
+  authority_refs: [R-doc05-S5-12]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "The sandbox MCP server is not yet started or has crashed"
+    when: "The §3.9 preflight calls GET /health"
+    then:
+      - "Connection error or non-200 response causes preflight to fail"
+      - "The agent turn is not started"
+  primary_oracle: {type: deterministic, artifact: "integration test: preflight raises/returns failure when health endpoint is unavailable"}
+  thresholds: {}
+  dependency_class: vendor:e2b
+  mock_boundary: "Health endpoint stubbed to timeout"
+  golden_path: false
+  verification_ladder:
+    - {tier: integration}
+    - {tier: reality}
+  test_ids: [T-S5-039-NEG]
