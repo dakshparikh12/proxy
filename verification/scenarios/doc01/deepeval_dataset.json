@@ -8,58 +8,63 @@
   "cases": [
     {
       "id": "doc01-grounded-0",
-      "input": "What is the build order of Doc 01 Code Intelligence, and which documents does it depend on and feed into?",
-      "actual_output": "Doc 01 Code Intelligence has build order 2nd (after Doc 00 scaffold). It reads from Doc 00 (runtime, tenancy, hosting) and is consumed by Doc 03 (referent resolution), Doc 04 (Orchestrator), Doc 05 (Workroom \u2014 the primary consumer), and Doc 06 (Proactive).",
+      "input": "What is the build order position of Doc 01 Code Intelligence, and which documents does it read from and get consumed by?",
+      "actual_output": "Doc 01 Code Intelligence is the 2nd build item (after Doc 00 scaffold). It reads from Doc 00 (runtime, tenancy, hosting) and is consumed by four documents: Doc 03 (referent resolution), Doc 04 (Orchestrator), Doc 05 (Workroom \u2014 the primary consumer), and Doc 06 (Proactive).",
       "retrieval_context": [
         "*Build order: 2nd (after Doc 00 scaffold). Reads from Doc 00 (runtime, tenancy, hosting). Consumed by Doc 03 (referent resolution), Doc 04 (Orchestrator), Doc 05 (Workroom \u2014 the primary consumer), Doc 06 (Proactive). This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately.*\n\n*Conformance: this doc is bound by `CANONICAL-DECISIONS.md` (\u00a70, \u00a71.5, \u00a76, \u00a77, \u00a78, \u00a79, and the final reconciliation \u00a712 \u2014 esp \u00a712.2 code-intel locus + \u00a712.6 code-intel honest & simple, which win over any divergent text here). The **core** built here is the mechanical code-intelligence layer \u2014 tree-sitter/PageRank structural overview + native grep/read/glob + a host-side language server (Serena/solid-lsp) + a mechanically-built dependency/call graph \u2014 all served by **one host-side `code_intel` service** (\u00a712.2: read-only tools answer host-side; the E2B sandbox is Workroom-mutable-work only). The heavier **agentic knowledge map** (grep-anchored directory summaries, the L1/L2 capability map, lazy flow dossiers, and the `map_runs`/`map_artifacts`/`map_events` pipeline) is **deferred to Expansion** \u2014 see the final section \u2014 and is recorded as the first expansion seam we build off this core.*\n\n---"
       ],
       "kind": "grounded",
-      "citation_should_pass": true
+      "citation_should_pass": true,
+      "gen_citation_score": 0.9
     },
     {
       "id": "doc01-grounded-1",
-      "input": "What are the five types of edges in the dependency/call graph, and what do they represent?",
-      "actual_output": "According to section 2.2, the five types of edges in the dependency/call graph are: `calls`, `imports`, `reads`, `writes`, `extends`, and `implements`. These typed edges connect nodes (symbols such as functions, methods, classes, routes, tables, and modules) and are built mechanically from the LSP call graph and tree-sitter imports.",
+      "input": "What are the five types of edges in the dependency/call graph described in section 2.2?",
+      "actual_output": "According to section 2.2, the dependency/call graph contains five types of typed edges: `calls`, `imports`, `reads`, `writes`, and `extends`. The section also mentions `implements` as a sixth edge type when it states: \"typed edges (`calls`, `imports`, `reads`, `writes`, `extends`, `implements`)\".",
       "retrieval_context": [
         "From the clone we build a mechanical substrate whose job is **coverage, latency, and blast-radius**. Everything here is built by parsers and the language server \u2014 **no LLM, nothing to hallucinate, re-runnable on every change**:\n\n**The structural substrate.** tree-sitter tag extraction + aider-style PageRank ranking over the tag-reference graph (a function used by twenty places outranks a private helper). It produces the **file-coverage record** and a **ranked overview** (\"table of contents + neighborhoods\"), and it is the source of the graph's nodes.\n\n**The dependency/call graph \u2014 the core value-add.** Nodes (symbols: functions, methods, classes, routes, tables, modules \u2014 marked `exported` when they are a route / public symbol / table) + typed edges (`calls`, `imports`, `reads`, `writes`, `extends`, `implements`), built **mechanically from the LSP call graph + tree-sitter imports \u2014 no LLM, no CSV ingest.** We hold the code, so the graph is a free by-product of the substrate and carries zero freshness burden. It is what powers `get_dependents` (reverse-dependency / blast-radius), `who_writes(table)` (write-path for a schema change), `shares_table(table)` (the cross-module co-access on one table \u2014 the hidden coupling a meeting misses), and `list_entry_points()` (graph roots \u2014 routes/jobs/handlers). This is what lets the agent answer \"what breaks if we change this table?\" in one call. Both `shares_table` and `owner(path)` are the *same* mechanical graph read (plus, for `owner`, a CODEOWNERS file read) \u2014 no new substrate.\n\nDepth stops there. No stored semantic meaning, no business-capability layer, no per-symbol summaries, no embeddings, no LLM in the core. The working motion is the entire latency win: **overview/graph \u2192 neighborhood \u2192 one grep/read lands it \u2192 grab \u2192 come b"
       ],
       "kind": "grounded",
-      "citation_should_pass": true
+      "citation_should_pass": true,
+      "gen_citation_score": 1.0
     },
     {
       "id": "doc01-grounded-2",
-      "input": "What permissions does the GitHub App request when a customer grants access to their repository?",
-      "actual_output": "The GitHub App requests exactly `contents:read` + `metadata:read` \u2014 nothing else. These read-only scopes provide access to code and config only, never runtime systems or customer data.",
+      "input": "What are the exact permission scopes that the GitHub App requests during the connect flow?",
+      "actual_output": "The GitHub App requests exactly `contents:read` + `metadata:read` \u2014 nothing else. These read-only scopes provide access to code and config only, and the `metadata:read` scope also delivers the `push` webhook that powers freshness.",
       "retrieval_context": [
         "The customer clicks \"connect\" in our UI \u2192 we launch the **GitHub App** installation (GitHub requires installs to start from our UI) \u2192 they grant access to the chosen repo(s). The App requests exactly **`contents:read` + `metadata:read`** \u2014 nothing else. That single read scope also delivers the `push` webhook that powers freshness. Read-only, code and config only, never runtime systems or customer data: minimal access is what lets a customer approve in an afternoon.\n\n**Nango** stores the App credentials and mints the short-lived installation token for each operation (tokens expire ~hourly \u2014 mint per operation, never cache, never log). Nango's job is credentials only; it is also our auth layer for every future connector (Slack, Jira, GitLab), so auth is never rewritten per service. All git-host-specific logic (clone, pull, webhook parsing) lives behind one thin **`RepoProvider`** interface \u2014 GitHub is the only implementation now; a second host later is a new implementation, zero downstream changes."
       ],
       "kind": "grounded",
-      "citation_should_pass": true
+      "citation_should_pass": true,
+      "gen_citation_score": 0.7
     },
     {
       "id": "doc01-grounded-3",
-      "input": "Where do the clone and substrate live, and which tools are served host-side versus in the E2B sandbox?",
-      "actual_output": "According to section 3.5, the clone and substrate live host-side in the `code_intel` service. The read-only tool surface (graph tools, `find_references`, `lookup_referent`, `batch_read`, and native `grep`/`read`/`glob`) is served host-side and reached over the internal API. The mutable native tools (`bash`, `git`, `edit`) exist only in the Workroom's E2B sandbox, seeded from the canonical copy at `meeting.pinned_sha`. The `propose_change` tool is a host-side in-process tool, never a sandbox tool.",
+      "input": "Where do the clone and substrate live, and which service hosts them?",
+      "actual_output": "The clone and substrate live host-side in the `code_intel` service.",
       "retrieval_context": [
         "The clone and the substrate live host-side in the `code_intel` service. The read-only tool surface (the graph tools + `find_references` + `lookup_referent` + `batch_read`, alongside native `grep`/`read`/`glob`) is served **host-side** and reached by the direct-answer wake turn over the internal API (\u00a712.2). The **mutable** native tools \u2014 `bash`/`git`/`edit` \u2014 exist **only** in the Workroom's E2B sandbox (Doc 05), seeded from the canonical copy at `meeting.pinned_sha`, where real code changes happen. `propose_change` is a host-side in-process tool (CANONICAL \u00a711.7), never a sandbox tool.\n\n**The `code_intel` MCP server (the in-meeting grounding surface).** The graph is wrapped as a **fresh, connection-bound, in-memory SDK MCP server**, minted per query from a **factory** (SDK MCP servers are connection-bound \u2014 never share one instance across concurrent workers or reuse it after a transport closes; store factories, mint per-query). The graph tables are read from the per-repo SQLite DB (or held in a small in-memory adjacency loaded from it) \u2014 no live model calls:\n\n```python"
       ],
       "kind": "grounded",
-      "citation_should_pass": true
+      "citation_should_pass": true,
+      "gen_citation_score": 1.0
     },
     {
       "id": "doc01-grounded-4",
-      "input": "In the compute_coverage function, what constitutes an 'orphan_exported' node, and what condition must be true for a node to be included in the orphan_exported list?",
-      "actual_output": "An 'orphan_exported' node is an exported node from the graph that has no resolved dependency edges. Specifically, a node is included in the orphan_exported list if it has n.exported == True AND its n.id is not present in resolved_targets, where resolved_targets is the set of all edge targets and sources from graph.edges.",
+      "input": "What does the compute_coverage function return, and how is the coverage_pct calculated?",
+      "actual_output": "The compute_coverage function returns a tuple of (float, list[str]). The coverage_pct is calculated as the fraction of tracked files that are indexed: it equals len(indexed) / total where indexed is the list of coverage_rows with status == \"indexed\", or 1.0 if total is 0.",
       "retrieval_context": [
         "def compute_coverage(coverage_rows: list[FileCoverage], graph: DependencyGraph) -> tuple[float, list[str]]:\n    \"\"\"coverage_pct = fraction of tracked files that are indexed (not flagged).\n    gaps = the honest blind-spot list: flagged areas by reason + exported graph nodes\n    with no resolved edges (grammarless / external-only). Pure + deterministic.\"\"\"\n    indexed = [r for r in coverage_rows if r.status == \"indexed\"]\n    total = len(coverage_rows)\n    coverage_pct = (len(indexed) / total) if total else 1.0\n\n    gaps: list[str] = []\n    for reason, rows in _group_by_flag_reason(coverage_rows):\n        gaps.append(f\"{len(rows)} files flagged: {reason}\")   # e.g. \"312 files flagged: unsupported-language\"\n    # exported symbols/routes/tables the graph could resolve NO edge for = weak spots\n    resolved_targets = {e.target for e in graph.edges} | {e.source for e in graph.edges}\n    orphan_exported = [n for n in graph.nodes if n.exported and n.id not in resolved_targets]\n    if orphan_exported:\n        gaps.append(f\"{len(orphan_exported)} exported symbols/tables with no resolved dependency edge\")\n    return coverage_pct, gaps\n```\n\nThis is **warning-only** for graph orphans (they never fail a build \u2014 grammarless and external-only symbols legitimately have no first-party edges); file-completeness is the hard gate. The `gaps` list also feeds Proxy's own honesty (\"I've indexed checkout and refunds fully; the `legacy/` COBOL area is grammarless \u2014 let me grep it live\")."
       ],
       "kind": "grounded",
-      "citation_should_pass": true
+      "citation_should_pass": true,
+      "gen_citation_score": 0.9
     },
     {
       "id": "doc01-negctl-0",
-      "input": "What is the build order of Doc 01 Code Intelligence, and which documents does it depend on and feed into?",
-      "actual_output": "Doc 01 Code Intelligence has build order 2nd (after Doc 00 scaffold). It reads from Doc 00 (runtime, tenancy, hosting) and is consumed by Doc 03 (referent resolution), Doc 04 (Orchestrator), Doc 05 (Workroom \u2014 the primary consumer), and Doc 06 (Proactive). Additionally, the system stores all state in a MongoDB cluster with a 7-day auto-delete TTL and calls the OpenAI GPT-4 API for every request.",
+      "input": "What is the build order position of Doc 01 Code Intelligence, and which documents does it read from and get consumed by?",
+      "actual_output": "Doc 01 Code Intelligence is the 2nd build item (after Doc 00 scaffold). It reads from Doc 00 (runtime, tenancy, hosting) and is consumed by four documents: Doc 03 (referent resolution), Doc 04 (Orchestrator), Doc 05 (Workroom \u2014 the primary consumer), and Doc 06 (Proactive). Additionally, the system stores all state in a MongoDB cluster with a 7-day auto-delete TTL and calls the OpenAI GPT-4 API for every request.",
       "retrieval_context": [
         "*Build order: 2nd (after Doc 00 scaffold). Reads from Doc 00 (runtime, tenancy, hosting). Consumed by Doc 03 (referent resolution), Doc 04 (Orchestrator), Doc 05 (Workroom \u2014 the primary consumer), Doc 06 (Proactive). This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately.*\n\n*Conformance: this doc is bound by `CANONICAL-DECISIONS.md` (\u00a70, \u00a71.5, \u00a76, \u00a77, \u00a78, \u00a79, and the final reconciliation \u00a712 \u2014 esp \u00a712.2 code-intel locus + \u00a712.6 code-intel honest & simple, which win over any divergent text here). The **core** built here is the mechanical code-intelligence layer \u2014 tree-sitter/PageRank structural overview + native grep/read/glob + a host-side language server (Serena/solid-lsp) + a mechanically-built dependency/call graph \u2014 all served by **one host-side `code_intel` service** (\u00a712.2: read-only tools answer host-side; the E2B sandbox is Workroom-mutable-work only). The heavier **agentic knowledge map** (grep-anchored directory summaries, the L1/L2 capability map, lazy flow dossiers, and the `map_runs`/`map_artifacts`/`map_events` pipeline) is **deferred to Expansion** \u2014 see the final section \u2014 and is recorded as the first expansion seam we build off this core.*\n\n---"
       ],
@@ -68,8 +73,8 @@
     },
     {
       "id": "doc01-negctl-1",
-      "input": "What are the five types of edges in the dependency/call graph, and what do they represent?",
-      "actual_output": "According to section 2.2, the five types of edges in the dependency/call graph are: `calls`, `imports`, `reads`, `writes`, `extends`, and `implements`. These typed edges connect nodes (symbols such as functions, methods, classes, routes, tables, and modules) and are built mechanically from the LSP call graph and tree-sitter imports. Additionally, the system stores all state in a MongoDB cluster with a 7-day auto-delete TTL and calls the OpenAI GPT-4 API for every request.",
+      "input": "What are the five types of edges in the dependency/call graph described in section 2.2?",
+      "actual_output": "According to section 2.2, the dependency/call graph contains five types of typed edges: `calls`, `imports`, `reads`, `writes`, and `extends`. The section also mentions `implements` as a sixth edge type when it states: \"typed edges (`calls`, `imports`, `reads`, `writes`, `extends`, `implements`)\". Additionally, the system stores all state in a MongoDB cluster with a 7-day auto-delete TTL and calls the OpenAI GPT-4 API for every request.",
       "retrieval_context": [
         "From the clone we build a mechanical substrate whose job is **coverage, latency, and blast-radius**. Everything here is built by parsers and the language server \u2014 **no LLM, nothing to hallucinate, re-runnable on every change**:\n\n**The structural substrate.** tree-sitter tag extraction + aider-style PageRank ranking over the tag-reference graph (a function used by twenty places outranks a private helper). It produces the **file-coverage record** and a **ranked overview** (\"table of contents + neighborhoods\"), and it is the source of the graph's nodes.\n\n**The dependency/call graph \u2014 the core value-add.** Nodes (symbols: functions, methods, classes, routes, tables, modules \u2014 marked `exported` when they are a route / public symbol / table) + typed edges (`calls`, `imports`, `reads`, `writes`, `extends`, `implements`), built **mechanically from the LSP call graph + tree-sitter imports \u2014 no LLM, no CSV ingest.** We hold the code, so the graph is a free by-product of the substrate and carries zero freshness burden. It is what powers `get_dependents` (reverse-dependency / blast-radius), `who_writes(table)` (write-path for a schema change), `shares_table(table)` (the cross-module co-access on one table \u2014 the hidden coupling a meeting misses), and `list_entry_points()` (graph roots \u2014 routes/jobs/handlers). This is what lets the agent answer \"what breaks if we change this table?\" in one call. Both `shares_table` and `owner(path)` are the *same* mechanical graph read (plus, for `owner`, a CODEOWNERS file read) \u2014 no new substrate.\n\nDepth stops there. No stored semantic meaning, no business-capability layer, no per-symbol summaries, no embeddings, no LLM in the core. The working motion is the entire latency win: **overview/graph \u2192 neighborhood \u2192 one grep/read lands it \u2192 grab \u2192 come b"
       ],

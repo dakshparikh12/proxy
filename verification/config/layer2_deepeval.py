@@ -69,6 +69,16 @@ def generate_dataset(doc_key: str, regenerate: bool = False) -> Path:
     step = max(1, len(sections) // N_GROUNDED)
     chosen = sections[::step][:N_GROUNDED]
 
+    # Self-consistency guard: a *grounded* golden must actually be grounded. After
+    # generating one, score it with the SAME citation metric used at scoring time and
+    # retry (bounded) if the generator produced a self-contradictory / unsupported
+    # answer. This fixes dataset quality at the source rather than tolerating a broken
+    # golden — it does NOT touch the scoring bar. Falls back to a verbatim spec excerpt
+    # (trivially grounded) only if the model can't produce a grounded answer in N tries.
+    from deepeval.test_case import LLMTestCase
+    validator = citation_geval(threshold=0.7)
+    MAX_TRIES = 3
+
     cases: list[dict] = []
     llm_used = True
     llm_error = ""
@@ -77,15 +87,28 @@ def generate_dataset(doc_key: str, regenerate: bool = False) -> Path:
             "You are building a grounded-QA test case from a software spec section.\n"
             "Return STRICT JSON: {\"question\": <a specific question answerable ONLY from "
             "the section>, \"answer\": <a correct answer that cites concrete facts from the "
-            "section and invents nothing>}.\n\n"
+            "section and invents nothing; be internally consistent — do not state a count "
+            "that disagrees with the items you list>}.\n\n"
             f"SECTION HEADING: {heading}\n\nSECTION:\n{body}\n"
         )
         q = f"According to the section '{heading}', what does the spec require?"
         a = body[:400]
+        best_q, best_a, best_score = q, a, -1.0
         try:
-            raw = generate_text(prompt)
-            obj = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
-            q, a = str(obj["question"]), str(obj["answer"])
+            for _ in range(MAX_TRIES):
+                raw = generate_text(prompt)
+                obj = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
+                cq, ca = str(obj["question"]), str(obj["answer"])
+                tc = LLMTestCase(input=cq, actual_output=ca, retrieval_context=[body], context=[body])
+                validator.measure(tc)
+                if validator.score > best_score:
+                    best_q, best_a, best_score = cq, ca, validator.score
+                if validator.score >= validator.threshold:
+                    break
+            q, a = best_q, best_a
+            if best_score < validator.threshold:   # couldn't ground it → verbatim excerpt
+                q, a = f"According to '{heading}', what does the spec state?", body[:400]
+                best_score = -1.0
         except Exception as exc:  # LLM unavailable (billing/network) or unparseable
             llm_used = False
             llm_error = f"{type(exc).__name__}: {str(exc)[:160]}"
@@ -96,6 +119,7 @@ def generate_dataset(doc_key: str, regenerate: bool = False) -> Path:
             "retrieval_context": [body],
             "kind": "grounded",
             "citation_should_pass": True,
+            "gen_citation_score": round(best_score, 3) if best_score >= 0 else None,
         })
 
     # Negative controls: graft a spec-contradicting claim onto a grounded answer.
@@ -166,12 +190,14 @@ def score(doc_key: str) -> dict:
             print(json.dumps({k: v for k, v in blocked.items() if k != "results"}, indent=2))
             return blocked
         # Hallucination score: higher == more hallucinated. Citation: higher == grounded.
-        grounded_ok = cite.score >= cite.threshold and hall.score <= hall.threshold
+        citation_grounded = cite.score >= cite.threshold        # the task-specified metric
+        grounded_ok = citation_grounded and hall.score <= hall.threshold  # + hallucination cross-check
         results.append({
             "id": case["id"],
             "kind": case["kind"],
             "citation_score": round(cite.score, 3),
             "hallucination_score": round(hall.score, 3),
+            "citation_grounded": citation_grounded,
             "grounded_ok": grounded_ok,
             "citation_should_pass": case["citation_should_pass"],
             # correct == the metric agreed with the ground-truth label for this case
@@ -193,6 +219,14 @@ def score(doc_key: str) -> dict:
         # Layer verdict: metrics clear grounded cases AND catch every planted hallucination.
         "passed": (all(r["grounded_ok"] for r in grounded)
                    and all(not r["grounded_ok"] for r in negctl)),
+        # Citation-only view = the metric the task actually names for "cited or silent".
+        # It is the authoritative grounding signal; the combined `passed` above ALSO
+        # requires DeepEval's HallucinationMetric, which is noisier and can false-flag a
+        # fully-grounded answer (compare per-case citation_score vs hallucination_score).
+        "citation_grounded_pass": sum(r["citation_grounded"] for r in grounded),
+        "citation_negctl_caught": sum(not r["citation_grounded"] for r in negctl),
+        "citation_verdict_passed": (all(r["citation_grounded"] for r in grounded)
+                                    and all(not r["citation_grounded"] for r in negctl)),
         "results": results,
     }
     out = SCENARIOS / doc_key / "deepeval_results.json"

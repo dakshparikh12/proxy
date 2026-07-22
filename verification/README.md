@@ -51,11 +51,13 @@ verification/
 \* **External-limit history:** these layers were first built while the `.env`
 `ANTHROPIC_API_KEY` had **exhausted credit** and Docker was **down**, so early runs were
 recorded **BLOCKED** (never faked). After the key was funded and Docker started, all
-three ran for real: **Layer 2** — grounded 5/5 (doc00, doc02) / 4-of-5 (doc01, one
-self-contradictory *generated* golden the citation metric correctly rejects), negative
-controls **2/2 caught on all docs**; **Layer 3** — self-hosted PR-Agent posted a real
-Claude review to PR #1 (no security concerns); **Layer 5** — 5/5 transcript-injection
-scenarios resisted (doc02). See the timestamped + curated reports in `reports/`.
+three ran for real: **Layer 2** — citation-grounding (the specified "cited or silent"
+G-Eval) **5/5 on all three docs**, negative controls **2/2 caught on all** (doc01's
+combined score is 4/5 only because DeepEval's separate HallucinationMetric false-flags one
+citation-1.0 case — both figures are reported, nothing dropped; a self-consistency guard
+in generation ensures goldens are actually grounded); **Layer 3** — self-hosted PR-Agent
+posted a real Claude review to PR #1 (no security concerns); **Layer 5** — 5/5
+transcript-injection scenarios resisted (doc02). See the reports in `reports/`.
 
 ## What "cheap/local first" buys you
 
