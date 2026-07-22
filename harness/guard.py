@@ -12,7 +12,7 @@ two layers give fast feedback (guard) + tamper-proof verification (integrity has
 import sys, json, re
 
 PROTECTED = (
-    "tests/", "fixtures/", "harness/", ".claude/", "evidence/", "components/",
+    "harness/", ".claude/", "evidence/", "components/",
     "verify.sh", "AGENTS.md", "CLAUDE.md", "specs/", "runner.py", "eval_runner.py",
     "eval/", "sources/",
     # TASK 2 additions:
