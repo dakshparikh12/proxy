@@ -9,7 +9,7 @@ whole spec?" from an agent's hope into a decidable check.
 
 Dependency-free (no pyyaml) — parses the bundle's regular machine-generated YAML directly.
 
-Usage: python3 orchestrator/criteria_coverage_gate.py <doc>   e.g. doc01
+Usage: python3 scripts/coverage_gate.py <doc>   e.g. doc01
 Exit 0 = fully covered; nonzero = gaps (printed).
 """
 import re, sys, pathlib
