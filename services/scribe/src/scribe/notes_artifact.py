@@ -55,6 +55,41 @@ class NotesGenerationConflictError(Exception):
         self.expected_generation = expected_generation
 
 
+class _MissingGCSPreconditionFailed(Exception):
+    """Stand-in for ``google.api_core.exceptions.PreconditionFailed`` when the GCS
+    SDK is not installed (this module keeps the seam importable/runnable without
+    ``google.cloud.storage`` — see the module docstring).
+
+    On a host WITH the SDK this class is never used: :func:`precondition_failed_type`
+    returns the real ``PreconditionFailed`` and the live 412 path is exercised. On a
+    host WITHOUT it the create-only DISCIPLINE is still exercised at the unit tier by
+    a bucket double that raises exactly the type this seam catches (obtained via
+    :func:`precondition_failed_type`) — never a stub of the seam itself.
+    """
+
+
+def precondition_failed_type() -> type[Exception]:
+    """Resolve the 412 precondition exception the write seam catches (§3.3).
+
+    Returns the real ``google.api_core.exceptions.PreconditionFailed`` when the GCS
+    SDK is installed, else the local :class:`_MissingGCSPreconditionFailed` fallback.
+    This is the SINGLE source of truth for "what a create-only 412 raises here" — the
+    seam catches this type and a unit-tier create-only bucket double raises this same
+    type, so the mapping to :class:`NotesGenerationConflictError` runs for real on a
+    host without the SDK, never as a stub (AC-CLOSE-08/14 unit tier).
+    """
+    try:
+        from google.api_core.exceptions import (  # lazy: SDK optional
+            PreconditionFailed,
+        )
+    except ModuleNotFoundError:
+        return _MissingGCSPreconditionFailed
+    # google's exceptions are untyped (ignore_missing_imports); the class is a real
+    # Exception subclass — annotate so the seam's typed contract holds.
+    resolved: type[Exception] = PreconditionFailed
+    return resolved
+
+
 def _normalise_generation(generation: Any) -> int | str:
     """Return a generation as ``int``/``str`` — NEVER ``float`` (AC-STORE-11).
 
@@ -103,7 +138,10 @@ def write_finalized_notes(
     match: int | str | None = (
         None if if_generation_match is None else _normalise_generation(if_generation_match)
     )
-    from google.api_core.exceptions import PreconditionFailed  # lazy: SDK optional
+    # Resolve the 412 exception type the seam catches — the real google
+    # PreconditionFailed when the GCS SDK is installed, else a fallback so the seam
+    # stays runnable/unit-testable without the SDK (module docstring / AC-CLOSE).
+    precondition_failed = precondition_failed_type()
 
     blob = bucket.blob(NOTES_OBJECT_TEMPLATE.format(meeting_id=meeting_id))
     try:
@@ -112,7 +150,7 @@ def write_finalized_notes(
             content_type="text/markdown",
             if_generation_match=match,
         )
-    except PreconditionFailed as exc:  # HTTP 412 — someone wrote since we read
+    except precondition_failed as exc:  # HTTP 412 — someone wrote since we read
         raise NotesGenerationConflictError(meeting_id, if_generation_match) from exc
     blob.reload()
     # blob.generation is a uint64 the SDK surfaces as int — normalise so a
