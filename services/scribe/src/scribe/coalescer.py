@@ -134,7 +134,7 @@ class _Buffer:
 
 
 def _split_segment_at_token_cap(
-    seg: TranscriptSegment, tokens_allowed: int
+    seg: TranscriptSegment, tokens_allowed: int, max_duration_s: float
 ) -> tuple[TranscriptSegment, TranscriptSegment]:
     """Split ONE segment so the head fits ``tokens_allowed`` tokens; tail rolls on.
 
@@ -145,12 +145,16 @@ def _split_segment_at_token_cap(
     """
     if tokens_allowed <= 0 or tokens_allowed >= seg.token_count:
         raise ValueError("token split point must be strictly inside the segment")
-    frac = tokens_allowed / seg.token_count
-    mid_s = seg.start_s + seg.duration_s * frac
-    head = replace(seg, end_s=mid_s, token_count=tokens_allowed)
-    tail = replace(
-        seg, start_s=mid_s, token_count=seg.token_count - tokens_allowed
-    )
+    # Split at whichever cap binds first — tokens OR duration. Verification found a
+    # single >token-cap segment with a huge span emitting a head whose duration ignored
+    # the time cap (a 1201-tok/10000s segment made a 166-minute window). Honour BOTH.
+    frac_tok = tokens_allowed / seg.token_count
+    frac_time = (max_duration_s / seg.duration_s) if seg.duration_s > 0 else 1.0
+    frac = min(frac_tok, frac_time)
+    head_tokens = min(max(1, round(seg.token_count * frac)), seg.token_count - 1)
+    mid_s = seg.start_s + seg.duration_s * (head_tokens / seg.token_count)
+    head = replace(seg, end_s=mid_s, token_count=head_tokens)
+    tail = replace(seg, start_s=mid_s, token_count=seg.token_count - head_tokens)
     return head, tail
 
 
@@ -206,7 +210,7 @@ class Coalescer:
                     continue
                 # buffer empty but this one segment alone exceeds the cap: split it
                 # at the cap; the head is one window, the tail rolls on. Never widen.
-                head, tail = _split_segment_at_token_cap(pending, self._token_cap)
+                head, tail = _split_segment_at_token_cap(pending, self._token_cap, self._time_cap_s)
                 self._buf.segments.append(head)
                 out.append(self._cut(BoundaryType.TOKEN_CAP))
                 pending = tail

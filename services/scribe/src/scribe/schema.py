@@ -18,6 +18,7 @@ live:
 """
 from __future__ import annotations
 
+import math
 from enum import Enum
 from typing import Annotated, Literal, Optional, Union
 
@@ -68,6 +69,10 @@ class Claim(BaseModel):
     @classmethod
     def _reject_wall_clock(cls, value: float) -> float:
         """Reject a wall-clock epoch masquerading as a meeting-relative offset."""
+        if not math.isfinite(value):
+            # NaN slips past both < 0 and > ceiling (all NaN comparisons are False);
+            # a meeting offset is a finite non-negative number (verification fuzz finding).
+            raise ValueError("said_at_s must be a finite meeting-relative offset (not NaN/inf)")
         if value < 0:
             raise ValueError("said_at_s must be a non-negative meeting-relative offset")
         if value > _MEETING_RELATIVE_SECONDS_CEILING:
