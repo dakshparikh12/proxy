@@ -110,38 +110,53 @@ BASELINE_JSON="slices/${ID}/_baseline.json"
 echo "== DONE(${ID}) =="
 echo ""
 
-OVERALL=0  # 0=pass, 1=fail
+OVERALL_FAIL=0    # count of FAIL conjuncts
+OVERALL_DEFERRED=0  # count of DEFERRED conjuncts
+
+# Per-conjunct status strings: C1_STATUS, C2_STATUS, ..., C10_STATUS
+# Each is one of: PASS | FAIL | DEFERRED
+# DEFERRED is a distinct third state — it blocks DONE just like FAIL.
+C1_STATUS="UNKNOWN"
+C2_STATUS="UNKNOWN"
+C3_STATUS="UNKNOWN"
+C4_STATUS="UNKNOWN"
+C5_STATUS="UNKNOWN"
+C6_STATUS="UNKNOWN"
+C7_STATUS="UNKNOWN"
+C8_STATUS="UNKNOWN"
+C9_STATUS="UNKNOWN"
+C10_STATUS="UNKNOWN"
 
 # ── Conjunct 1: coverage(req↔crit) ──────────────────────────────────────────
 echo -n "[1] coverage(req<->crit) ... "
 if python3 scripts/coverage_gate.py "${DOCID}" > /tmp/done_check_c1.txt 2>&1; then
     echo "PASS"
-    C1=0
+    C1_STATUS="PASS"
 else
     echo "FAIL"
     cat /tmp/done_check_c1.txt
-    C1=1
-    OVERALL=1
+    C1_STATUS="FAIL"
+    OVERALL_FAIL=$((OVERALL_FAIL + 1))
 fi
 
 # ── Conjunct 2: tasks(crit↔task) ────────────────────────────────────────────
 echo -n "[2] tasks(crit<->task) ... "
 if python3 scripts/task_coverage.py "${ID}" > /tmp/done_check_c2.txt 2>&1; then
     echo "PASS"
-    C2=0
+    C2_STATUS="PASS"
 else
     echo "FAIL"
     cat /tmp/done_check_c2.txt
-    C2=1
-    OVERALL=1
+    C2_STATUS="FAIL"
+    OVERALL_FAIL=$((OVERALL_FAIL + 1))
 fi
 
 # ── Conjunct 3: all-tasks-pass ───────────────────────────────────────────────
 echo -n "[3] all-tasks-pass ... "
 if [[ ! -f "$TASKS_JSON" ]]; then
     echo "FAIL (no tasks.json)"
-    C3=1
-    OVERALL=1
+    C3_STATUS="FAIL"
+    OVERALL_FAIL=$((OVERALL_FAIL + 1))
 else
     ALL_PASS=$(python3 - <<EOF
 import json
@@ -158,15 +173,15 @@ EOF
 )
     if [[ "$ALL_PASS" == "true" ]]; then
         echo "PASS"
-        C3=0
+        C3_STATUS="PASS"
     elif [[ "$ALL_PASS" == "empty" ]]; then
         echo "FAIL (tasks list is empty)"
-        C3=1
-        OVERALL=1
+        C3_STATUS="FAIL"
+        OVERALL_FAIL=$((OVERALL_FAIL + 1))
     else
         echo "FAIL (${ALL_PASS} tasks have passes:false)"
-        C3=1
-        OVERALL=1
+        C3_STATUS="FAIL"
+        OVERALL_FAIL=$((OVERALL_FAIL + 1))
     fi
 fi
 
@@ -183,13 +198,13 @@ if ! uv run ruff check services libs scripts > /tmp/done_check_c4_ruff.txt 2>&1;
 fi
 if [[ $OFFLINE_FAIL -eq 0 ]]; then
     echo "PASS"
-    C4=0
+    C4_STATUS="PASS"
 else
     echo "FAIL"
     [[ -s /tmp/done_check_c4_pytest.txt ]] && tail -5 /tmp/done_check_c4_pytest.txt
     [[ -s /tmp/done_check_c4_ruff.txt ]] && cat /tmp/done_check_c4_ruff.txt
-    C4=1
-    OVERALL=1
+    C4_STATUS="FAIL"
+    OVERALL_FAIL=$((OVERALL_FAIL + 1))
 fi
 
 # ── Conjunct 5: integration(Doc09 §2) ────────────────────────────────────────
@@ -197,21 +212,22 @@ echo -n "[5] integration(Doc09§2) ... "
 echo "(note: needs live Postgres/GCS for persistence check; DEFERRED lines from journey = not-yet-PASS)"
 if python3 scripts/journey.py contracts > /tmp/done_check_c5.txt 2>&1; then
     echo "[5] PASS"
-    C5=0
+    C5_STATUS="PASS"
 else
     echo "[5] FAIL"
     cat /tmp/done_check_c5.txt
-    C5=1
-    OVERALL=1
+    C5_STATUS="FAIL"
+    OVERALL_FAIL=$((OVERALL_FAIL + 1))
 fi
 
 # ── Conjunct 6: invariants ───────────────────────────────────────────────────
 # Path used: try pre-commit first; if unavailable, try fallback ops.* modules;
 # if ops module is also absent, DEFERRED (logged honestly; never silently PASS).
+# DEFERRED is not PASS — it blocks DONE like any FAIL.
 echo -n "[6] invariants ... "
 if uv run pre-commit run --all-files > /tmp/done_check_c6.txt 2>&1; then
     echo "PASS (via pre-commit)"
-    C6=0
+    C6_STATUS="PASS"
 else
     PRE_COMMIT_RC=$?
     # pre-commit not installed or failed — try fallback
@@ -238,23 +254,25 @@ else
             fi
             if [[ $C6_FAIL -eq 0 ]]; then
                 echo "[6] PASS (fallback: check_secret_bindings + check_sdk_isolation_triad + naming)"
-                C6=0
+                C6_STATUS="PASS"
             else
                 echo "[6] FAIL (fallback)"
-                C6=1
-                OVERALL=1
+                C6_STATUS="FAIL"
+                OVERALL_FAIL=$((OVERALL_FAIL + 1))
             fi
         else
             # Neither pre-commit nor ops module available — DEFERRED
+            # DEFERRED is not PASS: it blocks DONE just like FAIL.
             echo "[6] DEFERRED (pre-commit not installed; ops module not available for fallback)"
             echo "    Install pre-commit to enable invariant checks."
-            C6=0  # DEFERRED: reported honestly, not silently skipped, not counted as FAIL
+            C6_STATUS="DEFERRED"
+            OVERALL_DEFERRED=$((OVERALL_DEFERRED + 1))
         fi
     else
         echo "FAIL (pre-commit exited $PRE_COMMIT_RC)"
         cat /tmp/done_check_c6.txt
-        C6=1
-        OVERALL=1
+        C6_STATUS="FAIL"
+        OVERALL_FAIL=$((OVERALL_FAIL + 1))
     fi
 fi
 
@@ -263,28 +281,34 @@ echo -n "[7] eval>=baseline ... "
 if [[ ! -f "$BASELINE_JSON" ]]; then
     echo "FAIL"
     echo "  eval: NO BASELINE (blocked) — create slices/${ID}/_baseline.json to unlock"
-    C7=1
-    OVERALL=1
+    C7_STATUS="FAIL"
+    OVERALL_FAIL=$((OVERALL_FAIL + 1))
 else
     # Baseline exists — run eval suite
     if uv run --group eval pytest tests/eval -q -k "${ID}" > /tmp/done_check_c7.txt 2>&1; then
         echo "PASS"
-        C7=0
+        C7_STATUS="PASS"
     else
         echo "FAIL"
         tail -10 /tmp/done_check_c7.txt
-        C7=1
-        OVERALL=1
+        C7_STATUS="FAIL"
+        OVERALL_FAIL=$((OVERALL_FAIL + 1))
     fi
 fi
 
 # ── Conjunct 8: mutation spot-check ─────────────────────────────────────────
+# Guards that acceptance cmds actually bind to real passing tests.
+# Algorithm:
+#   1. Pick the first task with a non-null acceptance.cmd.
+#   2. Run the ORIGINAL cmd; assert it exits 0 (real green, not exit 5 = no tests).
+#   3. Run the MUTATED cmd (impossible -k suffix); assert nonzero.
+#   Both must hold for PASS. If no runnable cmd exists yet, DEFERRED (blocks DONE).
 echo -n "[8] mutation-spotcheck ... "
-# Pick 1 task with a real acceptance.cmd; run it with an impossible -k suffix.
-# This proves the acceptance cmds actually bind to real tests (not vacuously pass).
 if [[ ! -f "$TASKS_JSON" ]]; then
-    echo "SKIP (no tasks.json)"
-    C8=0
+    # No tasks.json at all — DEFERRED (blocks DONE)
+    echo "DEFERRED (no tasks.json)"
+    C8_STATUS="DEFERRED"
+    OVERALL_DEFERRED=$((OVERALL_DEFERRED + 1))
 else
     REAL_CMD=$(python3 - <<EOF
 import json
@@ -297,19 +321,34 @@ for t in data["tasks"]:
 EOF
 )
     if [[ -z "$REAL_CMD" ]]; then
-        echo "SKIP (no task with real acceptance.cmd)"
-        C8=0
+        # No task has a real acceptance.cmd yet — DEFERRED (blocks DONE)
+        echo "DEFERRED (no task with real acceptance.cmd — nothing built yet)"
+        C8_STATUS="DEFERRED"
+        OVERALL_DEFERRED=$((OVERALL_DEFERRED + 1))
     else
-        # Append impossible -k suffix to ensure the test is NOT selected → expect nonzero
-        MUTATED_CMD="${REAL_CMD} -k NOPE_MUTATION_SPOTCHECK_XYZ_IMPOSSIBLE"
+        # Step 1: run the ORIGINAL cmd and assert it exits 0 (real green)
         # shellcheck disable=SC2086
-        if uv run $MUTATED_CMD -p no:cacheprovider -p no:testmon > /tmp/done_check_c8.txt 2>&1; then
-            echo "FAIL (mutated cmd passed — acceptance cmd does not truly bind)"
-            C8=1
-            OVERALL=1
+        if ! uv run $REAL_CMD -p no:cacheprovider -p no:testmon > /tmp/done_check_c8_orig.txt 2>&1; then
+            ORIG_RC=$?
+            if [[ $ORIG_RC -eq 5 ]]; then
+                echo "FAIL (original cmd collected no tests — exit 5; acceptance cmd does not bind to real tests)"
+            else
+                echo "FAIL (original cmd exited $ORIG_RC — acceptance cmd is not green)"
+            fi
+            C8_STATUS="FAIL"
+            OVERALL_FAIL=$((OVERALL_FAIL + 1))
         else
-            echo "PASS (mutated cmd correctly returned nonzero)"
-            C8=0
+            # Step 2: run the MUTATED cmd and assert nonzero
+            MUTATED_CMD="${REAL_CMD} -k NOPE_MUTATION_SPOTCHECK_XYZ_IMPOSSIBLE"
+            # shellcheck disable=SC2086
+            if uv run $MUTATED_CMD -p no:cacheprovider -p no:testmon > /tmp/done_check_c8.txt 2>&1; then
+                echo "FAIL (mutated cmd passed — acceptance cmd does not truly bind)"
+                C8_STATUS="FAIL"
+                OVERALL_FAIL=$((OVERALL_FAIL + 1))
+            else
+                echo "PASS (original green; mutated cmd correctly returned nonzero)"
+                C8_STATUS="PASS"
+            fi
         fi
     fi
 fi
@@ -318,40 +357,49 @@ fi
 echo -n "[9] regressions ratchet ... "
 if [[ ! -d "regressions" ]]; then
     echo "PASS (no regressions/ dir — vacuously green)"
-    C9=0
+    C9_STATUS="PASS"
 elif uv run pytest regressions/ -q -p no:cacheprovider > /tmp/done_check_c9.txt 2>&1; then
     echo "PASS"
-    C9=0
+    C9_STATUS="PASS"
 else
     echo "FAIL"
     tail -5 /tmp/done_check_c9.txt
-    C9=1
-    OVERALL=1
+    C9_STATUS="FAIL"
+    OVERALL_FAIL=$((OVERALL_FAIL + 1))
 fi
 
 # ── Conjunct 10: pip-audit ───────────────────────────────────────────────────
+# CRITICAL: if pip-audit output contains actual CVE findings (GHSA-/PYSEC-/vulnerability),
+# conjunct 10 is FAIL regardless of "could not be audited" notes for workspace-local packages.
+# DEFERRED only when the ONLY issue is inaccessible local packages AND no CVE was found.
 echo -n "[10] mechanical(pip-audit) ... "
 if uv run pip-audit > /tmp/done_check_c10.txt 2>&1; then
     echo "PASS"
-    C10=0
+    C10_STATUS="PASS"
 else
     PIP_AUDIT_RC=$?
     PIP_AUDIT_OUT=$(cat /tmp/done_check_c10.txt)
-    # May need network — report honestly
-    if echo "$PIP_AUDIT_OUT" | grep -qiE "network|connection|timeout|offline|unreachable"; then
+    # Check for actual CVE findings FIRST — these are always FAIL, regardless of other notes
+    if echo "$PIP_AUDIT_OUT" | grep -qiE "GHSA-|PYSEC-|vulnerabilit"; then
+        echo "FAIL (pip-audit found real CVE/vulnerability findings)"
+        tail -10 /tmp/done_check_c10.txt
+        C10_STATUS="FAIL"
+        OVERALL_FAIL=$((OVERALL_FAIL + 1))
+    elif echo "$PIP_AUDIT_OUT" | grep -qiE "network|connection|timeout|offline|unreachable"; then
         echo "DEFERRED (pip-audit needs network — not available in this environment)"
-        C10=0  # DEFERRED is not a FAIL for the overall gate
+        C10_STATUS="DEFERRED"
+        OVERALL_DEFERRED=$((OVERALL_DEFERRED + 1))
     elif echo "$PIP_AUDIT_OUT" | grep -q "could not be audited"; then
-        # Workspace-local packages (not on PyPI) can't be audited — DEFERRED for local packages
-        # (Third-party packages without vulnerabilities still count as clean)
-        echo "DEFERRED (pip-audit cannot audit workspace-local packages not on PyPI; third-party clean)"
+        # Workspace-local packages (not on PyPI) can't be audited, but no CVEs found.
+        echo "DEFERRED (pip-audit cannot audit workspace-local packages not on PyPI; no CVEs found in auditable packages)"
         tail -5 /tmp/done_check_c10.txt
-        C10=0  # DEFERRED: local packages are expected to be absent from PyPI
+        C10_STATUS="DEFERRED"
+        OVERALL_DEFERRED=$((OVERALL_DEFERRED + 1))
     else
         echo "FAIL (pip-audit exited $PIP_AUDIT_RC)"
         tail -5 /tmp/done_check_c10.txt
-        C10=1
-        OVERALL=1
+        C10_STATUS="FAIL"
+        OVERALL_FAIL=$((OVERALL_FAIL + 1))
     fi
 fi
 
@@ -360,33 +408,33 @@ echo ""
 echo "─────────────────────────────────────────────────"
 echo "DONE(${ID}) SUMMARY"
 echo "─────────────────────────────────────────────────"
-for i in 1 2 3 4 5 6 7 8 9 10; do
-    eval "C=\$C${i}"
-    if [[ $C -eq 0 ]]; then
-        STATUS="PASS"
-    else
-        STATUS="FAIL"
-    fi
-    case $i in
-        1) LABEL="coverage(req<->crit)";;
-        2) LABEL="tasks(crit<->task)";;
-        3) LABEL="all-tasks-pass";;
-        4) LABEL="offline suite + ruff";;
-        5) LABEL="integration(Doc09§2)";;
-        6) LABEL="invariants";;
-        7) LABEL="eval>=baseline";;
-        8) LABEL="mutation-spotcheck";;
-        9) LABEL="regressions ratchet";;
-        10) LABEL="mechanical(pip-audit)";;
-    esac
-    printf "  [%2d] %-30s %s\n" "$i" "$LABEL" "$STATUS"
-done
+printf "  [%2d] %-30s %s\n"  "1" "coverage(req<->crit)"    "$C1_STATUS"
+printf "  [%2d] %-30s %s\n"  "2" "tasks(crit<->task)"      "$C2_STATUS"
+printf "  [%2d] %-30s %s\n"  "3" "all-tasks-pass"           "$C3_STATUS"
+printf "  [%2d] %-30s %s\n"  "4" "offline suite + ruff"     "$C4_STATUS"
+printf "  [%2d] %-30s %s\n"  "5" "integration(Doc09§2)"    "$C5_STATUS"
+printf "  [%2d] %-30s %s\n"  "6" "invariants"               "$C6_STATUS"
+printf "  [%2d] %-30s %s\n"  "7" "eval>=baseline"           "$C7_STATUS"
+printf "  [%2d] %-30s %s\n"  "8" "mutation-spotcheck"       "$C8_STATUS"
+printf "  [%2d] %-30s %s\n"  "9" "regressions ratchet"      "$C9_STATUS"
+printf "  [%2d] %-30s %s\n" "10" "mechanical(pip-audit)"    "$C10_STATUS"
 echo "─────────────────────────────────────────────────"
 
-if [[ $OVERALL -eq 0 ]]; then
+if [[ $OVERALL_FAIL -gt 0 ]] || [[ $OVERALL_DEFERRED -gt 0 ]]; then
+    BLOCKING=""
+    if [[ $OVERALL_FAIL -gt 0 ]]; then
+        BLOCKING="${OVERALL_FAIL} FAIL"
+    fi
+    if [[ $OVERALL_DEFERRED -gt 0 ]]; then
+        if [[ -n "$BLOCKING" ]]; then
+            BLOCKING="${BLOCKING}, ${OVERALL_DEFERRED} DEFERRED"
+        else
+            BLOCKING="${OVERALL_DEFERRED} DEFERRED"
+        fi
+    fi
+    echo "DONE(${ID}): NOT DONE — ${BLOCKING} conjunct(s) block completion (see table above)"
+    exit 1
+else
     echo "DONE(${ID}): ALL CONJUNCTS PASS"
     exit 0
-else
-    echo "DONE(${ID}): NOT DONE — see FAIL lines above"
-    exit 1
 fi

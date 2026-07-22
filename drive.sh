@@ -9,8 +9,8 @@
 #   3. coverage_gate (fail fast on gap)
 #   4. task_coverage  (fail fast on gap)
 #   5. print task count
-#   6. done-check.sh --spec <id> → print DONE or blocked conjunct list
-#   7. Cost ceiling check via scripts/cost_log.py
+#   6. Cost ceiling check via scripts/cost_log.py
+#   7. done-check.sh --spec <id> → print DONE or blocked conjunct list
 #
 # Environment:
 #   V2_COST_CEILING_USD   (default: 25) — abort if spent_usd exceeds this

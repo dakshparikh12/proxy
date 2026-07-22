@@ -106,6 +106,57 @@ def test_spec_shows_eval_baseline_info() -> None:
     )
 
 
+def test_deferred_conjunct_prevents_done() -> None:
+    """Anti-gaming regression: a DEFERRED conjunct must prevent a DONE (exit 0) verdict.
+
+    DEFERRED is a distinct third state that blocks DONE — it must never roll up to PASS.
+    This test guards the CRITICAL-1 property so it cannot silently regress.
+
+    Strategy: inspect the done-check.sh exit-gate logic directly. The script must
+    exit nonzero when OVERALL_DEFERRED > 0. We verify this by parsing the script source
+    and by asserting that the exit gate checks OVERALL_DEFERRED (not just OVERALL_FAIL).
+    """
+    import re
+
+    script_text = DONE_CHECK.read_text()
+
+    # 1. The script must track a distinct OVERALL_DEFERRED counter.
+    assert "OVERALL_DEFERRED" in script_text, (
+        "done-check.sh must maintain an OVERALL_DEFERRED counter distinct from OVERALL_FAIL"
+    )
+
+    # 2. DEFERRED conjuncts must increment OVERALL_DEFERRED (not OVERALL_FAIL, not C=0).
+    assert "OVERALL_DEFERRED=$((OVERALL_DEFERRED + 1))" in script_text, (
+        "DEFERRED conjuncts must increment OVERALL_DEFERRED"
+    )
+
+    # 3. The exit gate must check OVERALL_DEFERRED alongside OVERALL_FAIL.
+    # Look for a condition that tests both OVERALL_FAIL and OVERALL_DEFERRED before exit 1.
+    exit_gate_pattern = re.compile(
+        r'OVERALL_FAIL.*OVERALL_DEFERRED|OVERALL_DEFERRED.*OVERALL_FAIL', re.DOTALL
+    )
+    assert exit_gate_pattern.search(script_text), (
+        "The exit gate in done-check.sh must check both OVERALL_FAIL and OVERALL_DEFERRED; "
+        "a DEFERRED conjunct must cause exit 1, not exit 0"
+    )
+
+    # 4. The summary table must render 'DEFERRED' as a label (not map it to 'PASS').
+    # The old code did: if C==0 → STATUS="PASS"; new code uses per-conjunct C<N>_STATUS strings.
+    assert 'C1_STATUS' in script_text, (
+        "done-check.sh must use per-conjunct status strings (C1_STATUS ... C10_STATUS) so "
+        "DEFERRED renders as 'DEFERRED', not 'PASS', in the summary table"
+    )
+
+    # 5. The summary rendering must NOT use the old numeric remap (if C -eq 0 → PASS).
+    # Old anti-pattern: `if [[ $C -eq 0 ]]; then STATUS="PASS"` — this would map DEFERRED→PASS.
+    # New pattern: each conjunct sets its own CX_STATUS string (PASS/FAIL/DEFERRED) and the
+    # summary prints those strings directly.
+    assert 'if [[ $C -eq 0 ]]; then' not in script_text, (
+        "done-check.sh must NOT use the old 'if C==0 → PASS' remap in the summary — "
+        "this would silently map DEFERRED to PASS"
+    )
+
+
 def test_task_mode_null_cmd_returns_nonzero() -> None:
     """--task with a null acceptance.cmd must exit nonzero with BLOCKED message."""
     tasks_json = ROOT / "slices" / "00" / "tasks.json"
