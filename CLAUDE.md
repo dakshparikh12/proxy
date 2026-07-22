@@ -21,9 +21,19 @@ a **rebuildable, derived cache** — the durable **source of truth is Postgres +
 Drop and rebuild the derived cache freely; never treat it as the record of truth.
 
 ## Commands
-- `uv sync` — install/refresh the whole workspace from the shared lock.
+- `uv sync --all-packages` — install/refresh the whole workspace. **Never bare `uv sync`** (it prunes members' deps + the pinned tools); always follow with `uv pip install --python .venv/bin/python -r tools/linux-verify-requirements.txt`.
 - `uv run --package <name> pytest` — run one workspace member's tests/tools.
+- `./drive.sh <id>` — run the full v2 loop for spec `<id>` (e.g. `00`, `03`).
+- `./done-check.sh --spec <id>` — compute the DONE predicate (exit 0 = DONE).
 - `alembic upgrade head` — apply the Postgres migrations to head.
+
+## The build loop (doc-agnostic — every doc runs the SAME pipeline)
+- Work **ONE** task from `slices/<id>/tasks.json` at a time; `/clear` between tasks.
+- TDD: write the failing acceptance test → code to green → **never edit tests, cassettes, acceptance bundles, goldens, fixtures, or `_baseline.json`** (a lean PreToolUse guard enforces this).
+- A task is done ONLY after its real path RAN on real/held-out data and the output was shown as evidence; flip `passes:true` in `tasks.json` only then.
+- `_baseline.json` changes and the `EXTRACTION_COUNT_HALT` are **human-gated** (founder review; never auto-approve).
+- A task that fails N identical times flags `BLOCKED:<reason>` and continues — it never deadlocks and never silently claims done.
+- Requirements + per-requirement acceptance checks are already distilled in `acceptance/doc<NN>/` (read those, not spec prose); `product/v0-spec/CANONICAL-DECISIONS.md` overrides; integration journeys = Doc 09 §2/§3.
 
 ## The five standing laws (build constraints; every visible behavior traces to one)
 1. **Grounded or silent** — cite `file:line` from the current clone, or say "not found by this method".
