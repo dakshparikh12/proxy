@@ -63,3 +63,7 @@ evidence/*-ladder.json
 
 # v2 build-loop runtime artifacts (derived; never committed)
 slices/
+
+# testmon local cache + SDD scratch ledger
+.testmondata
+.superpowers/
