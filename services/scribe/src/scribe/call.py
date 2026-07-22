@@ -2,8 +2,8 @@
 
 The Scribe is a **single extraction, not an agent** (§3.2): there is literally no
 loop — one ``messages.create``, one forced tool call, one delta out. This module
-issues exactly that: a bare ``anthropic.AsyncAnthropic().messages.create`` routed
-through the single ``libs.http.call_external`` seam (retry + cost telemetry, §14),
+issues exactly that single vendor micro-call routed
+through the one ``libs.http.call_external`` seam (retry + cost telemetry, §14),
 with the cache breakpoints placed by hand via :func:`scribe.prefix.build_scribe_prefix`
 and the output tool-forced + schema-validated via :mod:`scribe.parse`.
 

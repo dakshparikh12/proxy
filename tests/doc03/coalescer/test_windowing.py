@@ -292,7 +292,7 @@ def test_streaming_push_emits_windows_in_formation_order() -> None:
     coalescer = Coalescer()
     emitted: list[str] = []
     for s in [seg("A", 0, 1, 10), seg("B", 1, 2, 10), seg("A", 2, 3, 10)]:
-        for w in coalescer.push(s):
+        for w in coalescer.feed(s):
             emitted.append(w.speakers[0])
     for w in coalescer.flush():
         emitted.append(w.speakers[0])

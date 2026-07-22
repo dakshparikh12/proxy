@@ -209,7 +209,7 @@ def _read_graph_nodes(db_path: Optional[str], *, strict: bool) -> list[tuple[str
         if cur.fetchone() is None:
             return []
         rows = conn.execute(
-            f"SELECT node_id, area, file, symbol FROM {GRAPH_NODES_TABLE}"  # noqa: S608 - constant table name
+            "SELECT node_id, area, file, symbol FROM graph_nodes"  # literal table name — no interpolation
         ).fetchall()
     except sqlite3.Error as exc:
         if strict:

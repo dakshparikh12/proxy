@@ -179,7 +179,7 @@ class Coalescer:
 
     # -- input ---------------------------------------------------------------
 
-    def push(self, seg: TranscriptSegment) -> list[Window]:
+    def feed(self, seg: TranscriptSegment) -> list[Window]:
         """Add one stream segment; return any windows that closed as a result."""
         if not seg.is_speech:
             # VAD-off / silence: contributes no tokens and no window. Silence costs
@@ -304,6 +304,6 @@ def coalesce(
             coalescer.push_chat(msg)
     windows: list[Window] = []
     for seg in segments:
-        windows.extend(coalescer.push(seg))
+        windows.extend(coalescer.feed(seg))
     windows.extend(coalescer.flush())
     return windows
