@@ -279,20 +279,41 @@ def _text_of(resp: Any) -> str | None:
     return None
 
 
+def _strip_code_fences(text: str) -> str:
+    """Return the JSON payload from a possibly markdown-fenced string.
+
+    Real Haiku/Sonnet routinely wrap a JSON answer in a ```json … ``` code fence even
+    when asked for raw JSON. ``json.loads`` chokes on the fence, so the gate would read
+    EVERY real grounded response as a parse failure (⇒ grounded=False ⇒ needless
+    escalation on every check). Strip a leading ```/```json line and the trailing ```;
+    a raw (unfenced) response passes through unchanged. (Found by the reality tier.)
+    """
+    t = text.strip()
+    if t.startswith("```"):
+        lines = t.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        t = "\n".join(lines).strip()
+    return t
+
+
 def parse_entailment(resp: Any) -> EntailmentResult:
     """Parse a gate response to ``EntailmentResult``; any failure ⇒ grounded=False.
 
     A well-formed ``grounded=true`` / ``grounded=false`` object parses through with
-    its reason. Anything unparseable — no text block, malformed JSON, a missing or
-    non-bool ``grounded`` field — yields ``grounded=False`` with a parse-failure
-    reason. A parse failure is NEVER silently treated as grounded=true (AC-QGATE-08):
-    the fail-safe direction is a miss (which escalates), not a false pass.
+    its reason (whether raw or wrapped in a markdown code fence — see
+    :func:`_strip_code_fences`). Anything unparseable — no text block, malformed JSON,
+    a missing or non-bool ``grounded`` field — yields ``grounded=False`` with a
+    parse-failure reason. A parse failure is NEVER silently treated as grounded=true
+    (AC-QGATE-08): the fail-safe direction is a miss (which escalates), not a false pass.
     """
     text = _text_of(resp)
     if text is None:
         return EntailmentResult(False, "parse failure: no text block in gate response")
     try:
-        payload = json.loads(text)
+        payload = json.loads(_strip_code_fences(text))
     except (json.JSONDecodeError, ValueError):
         return EntailmentResult(False, "parse failure: gate response was not valid JSON")
     if not isinstance(payload, dict) or "grounded" not in payload:

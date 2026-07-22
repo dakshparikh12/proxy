@@ -186,10 +186,21 @@ def build_scribe_prefix(meeting: MeetingHeader, rolling_summary: str) -> list[di
             NOTE_DELTA_SCHEMA_DOC,
         ]
     )
-    return [
+    blocks: list[dict[str, Any]] = [
         {"type": "text", "text": static_head, "cache_control": {"type": "ephemeral"}},  # break #1
-        {"type": "text", "text": rolling_summary, "cache_control": {"type": "ephemeral"}},  # break #2
     ]
+    # Segment B (the rolling summary) carries breakpoint #2 — but ONLY when it is
+    # non-empty. The Anthropic API rejects cache_control on an EMPTY text block (400
+    # "cache_control cannot be set for empty text blocks"), and the rolling summary is
+    # empty at the FIRST window of every meeting (nothing summarised yet). Omitting the
+    # empty block keeps that first-window request valid while preserving the two-break
+    # A→B layout for every subsequent (non-empty-summary) window. (Found by the reality
+    # tier: unit tests with a fake client never exercise the real API's block rules.)
+    if rolling_summary.strip():
+        blocks.append(
+            {"type": "text", "text": rolling_summary, "cache_control": {"type": "ephemeral"}},  # break #2
+        )
+    return blocks
 
 
 __all__ = [
