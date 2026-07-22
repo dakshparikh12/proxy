@@ -1,0 +1,795 @@
+# Doc 05 (Workroom) — S11 requirements slice
+# Coverage: §3.13 (Build steps), §3.14 (Plan artifact), §4 (Key variables), §5 (Deferred/CUT)
+# ID scheme: R-doc05-S11-NN
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.13 Step 1 — Warm sandbox template + seeding
+# ═══════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc05-S11-01
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 1"
+  source_quote: "warm sandbox pre-provisioned for test meeting with current code + working tools before join; /health reports expected code-hash"
+  normalized_statement: >
+    WHEN a meeting is created
+    THE SYSTEM SHALL pre-provision a warm E2B sandbox (seeded from Doc 01's snapshot
+    at the pinned SHA, with toolchain, baked MCP server, ast-grep, and code-hash)
+    before the meeting-join event fires, so that no cold-boot occurs after a participant
+    joins.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-02
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 1"
+  source_quote: "/health reports expected code-hash"
+  normalized_statement: >
+    WHEN the sandbox /health endpoint is queried after seeding
+    THE SYSTEM SHALL return a response whose code-hash field matches the hash of the
+    snapshot at the pinned SHA that was used to seed the sandbox.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-03
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 1"
+  source_quote: "Graph/map/LSP are host-side code_intel (NOT in sandbox)"
+  normalized_statement: >
+    WHEN the sandbox is seeded
+    THE SYSTEM SHALL NOT place the code graph, codebase map, or LSP process inside the
+    sandbox; these components SHALL reside exclusively on the host-side code_intel layer.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.13 Step 2 — Sandbox tool transport (§3.5)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc05-S11-04
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 2"
+  source_quote: "JWT-MCP-over-HTTP server inside sandbox (stateless, per-sandbox session_id claim check, 8 tools with validate_path + atomic write)"
+  normalized_statement: >
+    WHEN the sandbox is initialized
+    THE SYSTEM SHALL start a stateless JWT-MCP-over-HTTP server inside the sandbox
+    that exposes exactly 8 tools, each enforcing validate_path and atomic write, and
+    that validates the session_id JWT claim on every request.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-05
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 2"
+  source_quote: "token minted for meeting A gets 403 against meeting B"
+  normalized_statement: >
+    WHEN a JWT token is minted for sandbox meeting A and presented to the MCP server
+    of sandbox meeting B
+    THE SYSTEM SHALL reject the request with HTTP 403.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-06
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 2"
+  source_quote: "expired token transparently re-minted mid-run"
+  normalized_statement: >
+    WHEN a JWT token expires during an active task run
+    THE SYSTEM SHALL transparently re-mint a replacement token via the host-side
+    token_provider without interrupting or failing the task.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-07
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 2"
+  source_quote: "host-side registration {type:'http', always_load:True} + token_provider re-mint"
+  normalized_statement: >
+    WHEN the sandbox MCP transport is registered on the host
+    THE SYSTEM SHALL register it with type 'http' and always_load set to True, and
+    SHALL wire the token_provider callback for re-minting.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.13 Step 3 — SDK-isolation triad (§3.4)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc05-S11-08
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 3"
+  source_quote: "strict_mcp_config + setting_sources=[] + computed allow-list + SDK_LOCAL_TOOLS block-list + runtime tripwire, on every call"
+  normalized_statement: >
+    WHEN a workroom SDK session is constructed
+    THE SYSTEM SHALL apply the full isolation triad: strict_mcp_config, setting_sources
+    set to empty, a computed tool allow-list, an SDK_LOCAL_TOOLS block-list, and a
+    runtime tripwire; this triad SHALL be applied on every SDK call without exception.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-09
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 3"
+  source_quote: "with decoy host connector + host file present, agent touches NEITHER; forced host built-in call trips [CRITICAL] log"
+  normalized_statement: >
+    WHEN the SDK agent is run with a decoy host connector and a host-side file present
+    THE SYSTEM SHALL guarantee the agent touches neither the decoy connector nor the
+    host file; and WHEN a host built-in call is forced
+    THE SYSTEM SHALL emit a [CRITICAL] log entry and treat the call as a tripwire
+    violation.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.13 Step 4 — Session-per-task wiring
+# ═══════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc05-S11-10
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 4"
+  source_quote: "SDK sessions per bundle; disposition system prompt + map as cached prefix; shared sandbox filesystem across tasks"
+  normalized_statement: >
+    WHEN tasks are dispatched within a meeting's sandbox
+    THE SYSTEM SHALL create one SDK session per task bundle, present the disposition
+    system prompt and codebase map as a cached prefix, and share the same sandbox
+    filesystem across all task sessions in the meeting.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-11
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 4"
+  source_quote: "SDK-session-id persisted + resume + stale-session replay"
+  normalized_statement: >
+    WHEN a running task session is killed and restarted
+    THE SYSTEM SHALL persist the SDK session ID, attempt to resume it, and on
+    stale-session failure SHALL replay the prior conversation via stale-session replay
+    so execution continues without data loss.
+  requirement_type: state_consistency
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-12
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 4"
+  source_quote: "second task sees first's artifact on disk"
+  normalized_statement: >
+    WHEN a second task session is started within the same meeting sandbox
+    THE SYSTEM SHALL present to that session all filesystem artifacts produced by any
+    prior task session in the same sandbox.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-13
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 4"
+  source_quote: "new task pays only its bundle in tokens"
+  normalized_statement: >
+    WHEN a new task session is started in a meeting with an already-warmed sandbox
+    THE SYSTEM SHALL charge only the tokens for the new task's bundle, not for the
+    shared system-prompt-and-map prefix.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.13 Step 5 — Envelope + progress events (§3.12)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc05-S11-14
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 5"
+  source_quote: "quick ask and long build both return contract-conforming envelopes; long build streams tool-boundary progress"
+  normalized_statement: >
+    WHEN any workroom task completes (whether a quick ask or a long build)
+    THE SYSTEM SHALL return a result envelope that conforms to the §3.12 Envelope
+    contract schema; and WHEN a long-build task is executing
+    THE SYSTEM SHALL stream progress events at each tool boundary.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.13 Step 6 — Staged code-change-draft gate + scoped tokens (§3.8)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc05-S11-15
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 6"
+  source_quote: "multi-file propose_change persists bundle (GCS + staged_drafts) and returns draft_id with status=needs_review without landing or pushing"
+  normalized_statement: >
+    WHEN a task invokes propose_change for one or more files
+    THE SYSTEM SHALL persist the change bundle to GCS and to staged_drafts, return a
+    stable draft_id, set status to needs_review, and SHALL NOT apply the change to the
+    working tree or push to any remote.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-16
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 6"
+  source_quote: "accept records approval + exposes bundle for download (never pushes)"
+  normalized_statement: >
+    WHEN a human approves a staged draft via the accept action
+    THE SYSTEM SHALL record the approval and expose the bundle for download; it SHALL
+    NOT push any changes to a remote git repository.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-17
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 6"
+  source_quote: "raw-write tools blocked via disallowed_tools"
+  normalized_statement: >
+    WHEN an SDK session is initialized for a workroom task
+    THE SYSTEM SHALL include raw-write tool names in disallowed_tools so the agent
+    cannot invoke them directly.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-18
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 6"
+  source_quote: "short-lived scoped per-sandbox tokens per job; host-side web search only, no arbitrary E2B egress"
+  normalized_statement: >
+    WHEN the sandbox executes a job
+    THE SYSTEM SHALL issue short-lived scoped tokens that are unique per sandbox per
+    job; web search SHALL be available only via the host-side path; arbitrary outbound
+    network egress from the E2B sandbox SHALL be blocked.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-19
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 6"
+  source_quote: "persisted multi-file code-change draft (durable draft_id, no push) that human can accept + download after sandbox tears down"
+  normalized_statement: >
+    WHEN a sandbox is torn down after a code-change task
+    THE SYSTEM SHALL ensure the draft bundle and its draft_id remain durably retrievable
+    in GCS so a human can accept and download the change after the sandbox no longer
+    exists.
+  requirement_type: state_consistency
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.13 Step 7 — Verify-loop V0 core (§3.7)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc05-S11-20
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 7"
+  source_quote: "ONE separate fresh-context critic (evidence-required, builder's log withheld, schema verdict, fail-closed)"
+  normalized_statement: >
+    WHEN a workroom task result is verified
+    THE SYSTEM SHALL invoke exactly one critic session with a fresh context (builder's
+    conversation log withheld), require evidence citations, enforce a schema-validated
+    verdict, and fail closed (default fail) if the critic does not produce a valid
+    schema verdict.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-21
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 7"
+  source_quote: "deterministic evidence gate reading host-observed receipts → hard gate"
+  normalized_statement: >
+    WHEN the critic verdict is evaluated
+    THE SYSTEM SHALL pass the result through a deterministic evidence gate that reads
+    host-observed receipts (not model prose) before finalizing the verification outcome;
+    this gate SHALL be hard (a failing gate blocks the result from being marked passed).
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-22
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 7"
+  source_quote: "planted wrong claim caught and downgrades status; 'pass' with no exit-0 receipt is force-FAILED"
+  normalized_statement: >
+    WHEN a planted false claim is present in a task result
+    THE SYSTEM SHALL detect it via the critic and downgrade the result status; and
+    WHEN a pass verdict is asserted but no exit-0 receipt exists in host-observed
+    records
+    THE SYSTEM SHALL force the final status to FAILED.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-23
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 7"
+  source_quote: "Distinct-lens panel + red-team = Expansion"
+  normalized_statement: >
+    WHEN V0 is shipped
+    THE SYSTEM SHALL NOT include a multi-lens verifier panel or a red-team turn; these
+    capabilities are deferred to the Expansion release.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.13 Step 8 — Sequential big-build contract (§3.6)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc05-S11-24
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 8"
+  source_quote: "plan turn → persisted AC-tagged multi-file plan → resumed session, per-subtask fresh worker + tight max_turns + STOP"
+  normalized_statement: >
+    WHEN a big-build task begins
+    THE SYSTEM SHALL execute a plan turn, persist the AC-tagged multi-file plan, then
+    resume the session and execute each subtask with a fresh worker session bounded by
+    a tight max_turns and terminated with a STOP signal on completion.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-25
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 8"
+  source_quote: "checkpoint + git read-back + publish-or-fail → gated replan, subtasks run SEQUENTIALLY"
+  normalized_statement: >
+    WHEN each big-build subtask completes
+    THE SYSTEM SHALL checkpoint its result, perform a git read-back to verify produced
+    files, publish the result or fail the subtask explicitly; and SHALL execute all
+    subtasks sequentially (never concurrently) within the resumed session.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-26
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 8"
+  source_quote: "mid-run crash resumes without redoing finished units"
+  normalized_statement: >
+    WHEN the big-build session crashes mid-execution and is restarted
+    THE SYSTEM SHALL resume from the last persisted checkpoint and SHALL NOT re-execute
+    any subtask that was already checkpointed as complete.
+  requirement_type: state_consistency
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-27
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 8"
+  source_quote: "publish failure → subtask FAILS (never silent-green)"
+  normalized_statement: >
+    WHEN a subtask's publish step fails
+    THE SYSTEM SHALL mark that subtask as FAILED and SHALL NOT silently mark it green
+    or continue as if it succeeded.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.13 Step 9 — Cost/latency + built-thin extras (§3.9)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc05-S11-28
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 9"
+  source_quote: "cold-start never happens on live tier"
+  normalized_statement: >
+    WHEN a task is dispatched on the live production tier
+    THE SYSTEM SHALL dispatch it into a pre-provisioned warm sandbox so that no
+    cold-boot latency is incurred at dispatch time.
+  requirement_type: performance
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-29
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 9"
+  source_quote: "no-progress detection + bounded replan (≤2) → honest partial; correction-into-the-plan"
+  normalized_statement: >
+    WHEN no-progress is detected in a running task
+    THE SYSTEM SHALL trigger a bounded replan (at most 2 replans), and SHALL return an
+    honest partial result with receipts when the replan cap is exhausted; mid-build
+    corrections SHALL be applied into the plan, not restart the entire build.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-30
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.13 step 9"
+  source_quote: "task forced into loop stops at cap with receipts"
+  normalized_statement: >
+    WHEN a task enters a progress-stalling loop
+    THE SYSTEM SHALL stop the task at the replan cap and return an honest partial
+    response that includes all receipts produced up to that point.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.14 — Plan artifact structure
+# ═══════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc05-S11-31
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.14"
+  source_quote: "Each unit has: files-to-touch, AC-tag, verify line (exact machine-checkable), done-when"
+  normalized_statement: >
+    WHEN a plan artifact is produced
+    THE SYSTEM SHALL include for every plan unit: the list of files to touch, an
+    AC-tag, a verify line containing an exact machine-checkable command, and a
+    done-when condition.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-32
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.14"
+  source_quote: "[independent] tags mark fan-out candidates (V0 runs them sequentially — Expansion only)"
+  normalized_statement: >
+    WHEN a plan artifact is produced and a unit is eligible for concurrent execution
+    THE SYSTEM SHALL mark it with [independent] in the plan; in V0 all units SHALL
+    still run sequentially; concurrent fan-out of [independent] units is deferred to
+    Expansion.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-33
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.14"
+  source_quote: "Each unit's verify line → deterministic gate reads from host-observed receipt (not model prose)"
+  normalized_statement: >
+    WHEN a plan unit's verify line is evaluated
+    THE SYSTEM SHALL execute the exact command named in the verify line and read the
+    result from host-observed receipts; model prose SHALL NOT be used as a substitute
+    for the deterministic receipt check.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §4 — Key variables (normative numeric bounds)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc05-S11-34
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§4"
+  source_quote: "Quick ask SLA: a few seconds; direct path ~1-2s"
+  normalized_statement: >
+    WHEN a quick-ask task is dispatched via the direct path
+    THE SYSTEM SHALL return a response with p50 end-to-end latency of approximately
+    1-2 seconds.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-35
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§4"
+  source_quote: "Latency tuning order: prompt bias → speculative quick-answer → NEVER a router"
+  normalized_statement: >
+    WHEN latency optimization is applied to the quick-ask path
+    THE SYSTEM SHALL use prompt bias first, then speculative quick-answer; it SHALL
+    NOT introduce a routing model or router component in the quick-ask path.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-36
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§4"
+  source_quote: "Detach past [~2s] (meeting never blocks; Proxy's ack covers it)"
+  normalized_statement: >
+    WHEN a task is projected to take longer than approximately 2 seconds
+    THE SYSTEM SHALL detach it from the synchronous meeting channel and send Proxy's
+    ack so the meeting thread is never blocked.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-37
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§4"
+  source_quote: "Replan cap: ≤2"
+  normalized_statement: >
+    WHEN replanning is triggered by no-progress detection
+    THE SYSTEM SHALL allow at most 2 replans for any single task and SHALL NOT
+    initiate a third replan.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-38
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§4"
+  source_quote: "Gated-replan remaining cap: 8"
+  normalized_statement: >
+    WHEN gated replan is evaluated
+    THE SYSTEM SHALL allow it to proceed only when at least 8 units of replan budget
+    remain; it SHALL NOT allow gated replan when the remaining cap is below 8.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-39
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§4"
+  source_quote: "JWT TTL + 5-min refresh margin"
+  normalized_statement: >
+    WHEN a sandbox JWT token approaches its TTL
+    THE SYSTEM SHALL re-mint a replacement token with at least a 5-minute margin
+    remaining before the current token expires.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-40
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§4"
+  source_quote: "Context-shrink retry cap: 3"
+  normalized_statement: >
+    WHEN a context-window overflow triggers a context-shrink retry
+    THE SYSTEM SHALL attempt at most 3 context-shrink retries before abandoning and
+    returning an honest partial result.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-41
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§4"
+  source_quote: "sandbox death → Proxy tells room what was lost"
+  normalized_statement: >
+    WHEN a sandbox dies unexpectedly during a task
+    THE SYSTEM SHALL report to the meeting room exactly which in-progress work was
+    lost, using the last checkpoint as the boundary.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-42
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§4"
+  source_quote: "unverifiable → verification=unverified, staged (status=needs_review)"
+  normalized_statement: >
+    WHEN a task result cannot be verified (evidence is absent or the critic cannot
+    render a valid verdict)
+    THE SYSTEM SHALL set verification to 'unverified' and status to 'needs_review' in
+    the returned envelope; it SHALL NOT mark the result as passed.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §5 — Deferred to Expansion (MUST NOT be in V0)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc05-S11-43
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§5"
+  source_quote: "Cross-worker worktree fan-out — Deferred"
+  normalized_statement: >
+    WHEN V0 is shipped
+    THE SYSTEM SHALL NOT contain any implementation of cross-worker worktree fan-out.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-44
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§5"
+  source_quote: "run_with_concurrency + race_with_timeout + slice-merge + slice-checkpoint resume + id-namespacing — Deferred"
+  normalized_statement: >
+    WHEN V0 is shipped
+    THE SYSTEM SHALL NOT contain any of the following: run_with_concurrency,
+    race_with_timeout, slice-merge, slice-checkpoint-resume, or id-namespacing
+    primitives.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-45
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§5"
+  source_quote: "plan-artifact-as-MCP-tool-server (list_tasks/get_task/mark_done) — Deferred"
+  normalized_statement: >
+    WHEN V0 is shipped
+    THE SYSTEM SHALL NOT expose list_tasks, get_task, or mark_done as MCP tool-server
+    endpoints; the plan artifact is a persisted data structure only, not a live tool
+    server.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-46
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§5"
+  source_quote: "3-specialist verifier panel + red-team turn + agreement-boosts-confidence merge — Deferred"
+  normalized_statement: >
+    WHEN V0 is shipped
+    THE SYSTEM SHALL NOT implement a multi-specialist verifier panel, a red-team
+    adversarial turn, or an agreement-boosts-confidence merge in the verify-loop.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-47
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§5"
+  source_quote: "PR push (core = code-change draft; download only; push is Expansion behind contents:write) — Deferred"
+  normalized_statement: >
+    WHEN V0 is shipped
+    THE SYSTEM SHALL NOT contain any code path that pushes changes to a remote git
+    repository; V0 supports download only; git push is deferred to Expansion behind
+    the contents:write permission gate.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-48
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§5"
+  source_quote: "Calendar-based pre-provision (V0 trigger = meeting-creation) — Deferred"
+  normalized_statement: >
+    WHEN V0 is shipped
+    THE SYSTEM SHALL NOT implement calendar-based sandbox pre-provision; the sole
+    pre-provision trigger in V0 is the meeting-creation event.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §5 — Explicitly CUT (never adopted)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc05-S11-49
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§5"
+  source_quote: ".mvs six-axis data-validation harness — Explicitly CUT"
+  normalized_statement: >
+    WHEN V0 is shipped
+    THE SYSTEM SHALL NOT contain any implementation of the .mvs six-axis
+    data-validation harness; this approach is explicitly cut and will not be adopted.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-50
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§5"
+  source_quote: "SDK's native Task subagents (blocked as isolation escape regardless) — Explicitly CUT"
+  normalized_statement: >
+    WHEN V0 is shipped
+    THE SYSTEM SHALL NOT use the SDK's native Task subagent mechanism; it is
+    categorically blocked as an isolation escape vector regardless of feature need.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-51
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§5"
+  source_quote: "Running query() inside the sandbox — Explicitly CUT"
+  normalized_statement: >
+    WHEN V0 is shipped
+    THE SYSTEM SHALL NOT invoke the host-side query() function from within the sandbox;
+    all query() calls originate exclusively on the host side.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified

@@ -1,0 +1,119 @@
+# Doc 09 — Cross-cutting requirements derived from AGENTS.md laws, product invariants,
+# and CANONICAL-DECISIONS — these are not section-specific.
+
+- requirement_id: R-doc09-LAW-01
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "AGENTS.md Product invariants, Invariant 5"
+  source_quote: "Truth-is-live (answer from the pinned current clone, never a stale cache)"
+  normalized_statement: >
+    WHEN Proxy generates a grounded answer
+    THE SYSTEM SHALL derive that answer from the pinned current clone (at meeting.pinned_sha)
+    and SHALL NOT substitute a stale cached result that was computed at a different SHA.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-LAW-02
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "AGENTS.md Product invariants, Invariant 7"
+  source_quote: "Freshness-gated caching (never cache verify/operate results)"
+  normalized_statement: >
+    WHEN the Workroom produces a build verification result or an operate result
+    THE SYSTEM SHALL NOT cache that result for reuse; each verification must
+    be freshly computed from the current artifact.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-LAW-03
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "AGENTS.md Product invariants, Invariant 3 (AMENDED 2026-07-17 per D-INV-03)"
+  source_quote: "the clone lives on a per-tenant encrypted volume, one tenant never sharing volume/process/index with another; hard-deleted ≤15 min on App uninstall; no raw source in logs or artifacts"
+  normalized_statement: >
+    WHEN a tenant uninstalls the GitHub App
+    THE SYSTEM SHALL hard-delete the tenant's clone, index, and Postgres rows
+    within 15 minutes and SHALL NOT leave raw source code in any log or artifact.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-LAW-04
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "CANONICAL §10.3"
+  source_quote: "no transcript-triggered path reaches an outward side-effect without a human click (staged-drafts-only already enforces this for world-touching acts — state it as an invariant)"
+  normalized_statement: >
+    WHEN any content arrives via the meeting transcript
+    THE SYSTEM SHALL NOT allow that content to trigger any outward side-effect
+    (PR creation, code push, external API call) without an explicit human click
+    on a staged draft.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-LAW-05
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "CANONICAL §10.3"
+  source_quote: "spotlight/delimit the transcript as untrusted input in the orchestrator + Scribe prompts"
+  normalized_statement: >
+    WHEN the Orchestrator or Scribe processes meeting transcript content
+    THE SYSTEM SHALL delimit that content as untrusted input using explicit
+    fence markers (e.g. '--- UNTRUSTED MEETING TRANSCRIPT ---') so that a
+    participant saying "ignore your rules" is treated as data, not an instruction.
+  requirement_type: security
+  criticality: P0
+  testability: analyzable
+  status: qualified
+
+- requirement_id: R-doc09-LAW-06
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "AGENTS.md Product invariants, Invariant 10"
+  source_quote: "Self-host credentials (Nango holds OAuth; tokens minted per-operation, never cached or logged)"
+  normalized_statement: >
+    WHEN the system mints or uses an OAuth token
+    THE SYSTEM SHALL obtain it from Nango per-operation, SHALL NOT cache the
+    token across operations, and SHALL NOT write the token to any log, trace,
+    or artifact.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-LAW-07
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "AGENTS.md Law 1 + Law 2"
+  source_quote: "cite file:line from the current clone, or say 'not found by this method'; exact results tagged resolved; search-derived tagged lower-bound"
+  normalized_statement: >
+    WHEN the system cannot establish a complete answer from the current clone
+    THE SYSTEM SHALL distinguish confirmed-absence, not-found-in-scope,
+    lower-bound (search-only), and dependency-unavailable — and SHALL NOT
+    convert incomplete evidence into an absolute claim.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-LAW-08
+  authority_type: architecture_invariant
+  authority_document: AGENTS.md
+  source_location: "AGENTS.md Product invariants, Invariant 6"
+  source_quote: "Staged-drafts (world-changes need a named human's approval)"
+  normalized_statement: >
+    WHEN the system performs any world-touching action (notes edit, code-change
+    apply, external API call)
+    THE SYSTEM SHALL require a named human to approve a staged draft before
+    executing the action; no world-touching action executes autonomously.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified

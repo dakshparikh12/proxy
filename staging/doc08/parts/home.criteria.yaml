@@ -1,0 +1,881 @@
+# Acceptance Criteria — Doc 08 Experience, UI & Surfaces · §2.8 The authenticated /m/{meeting_id} home
+# Source: product/v0-spec/08-BEHAVIOR.md §2.8
+# ID scheme: AC-HOME-NNN
+# Authority: DOC-08
+#
+# dependency_class values used in this file:
+#   db:postgres   — note_deltas fold, staged_drafts, tenant check, token revocation,
+#                   draft/tenant check, accept/reject handler, audit records
+#   gcs:objects   — diff bundle download artifact_ref in staged_drafts
+#
+# mock_boundary rules (MANDATORY when non-null):
+#   db:postgres   : real Postgres; MUST NOT mock asyncpg or stub the tenant-check query
+#   gcs:objects   : real GCS client or VCR cassette at GCS seam; MUST NOT stub at the
+#                   staged_drafts read layer
+#
+# NEG criteria are MANDATORY for every non-null dependency_class per format rules.
+# Golden-path: AC-HOME-013 is the full draft-approval E2E (tenant opens home → sees
+#              notes + draft → accepts → Doc 04 apply → status == accepted).
+#
+# Verification ladder derivation:
+#   lint + unit        : always present
+#   integration        : iff dependency_class is db:postgres or gcs:objects
+#   reality            : iff dependency_class is vendor:*
+#   negative           : ONLY on -NEG criteria
+#   e2e                : ONLY iff golden_path: true
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GET /m/{meeting_id} — Authenticated tenant member
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Notes + drafts rendered for authenticated member ─────────────────────────
+
+- criterion_id: AC-HOME-001
+  name: "GET /m/{meeting_id} returns folded notes markdown and staged_drafts for authenticated member"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-HOME-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A tenant member with a valid session and a meeting_id that belongs to their tenant"
+    when: "GET /m/{meeting_id} is requested"
+    then:
+      - "The response is HTTP 200"
+      - "The rendered page contains notes markdown folded server-side from note_deltas via internal notes reader"
+      - "The rendered page contains staged_drafts cards (at least one card per pending draft)"
+      - "No raw GCS URI appears in any href or src attribute of the response HTML"
+  primary_oracle: {type: deterministic, artifact: "integration test: real Postgres with note_deltas + staged_drafts rows; assert HTTP 200, notes content present, draft cards present, no gs:// in HTML"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-HOME-001]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres in integration; MUST NOT stub the tenant-check query or the internal notes reader"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-HOME-001-NEG
+  name: "GET /m/{meeting_id} degrades honestly when Postgres is unavailable"
+  authority_refs: [R-doc08-HOME-01]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres fault injection; MUST NOT replace the DB connection with Mock()"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  behavior:
+    given: "The Postgres connection is severed before the GET /m/{meeting_id} handler executes the tenant check or notes fold"
+    when: "A valid tenant member requests the page"
+    then:
+      - "The response is a structured HTTP 5xx error (never a partial render or a silent empty page)"
+      - "The error response does not expose internal stack traces or DB connection strings to the user"
+      - "No GCS URI or draft content is partially returned"
+  primary_oracle: {type: deterministic, artifact: "negative cassette at db:postgres seam; assert HTTP 5xx; assert no partial HTML; assert no internal detail in body"}
+  thresholds: {violations_allowed: 0}
+  test_ids: [T-HOME-001-NEG]
+
+# ── Tenant isolation: wrong-tenant → 404 (P0 security) ──────────────────────
+
+- criterion_id: AC-HOME-002
+  name: "GET /m/{meeting_id} returns 404 for a tenant-B member accessing a tenant-A meeting"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-HOME-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A valid session for tenant-B and a meeting_id that belongs to tenant-A"
+    when: "GET /m/{meeting_id} is requested by the tenant-B member"
+    then:
+      - "The response is HTTP 404 Not Found"
+      - "The body is identical to the body returned for a non-existent meeting_id (no existence oracle)"
+      - "No notes, draft cards, or meeting metadata from tenant-A's meeting appear in the response"
+  primary_oracle: {type: deterministic, artifact: "integration test: two tenants in real Postgres; assert HTTP 404 with body indistinguishable from non-existent-meeting 404; assert zero tenant-A data in response"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-HOME-002]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres with two distinct tenants; MUST NOT stub the tenant-check query"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-HOME-002-NEG
+  name: "Cross-tenant check degrades honestly (fail-closed) when Postgres is unavailable"
+  authority_refs: [R-doc08-HOME-02]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres fault injection; MUST NOT replace the tenant-check query with Mock()"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  behavior:
+    given: "Postgres is unavailable when the meeting→tenant check is executed"
+    when: "Any GET /m/{meeting_id} request is processed"
+    then:
+      - "The request is rejected with HTTP 5xx (fail-closed, not fail-open to 200)"
+      - "No notes or draft content is returned without a completed tenant check"
+  primary_oracle: {type: deterministic, artifact: "negative cassette at db:postgres seam; assert HTTP 5xx; assert no meeting content returned before tenant check completes"}
+  thresholds: {violations_allowed: 0}
+  test_ids: [T-HOME-002-NEG]
+
+# ── Non-existent meeting → 404 indistinguishable from wrong-tenant ────────────
+
+- criterion_id: AC-HOME-003
+  name: "GET /m/{meeting_id} returns 404 for a non-existent meeting, body indistinguishable from wrong-tenant 404"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-HOME-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A valid tenant session and a meeting_id that does not exist in the database"
+    when: "GET /m/{meeting_id} is requested"
+    then:
+      - "The response is HTTP 404 Not Found"
+      - "The HTTP status code, response body structure, and content are byte-for-byte identical to the wrong-tenant 404 case"
+      - "No hint in the response body distinguishes 'meeting does not exist' from 'meeting belongs to another tenant'"
+  primary_oracle: {type: deterministic, artifact: "integration test: compare HTTP 404 response bytes for non-existent meeting_id vs wrong-tenant meeting_id; assert identical status + body"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-HOME-003]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres; MUST NOT stub the tenant-check query"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-HOME-003-NEG
+  name: "Non-existent meeting check degrades honestly when Postgres is unavailable"
+  authority_refs: [R-doc08-HOME-03]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres fault injection; MUST NOT replace the DB connection with Mock()"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  behavior:
+    given: "Postgres is unavailable when the meeting existence check runs"
+    when: "A request with any meeting_id is processed"
+    then:
+      - "The request fails with HTTP 5xx (fail-closed)"
+      - "HTTP 404 is never returned speculatively without the DB check completing"
+  primary_oracle: {type: deterministic, artifact: "negative cassette; assert HTTP 5xx not HTTP 200 or 404; assert no data returned"}
+  thresholds: {violations_allowed: 0}
+  test_ids: [T-HOME-003-NEG]
+
+# ── Non-UUID meeting_id rejected before DB lookup ────────────────────────────
+
+- criterion_id: AC-HOME-004
+  name: "Non-UUID path segment is rejected before any database query is issued"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-HOME-04]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A GET /m/{meeting_id} request where meeting_id is not a valid UUID (e.g. 'abc', '123', 'not-a-uuid')"
+    when: "The request is processed"
+    then:
+      - "The response is HTTP 422 or 404 with no database query issued"
+      - "No asyncpg call or SQL statement is executed for the invalid meeting_id"
+      - "The response body does not reveal internal validation details"
+  primary_oracle: {type: deterministic, artifact: "unit test with asyncpg call counter: assert SQL call count == 0 for non-UUID inputs; assert HTTP 422 or 404"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-HOME-004]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GET /m/{meeting_id} — Capability-token path
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Valid token: notes-only view, no drafts ───────────────────────────────────
+
+- criterion_id: AC-HOME-005
+  name: "Valid capability token returns notes-only view with no draft cards or accept/reject controls"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-HOME-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A valid, unexpired, unrevoked capability token scoped to meeting_id, presented as ?token= without an authenticated session"
+    when: "GET /m/{meeting_id}?token=<valid_token> is requested"
+    then:
+      - "The response is HTTP 200"
+      - "The rendered page contains the notes markdown for that meeting"
+      - "The rendered page contains zero staged_drafts cards"
+      - "No accept or reject button/form is present in the response HTML"
+      - "No raw GCS URI appears in the HTML"
+  primary_oracle: {type: deterministic, artifact: "integration test: valid HMAC token, real Postgres; assert HTTP 200, notes present, no draft card HTML, no accept/reject form elements, no gs:// URIs"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-HOME-005]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres for token revocation check and notes fold; MUST NOT stub the revocation lookup"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-HOME-005-NEG
+  name: "Capability-token notes view degrades honestly when Postgres is unavailable"
+  authority_refs: [R-doc08-HOME-05]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres fault injection; MUST NOT replace the DB connection with Mock()"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  behavior:
+    given: "A valid capability token is presented but Postgres is unavailable"
+    when: "GET /m/{meeting_id}?token=<valid_token> is requested"
+    then:
+      - "The response is HTTP 5xx (fail-closed; not a partial notes render)"
+      - "No meeting data is returned without the revocation and tenant checks completing"
+  primary_oracle: {type: deterministic, artifact: "negative cassette at db:postgres seam; assert HTTP 5xx; assert no meeting HTML in response body"}
+  thresholds: {violations_allowed: 0}
+  test_ids: [T-HOME-005-NEG]
+
+# ── Token cross-meeting: token for A on path B → 404 (P0) ────────────────────
+
+- criterion_id: AC-HOME-006
+  name: "Capability token scoped to meeting A cannot read meeting B (token cross-meeting isolation)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-HOME-06]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A valid HMAC capability token whose signed meeting_id is meeting_id_A"
+    when: "GET /m/{meeting_id_B}?token=<token_for_A> is requested where meeting_id_B ≠ meeting_id_A"
+    then:
+      - "The response is HTTP 404 Not Found"
+      - "No data from meeting B is returned"
+      - "The token meeting_id field is re-verified against the URL path segment before any DB query for meeting B"
+  primary_oracle: {type: deterministic, artifact: "unit test: construct valid HMAC token for meeting_id_A; present to /m/{meeting_id_B}; assert HTTP 404; assert no SQL issued for meeting_id_B content"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-HOME-006]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres; MUST NOT stub the path vs token meeting_id comparison"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-HOME-006-NEG
+  name: "Cross-meeting token check degrades honestly when Postgres is unavailable"
+  authority_refs: [R-doc08-HOME-06]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres fault injection; MUST NOT replace the DB connection with Mock()"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  behavior:
+    given: "Postgres is unavailable during capability token meeting_id verification"
+    when: "Any token-authenticated GET request is processed"
+    then:
+      - "The request fails closed with HTTP 5xx"
+      - "No meeting data is returned without the path-vs-token check completing"
+  primary_oracle: {type: deterministic, artifact: "negative cassette; assert HTTP 5xx not HTTP 200"}
+  thresholds: {violations_allowed: 0}
+  test_ids: [T-HOME-006-NEG]
+
+# ── Expired token → 404 ──────────────────────────────────────────────────────
+
+- criterion_id: AC-HOME-007
+  name: "Expired capability token returns 404"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-HOME-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A capability token whose exp field is in the past"
+    when: "GET /m/{meeting_id}?token=<expired_token> is requested"
+    then:
+      - "The response is HTTP 404 Not Found"
+      - "No notes data is returned"
+      - "The token verifier checks the exp field before any DB query for meeting content"
+  primary_oracle: {type: deterministic, artifact: "unit test: construct HMAC token with past exp; assert HTTP 404; assert notes reader not called"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-HOME-007]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Revoked token → 404 ──────────────────────────────────────────────────────
+
+- criterion_id: AC-HOME-008
+  name: "Revoked capability token returns 404 after revocation check"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-HOME-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A capability token that is structurally valid and unexpired but present in revoked_tokens or whose epoch predates the current per-meeting epoch"
+    when: "GET /m/{meeting_id}?token=<revoked_token> is requested"
+    then:
+      - "The response is HTTP 404 Not Found"
+      - "No notes data is returned"
+      - "The revocation check is performed against the persistent revoked_tokens store (not a cache-only check)"
+  primary_oracle: {type: deterministic, artifact: "integration test: insert token into revoked_tokens in real Postgres; present token; assert HTTP 404; assert notes reader not called"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-HOME-008]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres for revoked_tokens lookup; MUST NOT stub the revocation query"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-HOME-008-NEG
+  name: "Revocation check degrades honestly (fail-closed) when Postgres is unavailable"
+  authority_refs: [R-doc08-HOME-08]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres fault injection; MUST NOT replace the revocation query with Mock()"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  behavior:
+    given: "Postgres is unavailable when the revoked_tokens check is executed"
+    when: "A capability token GET request is processed"
+    then:
+      - "The request fails closed with HTTP 5xx (revocation check failure is treated as denial, not bypass)"
+      - "No notes content is returned without a successful revocation check"
+  primary_oracle: {type: deterministic, artifact: "negative cassette at revocation query; assert HTTP 5xx; assert no notes content in response"}
+  thresholds: {violations_allowed: 0}
+  test_ids: [T-HOME-008-NEG]
+
+# ── Token cannot reach accept/reject routes (P0) ─────────────────────────────
+
+- criterion_id: AC-HOME-009
+  name: "Capability token presenting to POST accept or reject returns 401/403 without invoking the Doc 04 handler"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-HOME-09, R-doc08-HOME-16]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A valid, unexpired capability token (no active session cookie)"
+    when: "POST /m/{meeting_id}/drafts/{draft_id}/accept or .../reject is attempted using only the capability token"
+    then:
+      - "The response is HTTP 401 or 403"
+      - "The Doc 04 accept/reject handler is not invoked"
+      - "No audit record is created for the attempted action"
+      - "The protected() middleware intercepts the request before the handler body executes"
+  primary_oracle: {type: deterministic, artifact: "unit test: POST accept/reject with only a capability token; assert HTTP 401 or 403; assert doc04_accept_handler call count == 0; assert no audit row written"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-HOME-009]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres for session check; MUST NOT stub the protected() middleware"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-HOME-009-NEG
+  name: "Token-to-accept/reject guard degrades honestly when Postgres session check errors"
+  authority_refs: [R-doc08-HOME-09, R-doc08-HOME-16]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres fault injection; MUST NOT stub the protected() middleware"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  behavior:
+    given: "Postgres is unavailable when the session authentication check runs on a POST accept/reject"
+    when: "A POST is attempted with any credential"
+    then:
+      - "The request fails with HTTP 5xx or 401/403 (fail-closed)"
+      - "The Doc 04 handler is never invoked without a verified session"
+  primary_oracle: {type: deterministic, artifact: "negative cassette at session-check DB query; assert HTTP 5xx or 401/403; assert handler not called"}
+  thresholds: {violations_allowed: 0}
+  test_ids: [T-HOME-009-NEG]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# POST /m/{meeting_id}/drafts/{draft_id}/accept
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Accept: Doc 04 handler called, idempotent, audited ───────────────────────
+
+- criterion_id: AC-HOME-010
+  name: "POST accept calls Doc 04 accept handler exactly once per new acceptance; idempotent on repeat"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-HOME-10, R-doc08-HOME-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An authenticated tenant member with a valid CSRF token and a draft_id in staged_drafts that belongs to their tenant and is in a pending state"
+    when: "POST /m/{meeting_id}/drafts/{draft_id}/accept is submitted"
+    then:
+      - "The response is HTTP 200 or 204"
+      - "doc04_accept_handler is called exactly once with draft_id and actor=user_id"
+      - "An audit record is created recording actor, draft_id, and action=accept"
+      - "If the same POST is submitted a second time, the response is still 200/204 and doc04_accept_handler is NOT called a second time (idempotent)"
+  primary_oracle: {type: deterministic, artifact: "integration test with real Postgres: first accept asserts handler call + audit row; second identical accept asserts handler call count still == 1; audit row count still == 1"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-HOME-010]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres for staged_drafts and audit; MUST NOT stub the tenant-check or idempotency query"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-HOME-010-NEG
+  name: "Accept handler degrades honestly when Postgres is unavailable during the accept write"
+  authority_refs: [R-doc08-HOME-10]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres fault injection after tenant check but during handler write; MUST NOT replace the DB connection with Mock()"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  behavior:
+    given: "Postgres fails after the tenant check succeeds but before the accept write commits"
+    when: "POST accept is submitted"
+    then:
+      - "The response is HTTP 5xx (structured failure)"
+      - "No partial accept state is written (the audit row is absent)"
+      - "The draft remains in its original state"
+  primary_oracle: {type: deterministic, artifact: "negative cassette at accept write; assert HTTP 5xx; assert no audit row; assert draft state unchanged in subsequent GET"}
+  thresholds: {violations_allowed: 0}
+  test_ids: [T-HOME-010-NEG]
+
+# ── Reject: Doc 04 handler called, idempotent, audited ───────────────────────
+
+- criterion_id: AC-HOME-011
+  name: "POST reject calls Doc 04 reject handler exactly once per new rejection; idempotent on repeat"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-HOME-11, R-doc08-HOME-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An authenticated tenant member with a valid CSRF token and a pending draft_id in staged_drafts belonging to their tenant"
+    when: "POST /m/{meeting_id}/drafts/{draft_id}/reject is submitted"
+    then:
+      - "The response is HTTP 200 or 204"
+      - "doc04_reject_handler is called exactly once with draft_id and actor=user_id"
+      - "An audit record is created recording actor, draft_id, and action=reject"
+      - "A second identical POST returns 200/204 without calling the handler again"
+  primary_oracle: {type: deterministic, artifact: "integration test: first reject asserts handler call + audit row; second identical reject asserts handler call count still == 1"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-HOME-011]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres for staged_drafts and audit; MUST NOT stub the tenant-check or idempotency query"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-HOME-011-NEG
+  name: "Reject handler degrades honestly when Postgres is unavailable during the reject write"
+  authority_refs: [R-doc08-HOME-11]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres fault injection; MUST NOT replace the DB connection with Mock()"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  behavior:
+    given: "Postgres fails during the reject write"
+    when: "POST reject is submitted"
+    then:
+      - "The response is HTTP 5xx"
+      - "No audit row is written"
+      - "The draft remains in its original state"
+  primary_oracle: {type: deterministic, artifact: "negative cassette at reject write; assert HTTP 5xx; assert no audit row; assert draft state unchanged"}
+  thresholds: {violations_allowed: 0}
+  test_ids: [T-HOME-011-NEG]
+
+# ── CSRF required; missing token → 403/422 ───────────────────────────────────
+
+- criterion_id: AC-HOME-012
+  name: "POST accept/reject without CSRF token returns 403 or 422 before invoking any handler"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-HOME-12]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An authenticated tenant member with a valid session but no CSRF token in the POST request"
+    when: "POST /m/{meeting_id}/drafts/{draft_id}/accept (or .../reject) is submitted"
+    then:
+      - "The response is HTTP 403 or 422"
+      - "The Doc 04 handler is not invoked"
+      - "No audit record is written"
+  primary_oracle: {type: deterministic, artifact: "unit test: omit CSRF token; assert HTTP 403 or 422; assert doc04_accept_handler call count == 0; assert no audit row"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-HOME-012]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GOLDEN PATH — Full draft-approval E2E (golden_path: true)
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-HOME-013
+  name: "End-to-end: tenant member opens /m/{meeting_id}, sees notes + draft, clicks accept, draft status becomes accepted"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc08-HOME-01, R-doc08-HOME-02, R-doc08-HOME-10]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A real Postgres instance with: a meeting belonging to tenant-A, note_deltas rows folded to
+      a non-empty notes markdown, and one staged_drafts row in pending state with a persisted
+      Envelope.draft_id; an authenticated tenant-A member session; a valid CSRF token
+    when: >
+      1. GET /m/{meeting_id} is requested by the tenant-A member
+      2. The response HTML is inspected to confirm notes and draft card are present
+      3. POST /m/{meeting_id}/drafts/{draft_id}/accept is submitted with CSRF token
+    then:
+      - "Step 1: HTTP 200 with notes markdown and the draft card visible"
+      - "Step 2: draft card contains the persisted draft_id from staged_drafts (not an in-memory ID)"
+      - "Step 3: HTTP 200 or 204; doc04_accept_handler is called with correct draft_id and actor"
+      - "Step 3: audit record created with action=accept, actor=user_id, draft_id"
+      - "Step 3: subsequent GET /m/{meeting_id} reflects draft status as accepted (card updated or removed)"
+      - "No raw GCS URI appears at any step"
+      - "No internal name (Orchestrator/Scribe/workroom) appears in any rendered HTML"
+  primary_oracle: {type: deterministic, artifact: "E2E integration test with real Postgres: multi-step HTTP client asserting each step outcome; audit row present after accept; GET confirms status change"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-HOME-013]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres throughout; MUST NOT stub the tenant-check, idempotency, audit, or Doc 04 handler calls"
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: e2e}
+
+- criterion_id: AC-HOME-013-NEG
+  name: "Full approval flow degrades honestly when Postgres fails between GET and accept POST"
+  authority_refs: [R-doc08-HOME-01, R-doc08-HOME-10]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres fault injection between the GET step and the POST accept step; MUST NOT replace any query with Mock()"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  behavior:
+    given: "GET /m/{meeting_id} succeeds, but Postgres becomes unavailable before the subsequent POST accept is processed"
+    when: "POST accept is submitted"
+    then:
+      - "HTTP 5xx is returned (no partial accept)"
+      - "No audit record is written"
+      - "Draft remains in pending state on recovery"
+  primary_oracle: {type: deterministic, artifact: "negative cassette injected after GET completes but before POST accept DB write; assert HTTP 5xx; assert no audit row; assert draft still pending on reconnect GET"}
+  thresholds: {violations_allowed: 0}
+  test_ids: [T-HOME-013-NEG]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# POST security: draft/tenant isolation and cross-tenant guard (P0)
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-HOME-014
+  name: "POST accept/reject with a wrong-tenant draft_id returns 404 without invoking Doc 04 handler"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-HOME-13]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "An authenticated tenant-B member with a valid session, CSRF token, and a draft_id that belongs to tenant-A (or does not exist)"
+    when: "POST /m/{meeting_id}/drafts/{draft_id}/accept is submitted"
+    then:
+      - "The response is HTTP 404 Not Found"
+      - "The Doc 04 accept handler is not invoked"
+      - "No audit record is written for the tenant-B user"
+  primary_oracle: {type: deterministic, artifact: "integration test: two tenants in real Postgres; assert HTTP 404; assert doc04_accept_handler call count == 0; assert no audit row for tenant-B actor"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-HOME-014]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres with two distinct tenants; MUST NOT stub the meeting/draft→tenant check"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-HOME-014-NEG
+  name: "Draft/tenant check degrades honestly (fail-closed) when Postgres is unavailable"
+  authority_refs: [R-doc08-HOME-13]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres fault injection; MUST NOT stub the draft/tenant check"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  behavior:
+    given: "Postgres is unavailable when require_meeting_and_draft_in_tenant is called"
+    when: "POST accept or reject is submitted"
+    then:
+      - "The request fails with HTTP 5xx (fail-closed; not a bypass to 200)"
+      - "Doc 04 handler is not invoked"
+  primary_oracle: {type: deterministic, artifact: "negative cassette at draft/tenant check query; assert HTTP 5xx; assert handler not called"}
+  thresholds: {violations_allowed: 0}
+  test_ids: [T-HOME-014-NEG]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# code-change accept: never pushes to remote (P0, CANONICAL §12.9)
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-HOME-015
+  name: "Accepting a code-change draft records approval and exposes diff bundle; no remote push ever occurs"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-HOME-15]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A staged_drafts row of type code-change with a pending status and an artifact_ref pointing to a GCS diff bundle"
+    when: "POST /m/{meeting_id}/drafts/{draft_id}/accept is submitted by a valid tenant member with CSRF"
+    then:
+      - "doc04_accept_handler records the approval (status = accepted) in the database"
+      - "The diff bundle download link is exposed for the user (pointing to the download endpoint, not a raw GCS URI)"
+      - "Zero git push, git push --force, or remote write operations are performed"
+      - "No external VCS API call is made as a side-effect of acceptance"
+  primary_oracle: {type: deterministic, artifact: "unit test with call counter on git/VCS seams: assert push_count == 0 after accept; integration test: assert draft status == accepted in DB; assert download link present in response; assert no gs:// URI in HTML"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-HOME-015]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres for draft write; VCS push seam may be a no-op stub asserting zero calls; MUST NOT stub the tenant-check or the accept write"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-HOME-015-NEG
+  name: "code-change accept degrades honestly when Postgres is unavailable during approval write"
+  authority_refs: [R-doc08-HOME-15]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres fault injection; MUST NOT replace the accept write with Mock()"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  behavior:
+    given: "Postgres fails during the code-change draft approval write"
+    when: "POST accept is submitted for a code-change draft"
+    then:
+      - "HTTP 5xx is returned"
+      - "No approval record is written"
+      - "No remote push occurs (push_count remains 0)"
+  primary_oracle: {type: deterministic, artifact: "negative cassette at approval write; assert HTTP 5xx; assert push_count == 0; assert no audit row"}
+  thresholds: {violations_allowed: 0}
+  test_ids: [T-HOME-015-NEG]
+
+# ── GCS diff bundle download (gcs:objects dependency) ────────────────────────
+
+- criterion_id: AC-HOME-015-GCS
+  name: "code-change diff bundle is served via download endpoint; no raw GCS URI in HTML"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-HOME-15, R-doc08-HOME-20]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A code-change draft with an accepted status and an artifact_ref in GCS"
+    when: "GET /m/{meeting_id} is rendered for a tenant member"
+    then:
+      - "The diff bundle is accessible via a /m/{meeting_id}-relative download URL"
+      - "No gs:// URI or storage.googleapis.com signed URL appears in any HTML attribute"
+  primary_oracle: {type: deterministic, artifact: "integration test: assert HTML contains no gs:// or storage.googleapis.com in any href/src; assert download link resolves via app route"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-HOME-015-GCS]
+  dependency_class: gcs:objects
+  mock_boundary: "may use VCR cassette at GCS read seam; MUST NOT stub at the staged_drafts read layer"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-HOME-015-GCS-NEG
+  name: "GCS diff bundle fetch degrades honestly when GCS is unavailable"
+  authority_refs: [R-doc08-HOME-15, R-doc08-HOME-20]
+  dependency_class: gcs:objects
+  mock_boundary: "real GCS fault injection at the object fetch seam; MUST NOT stub at the staged_drafts read layer"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  behavior:
+    given: "GCS returns an error when the diff bundle artifact is fetched for a code-change draft"
+    when: "The download endpoint is accessed"
+    then:
+      - "The response is a structured HTTP 5xx or 503 with a user-readable message"
+      - "No raw GCS error body or signed URI is exposed to the user"
+  primary_oracle: {type: deterministic, artifact: "negative cassette at GCS object fetch; assert HTTP 5xx; assert no GCS URI in response body"}
+  thresholds: {violations_allowed: 0}
+  test_ids: [T-HOME-015-GCS-NEG]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# V0 scope / structural negatives
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── No cross-meeting list ─────────────────────────────────────────────────────
+
+- criterion_id: AC-HOME-016
+  name: "No cross-meeting list, analytics, or history index exists on the /m/{meeting_id} surface"
+  evidence_class: "[static]"
+  authority_refs: [R-doc08-HOME-17, R-doc08-HOME-18]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The full HTML template and view handler for /m/{meeting_id}"
+    when: "Static analysis and a rendered integration snapshot are inspected"
+    then:
+      - "No HTML element with a meeting list, meeting index, analytics panel, or history table is present in the template"
+      - "The route handler issues zero queries against a cross-meeting or aggregate view"
+      - "No link with an href referencing another /m/{other_meeting_id} is rendered on the page (other than the current meeting)"
+  primary_oracle: {type: deterministic, artifact: "static analysis of template and route handler: assert no cross-meeting query; integration snapshot: assert no list/analytics/history HTML elements"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-HOME-016]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── Net-new surface exactly 2 routes + 1 page + 1 token verifier ─────────────
+
+- criterion_id: AC-HOME-017
+  name: "§2.8 delivery adds exactly 2 HTTP routes, 1 page template, and 1 token verifier — no additional surface"
+  evidence_class: "[static]"
+  authority_refs: [R-doc08-HOME-19]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The diff of routes and templates introduced by the §2.8 implementation against the pre-§2.8 baseline"
+    when: "All new route registrations and page templates are enumerated"
+    then:
+      - "Exactly 2 new route handlers are registered: GET /m/{meeting_id} and the accept/reject POST pair (counted as the per-spec 2)"
+      - "Exactly 1 new page template file is introduced for the meeting home"
+      - "Exactly 1 new token verifier function or class is introduced"
+      - "No additional routes or page templates beyond these are introduced in the §2.8 diff"
+  primary_oracle: {type: deterministic, artifact: "static analysis of route registration and template directories: count new entries in diff; assert route_count == 2 (GET home + POST accept|reject), template_count == 1, verifier_count == 1"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-HOME-017]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── No raw GCS URI in any rendered user-visible HTML ─────────────────────────
+
+- criterion_id: AC-HOME-018
+  name: "No raw GCS URI (gs:// or storage.googleapis.com) appears in any user-visible HTML rendered by /m/{meeting_id}"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-HOME-20]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A rendered GET /m/{meeting_id} response including notes, draft cards, and any download links"
+    when: "The full HTML body is scanned"
+    then:
+      - "Zero occurrences of 'gs://' in any attribute value or text content"
+      - "Zero occurrences of 'storage.googleapis.com' in any href or src attribute"
+      - "All download or artifact links use /m/{meeting_id}-relative application URLs"
+  primary_oracle: {type: deterministic, artifact: "integration test: render full page HTML; assert regex for 'gs://' count == 0; assert regex for 'storage\\.googleapis\\.com' count == 0"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-HOME-018]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres for rendering; MUST NOT stub the notes fold or staged_drafts read"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-HOME-018-NEG
+  name: "GCS URI guard degrades honestly when Postgres is unavailable during page render"
+  authority_refs: [R-doc08-HOME-20]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres fault injection; MUST NOT replace the DB connection with Mock()"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  behavior:
+    given: "Postgres is unavailable during the page render"
+    when: "GET /m/{meeting_id} is requested"
+    then:
+      - "HTTP 5xx is returned (no partial render leaking GCS URIs)"
+  primary_oracle: {type: deterministic, artifact: "negative cassette; assert HTTP 5xx; assert no 'gs://' in any partial response body"}
+  thresholds: {violations_allowed: 0}
+  test_ids: [T-HOME-018-NEG]
+
+# ── Naming: no internal names in any rendered /m/{meeting_id} HTML ────────────
+
+- criterion_id: AC-HOME-019
+  name: "No user-visible string on /m/{meeting_id} contains Orchestrator, Scribe, workroom, or sandbox"
+  evidence_class: "[static]"
+  authority_refs: [R-doc08-HOME-01, R-doc08-HOME-05]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "All rendered HTML for /m/{meeting_id} (authenticated and capability-token modes)"
+    when: "The naming lint (libs.lint.naming) is applied to the page template and any inline strings"
+    then:
+      - "Zero occurrences of 'Orchestrator', 'Scribe', 'workroom', or 'sandbox' in any user-visible HTML, button label, or error message"
+  primary_oracle: {type: deterministic, artifact: "libs.lint.naming lint gate over /m/{meeting_id} template + view handler string literals; assert forbidden_word_count == 0; integration snapshot scan of full rendered HTML"}
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-HOME-019]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}

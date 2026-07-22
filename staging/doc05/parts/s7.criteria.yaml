@@ -1,0 +1,1542 @@
+# Doc 05 (Workroom) — S7 acceptance criteria slice
+# Coverage: §3.7 (The verify-loop — the builder NEVER grades itself)
+# ID scheme: AC-S7-NNN (NEG pairs: AC-S7-NNN-NEG)
+#
+# Structure mirrors §3.7 sub-sections:
+#   ① Separate fresh-context critic (AC-S7-001 … AC-S7-016)
+#   ② Deterministic evidence gate   (AC-S7-017 … AC-S7-031)
+#   ③ Hard gate                      (AC-S7-032 … AC-S7-038)
+#   ④ Expansion exclusions (V0)      (AC-S7-039 … AC-S7-044)
+#
+# NEG-pair rule: every non-null dependency_class criterion has a paired -NEG criterion.
+# vendor:claude-sdk criteria carry {tier: reality} in their verification_ladder.
+# golden_path: true criteria: AC-S7-015 (critic integration) + AC-S7-030 (offline+live end-to-end)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ① — SEPARATE FRESH-CONTEXT CRITIC
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S7-001
+  name: "Critic is invoked as a separate query() with no shared session state from the builder"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S7-01]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A completed build pass; the verify-loop is triggered."
+    when: "The critic query() call is constructed and issued."
+    then:
+      - "The critic uses a freshly constructed ClaudeAgentOptions / session — not the builder's running session object."
+      - "The critic's context contains no tool history, memory references, or variable bindings from the builder's session."
+      - "Inspecting the critic call site shows no passing of the builder's session_id, conversation_id, or context bag."
+  primary_oracle:
+    type: static_analysis
+    artifact: >
+      AST / call-graph scan of the verify-loop invocation: assert critic is called via
+      query() on a freshly constructed options object; assert no builder session object
+      is passed as argument to the critic call; grep for session reuse patterns returns 0 matches.
+  thresholds:
+    builder_session_objects_passed_to_critic: 0
+    shared_tool_history_objects: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-001]
+
+- criterion_id: AC-S7-002
+  name: "Critic model is strictly stronger (higher capability tier) than the builder model"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S7-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The verify-loop configuration; the builder is assigned a model tier."
+    when: "The critic query() options are constructed."
+    then:
+      - "The model field in the critic's ClaudeAgentOptions resolves to a capability tier strictly above the builder's model."
+      - "A model-tier comparison function (e.g. MODEL_TIER_RANK[critic_model] > MODEL_TIER_RANK[builder_model]) returns True."
+      - "Using the same model for both critic and builder raises a configuration error at startup."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: instantiate verify-loop with builder_model=TIER_N; assert
+      MODEL_TIER_RANK[critic_model] > MODEL_TIER_RANK[builder_model]; assert that
+      critic_model == builder_model raises ConfigurationError.
+  thresholds:
+    critic_tier_minus_builder_tier_minimum: 1
+    same_model_configurations_allowed: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-002]
+
+- criterion_id: AC-S7-003
+  name: "Builder success log and self-narration are absent from the critic's context"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S7-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A build pass that produced a success log containing the string 'BUILD PASSED' and builder narration."
+    when: "The critic's prompt and system_prompt are assembled."
+    then:
+      - "The string 'BUILD PASSED' (or any builder-declared success token) does NOT appear in the critic's prompt or system_prompt."
+      - "The builder's self-narration messages are not included in the critic's message list."
+      - "The critic's context contains only: the task specification, the artifact under review, and the AC-tag list."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: run a build pass that emits a known success-log token; capture the
+      critic's assembled prompt object; assert success-log token absent from
+      prompt + system_prompt + any injected message content; assert builder
+      narration message count in critic context == 0.
+  thresholds:
+    builder_success_tokens_in_critic_context: 0
+    builder_narration_messages_in_critic_context: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-003]
+
+- criterion_id: AC-S7-004
+  name: "Critic prompt enforces the four-phase judgment order: AC-tags → runs → cited → scope"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S7-04]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The critic's system_prompt or instruction template."
+    when: "The prompt template is inspected statically."
+    then:
+      - "The prompt explicitly lists the four judgment phases in order: (i) each AC-tag met; (ii) artifact runs/parses/typechecks; (iii) load-bearing claims cited at file:line; (iv) stayed in scope."
+      - "No phase is absent, reordered, or merged with another."
+      - "The instruction to re-run commands via run_command (not accept claims) appears in phase (ii)."
+  primary_oracle:
+    type: static_analysis
+    artifact: >
+      Static read of the critic system_prompt template; assert all four phase labels
+      present in order; assert run_command instruction present in phase-ii section;
+      assert no 'accept the builder's claim' or equivalent shortcut present.
+  thresholds:
+    judgment_phases_present_in_order: 4
+    shortcut_accept_claim_instructions: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-004]
+
+- criterion_id: AC-S7-005
+  name: "Critic re-runs pytest/typecheck/parse via run_command and reads exit code — does not accept prose claims"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S7-05, R-doc05-S7-10]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "An artifact where the builder narrated 'all tests pass' but the artifact actually fails pytest; critic is invoked."
+    when: "The critic evaluates phase (ii) of its judgment."
+    then:
+      - "The critic issues a run_command call to execute pytest (or equivalent) and receives the actual exit code."
+      - "The critic's verdict for the runs-check reflects the actual exit code, NOT the builder's prose claim."
+      - "A failing exit code (non-zero) causes the criterion to be marked FAILED in the verdict."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Simulation test: supply a broken artifact + builder prose claim of 'tests pass';
+      cassette the run_command response with exit_code=1; assert critic verdict marks
+      runs-check FAILED; assert verdict does not reference the builder's prose claim
+      as evidence.
+  thresholds:
+    builder_prose_claims_used_as_evidence: 0
+    run_command_calls_for_phase_ii: {minimum: 1}
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK with cassette at LLM boundary and stubbed run_command exit_code."
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S7-005]
+
+- criterion_id: AC-S7-005-NEG
+  name: "NEG: critic with run_command stubbed as always-pass marks runs-check PASSED (confirms gate is exit-code-driven)"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S7-05]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A broken artifact; run_command stubbed to always return exit_code=0."
+    when: "The critic evaluates phase (ii)."
+    then:
+      - "The critic marks runs-check PASSED — confirming that the verdict is driven entirely by the exit code, not prose content."
+      - "This validates that the positive criterion (AC-S7-005) is non-vacuous: swapping exit code changes the verdict."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Control: same broken artifact + run_command stubbed exit_code=0; assert
+      critic verdict marks runs-check PASSED; confirms exit-code causality.
+  thresholds:
+    runs_check_passed_with_exit_code_zero: 1
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK with cassette; run_command exit_code=0 stub."
+  golden_path: false
+  verification_ladder:
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S7-005-NEG]
+
+- criterion_id: AC-S7-006
+  name: "Critic has run_command in its tool set and does NOT have write_file or edit_file"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S7-10, R-doc05-S7-27]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The critic's ClaudeAgentOptions or allowed_tools list is assembled."
+    when: "The effective tool set is inspected."
+    then:
+      - "run_command is present in the critic's allowed_tools."
+      - "write_file, edit_file, Write, Edit, and any analogous mutation tools are absent from the critic's tool set."
+      - "No mutation tool can be added to the critic via any configuration path."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: inspect the critic's assembled options.allowed_tools;
+      assert 'run_command' in allowed_tools;
+      assert set(allowed_tools).isdisjoint({'write_file', 'edit_file', 'Write', 'Edit'});
+      static scan confirms no conditional code path adds mutation tools to critic.
+  thresholds:
+    run_command_in_critic_tools: 1
+    mutation_tools_in_critic_tools: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-006]
+
+- criterion_id: AC-S7-007
+  name: "Critic verdict is schema-constrained via json_schema output format"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S7-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The critic query() call construction."
+    when: "The critic options are inspected statically and at runtime."
+    then:
+      - "The ClaudeAgentOptions (or equivalent structured-output config) carries a json_schema that constrains the verdict object."
+      - "The schema requires at minimum: a 'criteria' array (each item with criterion_id and status), a top-level 'verification' field, and a top-level 'status' field."
+      - "The SDK's structured-output mechanism is used — not post-hoc JSON parsing of free-text."
+  primary_oracle:
+    type: static_analysis
+    artifact: >
+      AST scan of critic call site: assert json_schema (or output_schema / outputFormat
+      equivalent per live SDK docs) is provided; assert schema contains 'criteria',
+      'verification', 'status' fields as required; assert no fallback 'json.loads(response.text)'
+      code path for verdict extraction.
+  thresholds:
+    json_schema_present_on_critic_call: 1
+    free_text_json_parse_fallback_paths: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-007]
+
+- criterion_id: AC-S7-008
+  name: "Emitted verdict is independently re-validated against the declared json_schema after emission"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S7-06, R-doc05-S7-28]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The verify-loop has received a structured verdict object from the critic."
+    when: "The verdict is processed."
+    then:
+      - "A second independent schema validation (e.g. jsonschema.validate) is run on the emitted verdict object."
+      - "This validation is separate from the SDK's own schema enforcement (belt-and-suspenders)."
+      - "A verdict object that passes the SDK but fails the independent check is treated as unparseable → unverified/needs_review."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: inject a verdict that satisfies the SDK schema minimally but violates
+      an additional constraint in the independent validator; assert verify-loop returns
+      verification='unverified' and status='needs_review'.
+  thresholds:
+    independent_schema_validations_run: 1
+    sdk_pass_independent_fail_allowed: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-008]
+
+- criterion_id: AC-S7-009
+  name: "Structured-output API call shape is confirmed against live SDK docs at build (not assumed)"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S7-07]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "The critic call site implementation."
+    when: "A build-time check or code comment is inspected."
+    then:
+      - "The source file contains a dated confirmation comment (or a build-time assertion) citing the live SDK documentation URL and confirming the structured-output parameter name and call shape."
+      - "The confirmation is dated within the current build cycle — it is not a one-time historical note."
+      - "An automated CI step (or test fixture) imports the SDK and asserts the structured-output kwarg name matches what the code uses."
+  primary_oracle:
+    type: static_analysis
+    artifact: >
+      Read the critic call-site source: assert confirmation comment with SDK doc URL
+      and structured-output parameter name is present; assert CI step or fixture
+      asserts the kwarg name via introspection of the SDK's query() signature.
+  thresholds:
+    sdk_doc_confirmation_comments: {minimum: 1}
+    ci_kwarg_assertion_steps: {minimum: 1}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-009]
+
+- criterion_id: AC-S7-010
+  name: "Unparseable or uncertain verdict → verification='unverified', status='needs_review', never 'verified'"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S7-08]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The verify-loop's parse_verdict() function."
+    when: "A malformed JSON verdict (missing required field, wrong types) is injected."
+    then:
+      - "parse_verdict() sets verification='unverified' on the envelope."
+      - "parse_verdict() sets status='needs_review' on the envelope."
+      - "verification is never set to 'verified' when the verdict is malformed or contains uncertainty."
+      - "No exception propagates to the caller — the fail-closed handling is graceful."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Parameterized unit tests: inject (a) JSON missing 'criteria' key, (b) JSON with
+      verification field set to null, (c) JSON with an 'uncertain' flag set; for each
+      assert envelope.verification == 'unverified' and envelope.status == 'needs_review'
+      and no exception raised.
+  thresholds:
+    verified_set_on_malformed_verdict: 0
+    exceptions_from_parse_verdict_on_bad_input: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  test_ids: [T-S7-010]
+
+- criterion_id: AC-S7-011
+  name: "Total parse failure → every individual criterion is set to FAILED"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S7-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "parse_verdict() is called with a completely unparseable payload (not valid JSON at all)."
+    when: "The payload is processed."
+    then:
+      - "Every criterion in the verification run is set to status='failed'."
+      - "No criterion is left in an unknown, partial-pass, or default-pass state."
+      - "The envelope receives verification='unverified' and status='needs_review'."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: pass b'NOT JSON AT ALL <<<' to parse_verdict(); assert
+      all criteria in the returned result have status == 'failed';
+      assert envelope.verification == 'unverified' and envelope.status == 'needs_review'.
+  thresholds:
+    criteria_not_set_to_failed_on_total_parse_failure: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  test_ids: [T-S7-011]
+
+- criterion_id: AC-S7-012
+  name: "Builder cannot author or modify the checker, the harness, or the verdict (anti-gaming)"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S7-11]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The full Workroom source tree; the builder's allowed tool set."
+    when: "The tool permissions and code ownership are inspected statically."
+    then:
+      - "The builder worker's tool set contains no write_file or edit_file permission over the verification harness path."
+      - "The verification harness (parse_verdict, evidence_backed, the critic invocation) is in a separate, read-only-to-builder module."
+      - "No code path allows the builder to emit a verdict object directly or to set verification='verified' itself."
+  primary_oracle:
+    type: static_analysis
+    artifact: >
+      Static check: assert the builder's allowed_tools list excludes write/edit over
+      the harness module; assert harness module is not imported by the builder-side
+      code in a writable context; grep for builder calling parse_verdict() or
+      evidence_backed() directly returns 0 matches.
+  thresholds:
+    builder_write_access_to_harness_module: 0
+    builder_direct_verdict_emissions: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-012]
+
+- criterion_id: AC-S7-013
+  name: "Fixed deterministic tool is used as judge when output is mechanically checkable"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S7-11]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The critic's phase-(ii) evaluation for a compilable/testable artifact."
+    when: "The judgment mechanism is inspected."
+    then:
+      - "For artifacts with a runnable test suite, mypy typecheck, or schema validation, the verdict for that criterion is derived from the fixed tool's exit code — not from LLM prose assessment."
+      - "A criterion that could be checked deterministically is not left to LLM prose judgment."
+  primary_oracle:
+    type: static_analysis
+    artifact: >
+      Audit the critic system_prompt + verdict schema: assert all mechanically checkable
+      criteria (runs, typechecks, validates) specify the check command and require
+      run_command exit_code as evidence; assert no criterion of this type is
+      marked 'evaluated_by: llm_prose_only'.
+  thresholds:
+    deterministically_checkable_criteria_left_to_prose: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-013]
+
+- criterion_id: AC-S7-014
+  name: "Critic invocation is a real live SDK query() call (vendor:claude-sdk dependency confirmed)"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc05-S7-01, R-doc05-S7-02, R-doc05-S7-06]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The verify-loop integration test suite with a cassette at the network boundary."
+    when: "The verify-loop is exercised end-to-end."
+    then:
+      - "The SDK's query() is called with the correct model tier (stronger than builder) and json_schema output format."
+      - "The returned structured verdict is a valid Python object matching the declared schema."
+      - "No stubbed/mocked verdict is returned from a non-SDK code path."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Integration test with cassette: assert query() is called once with
+      model==CRITIC_MODEL and json_schema in options; assert returned verdict
+      passes independent schema validation; assert no stub intercepts the call.
+  thresholds:
+    critic_query_calls_in_integration_test: 1
+    schema_validation_passes: 1
+    stubbed_verdict_injections: 0
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK call with cassette at HTTP boundary; LLM response pre-recorded."
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: reality}
+  test_ids: [T-S7-014]
+
+- criterion_id: AC-S7-014-NEG
+  name: "NEG: Downgrading critic model to builder tier causes a ConfigurationError at startup"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S7-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The verify-loop configuration where critic_model is set to the same model as the builder."
+    when: "The verify-loop is initialized."
+    then:
+      - "A ConfigurationError (or equivalent startup guard) is raised before any query() call is made."
+      - "No verification run proceeds with a same-or-weaker critic model."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: construct verify-loop with critic_model == builder_model;
+      assert ConfigurationError raised during __init__ before first query().
+  thresholds:
+    verification_runs_with_same_tier_critic: 0
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "SDK import only; no actual query() call made."
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: negative}
+  test_ids: [T-S7-014-NEG]
+
+- criterion_id: AC-S7-015
+  name: "Golden path: critic completes a full four-phase verification and returns a schema-valid verdict"
+  evidence_class: "[eval]"
+  authority_refs: [R-doc05-S7-01, R-doc05-S7-04, R-doc05-S7-05, R-doc05-S7-06, R-doc05-S7-10]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A valid artifact with all criteria passing; builder context contains a known
+      success-log token; critic is invoked via the full verify-loop.
+    when: "The verify-loop runs to completion."
+    then:
+      - "The critic is a fresh query() call — builder session not shared."
+      - "The builder success-log token is absent from the critic's assembled context."
+      - "The critic issues at least one run_command call for phase-(ii) checks."
+      - "The verdict passes independent schema validation."
+      - "All criteria in the verdict are marked 'passed'."
+      - "The envelope receives verification='verified' and status='done'."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Integration test with cassette (real SDK, pre-recorded LLM response for all-pass
+      verdict): assert builder-session not reused; assert success-log absent from critic
+      prompt; assert run_command called >= 1 time; assert verdict schema-valid; assert
+      envelope.verification == 'verified' and envelope.status == 'done'.
+  thresholds:
+    builder_session_reuse: 0
+    success_log_in_critic_context: 0
+    run_command_calls: {minimum: 1}
+    schema_validation_errors: 0
+    envelope_verification_value: "verified"
+    envelope_status_value: "done"
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK invocation with cassette at HTTP boundary."
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: reality}
+    - {tier: e2e}
+  test_ids: [T-S7-015]
+
+- criterion_id: AC-S7-015-NEG
+  name: "NEG: When critic cannot be invoked (SDK unavailable), verify-loop returns unverified/needs_review — never verified"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S7-08]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The SDK's query() raises an exception (network error, auth failure, timeout)."
+    when: "The verify-loop attempts the critic call."
+    then:
+      - "The verify-loop catches the exception without propagating it."
+      - "All criteria default to status='failed'."
+      - "The envelope receives verification='unverified' and status='needs_review'."
+      - "verification is never set to 'verified' due to a SDK call failure."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: stub query() to raise RuntimeError; assert all criteria set to
+      'failed'; assert envelope.verification == 'unverified'; assert no uncaught
+      exception reaches the caller.
+  thresholds:
+    verified_set_on_sdk_failure: 0
+    uncaught_exceptions_from_verify_loop: 0
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "SDK query() stubbed to raise RuntimeError."
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: negative}
+  test_ids: [T-S7-015-NEG]
+
+- criterion_id: AC-S7-016
+  name: "Critic system_prompt and tool list are read-only at runtime — cannot be mutated by agent output"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S7-11, R-doc05-S7-27]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The verify-loop implementation; any processing of the critic's output."
+    when: "The critic's output is processed and subsequent critic calls are made."
+    then:
+      - "The critic's system_prompt is assembled once from a fixed template and never modified based on a previous critic output."
+      - "The critic's allowed_tools list is never extended or modified based on the artifact or builder output."
+      - "No code path exists where a critic output value is fed back into the next critic call's configuration."
+  primary_oracle:
+    type: static_analysis
+    artifact: >
+      AST scan: assert system_prompt is constructed from a constant template with
+      only artifact-derived substitutions (not prior-critic-output substitutions);
+      assert allowed_tools is assigned from a constant list, not from any runtime
+      variable derived from model output.
+  thresholds:
+    mutable_system_prompt_code_paths: 0
+    runtime_tool_list_extensions: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-016]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ② — DETERMINISTIC EVIDENCE GATE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S7-017
+  name: "evidence_backed() reads structured host-observed receipts — no regex or pattern match over model prose"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S7-12, R-doc05-S7-13]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The evidence_backed() function implementation."
+    when: "The source is inspected statically."
+    then:
+      - "evidence_backed() accesses receipts by reading a structured object (dict/dataclass) with named fields — not by running re.search() or str.find() on any string."
+      - "No import or usage of re (regex) or string-search patterns appears inside evidence_backed() or any function it calls for receipt evaluation."
+      - "Receipt fields are accessed by key (e.g. receipt['exit_code'], receipt['argv']) not by string parsing."
+  primary_oracle:
+    type: static_analysis
+    artifact: >
+      AST scan of evidence_backed() and its call tree: assert zero re.search /
+      re.match / re.findall / re.compile / str.find / str.contains calls;
+      assert receipt fields accessed as dict keys or dataclass attributes only.
+  thresholds:
+    regex_or_pattern_match_calls_in_evidence_backed: 0
+    string_search_calls_in_evidence_backed: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-017]
+
+- criterion_id: AC-S7-018
+  name: "No regex-over-notes code path exists anywhere in the verification pipeline"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S7-13]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The full verification pipeline source (parse_verdict, evidence_backed, the hard gate, and any helpers)."
+    when: "The source is scanned statically for pattern-matching over model-generated text."
+    then:
+      - "No function applies a regex or substring search to builder notes, critic notes, or any model-generated string in order to determine pass/fail."
+      - "The only text-handling in the pipeline is: (a) schema validation of JSON fields, and (b) constructing error messages for output."
+  primary_oracle:
+    type: static_analysis
+    artifact: >
+      grep -rn 're\.' <verification_pipeline_module>; grep -rn 'notes.*pass\|pass.*notes\|re\.search.*notes\|re\.match.*notes';
+      assert zero matches where regex targets model-generated prose for a pass/fail decision.
+  thresholds:
+    regex_over_notes_occurrences: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-018]
+
+- criterion_id: AC-S7-019
+  name: "Receipts consumed by evidence_backed() carry the exact schema: {command_id, argv, exit_code, stdout_ref, artifact_hashes}"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S7-14]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The receipt dataclass or TypedDict declaration used by evidence_backed()."
+    when: "The type definition is inspected."
+    then:
+      - "The receipt type has exactly the five fields: command_id (str), argv (list[str]), exit_code (int), stdout_ref (str), artifact_hashes (list[dict])."
+      - "No field is missing or renamed."
+      - "evidence_backed() does not accept a receipt missing any of these fields — a missing required field raises a KeyError or ValidationError."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: construct a receipt missing 'exit_code'; call evidence_backed() with
+      it; assert KeyError or ValidationError raised.
+      Static check: assert Receipt type definition contains exactly the five required
+      field names.
+  thresholds:
+    receipt_schema_field_count: 5
+    missing_field_receipts_silently_accepted: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-019]
+
+- criterion_id: AC-S7-020
+  name: "evidence_backed() returns False when no receipt matches the named verify command"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S7-15]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A verify_cmds list containing 'pytest tests/'; a receipts list with no entry whose argv includes 'pytest tests/'."
+    when: "evidence_backed(verify_cmds=['pytest tests/'], receipts=<non_matching_receipts>) is called."
+    then:
+      - "The function returns False."
+      - "No receipt is considered a match if the named verify command does not appear in argv."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: evidence_backed(verify_cmds=['pytest tests/'], receipts=[receipt_for_mypy])
+      → assert result is False.
+  thresholds:
+    false_positives_on_missing_receipt: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-020]
+
+- criterion_id: AC-S7-021
+  name: "evidence_backed() returns False when receipt has exit_code != 0, even if command matches"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S7-15]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A receipt with argv=['pytest', 'tests/'] and exit_code=1 (failing run)."
+    when: "evidence_backed(verify_cmds=['pytest tests/'], receipts=[<that_receipt>]) is called."
+    then:
+      - "The function returns False — exit_code != 0 is not a backed pass regardless of command name match."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: evidence_backed(verify_cmds=['pytest tests/'],
+      receipts=[{argv:['pytest','tests/'], exit_code:1, ...}]) → assert False.
+  thresholds:
+    false_positives_on_nonzero_exit_code: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-021]
+
+- criterion_id: AC-S7-022
+  name: "evidence_backed() returns False when required artifact hash is absent from receipt"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S7-16]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      required_hashes={'dist/output.whl': 'abc123'};
+      receipt with exit_code=0 but artifact_hashes=[{'path': 'dist/output.whl', 'sha256': 'deadbeef'}].
+    when: "evidence_backed() is called with these inputs."
+    then:
+      - "The function returns False — the required sha256 hash does not match the receipt."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: evidence_backed(verify_cmds=['build'], required_hashes={'dist/output.whl':'abc123'},
+      receipts=[{argv:['build'], exit_code:0, artifact_hashes:[{path:'dist/output.whl',sha256:'deadbeef'}]}])
+      → assert False.
+  thresholds:
+    false_positives_on_hash_mismatch: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-022]
+
+- criterion_id: AC-S7-023
+  name: "evidence_backed() returns False when required_hashes specifies a path absent from receipt artifact_hashes"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S7-16]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      required_hashes={'dist/output.whl': 'abc123'};
+      receipt with exit_code=0 but artifact_hashes=[] (empty — no hashes recorded).
+    when: "evidence_backed() is called."
+    then:
+      - "The function returns False — a required hash path that is absent from the receipt is not considered a match."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: evidence_backed with required_hashes={'dist/output.whl':'abc123'},
+      receipt artifact_hashes=[] → assert False.
+  thresholds:
+    false_positives_on_missing_hash_path: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-023]
+
+- criterion_id: AC-S7-024
+  name: "evidence_backed() returns False when verify_cmds is empty"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S7-18]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "verify_cmds=[] and any receipts (including a receipt with exit_code=0)."
+    when: "evidence_backed(verify_cmds=[], receipts=<any>) is called."
+    then:
+      - "The function returns False immediately — empty verify_cmds is never evidence of a backed pass."
+      - "The receipts argument is irrelevant when verify_cmds is empty."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: evidence_backed(verify_cmds=[], receipts=[{argv:['pytest'], exit_code:0, ...}])
+      → assert False.
+  thresholds:
+    false_positives_on_empty_verify_cmds: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-024]
+
+- criterion_id: AC-S7-025
+  name: "parse_verdict() force-downgrades a claimed pass to FAILED with the exact message when no receipt backs it"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S7-17]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A critic verdict JSON where criterion X has status='passed'; the evidence gate
+      finds no host-observed receipt backing that pass (evidence_backed() returns False).
+    when: "parse_verdict() processes this verdict."
+    then:
+      - "Criterion X's status is downgraded to 'failed' in the returned result."
+      - "The notes for criterion X contain the exact string: '[verify gate] Downgraded to FAILED: no host-observed receipt (named verify command at exit_code 0 / matching artifact hash) backs this pass. Model prose is not a verdict.'"
+      - "The downgrade message is appended verbatim — no summarization or rephrasing."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: supply critic verdict with criterion status='passed' and evidence_backed
+      returning False; call parse_verdict(); assert criterion.status == 'failed';
+      assert '[verify gate] Downgraded to FAILED: no host-observed receipt (named verify
+      command at exit_code 0 / matching artifact hash) backs this pass. Model prose is
+      not a verdict.' in criterion.notes (exact substring match).
+  thresholds:
+    downgrade_message_exact_matches: 1
+    downgraded_criteria_remaining_passed: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  test_ids: [T-S7-025]
+
+- criterion_id: AC-S7-026
+  name: "Model prose 'exit code 0' in narration does NOT constitute a backed pass in the evidence gate"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S7-12, R-doc05-S7-17]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A critic verdict where the narration/notes field contains the string
+      'command exited with exit code 0 — tests passed'; receipts list is empty.
+    when: "evidence_backed() evaluates this claimed pass."
+    then:
+      - "evidence_backed() returns False — the prose string is not a receipt."
+      - "parse_verdict() force-downgrades the criterion to FAILED."
+      - "The downgrade note is appended citing model prose as insufficient."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: evidence_backed(verify_cmds=['pytest'], receipts=[],
+      notes='command exited with exit code 0') → assert False;
+      parse_verdict with that verdict → assert criterion status == 'failed' and
+      exact downgrade message present.
+  thresholds:
+    prose_exit_code_passing_the_gate: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  test_ids: [T-S7-026]
+
+- criterion_id: AC-S7-027
+  name: "evidence_backed() returns True when a receipt exactly matches: correct argv, exit_code=0, hash match"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S7-15, R-doc05-S7-16]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      verify_cmds=['pytest tests/']; required_hashes={'dist/output.whl': 'abc123'};
+      receipt with argv=['pytest', 'tests/'], exit_code=0,
+      artifact_hashes=[{'path':'dist/output.whl','sha256':'abc123'}].
+    when: "evidence_backed() is called with these inputs."
+    then:
+      - "The function returns True — this is a fully backed pass."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: evidence_backed with matching receipt → assert True.
+  thresholds:
+    false_negatives_on_valid_receipt: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-027]
+
+- criterion_id: AC-S7-028
+  name: "Deterministic gate and live critic both run for every change — neither is skipped"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S7-19]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A complete verify-loop run triggered after a build pass."
+    when: "The execution trace is inspected."
+    then:
+      - "The evidence gate (evidence_backed() / parse_verdict() downgrade logic) runs."
+      - "The live critic (query() call) also runs."
+      - "Neither is conditionally skipped based on the result of the other."
+      - "A configuration flag that disables either gate raises a ConfigurationError."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Integration test with instrumentation: run full verify-loop; assert evidence_backed
+      called >= 1 time AND query() called >= 1 time; assert no early-return branch
+      skips either after the other succeeds; static scan for 'skip_evidence_gate' or
+      'skip_critic' configuration flags raises CI alert.
+  thresholds:
+    evidence_gate_skips: 0
+    critic_skips: 0
+    skip_configuration_flags_allowed: 0
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK with cassette; evidence_backed instrumented."
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: reality}
+  test_ids: [T-S7-028]
+
+- criterion_id: AC-S7-028-NEG
+  name: "NEG: Skipping evidence gate while critic passes still yields unverified/needs_review"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S7-19]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A patched verify-loop where evidence_backed() is force-skipped (returns True without checking)."
+    when: "The verify-loop runs with a critic verdict marking all criteria passed."
+    then:
+      - "The hard gate detects that evidence is not properly backed (the patched skip is detectable)."
+      - "If the skip is undetectable, a separate CI check asserts that the evidence gate was actually exercised (via call count instrumentation)."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Control: patch evidence_backed to return True without checking; run verify-loop;
+      assert instrumentation shows evidence_backed was not called with real receipts;
+      assert CI call-count check fails with evidence_backed_call_count == 0.
+  thresholds:
+    evidence_gate_bypasses_detectable: 1
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "SDK with cassette; evidence_backed patched."
+  golden_path: false
+  verification_ladder:
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S7-028-NEG]
+
+- criterion_id: AC-S7-029
+  name: "evidence_backed() implementation is at most ~30 lines of non-LLM code"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S7-12]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "The evidence_backed() function source."
+    when: "The function body is measured."
+    then:
+      - "The function body contains at most 35 logical lines of Python (blank lines and comments excluded)."
+      - "The function contains no LLM call, no API request, and no I/O other than reading the receipts argument."
+  primary_oracle:
+    type: static_analysis
+    artifact: >
+      Line-count assertion: radon or manual count of evidence_backed() body <= 35
+      logical lines; grep for 'query(' or 'requests.' inside evidence_backed returns 0.
+  thresholds:
+    evidence_backed_logical_line_count_max: 35
+    llm_calls_in_evidence_backed: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-029]
+
+- criterion_id: AC-S7-030
+  name: "Golden path: full offline+live verify-loop on a passing build returns verified/done with receipt-backed evidence"
+  evidence_class: "[eval]"
+  authority_refs: [R-doc05-S7-12, R-doc05-S7-15, R-doc05-S7-19, R-doc05-S7-20]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A valid artifact; a host-observed receipt with matching argv, exit_code=0, and
+      matching artifact_hashes; a critic verdict (cassette) marking all criteria passed.
+    when: "The full verify-loop (evidence gate + critic + hard gate) runs."
+    then:
+      - "evidence_backed() returns True for all criteria."
+      - "No criteria are force-downgraded."
+      - "The critic query() is called and returns a schema-valid all-passed verdict."
+      - "The hard gate sets verification='verified' and status='done'."
+      - "The final envelope is verification='verified' and status='done'."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      End-to-end integration test: provide matching receipt + all-pass cassette;
+      assert evidence_backed True; assert no downgrade messages in notes;
+      assert envelope.verification == 'verified' and envelope.status == 'done'.
+  thresholds:
+    force_downgrades: 0
+    schema_validation_errors: 0
+    envelope_verification_value: "verified"
+    envelope_status_value: "done"
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK with cassette at HTTP boundary; receipts provided as test fixtures."
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: reality}
+    - {tier: e2e}
+  test_ids: [T-S7-030]
+
+- criterion_id: AC-S7-030-NEG
+  name: "NEG: Full verify-loop on a passing critic but missing receipt returns unverified/needs_review"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S7-17, R-doc05-S7-20]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A critic verdict (cassette) marking all criteria passed; receipts list is EMPTY
+      (no host-observed receipts).
+    when: "The full verify-loop runs."
+    then:
+      - "Every criterion is force-downgraded to FAILED by the evidence gate."
+      - "The hard gate sees at least one FAILED criterion and sets verification='unverified' and status='needs_review'."
+      - "The exact downgrade message appears in each criterion's notes."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Integration test: provide all-pass critic cassette + empty receipts;
+      assert all criteria.status == 'failed';
+      assert downgrade message present in each criterion's notes;
+      assert envelope.verification == 'unverified' and envelope.status == 'needs_review'.
+  thresholds:
+    criteria_not_downgraded_with_empty_receipts: 0
+    envelope_verified_with_empty_receipts: 0
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK with cassette; empty receipts fixture."
+  golden_path: false
+  verification_ladder:
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S7-030-NEG]
+
+- criterion_id: AC-S7-031
+  name: "evidence_backed() returns True for each required verify_cmd independently (multi-command check)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S7-15]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      verify_cmds=['pytest tests/', 'mypy src/']; receipts containing one receipt for
+      pytest (exit_code=0) but no receipt for mypy.
+    when: "evidence_backed() is called."
+    then:
+      - "The function returns False — ALL named verify commands require a matching receipt."
+      - "A partial match (some but not all commands have receipts) is not sufficient."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: evidence_backed(verify_cmds=['pytest tests/', 'mypy src/'],
+      receipts=[only_pytest_receipt]) → assert False.
+  thresholds:
+    false_positives_on_partial_command_coverage: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-031]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ③ — HARD GATE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S7-032
+  name: "Hard gate sets verification='verified' and status='done' only when ALL individual checks are green"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S7-20]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A verify-loop result where all criteria have status='passed' (no FAILED, no force-downgrades)."
+    when: "The hard gate evaluates the result."
+    then:
+      - "The envelope receives verification='verified' and status='done'."
+      - "A single FAILED criterion (injected as a test) causes the gate to set verification='unverified' and status='needs_review' instead."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test A (all-pass): all criteria passed → assert envelope.verification == 'verified'
+      and envelope.status == 'done'.
+      Unit test B (one-fail): inject one criteria with status='failed' → assert
+      envelope.verification == 'unverified' and envelope.status == 'needs_review'.
+  thresholds:
+    verified_done_with_any_failed_criterion: 0
+    unverified_with_all_passed_criteria: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  test_ids: [T-S7-032]
+
+- criterion_id: AC-S7-033
+  name: "Envelope status is restricted to the canonical enum: done|partial|failed|needs_clarification|needs_review"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S7-21]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The envelope status type definition / Literal type / Enum used in the verify-loop and hard gate."
+    when: "The type definition is inspected statically."
+    then:
+      - "The status field's type is an Enum or Literal containing exactly: 'done', 'partial', 'failed', 'needs_clarification', 'needs_review'."
+      - "The values 'verified' and 'draft' are NOT present in the status enum."
+      - "Attempting to assign status='verified' or status='draft' raises a type error (static) or ValueError (runtime)."
+  primary_oracle:
+    type: static_analysis
+    artifact: >
+      Static check: import the status Enum/Literal; assert set(EnvelopeStatus) ==
+      {'done', 'partial', 'failed', 'needs_clarification', 'needs_review'};
+      assert 'verified' not in EnvelopeStatus; assert 'draft' not in EnvelopeStatus;
+      mypy --strict confirms no assignment of 'verified' or 'draft' to status field.
+  thresholds:
+    verified_in_status_enum: 0
+    draft_in_status_enum: 0
+    status_enum_size: 5
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-033]
+
+- criterion_id: AC-S7-034
+  name: "'verified' and 'draft' are not assignable as envelope status values (runtime guard)"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S7-21]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The envelope construction code at runtime."
+    when: "An attempt is made to set envelope.status = 'verified' (or 'draft')."
+    then:
+      - "A ValueError (or equivalent) is raised immediately at the assignment."
+      - "The envelope is never persisted with status='verified' or status='draft'."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: attempt Envelope(status='verified') → assert ValueError raised.
+      Unit test: attempt Envelope(status='draft') → assert ValueError raised.
+  thresholds:
+    invalid_status_values_silently_accepted: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  test_ids: [T-S7-034]
+
+- criterion_id: AC-S7-035
+  name: "Proof state rides the separate 'verification' field — not the 'status' field"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S7-21]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The envelope data model (Envelope TypedDict/dataclass/Pydantic model)."
+    when: "The schema is inspected."
+    then:
+      - "The envelope has a 'verification' field (separate from 'status') that can hold 'verified' or 'unverified'."
+      - "The 'status' field is used exclusively for workflow state (done/partial/failed/needs_clarification/needs_review)."
+      - "No code path writes verification state into the status field."
+  primary_oracle:
+    type: static_analysis
+    artifact: >
+      Static check: assert Envelope has both 'status' and 'verification' fields as
+      distinct top-level attributes; assert 'verified'/'unverified' values appear only
+      in the 'verification' field assignment; grep for status='verified' returns 0 matches.
+  thresholds:
+    verification_value_written_to_status_field: 0
+    status_field_present: 1
+    verification_field_present: 1
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-035]
+
+- criterion_id: AC-S7-036
+  name: "Delivery is blocked when any criterion has failed — cannot mark delivered while failures remain"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S7-22]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A verify-loop result containing at least one criterion with status='failed'."
+    when: "The hard gate attempts to mark the artifact as delivered."
+    then:
+      - "The delivery is blocked — the hard gate raises DeliveryBlockedError (or equivalent) or returns a non-deliverable status."
+      - "The artifact envelope is NOT stamped as delivered or verification='verified'."
+      - "The blocking is unconditional regardless of how many criteria passed — a single failure suffices."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: pass result with one criteria.status='failed' to the delivery-gate
+      function; assert DeliveryBlockedError (or equivalent) raised or return value
+      indicates non-deliverable; assert envelope.verification != 'verified'.
+  thresholds:
+    deliveries_with_any_failed_criterion: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  test_ids: [T-S7-036]
+
+- criterion_id: AC-S7-037
+  name: "Hard gate is the single code path that sets verification='verified' — no bypass route"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S7-20, R-doc05-S7-22]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The full verify-loop and workroom source tree."
+    when: "All assignments to the 'verification' field are enumerated statically."
+    then:
+      - "The string 'verified' is assigned to an envelope's verification field only inside the hard gate function."
+      - "No other function, method, or code path sets verification='verified'."
+      - "The hard gate function is not callable by the builder worker directly."
+  primary_oracle:
+    type: static_analysis
+    artifact: >
+      grep -rn "verification.*=.*['\"]verified['\"]" <source_tree>;
+      assert all matches are inside the hard gate module;
+      assert zero matches outside the hard gate module.
+  thresholds:
+    verified_assignments_outside_hard_gate: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-037]
+
+- criterion_id: AC-S7-038
+  name: "Hard gate with mixed results (some passed, some failed) sets status='needs_review' not 'partial'"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S7-20]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A verify-loop result with some criteria passed and some failed."
+    when: "The hard gate evaluates the mixed result."
+    then:
+      - "The envelope status is set to 'needs_review' (not 'partial' or 'failed')."
+      - "verification is set to 'unverified' (not 'verified')."
+      - "The 'partial' status is not used by the hard gate — it belongs to a different workflow state."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: supply mix of passed/failed criteria; assert envelope.status == 'needs_review'
+      and envelope.verification == 'unverified'; assert envelope.status != 'partial'.
+  thresholds:
+    partial_status_used_by_hard_gate_on_mixed_results: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-038]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ④ — EXPANSION EXCLUSIONS (V0 SCOPE)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S7-039
+  name: "V0: No implementation of run_with_concurrency or race_with_timeout exists in the codebase"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S7-23, R-doc05-S7-25]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The full workroom source tree (all Python files under services/workroom and libs/*)."
+    when: "The source is scanned for V0-excluded concurrency primitives."
+    then:
+      - "No function named run_with_concurrency exists anywhere in the source tree."
+      - "No function named race_with_timeout exists anywhere in the source tree."
+      - "No import or call site references these names."
+  primary_oracle:
+    type: static_analysis
+    artifact: >
+      grep -rn 'run_with_concurrency\|race_with_timeout' <source_tree>;
+      assert zero matches.
+  thresholds:
+    run_with_concurrency_occurrences: 0
+    race_with_timeout_occurrences: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-039]
+
+- criterion_id: AC-S7-040
+  name: "V0: No parallel critic panel, red-team turn, or agreement-merge logic exists"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S7-23, R-doc05-S7-24]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The full workroom source tree."
+    when: "The source is scanned for V0-excluded panel / red-team patterns."
+    then:
+      - "No function or class related to a multi-critic panel exists (no 'CriticPanel', 'parallel_critics', or equivalent)."
+      - "No red-team turn logic exists (no 'RedTeamCritic', 'adversarial_critic', or equivalent)."
+      - "No agreement-merge or confidence-boost logic exists (no 'merge_critic_verdicts', 'agreement_boost', or equivalent)."
+      - "The verify-loop invokes exactly ONE critic query() per verification run."
+  primary_oracle:
+    type: static_analysis
+    artifact: >
+      grep -rni 'critic_panel\|parallel_critic\|red_team_critic\|adversarial_critic\|merge_critic\|agreement_boost\|confidence_boost' <source_tree>;
+      assert zero matches.
+      Static check: verify-loop code invokes query() for the critic exactly once per run.
+  thresholds:
+    critic_panel_occurrences: 0
+    red_team_critic_occurrences: 0
+    agreement_merge_occurrences: 0
+    critic_query_calls_per_run_max: 1
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-040]
+
+- criterion_id: AC-S7-041
+  name: "V0: No plan-artifact-as-MCP-tool-server exposing list_tasks/get_task/mark_done"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S7-23, R-doc05-S7-26]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The full workroom source tree and any MCP server definitions."
+    when: "The source is scanned for V0-excluded MCP tool-server patterns."
+    then:
+      - "No MCP tool named list_tasks, get_task, or mark_done exists in any MCP server definition."
+      - "No class or module implementing a 'plan as MCP tool server' pattern exists."
+      - "The plan artifact is accessed directly as a data structure, not served via MCP endpoints."
+  primary_oracle:
+    type: static_analysis
+    artifact: >
+      grep -rn 'list_tasks\|get_task\|mark_done' <source_tree>;
+      assert zero matches in MCP server definitions or tool registries.
+  thresholds:
+    mcp_plan_tool_server_occurrences: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-041]
+
+- criterion_id: AC-S7-042
+  name: "V0: verify-loop invokes exactly one critic query() per verification run (no fan-out)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S7-23, R-doc05-S7-24]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The verify-loop with instrumented query() calls."
+    when: "A single verification run is triggered."
+    then:
+      - "Exactly one query() call is made to the critic model."
+      - "No asyncio.gather, concurrent.futures, or threading is used to fan out multiple critic calls."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Integration test: instrument query() with a call counter; run verify-loop once;
+      assert critic_query_call_count == 1.
+      Static scan: assert no asyncio.gather / concurrent.futures.as_completed in
+      verify-loop module.
+  thresholds:
+    critic_query_calls_per_single_run: 1
+    fan_out_primitives_in_verify_loop: 0
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "SDK query() instrumented with counter; no real HTTP calls."
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: reality}
+  test_ids: [T-S7-042]
+
+- criterion_id: AC-S7-042-NEG
+  name: "NEG: Call-count assertion correctly fires when query() is called twice (counter guard is real)"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S7-24]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A patched verify-loop that calls query() twice for one verification run."
+    when: "The integration test counter check runs."
+    then:
+      - "The call-count assertion fires and reports failure with critic_query_call_count == 2."
+      - "This confirms the counter guard is non-vacuous."
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Control: patch verify-loop to call query() twice; assert counter == 2;
+      assert the assertion 'critic_query_call_count == 1' fails.
+  thresholds:
+    double_call_detected: 1
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "SDK query() instrumented; patched verify-loop."
+  golden_path: false
+  verification_ladder:
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S7-042-NEG]
+
+- criterion_id: AC-S7-043
+  name: "V0 scope comment is present in the verify-loop module marking expansion items as NOT V0"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S7-23]
+  criticality: P2
+  blocking: false
+  behavior:
+    given: "The verify-loop module source file."
+    when: "The module's top-of-file or section comments are read."
+    then:
+      - "A comment block explicitly marks the expansion items (multi-lens panel, red-team turn, run_with_concurrency, race_with_timeout, plan-as-MCP-server) as NOT V0."
+      - "The comment references §3.7 ④ as its authority."
+  primary_oracle:
+    type: static_analysis
+    artifact: >
+      Read verify-loop module; assert comment containing 'NOT V0' and references to
+      expansion items present; assert '§3.7' reference in comment block.
+  thresholds:
+    not_v0_comment_present: 1
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+  test_ids: [T-S7-043]
+
+- criterion_id: AC-S7-044
+  name: "ruff + mypy --strict pass clean on the verify-loop module (no type errors, no lint violations)"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S7-01, R-doc05-S7-12, R-doc05-S7-20]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The verify-loop module and its direct dependencies."
+    when: "ruff check and mypy --strict are run."
+    then:
+      - "ruff reports zero violations."
+      - "mypy --strict reports zero errors."
+      - "This includes the Enum/Literal status type constraints (no 'verified'/'draft' in status type passes mypy)."
+  primary_oracle:
+    type: static_analysis
+    artifact: >
+      CI: uv run ruff check <verify_loop_module> && uv run mypy --strict <verify_loop_module>;
+      assert exit_code == 0 for both.
+  thresholds:
+    ruff_violations: 0
+    mypy_strict_errors: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S7-044]

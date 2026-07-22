@@ -1,0 +1,462 @@
+# Requirements — Doc 08 Experience, UI & Surfaces · §4.1 libs/contracts (import-time registry)
+#                                                  · §4.2 Pydantic-per-message (ChannelAction)
+# ID prefix: R-doc08-REG-NN
+# Authority: DOC-08 §4.1, §4.2
+# Status: qualified
+#
+# CANONICAL overrides applied:
+#   §1     — registry base class is ProxyMessage + MessageType (NOT ProxyEvent/EventType)
+#   §11.11 — per-field produce/consume graph-diff is also required in CI
+#   §12.9  — tile is OUTBOUND-ONLY; no TileAddress inbound model exists
+#   Signal-surface types (transcript/roster/speaking/boundary/barge-in/bot-status/
+#            meeting-end/channel-report) are EXPLICITLY out of assert_registry_closed() scope
+#   connect-page interactions are REST (§4.6), not WS — no Connect* WS models exist
+#
+# Criticality key:
+#   P0 — invariant; violation is a security or isolation failure; build-blocking
+#   P1 — shipping requirement; violation blocks release
+#   P2 — refinement; expected in V0 but not gating
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §4.1 — IMPORT-TIME REGISTRATION (metaclass / __init_subclass__)
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-REG-01
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.1 paragraph 2"
+  source_quote: >
+    Registration is not a convention you remember; it is enforced at import time
+    (a metaclass hook) and re-checked by a CI test and a boot-time fail-fast.
+  normalized_statement: >
+    WHEN a Python module that defines a ProxyMessage subclass with a declared
+    message_type ClassVar is imported THE SYSTEM SHALL automatically register that
+    subclass in CHANNEL_REGISTRY without requiring any explicit call outside
+    __init_subclass__; the registration SHALL be visible to all code that runs
+    after the import.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-REG-02
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.1 paragraph 2"
+  source_quote: >
+    Registration is not a convention you remember; it is enforced at import time
+    (a metaclass hook).
+  normalized_statement: >
+    WHEN a class that subclasses ProxyMessage is defined without declaring a
+    message_type ClassVar THE SYSTEM SHALL raise TypeError at class-construction
+    time (import time) before the class body is finalised; the incomplete subclass
+    SHALL NOT be added to CHANNEL_REGISTRY.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-REG-03
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.1 paragraph 2 (CANONICAL §1: duplicate registration raises)"
+  source_quote: >
+    Registration is not a convention you remember; it is enforced at import time
+    (a metaclass hook).
+  normalized_statement: >
+    WHEN a ProxyMessage subclass is defined with a message_type value that is
+    already present in CHANNEL_REGISTRY THE SYSTEM SHALL raise TypeError at
+    class-construction time; it SHALL NOT silently overwrite the prior registration
+    (last-wins is prohibited).
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §4.1 — SET-EQUALITY: assert_registry_closed()
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-REG-04
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.1 closure-check block"
+  source_quote: >
+    missing = set(MessageType) - set(CHANNEL_REGISTRY)
+    unknown = set(CHANNEL_REGISTRY) - set(MessageType)
+    if missing or unknown or unhandled or unprojected:
+        raise RuntimeError(...)
+  normalized_statement: >
+    WHEN assert_registry_closed() is called AND every MessageType value has
+    exactly one registered ProxyMessage subclass and no extra undeclared model
+    exists THE SYSTEM SHALL return without raising; WHEN any MessageType value
+    lacks a model OR any model is registered under a key not in MessageType THE
+    SYSTEM SHALL raise RuntimeError naming the violating entries.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-REG-05
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.1 closure-check block"
+  source_quote: "unhandled = INBOUND - set(MESSAGE_HANDLERS)"
+  normalized_statement: >
+    WHEN assert_registry_closed() is called AND any INBOUND MessageType has no
+    corresponding entry in MESSAGE_HANDLERS THE SYSTEM SHALL raise RuntimeError
+    naming the unhandled inbound type; with CHANNEL_ACTION as the sole INBOUND
+    type, a missing handler for CHANNEL_ACTION SHALL always trigger this error.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-REG-06
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.1 closure-check block"
+  source_quote: "unprojected = {t for t in OUTBOUND if not MESSAGE_PROJECTORS.get(t)}"
+  normalized_statement: >
+    WHEN assert_registry_closed() is called AND any OUTBOUND MessageType has no
+    registered projector in MESSAGE_PROJECTORS THE SYSTEM SHALL raise RuntimeError
+    naming the unprojected outbound type.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-REG-07
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.1 closure-check block"
+  source_quote: "if missing or unknown or unhandled or unprojected: raise RuntimeError(...)"
+  normalized_statement: >
+    WHEN assert_registry_closed() detects multiple simultaneous defect categories
+    (missing model, undeclared model, unhandled inbound, unprojected outbound)
+    THE SYSTEM SHALL raise exactly one RuntimeError whose message names all
+    defect categories in a single call; it SHALL NOT raise one error per defect
+    or stop at the first category found.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §4.1 — CI GATE
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-REG-08
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.1 CI gate paragraph"
+  source_quote: >
+    CI gate: test_contract_graph_closed() imports libs.contracts (triggering
+    __init_subclass__) and calls assert_registry_closed(). A new MessageType
+    with no model fails the merge.
+  normalized_statement: >
+    THE SYSTEM SHALL include a CI test named test_contract_graph_closed() that
+    imports libs.contracts (triggering all __init_subclass__ hooks) and calls
+    assert_registry_closed(); the test SHALL fail with a non-zero exit code
+    whenever assert_registry_closed() raises, blocking the merge.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §4.1 — BOOT-TIME FAIL-FAST
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-REG-09
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.1 Boot gate paragraph"
+  source_quote: "Boot gate: the FastAPI lifespan calls assert_registry_closed() before accepting traffic."
+  normalized_statement: >
+    WHEN the FastAPI application lifespan startup hook executes THE SYSTEM SHALL
+    call assert_registry_closed() before accepting any WebSocket or HTTP traffic;
+    if assert_registry_closed() raises THE SYSTEM SHALL propagate the error, bind
+    no listeners, and exit with a non-zero exit code.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §4.1 — requires_meeting_scope DEFAULT (Law 3: Human control — default reject)
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-REG-10
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.1 paragraph 3 (Law 3: Human control)"
+  source_quote: >
+    meeting scope default is reject (cannot opt out of isolation)
+  normalized_statement: >
+    WHEN a ProxyMessage subclass is defined without an explicit
+    requires_meeting_scope attribute THE SYSTEM SHALL default requires_meeting_scope
+    to True; a subclass may only opt out by explicitly setting
+    requires_meeting_scope = False.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §4.1 — SIGNAL-SURFACE TYPES EXCLUDED FROM CLOSURE CHECK
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-REG-11
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.1 final paragraph"
+  source_quote: >
+    Signal-surface types are OUT of this closure check's scope. Doc 02's signal
+    surface — transcript/roster/speaking/boundary/barge-in/bot-status/meeting-end/
+    channel-report — are in-process internal events (02→03/04), not client-facing
+    ProxyMessages. They are outside assert_registry_closed(). A builder must NOT
+    register them as ProxyMessages.
+  normalized_statement: >
+    AT ALL TIMES the Doc 02 signal-surface event types (transcript, roster,
+    speaking, boundary, barge-in, bot-status, meeting-end, channel-report) SHALL
+    NOT be registered in CHANNEL_REGISTRY as ProxyMessage subclasses; registering
+    any signal-surface type as a ProxyMessage SHALL be treated as a build violation.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §4.1 — PER-FIELD PRODUCE/CONSUME GRAPH-DIFF (CANONICAL §11.11)
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-REG-12
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.1 V0 scope paragraph (CANONICAL §11.11)"
+  source_quote: >
+    add per-field produce/consume field-diff to CI (over MESSAGE_PRODUCERS).
+  normalized_statement: >
+    THE SYSTEM SHALL include a CI step that computes a per-field produce/consume
+    graph-diff over MESSAGE_PRODUCERS; WHEN a field is present in MESSAGE_PRODUCERS
+    but has no registered consumer THE CI STEP SHALL report the orphaned field name
+    and its parent model, and SHALL exit non-zero, blocking the merge.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-REG-13
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.1 V0 scope paragraph (CANONICAL §11.11 — alias policy)"
+  source_quote: >
+    add per-field produce/consume field-diff to CI (over MESSAGE_PRODUCERS).
+  normalized_statement: >
+    THE CI per-field graph-diff step SHALL also detect and reject deprecated field
+    aliases (.kind instead of .type, verified/draft string literals instead of
+    EnvelopeStatus, dm? instead of dm_available); WHEN a deprecated alias is found
+    THE CI STEP SHALL name the alias and the canonical replacement, and SHALL exit
+    non-zero.
+  requirement_type: contract
+  criticality: P2
+  testability: executable
+  status: qualified
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §4.2 — meeting_id UUID VALIDATION BEFORE DB LOOKUP
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-REG-14
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.2 paragraph 2"
+  source_quote: >
+    meeting_id: UUID on the meeting-scoped message. A non-UUID is rejected before
+    any DB lookup happens — this is precisely what makes tenant isolation sound.
+  normalized_statement: >
+    WHEN a ChannelAction payload arrives at the WS funnel THE SYSTEM SHALL validate
+    meeting_id as a well-formed UUID using the Pydantic UUID type BEFORE issuing
+    any database query; a non-UUID value SHALL cause a ValidationError that aborts
+    dispatch without any DB lookup occurring.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §4.2 — FREE-TEXT FIELD LENGTH BOUND
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-REG-15
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.2 paragraph 3"
+  source_quote: "Field(max_length=N) on every free-text field"
+  normalized_statement: >
+    WHEN the ChannelAction model is defined THE SYSTEM SHALL annotate the arg
+    field with Field(max_length=2_000); a value exceeding 2000 characters SHALL
+    cause a ValidationError citing the arg field before any further processing.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-REG-16
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.2 paragraph 3"
+  source_quote: "plus a socket-level payload cap. Together they bound DoS."
+  normalized_statement: >
+    THE SYSTEM SHALL enforce a socket-level payload cap on every inbound WebSocket
+    message; a raw message whose byte length exceeds the configured cap SHALL be
+    dropped (connection closed or error frame sent) BEFORE the bytes are passed
+    to Pydantic for parsing; the Pydantic model constructor SHALL NOT be invoked
+    for any over-cap message.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §4.2 — SURFACE FIELD: CLOSED LITERAL (ActionSurface)
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-REG-17
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.2 paragraph 4 + ChannelAction model"
+  source_quote: >
+    surface: ActionSurface  # Literal["voice", "chat", "canvas", "screen"] — NO tile (outbound only)
+  normalized_statement: >
+    WHEN a ChannelAction payload is parsed THE SYSTEM SHALL validate the surface
+    field against a closed Literal set of exactly four values ("voice", "chat",
+    "canvas", "screen"); any value not in this set (including "tile" and any
+    arbitrary string) SHALL cause a ValidationError on the surface field; there
+    SHALL be no if/else fall-through for unrecognised surfaces.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §4.2 — ACTION FIELD: CLOSED LITERAL
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-REG-18
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.2 ChannelAction model"
+  source_quote: >
+    action: Literal[
+        "share_screen", "stop_share", "walkthrough_on", "walkthrough_off",
+        "catch_me_up", "where_are_we", "shorter", "capabilities", "show_your_work",
+    ]
+  normalized_statement: >
+    WHEN a ChannelAction payload is parsed THE SYSTEM SHALL validate the action
+    field against a closed Literal set of exactly nine values: "share_screen",
+    "stop_share", "walkthrough_on", "walkthrough_off", "catch_me_up",
+    "where_are_we", "shorter", "capabilities", "show_your_work"; any value not in
+    this set SHALL cause a ValidationError on the action field; there SHALL be no
+    if/else fall-through or default handler for unrecognised actions.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §4.2 — SINGLE CENTRAL VALIDATION POINT
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-REG-19
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.2 paragraph 1"
+  source_quote: >
+    validated once, centrally, at the funnel (§4.3) — never re-parsed ad hoc
+    in a handler.
+  normalized_statement: >
+    WHEN an inbound ChannelAction payload traverses the full dispatch chain from
+    WS funnel through handler THE SYSTEM SHALL invoke Pydantic model construction
+    or model_validate exactly once (at the funnel); no handler module SHALL call
+    ChannelAction.model_validate, ChannelAction(**...) or json.loads on the same
+    raw payload.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §4.2 — canvas_id UUID AND SERVER-SIDE RESOLUTION
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-REG-20
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.2 ChannelAction model"
+  source_quote: "canvas_id: UUID | None = None"
+  normalized_statement: >
+    WHEN a ChannelAction payload contains a non-null canvas_id value THE SYSTEM
+    SHALL validate canvas_id as a well-formed UUID using the Pydantic UUID type;
+    a non-UUID canvas_id value SHALL cause a ValidationError; furthermore, the
+    canvas's owning meeting SHALL be resolved server-side from the DB by canvas_id
+    key and SHALL NOT be inferred from the client-supplied meeting_id for
+    authorisation purposes.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §4.2 — STRUCTURAL NEGATIVES: NO TileAddress, NO Connect* WS MODELS
+# ══════════════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-REG-21
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.2 final paragraph"
+  source_quote: >
+    There is no TileAddress model ... the '◉ listening to Maya' caption is an
+    outbound tile.state render driven server-side (not a tile→backend message).
+  normalized_statement: >
+    AT ALL TIMES libs/contracts SHALL NOT contain a ProxyMessage subclass named
+    TileAddress or any class that encodes a tile-originated inbound WS message;
+    the tile surface is outbound-only and generates no inbound WS traffic; the
+    absence SHALL be structural (the class definition must not exist), not a
+    runtime gate.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-REG-22
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.2 final paragraph"
+  source_quote: >
+    there are no Connect* models: ... the connect readiness poll / install-start
+    are REST (§4.6).
+  normalized_statement: >
+    AT ALL TIMES libs/contracts SHALL NOT contain any ProxyMessage subclass whose
+    name begins with "Connect" or that represents a connect-page interaction as a
+    WS message; connect-page interactions (readiness poll, install-start) are REST
+    endpoints defined in §4.6 and SHALL NOT appear in the WS message registry.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified

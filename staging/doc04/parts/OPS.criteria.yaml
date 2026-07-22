@@ -1,0 +1,800 @@
+# OPS.criteria.yaml — Doc 04 (Proxy Orchestrator) — §3.8 + §3.9
+# Acceptance criteria for the Reconcile Sweep (§3.8) and ManagedResource / Sandbox Lifecycle (§3.9).
+# ID scheme: AC-OPS-NNN  (NEG pairs: AC-OPS-NNN-NEG)
+#
+# dependency_class values:
+#   null         — pure in-process / structural; zero external systems
+#   db:postgres  — reconcile reads meeting end-status from Postgres
+#   vendor:e2b   — E2B sandbox provision / destroy / health / list calls
+#
+# NEG-pair rule: every non-null dependency_class criterion has a paired AC-OPS-NNN-NEG.
+# db:postgres criteria → ladder includes integration + negative.
+# vendor:e2b criteria  → ladder includes reality + negative.
+# null criteria        → ladder: [lint, unit].
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.8 · Endpoint security — RECONCILE_TOKEN bearer gate
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OPS-001
+  name: "POST /internal/reconcile rejects requests without valid RECONCILE_TOKEN"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-OPS-01]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The reconcile endpoint is mounted and RECONCILE_TOKEN is set"
+    when: "A POST /internal/reconcile arrives with a missing or invalid bearer token"
+    then:
+      - "The server responds with HTTP 401"
+      - "run_reconcile_sweep() is never invoked"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test sends unauthenticated request; asserts status_code == 401 and sweep call count == 0"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-OPS-001]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-OPS-001-NEG
+  name: "NEG: valid RECONCILE_TOKEN allows POST /internal/reconcile through"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-OPS-01]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The reconcile endpoint is mounted and RECONCILE_TOKEN='secret' is configured"
+    when: "A POST /internal/reconcile arrives with Authorization: Bearer secret"
+    then:
+      - "The server does not return 401"
+      - "run_reconcile_sweep() is called once"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test sends authenticated request; asserts status_code != 401 and sweep call count == 1"
+  thresholds: {}
+  fault_model_refs: []
+  test_ids: [T-OPS-001-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.8 · Single shared function — no drift between prod and dev paths
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OPS-002
+  name: "Prod HTTP path and dev in-process interval both call the same run_reconcile_sweep function"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-OPS-02, R-doc04-OPS-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The reconcile HTTP handler and the dev in-process interval are both configured"
+    when: "Each path triggers a reconcile"
+    then:
+      - "Both paths call the identical run_reconcile_sweep function object (not a copy)"
+      - "No reconcile logic duplicated outside run_reconcile_sweep"
+  primary_oracle:
+    type: deterministic
+    artifact: "Static analysis / unit test asserts the HTTP handler and dev interval both reference the same run_reconcile_sweep symbol; grep for sweep steps outside that function returns zero matches"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-OPS-002]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.8 · Step isolation — one failure does not abort the sweep
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OPS-003
+  name: "Reconcile step failure does not abort subsequent steps"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc04-OPS-04]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "run_reconcile_sweep() is called and deps.mark_stale_operations_interrupted raises an exception"
+    when: "The sweep executes"
+    then:
+      - "deps.sandbox_orchestrator.reconcile is still called"
+      - "deps.notes_retention.reconcile is still called"
+      - "The returned dict contains exactly one error entry naming 'stale-harnesses'"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test patches step 1 to raise; asserts steps 2 and 3 were called and errors == ['stale-harnesses: <exc>']"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-OPS-003]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-OPS-003-MID
+  name: "Middle step failure still executes step 3"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc04-OPS-04]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "run_reconcile_sweep() is called and deps.sandbox_orchestrator.reconcile raises an exception"
+    when: "The sweep executes"
+    then:
+      - "deps.mark_stale_operations_interrupted was already called (step 1 completed)"
+      - "deps.notes_retention.reconcile is still called after step 2 fails"
+      - "The returned dict error list contains exactly one entry naming 'meeting-sandboxes'"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test patches step 2 to raise; asserts step 3 was called and errors == ['meeting-sandboxes: <exc>']"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-OPS-003-MID]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.8 · Return value — {"errors": []} on clean sweep
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OPS-004
+  name: "run_reconcile_sweep returns {errors: []} when all steps succeed"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-OPS-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "All three reconcile steps are patched to succeed without raising"
+    when: "run_reconcile_sweep(deps) is awaited"
+    then:
+      - "The returned value is a dict with key 'errors'"
+      - "The value of 'errors' is an empty list"
+      - "No other keys are present in the returned dict"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test asserts return value == {'errors': []}"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-OPS-004]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-OPS-004-FAIL
+  name: "run_reconcile_sweep returns error strings labeled with step name and exception"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-OPS-05, R-doc04-OPS-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Step 'stale-harnesses' raises ValueError('boom') and other steps succeed"
+    when: "run_reconcile_sweep(deps) is awaited"
+    then:
+      - "The returned dict equals {'errors': ['stale-harnesses: boom']}"
+      - "Error string format is '{step_name}: {exception_message}'"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test patches step 1 to raise ValueError('boom'); asserts return == {'errors': ['stale-harnesses: boom']}"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-OPS-004-FAIL]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.8 · Three ordered steps — stale-harnesses, meeting-sandboxes, notes-retention
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OPS-005
+  name: "Reconcile sweep calls all three steps in the canonical order"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-OPS-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "run_reconcile_sweep() is called with all three deps steps patched to succeed"
+    when: "The sweep executes"
+    then:
+      - "mark_stale_operations_interrupted is called first"
+      - "sandbox_orchestrator.reconcile is called second"
+      - "notes_retention.reconcile is called third"
+      - "Each step is called exactly once"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test records call order via side_effect; asserts call_order == ['stale-harnesses', 'meeting-sandboxes', 'notes-retention'] with each count == 1"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-OPS-005]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.9 · ensure_running idempotency — no double-provision
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OPS-006
+  name: "ensure_running returns existing sandbox without re-provisioning when healthy"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc04-OPS-09, R-doc04-OPS-11]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A meeting_id already has a sandbox row in the repo and health() returns ok"
+    when: "ensure_running() is called a second time for the same meeting_id"
+    then:
+      - "provision() is NOT called"
+      - "The returned Meta equals the previously persisted Meta"
+      - "At most one sandbox exists for the meeting_id after both calls"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test calls ensure_running() twice with in-memory repo and mock provider; asserts provision call count == 1 (from first call only) and both returns are equivalent"
+  thresholds: {violations_allowed: 0, double_provisions_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-OPS-006]
+  dependency_class: vendor:e2b
+  mock_boundary: "E2B provider replaced by in-memory fake with call counters"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+
+- criterion_id: AC-OPS-006-NEG
+  name: "NEG: ensure_running calls provision exactly once when no sandbox exists"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-OPS-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "No sandbox row exists for the meeting_id in the repo"
+    when: "ensure_running() is called once"
+    then:
+      - "provision() is called exactly once"
+      - "The repo upsert is called with the returned Meta"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test with empty in-memory repo; asserts provision call count == 1 and repo.upsert called once"
+  thresholds: {}
+  fault_model_refs: []
+  test_ids: [T-OPS-006-NEG]
+  dependency_class: vendor:e2b
+  mock_boundary: "E2B provider replaced by in-memory fake"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: negative}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.9 · gone/transient health → fresh provision (not restart)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OPS-007
+  name: "ensure_running provisions fresh sandbox when existing sandbox health returns gone"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-OPS-10, R-doc04-OPS-19]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A sandbox row exists for the meeting_id and health() returns gone"
+    when: "ensure_running() is called"
+    then:
+      - "provision() is called to create a fresh sandbox"
+      - "repo.upsert is called with the new Meta"
+      - "No restart or reconnect to the gone sandbox is attempted"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: mock health returns gone; asserts provision call count == 1 and no restart/reconnect calls"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-OPS-007]
+  dependency_class: vendor:e2b
+  mock_boundary: "E2B provider replaced by in-memory fake; health() stubbed to return gone"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+
+- criterion_id: AC-OPS-007-NEG
+  name: "NEG: ensure_running provisions fresh sandbox when existing sandbox health returns transient"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-OPS-10]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A sandbox row exists for the meeting_id and health() returns transient"
+    when: "ensure_running() is called"
+    then:
+      - "provision() is called to create a fresh sandbox"
+      - "The transient sandbox is not returned to the caller as healthy"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: mock health returns transient; asserts provision call count == 1 and returned Meta is from fresh provision"
+  thresholds: {}
+  fault_model_refs: []
+  test_ids: [T-OPS-007-NEG]
+  dependency_class: vendor:e2b
+  mock_boundary: "E2B provider replaced by in-memory fake; health() stubbed to return transient"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: negative}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.9 · destroy tolerates 404
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OPS-008
+  name: "destroy() does not raise when E2B returns 404 (sandbox already gone)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-OPS-12]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The E2B provider returns a 404 / not-found error for the sandbox"
+    when: "destroy() is called on that sandbox Meta"
+    then:
+      - "destroy() returns normally (no exception raised to caller)"
+      - "The 404 is treated as confirmation the sandbox is gone"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: mock E2B raises HTTPError(404); asserts destroy() does not raise and returns None"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-OPS-008]
+  dependency_class: vendor:e2b
+  mock_boundary: "E2B provider replaced by in-memory fake that raises 404"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+
+- criterion_id: AC-OPS-008-NEG
+  name: "NEG: destroy() does raise when E2B returns a non-404 error"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-OPS-12]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The E2B provider returns a 500 server error for the destroy call"
+    when: "destroy() is called"
+    then:
+      - "destroy() propagates the exception to its caller"
+      - "Only 404 is swallowed; other errors are not silently absorbed"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: mock E2B raises HTTPError(500); asserts destroy() re-raises the exception"
+  thresholds: {}
+  fault_model_refs: []
+  test_ids: [T-OPS-008-NEG]
+  dependency_class: vendor:e2b
+  mock_boundary: "E2B provider replaced by in-memory fake that raises 500"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: negative}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.9 · health() is read-only
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OPS-009
+  name: "health() produces no side effects — no provision, destroy, or state mutations"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-OPS-13]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A sandbox Meta for a live sandbox"
+    when: "health() is called"
+    then:
+      - "The provider's provision() and destroy() are not called"
+      - "health() returns one of ok, transient, or gone"
+      - "No external write operations occur as a result of the health call"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: spy on provision and destroy; call health(); assert both spy call counts == 0 and return value in {ok, transient, gone}"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-OPS-009]
+  dependency_class: vendor:e2b
+  mock_boundary: "E2B provider replaced by in-memory fake with spy methods"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+
+- criterion_id: AC-OPS-009-NEG
+  name: "NEG: health() returns gone for a sandbox that E2B reports as non-existent"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-OPS-13]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "E2B reports the sandbox as not found (sandbox terminated)"
+    when: "health() is called"
+    then:
+      - "health() returns gone (not ok or transient)"
+      - "health() does not raise an exception"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: mock E2B returns not-found; asserts health() == gone and no exception"
+  thresholds: {}
+  fault_model_refs: []
+  test_ids: [T-OPS-009-NEG]
+  dependency_class: vendor:e2b
+  mock_boundary: "E2B provider replaced by in-memory fake returning not-found"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: negative}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.9 · reconcile: list → orphan/TTL check → destroy (tolerates 404)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OPS-010
+  name: "reconcile() destroys sandboxes for ended meetings (orphan check)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-OPS-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "list_sandboxes() returns two sandboxes: one for an active meeting, one for an ended meeting"
+    when: "reconcile() is called"
+    then:
+      - "destroy() is called for the sandbox belonging to the ended meeting"
+      - "destroy() is NOT called for the sandbox belonging to the active meeting"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: mock list_sandboxes returns two metas; mock _is_orphan_or_past_ttl returns True for ended-meeting meta only; assert destroy called once with ended-meeting meta"
+  thresholds: {violations_allowed: 0, live_sandboxes_destroyed: 0}
+  fault_model_refs: []
+  test_ids: [T-OPS-010]
+  dependency_class: db:postgres
+  mock_boundary: "E2B provider and Postgres replaced by in-memory fakes; meeting status driven by fixture data"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+
+- criterion_id: AC-OPS-010-NEG
+  name: "NEG: reconcile() does not destroy sandboxes for active meetings"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-OPS-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "list_sandboxes() returns only sandboxes for active meetings within TTL"
+    when: "reconcile() is called"
+    then:
+      - "destroy() is never called"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: all metas have _is_orphan_or_past_ttl == False; assert destroy call count == 0"
+  thresholds: {}
+  fault_model_refs: []
+  test_ids: [T-OPS-010-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "E2B provider and Postgres replaced by in-memory fakes"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: negative}
+
+- criterion_id: AC-OPS-010-TTL
+  name: "reconcile() destroys sandboxes past TTL even for non-ended meetings"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc04-OPS-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A sandbox is labelled for an active meeting but its age exceeds TTL"
+    when: "reconcile() is called"
+    then:
+      - "destroy() is called for that sandbox"
+      - "The TTL boundary is evaluated by age, not by meeting status alone"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: mock _is_orphan_or_past_ttl returns True based on age > TTL even though meeting is not ended; assert destroy called once"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-OPS-010-TTL]
+  dependency_class: vendor:e2b
+  mock_boundary: "E2B provider replaced by in-memory fake; TTL computation driven by injected clock"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+
+- criterion_id: AC-OPS-010-TTL-NEG
+  name: "NEG: reconcile() 404 on destroy during cron does not abort remaining sandboxes"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-OPS-14, R-doc04-OPS-12]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "list_sandboxes() returns three orphaned sandboxes and destroy() raises 404 on the first"
+    when: "reconcile() is called"
+    then:
+      - "destroy() is attempted for all three sandboxes"
+      - "The 404 on the first sandbox does not abort the loop"
+      - "reconcile() does not raise an exception"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: mock destroy raises 404 for first meta; assert destroy called 3 times and reconcile() returns normally"
+  thresholds: {}
+  fault_model_refs: []
+  test_ids: [T-OPS-010-TTL-NEG]
+  dependency_class: vendor:e2b
+  mock_boundary: "E2B provider replaced by in-memory fake with selective 404 injection"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: negative}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.9 · E2B-native timeout set at provision time
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OPS-011
+  name: "provision() sets E2B-native timeout/maxRunDuration on every sandbox"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-OPS-15]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A ProvisionSpec for a new meeting sandbox"
+    when: "provision() is called"
+    then:
+      - "The E2B sandbox creation call includes a non-zero timeout/maxRunDuration parameter"
+      - "The timeout value is derived from the ProvisionSpec or a configured default, not hardcoded as zero or omitted"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: capture kwargs passed to E2B sandbox create; assert timeout/maxRunDuration > 0 in captured kwargs"
+  thresholds: {violations_allowed: 0, sandboxes_without_timeout: 0}
+  fault_model_refs: []
+  test_ids: [T-OPS-011]
+  dependency_class: vendor:e2b
+  mock_boundary: "E2B client replaced by spy that captures creation kwargs"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+
+- criterion_id: AC-OPS-011-NEG
+  name: "NEG: provision() without timeout parameter would omit E2B self-reap guarantee"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-OPS-15]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "provision() is patched to omit the timeout kwarg"
+    when: "The test inspects the E2B creation call"
+    then:
+      - "timeout/maxRunDuration is absent from the creation kwargs"
+      - "This confirms the positive test is actually verifying the timeout parameter"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: patch provision to call E2B without timeout; assert timeout key absent from captured kwargs (validates the positive oracle)"
+  thresholds: {}
+  fault_model_refs: []
+  test_ids: [T-OPS-011-NEG]
+  dependency_class: vendor:e2b
+  mock_boundary: "E2B client replaced by spy; provision patched to omit timeout"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: negative}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.9 · Explicit destroy on meeting-end (ordered close)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OPS-012
+  name: "Ordered close sequence calls destroy() on the meeting sandbox"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-OPS-16]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A meeting with an active sandbox"
+    when: "The ordered close sequence (§3.16) is executed"
+    then:
+      - "destroy() is called on the sandbox during the close sequence"
+      - "destroy() is called before the close sequence completes (not deferred to cron)"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: run_close() with mock sandbox lifecycle; assert destroy() called once before run_close() returns"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-OPS-012]
+  dependency_class: vendor:e2b
+  mock_boundary: "E2B provider replaced by in-memory fake with call recording"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+
+- criterion_id: AC-OPS-012-NEG
+  name: "NEG: ordered close without sandbox lifecycle call leaves sandbox running"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-OPS-16]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "run_close() is patched to skip the sandbox destroy call"
+    when: "The close sequence completes"
+    then:
+      - "destroy() call count == 0"
+      - "This confirms the positive test exercises the real destroy path"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: patch out destroy in run_close; assert destroy call count == 0 (oracle validation)"
+  thresholds: {}
+  fault_model_refs: []
+  test_ids: [T-OPS-012-NEG]
+  dependency_class: vendor:e2b
+  mock_boundary: "E2B provider replaced by in-memory fake; destroy patched out of run_close"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: negative}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.9 · No state machine — structural absence check
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OPS-013
+  name: "No provisioning/running/stopped/failed state machine exists in sandbox lifecycle code"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-OPS-17]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The sandbox lifecycle module source is available"
+    when: "Static analysis scans the module for state machine patterns"
+    then:
+      - "No enum, class, or variable named with provisioning/running/stopped/failed appears in the sandbox lifecycle module"
+      - "No branching on state fields named 'status' or 'state' within the sandbox lifecycle module"
+  primary_oracle:
+    type: deterministic
+    artifact: "Lint / grep over sandbox lifecycle module: assert zero matches for /provisioning|stopped|failed/ in state-transition context; assert no SandboxState enum"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-OPS-013]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.9 · Reconcile is cost optimization — correctness held by E2B-native timeout
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OPS-014
+  name: "Skipped reconcile tick does not cause permanent sandbox leak"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc04-OPS-18, R-doc04-OPS-15]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The orchestrator dies after provisioning a sandbox and before calling destroy(), and reconcile is never called again"
+    when: "The E2B-native timeout elapses"
+    then:
+      - "E2B self-reaps the sandbox (verified via E2B audit log or provider capability assertion)"
+      - "No sandbox runs permanently beyond its provisioned timeout regardless of orchestrator state"
+  primary_oracle:
+    type: deterministic
+    artifact: "Reality test or provider capability assertion: E2B sandbox with maxRunDuration set is confirmed terminated after timeout with no destroy call; OR unit test asserts timeout kwarg was passed (AC-OPS-011 suffices for static proof)"
+  thresholds: {permanent_leaks_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-OPS-014]
+  dependency_class: vendor:e2b
+  mock_boundary: "E2B client replaced by time-accelerated fake that self-terminates after timeout"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+
+- criterion_id: AC-OPS-014-NEG
+  name: "NEG: sandbox without E2B-native timeout would leak if orchestrator dies and reconcile is skipped"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc04-OPS-18]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "provision() is patched to omit timeout; orchestrator is killed; reconcile never fires"
+    when: "Time passes"
+    then:
+      - "The sandbox continues to run (no self-reap occurs)"
+      - "This confirms the timeout parameter is the load-bearing safety net"
+  primary_oracle:
+    type: deterministic
+    artifact: "Reality/simulation test: sandbox without timeout remains active after timeout-equivalent delay; confirms the positive test's reliance on the timeout kwarg"
+  thresholds: {}
+  fault_model_refs: []
+  test_ids: [T-OPS-014-NEG]
+  dependency_class: vendor:e2b
+  mock_boundary: "E2B client replaced by time-accelerated fake that only self-terminates when timeout kwarg is set"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: negative}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.8 · Cost-driven vs availability-critical placement
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OPS-015
+  name: "Credential-refresh loops are not placed in the Scheduler sweep"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-OPS-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The reconcile sweep definition in run_reconcile_sweep() is examined"
+    when: "Static analysis inspects the step list"
+    then:
+      - "No STT credential refresh step appears in the run_reconcile_sweep step list"
+      - "No Recall credential refresh step appears in the run_reconcile_sweep step list"
+  primary_oracle:
+    type: deterministic
+    artifact: "Lint / code inspection: assert run_reconcile_sweep contains exactly three steps (stale-harnesses, meeting-sandboxes, notes-retention) and no credential-refresh step"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-OPS-015]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
