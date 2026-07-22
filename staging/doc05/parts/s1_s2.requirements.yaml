@@ -1,0 +1,727 @@
+# Doc 05 (Workroom) — §1 + §2 requirements slice
+# Coverage: §1 (The end goal) and §2.1–2.6 (The design)
+# ID scheme: R-doc05-S1-NN for §1 items, R-doc05-S2-NN for §2 items
+# Authority document: DOC-05
+
+# ── §1 · The end goal ──────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S1-01
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§1 paragraph 1"
+  source_quote: "one dynamic pipeline — no task-type router, no intake classifier — where quick asks are answered fast (a few seconds; ~1–2s on the direct path) and large tasks are executed with plan-artifact discipline and SEQUENTIAL subtasks, the difference decided entirely by the engine's own judgment."
+  normalized_statement: >
+    WHEN the Workroom receives a task
+    THE SYSTEM SHALL route it through a single dynamic pipeline with no task-type router
+    and no intake classifier; the engine's own judgment SHALL determine whether to respond
+    quickly or engage plan-artifact discipline with sequential subtasks.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S1-02
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§1 paragraph 2"
+  source_quote: "DO NOT BUILD AN AGENT. ADOPT ONE. The Workroom is Claude Code's engine, unmodified — the Claude Agent SDK is that engine packaged as a library."
+  normalized_statement: >
+    WHEN the Workroom is implemented
+    THE SYSTEM SHALL use the Claude Agent SDK as the unmodified engine (loop, self-scaling
+    effort, native tools, subagents, Plan Mode/todo tools, session resume) and SHALL NOT
+    re-implement agent internals such as routing, planning-within-a-turn, or effort control.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S1-03
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§1 paragraph 2"
+  source_quote: "Everything this document adds is configuration and a thin orchestration shell, never modification: a role prompt, a bigger toolbelt, an output format, safety/cost floors, and a big-build discipline the engine itself chooses to pick up."
+  normalized_statement: >
+    WHEN the Workroom wraps the Claude Agent SDK
+    THE SYSTEM SHALL add only: a role prompt, a declared toolbelt, an output format,
+    safety/cost floors, and the big-build discipline shell; it SHALL NOT modify SDK
+    internals or re-create any agent-internal behavior.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S1-04
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§1 paragraph 2"
+  source_quote: "If any part of an implementation starts re-creating agent internals (routing, planning-within-a-turn, effort control), it is wrong."
+  normalized_statement: >
+    WHEN the Workroom implementation is reviewed
+    THE SYSTEM SHALL contain no re-implementation of SDK agent internals including routing
+    logic, planning-within-a-turn logic, or effort-control logic; any such code is a
+    disqualifying defect.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S1-05
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§1 paragraph 3"
+  source_quote: "V0 core is sequential — cross-worker fan-out is Expansion, CANONICAL §12.4."
+  normalized_statement: >
+    WHEN the V0 Workroom executes a large task
+    THE SYSTEM SHALL execute subtasks sequentially in one resumed SDK session; cross-worker
+    fan-out SHALL NOT be present in V0 and is deferred to Expansion.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S1-06
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§1 paragraph 4 (concrete example 3)"
+  source_quote: "Build the rate-limiter we discussed → plan artifact → critic pass → SEQUENTIAL subtasks in the sandbox (checkpoint → git read-back → publish-or-fail) → a separate verifier that requires running evidence → a staged code-change draft with a failing-then-passing test as its receipt."
+  normalized_statement: >
+    WHEN the engine judges a task as a large build
+    THE SYSTEM SHALL produce a plan artifact, execute a critic pass, run sequential subtasks
+    with checkpoint + git read-back + publish-or-fail, invoke a separate verifier requiring
+    running evidence, and return a staged code-change draft with a test receipt; it SHALL
+    NOT skip any of these steps.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S1-07
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§1 paragraph 4 (concrete example 4)"
+  source_quote: "A mid-task correction ('100/min, not 60') lands into the live plan; execution continues, no restart."
+  normalized_statement: >
+    WHEN a human correction arrives mid-task
+    THE SYSTEM SHALL apply the correction to the live plan artifact and continue execution
+    without restarting the SDK session or discarding completed subtasks.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S1-08
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§1 paragraph 5"
+  source_quote: "Not this layer: deciding whether/when to speak (Doc 04) · judging proactive worth (Doc 06) · touching the canonical repo copy · executing anything outside its sandbox."
+  normalized_statement: >
+    WHEN the Workroom operates
+    THE SYSTEM SHALL NOT decide whether or when to speak (Doc 04 responsibility), judge
+    proactive worth (Doc 06 responsibility), touch the canonical repo copy, or execute
+    any action outside its designated sandbox.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §2.1 · How quick asks are quick (the exact mechanics) ─────────────────────
+
+- requirement_id: R-doc05-S2-01
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.1 paragraph 1"
+  source_quote: "The fastest answers (~1–2s) are the Orchestrator's direct path — host-side code_intel (graph/LSP), no Workroom sandbox at all (CANONICAL §12.2)."
+  normalized_statement: >
+    WHEN a quick ask is answered via the host-side code_intel direct path (no sandbox)
+    THE SYSTEM SHALL return the response within approximately 1–2 seconds end-to-end.
+  requirement_type: performance
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-02
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.1 paragraph 1"
+  source_quote: "A quick ask that does reach the Workroom sandbox is 'a few seconds.'"
+  normalized_statement: >
+    WHEN a quick ask reaches the Workroom sandbox
+    THE SYSTEM SHALL return the response within a few seconds (single-digit seconds);
+    sandbox cold-start SHALL NOT occur because the sandbox is pre-provisioned.
+  requirement_type: performance
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-03
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.1 paragraph 1"
+  source_quote: "The engine spends ~zero thinking on trivial asks natively (adaptive effort — the same behavior Claude Code shows daily: easy question, near-instant answer). We add nothing here; anything we added would slow it down."
+  normalized_statement: >
+    WHEN the Workroom system prompt and toolbelt are configured for a quick ask
+    THE SYSTEM SHALL add no routing, classification, or overhead that would increase
+    time-to-first-token for trivial asks; the SDK's native adaptive effort SHALL be the
+    sole effort-control mechanism.
+  requirement_type: performance
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-04
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.1 paragraph 1"
+  source_quote: "Tools are millisecond-fast: one ripgrep over the checkout (via the sandbox tool transport, §3.5); 'where is X' from the map (host-side code_intel, already in context)."
+  normalized_statement: >
+    WHEN the Workroom executes a lookup tool call
+    THE SYSTEM SHALL complete the tool execution (ripgrep or host-side map query) in
+    millisecond-range latency; no tool on the critical lookup path SHALL have observable
+    cold-start overhead.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-05
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.1 paragraph 1"
+  source_quote: "The environment has no cold anything (our entire speed contribution): the sandbox is already running (meeting-creation pre-provisioned, §3.9), the system prompt + map are prompt-cached (cached tokens process fast → low first-token latency), the language server is warm on the host-side code_intel service."
+  normalized_statement: >
+    WHEN a task arrives during a meeting
+    THE SYSTEM SHALL have zero cold-start latency because: the E2B sandbox is pre-provisioned
+    at meeting creation, the system prompt and map are prompt-cached, and the host-side
+    code_intel language server is warm; no cold-boot of any component SHALL occur mid-meeting.
+  requirement_type: performance
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-06
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.1 paragraph 1 (validation item)"
+  source_quote: "Validation item (top of the list for the live gate): the SLA (a few seconds; ~1–2s on the direct path). If measurement misses it, the tuning order is: prompt bias → speculative quick-answer layer (a researched, lossless ~20% latency pattern) → only then anything else. Never a router."
+  normalized_statement: >
+    WHEN the live gate validates latency
+    THE SYSTEM SHALL measure end-to-end SLA as the top gate item; if the SLA is missed
+    the prescribed tuning order SHALL be: first prompt bias adjustment, then speculative
+    quick-answer layer, then anything else; a router SHALL NEVER be added as a fix.
+  requirement_type: performance
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §2.2 · The disposition ─────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S2-07
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.2 paragraph 1"
+  source_quote: "Its opening line, verbatim: 'If this can be answered with a straight lookup, a single tool call, or one step — answer it quickly and simply, now. Otherwise: plan, build, and verify.'"
+  normalized_statement: >
+    WHEN the Workroom SDK session is initialized
+    THE SYSTEM SHALL include as the first instruction in the system prompt verbatim: "If
+    this can be answered with a straight lookup, a single tool call, or one step — answer
+    it quickly and simply, now. Otherwise: plan, build, and verify."
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-08
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.2 paragraph 1"
+  source_quote: "decide the cheapest correct path yourself; never classify into task types"
+  normalized_statement: >
+    WHEN the disposition is set in the system prompt
+    THE SYSTEM SHALL instruct the engine to decide the cheapest correct path autonomously
+    and explicitly prohibit classification of tasks into predefined types.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-09
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.2 paragraph 1"
+  source_quote: "cite file:line for every claim; run the check; say plainly what you couldn't prove — a partial receipt beats a false claim"
+  normalized_statement: >
+    WHEN the engine makes a claim about code
+    THE SYSTEM (via system prompt instruction) SHALL require the engine to cite file:line
+    for every claim, run the verification check, and report plainly what it could not
+    prove; a partial receipt SHALL be preferred over a false claim.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-10
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.2 paragraph 1"
+  source_quote: "never fabricate (missing data → clearly-marked defaults)"
+  normalized_statement: >
+    WHEN the engine encounters missing data
+    THE SYSTEM (via system prompt instruction) SHALL require the engine to use
+    clearly-marked defaults rather than fabricating information; no fabricated claim
+    SHALL be presented as a confirmed fact.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-11
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.2 paragraph 1"
+  source_quote: "ask ONE clarifying question only when the alternatives would change what you do (through Proxy)"
+  normalized_statement: >
+    WHEN the engine determines it needs clarification
+    THE SYSTEM (via system prompt instruction) SHALL require the engine to ask at most
+    one clarifying question and only when the alternatives would change the action taken;
+    it SHALL NOT ask clarifying questions for information that would not change the outcome.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-12
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.2 paragraph 1"
+  source_quote: "anything world-touching is produced fully, then staged as a draft"
+  normalized_statement: >
+    WHEN the engine is directed to perform a world-touching act (push/send/file)
+    THE SYSTEM SHALL first produce the artifact fully in the sandbox and then stage it
+    as a draft via propose_change; it SHALL NOT execute world-touching acts directly.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-13
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.2 paragraph 1"
+  source_quote: "your answer will be spoken in a meeting — make headlines speakable"
+  normalized_statement: >
+    WHEN the engine produces a response
+    THE SYSTEM (via system prompt instruction) SHALL require the engine to make the
+    headline of any response speakable in a meeting context; jargon-heavy or
+    unpronounceable headlines SHALL NOT appear in the envelope.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-14
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.2 paragraph 1"
+  source_quote: "stop at your budget/replan caps and return the honest state"
+  normalized_statement: >
+    WHEN the engine reaches its K-budget or replan cap
+    THE SYSTEM SHALL stop execution and return the honest partial state in the envelope;
+    it SHALL NOT continue past budget limits or conceal partial completion.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-15
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.2 paragraph 1"
+  source_quote: "an honest decline names the missing access"
+  normalized_statement: >
+    WHEN the engine cannot fulfill a request due to missing access
+    THE SYSTEM SHALL decline honestly and name the specific missing access in its response;
+    it SHALL NOT fabricate or attempt workarounds beyond declared tool access.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-16
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.2 paragraph 1"
+  source_quote: "orient from the map; read only what you need; prefer parallel tool calls; put big outputs in files"
+  normalized_statement: >
+    WHEN the disposition is set in the system prompt
+    THE SYSTEM SHALL instruct the engine to: orient from the code_intel map, read only
+    necessary content, prefer parallel tool calls, and put large outputs in files rather
+    than in-context.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §2.3 · Large tasks: the discipline ────────────────────────────────────────
+
+- requirement_id: R-doc05-S2-17
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.3 paragraph 1 item 1"
+  source_quote: "The plan artifact materializes — a first planning turn (read-only) → a live TODO plan that upgrades to a repo-persisted multi-file Markdown plan for multi-file work."
+  normalized_statement: >
+    WHEN the engine judges a task as large
+    THE SYSTEM SHALL execute a first read-only planning turn and produce a plan artifact
+    that, for multi-file work, upgrades to a repo-persisted multi-file Markdown plan;
+    this plan SHALL persist in the repository, not only in model context.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-18
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.3 paragraph 1 item 1"
+  source_quote: "Per unit: acceptance criteria · files-to-touch · verification steps · order."
+  normalized_statement: >
+    WHEN a plan unit is authored
+    THE SYSTEM SHALL include for each unit: acceptance criteria tags, the list of files
+    to touch, verification steps with exact machine-checkable pass rules, and an
+    explicit ordering constraint; any unit missing these fields is invalid.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-19
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.3 paragraph 1 item 1"
+  source_quote: "Multi-step/world-touching plans post to chat before execution (silence = go)."
+  normalized_statement: >
+    WHEN a multi-step or world-touching plan is ready for execution
+    THE SYSTEM SHALL post the plan to chat and await human response before beginning
+    execution; silence from the human SHALL be treated as approval to proceed.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-20
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.3 paragraph 1 item 1"
+  source_quote: "The plan is editable state: it's where corrections land and progress is tracked."
+  normalized_statement: >
+    WHEN a human correction arrives during large-task execution
+    THE SYSTEM SHALL write the correction into the live plan artifact as an edit to the
+    relevant plan unit; corrections SHALL NOT be applied only in model context and SHALL
+    NOT require a task restart.
+  requirement_type: state_consistency
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-21
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.3 paragraph 1 item 2"
+  source_quote: "A plan-verify critic pass (confirmed pattern) — one fresh-context critic reads the plan for missing files, weak criteria, wrong ordering. Fired for high-stakes builds; skipped for small ones."
+  normalized_statement: >
+    WHEN a high-stakes build plan is produced
+    THE SYSTEM SHALL run a fresh-context critic pass that checks the plan for missing
+    files, weak acceptance criteria, and wrong ordering before execution begins;
+    this pass SHALL be skipped for small builds.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-22
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.3 paragraph 1 item 3"
+  source_quote: "Sequential subtask execution — the lead executes subtasks one at a time in one resumed session, each a fresh query() with a tight max_turns and an explicit STOP"
+  normalized_statement: >
+    WHEN a large task executes its plan
+    THE SYSTEM SHALL execute subtasks one at a time in a single resumed SDK session, each
+    as a fresh query() with a tight max_turns budget and an explicit STOP instruction;
+    it SHALL NOT start the next subtask until the current one is complete.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-23
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.3 paragraph 1 item 3"
+  source_quote: "each under a K-budget (terminate on success / unrecoverable error / budget out)"
+  normalized_statement: >
+    WHEN a subtask executes
+    THE SYSTEM SHALL enforce a per-subtask K-budget (token budget) and SHALL terminate
+    the subtask on success, unrecoverable error, or budget exhaustion; it SHALL NOT
+    allow a subtask to run past its declared budget.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-24
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.3 paragraph 1 item 4"
+  source_quote: "Independent verification — ONE separate critic in fresh context that requires running evidence and is fail-closed (§3.7), backed by a deterministic evidence gate that reads host-observed receipts (§3.7②). The builder never grades itself."
+  normalized_statement: >
+    WHEN a large task completes its build phase
+    THE SYSTEM SHALL invoke exactly one separate critic in a fresh context (no shared
+    session state with the builder) that requires running evidence; it SHALL be
+    fail-closed and backed by the deterministic evidence gate; the builder SHALL NOT
+    grade its own output.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §2.4 · The environment and the toolbelt ───────────────────────────────────
+
+- requirement_id: R-doc05-S2-25
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.4 paragraph 1"
+  source_quote: "A per-meeting E2B sandbox, seeded warm from Doc 01's snapshot: checkout at the pinned SHA + toolchain installed."
+  normalized_statement: >
+    WHEN a meeting starts
+    THE SYSTEM SHALL provision exactly one E2B sandbox per meeting, seeded from Doc 01's
+    snapshot with a checkout at the pinned SHA and the toolchain installed.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-26
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.4 paragraph 1"
+  source_quote: "E2B is Workroom-mutable-only — bash/git/edit (CANONICAL §12.2); the read-only dependency graph + LSP live on the host-side code_intel service, not in the sandbox (no in-sandbox LSP, no sandbox-side code_intel MCP)."
+  normalized_statement: >
+    WHEN the Workroom accesses code intelligence
+    THE SYSTEM SHALL confine all mutable operations (bash, git, file edits) to the E2B
+    sandbox; the dependency graph and LSP SHALL reside on the host-side code_intel service
+    only; no in-sandbox LSP and no sandbox-side code_intel MCP SHALL be present.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-27
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.4 paragraph 1"
+  source_quote: "The engine (query()) runs on the trusted orchestrator host; every file/shell effect executes inside the sandbox through a JWT-gated MCP-over-HTTP transport (§3.5)"
+  normalized_statement: >
+    WHEN the engine executes a file or shell tool call
+    THE SYSTEM SHALL run query() on the trusted orchestrator host and route all file
+    and shell effects through the JWT-gated MCP-over-HTTP transport into the sandbox;
+    no file or shell effect SHALL execute directly on the orchestrator host.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-28
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.4 paragraph 1"
+  source_quote: "Two tool sources the agent sees: (a) the sandbox transport (mutable work) — read_file · list_files · grep · glob · run_command (the shell workhorse) · write_file · edit_file · ast_grep (structural search/refactor, §3.5); (b) the host-side code_intel API (read-only, §12.2)"
+  normalized_statement: >
+    WHEN the Workroom agent is configured
+    THE SYSTEM SHALL expose exactly two tool sources: (a) the sandbox transport providing
+    read_file, list_files, grep, glob, run_command, write_file, edit_file, and ast_grep;
+    (b) the host-side read-only code_intel API; no other tool sources SHALL be present
+    in core.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-29
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.4 paragraph 2"
+  source_quote: "The bundle carries notes_ref = meeting_id, not the notes object. The Workroom does not read the Scribe's in-process NOTES_CACHE."
+  normalized_statement: >
+    WHEN the Workroom receives a task bundle
+    THE SYSTEM SHALL receive a notes_ref field containing only the meeting_id UUID
+    and SHALL NOT receive or read the Scribe's in-process NOTES_CACHE directly.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-30
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.4 paragraph 2"
+  source_quote: "It reads the live notes object via the internal API — GET /internal/notes/{meeting_id} (token-gated, mounted outside the auth wall like /internal/reconcile), which folds the durable note_deltas (Postgres) into the notes object server-side."
+  normalized_statement: >
+    WHEN the Workroom needs to read live notes
+    THE SYSTEM SHALL fetch them via GET /internal/notes/{meeting_id} using a token-gated
+    request; it SHALL NOT use any other notes access path; the server SHALL fold
+    note_deltas from Postgres into the response server-side.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-31
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.4 paragraph 2"
+  source_quote: "meeting_id is a UUID (CANONICAL §11.2)"
+  normalized_statement: >
+    WHEN meeting_id values are stored, transmitted, or compared in the Workroom
+    THE SYSTEM SHALL treat meeting_id as a UUID conforming to CANONICAL §11.2; no
+    non-UUID meeting identifier format SHALL be accepted or generated.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-32
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.4 paragraph 2"
+  source_quote: "host-side web search/fetch (research runs on the host, not the sandbox — no arbitrary E2B outbound in core, CANONICAL §12.9)"
+  normalized_statement: >
+    WHEN the agent performs web search or fetch
+    THE SYSTEM SHALL execute web search and fetch on the orchestrator host only; no
+    arbitrary outbound network calls from within the E2B sandbox SHALL be permitted
+    in V0 core.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-33
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.4 paragraph 2"
+  source_quote: "The SDK's own Bash/Read/Edit/Glob/Grep/Task/WebFetch built-ins are blocked (§3.4) — they would run on the host, not the sandbox; their capability is delivered by the sandbox MCP tools of the same shape."
+  normalized_statement: >
+    WHEN the Workroom SDK session is initialized
+    THE SYSTEM SHALL block the SDK built-ins Bash, Read, Edit, Glob, Grep, Task, and
+    WebFetch via the SDK-isolation triad (§3.4); all equivalent capability SHALL be
+    delivered through the sandbox MCP tools.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §2.5 · The floors ─────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S2-34
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.5 paragraph 1"
+  source_quote: "Staged-draft gate: build fully in the sandbox (do the work first); anything world-touching (push/send/file) becomes a draft a named human approves."
+  normalized_statement: >
+    WHEN the agent completes work that touches the world (push, send, file write)
+    THE SYSTEM SHALL first complete the work fully in the sandbox and then stage it as
+    a draft requiring a named human's explicit approval before any external effect occurs.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-35
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.5 paragraph 1"
+  source_quote: "Enforced structurally as propose_change (§3.8): the agent's only 'write to the world' persists the proposed diff durably (GCS Object-Versioned + a staged_drafts row, CANONICAL §4) and returns a draft_id with status=needs_review without landing the change"
+  normalized_statement: >
+    WHEN the agent writes to the world
+    THE SYSTEM SHALL enforce this structurally: propose_change SHALL be the agent's only
+    write-to-world path; it SHALL persist the diff durably in GCS (Object-Versioned)
+    and a staged_drafts row, and SHALL return a draft_id with status=needs_review
+    without landing the change.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-36
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.5 paragraph 1"
+  source_quote: "a named human's accept click drives the actual apply"
+  normalized_statement: >
+    WHEN a staged draft exists with status=needs_review
+    THE SYSTEM SHALL require an explicit named human accept action to apply the change;
+    no automated or timeout-based application SHALL occur without that accept action.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-37
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.5 paragraph 2"
+  source_quote: "Independent verification (2.3.4 / §3.7 — mandatory shape: ONE fresh-context verifier + deterministic evidence gate, builder never self-grades; the multi-lens panel is Expansion)."
+  normalized_statement: >
+    WHEN a large build completes
+    THE SYSTEM SHALL run independent verification in the mandatory shape: exactly one
+    fresh-context verifier plus the deterministic evidence gate; the builder SHALL NOT
+    self-grade; the multi-lens panel IS NOT part of V0.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-38
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.5 paragraph 3"
+  source_quote: "Cost caps: per-task dollar cap + per-worker K-budgets, pre-spend checked; a live per-meeting circuit-breaker (Doc 04); runaway loops structurally impossible."
+  normalized_statement: >
+    WHEN a task is initiated
+    THE SYSTEM SHALL pre-check the per-task dollar cap and per-worker K-budgets before
+    spending; the live per-meeting circuit-breaker (Doc 04) SHALL be active; the
+    implementation SHALL make runaway loops structurally impossible.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §2.6 · Proactive tasks and follow-ups ─────────────────────────────────────
+
+- requirement_id: R-doc05-S2-39
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.6 paragraph 1"
+  source_quote: "Judge-initiated tasks (Doc 06) run the identical loop at read/verify-tier by default, may do bounded real work (mockup, synthetic-data run) when the contribution warrants; surfacing remains the judge's gate."
+  normalized_statement: >
+    WHEN the Workroom executes a judge-initiated proactive task
+    THE SYSTEM SHALL run the identical task loop at read/verify-tier by default; it MAY
+    do bounded real work (mockup, synthetic-data run) when warranted; surfacing the
+    result SHALL remain gated by the judge (Doc 06), not the Workroom.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S2-40
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§2.6 paragraph 1"
+  source_quote: "Results land on the notes; the sandbox persists per meeting; 'run it again at 2×' resolves 'it.'"
+  normalized_statement: >
+    WHEN a proactive task completes
+    THE SYSTEM SHALL write results to the meeting notes; the sandbox SHALL persist for
+    the duration of the meeting so follow-up references (e.g. "it") resolve to prior
+    artifacts; the sandbox SHALL NOT be torn down between tasks within the same meeting.
+  requirement_type: state_consistency
+  criticality: P1
+  testability: executable
+  status: qualified
