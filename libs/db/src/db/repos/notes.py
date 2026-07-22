@@ -190,7 +190,7 @@ async def reap_orphaned_meetings(pool: Any) -> int:
     A ``live`` meeting whose ``meeting-harness`` operation row is stale or
     interrupted belongs to a killed harness; leaving it pins the UI to "in
     progress" forever. The reaper reaps meetings via a JOIN to ``operation_runs``
-    on ``scope_id = meeting_id::text`` (the one documented §11.2 cast) —
+    on ``scope_id = meetings.id`` cast to text (the one documented §11.2 cast) —
 
     it MUST NOT key off ``meetings.last_heartbeat_at``: that column does NOT
     exist (``meetings`` carries only ``status live|ended|interrupted``, §11.1).
