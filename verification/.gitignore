@@ -9,3 +9,4 @@ node_modules/
 # Isolated tool venvs and caches
 **/.venv/
 .deepeval*
+tools/uv.lock
