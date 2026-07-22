@@ -60,3 +60,6 @@ orchestrator/state/heartbeat
 
 # Ladder-runner derived per-run state (rebuildable, like a cache — never source of truth).
 evidence/*-ladder.json
+
+# v2 build-loop runtime artifacts (derived; never committed)
+slices/
