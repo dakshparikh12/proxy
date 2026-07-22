@@ -18,3 +18,20 @@ def test_coverage_gate_parses_real_requirements():
     # bundle carries doc requirements (R-DOC00-*) plus cross-cutting invariants (R-INV-*)
     assert all(k.startswith("R-") for k in reqs)
     assert any(k.startswith("R-DOC00") for k in reqs)
+
+
+def test_parse_criteria_includes_test_ids():
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import importlib
+    import coverage_gate
+    importlib.reload(coverage_gate)  # ensure fresh load after path insert
+    crits = coverage_gate.parse_criteria(ROOT / "acceptance/doc00/criteria/criteria.yaml")
+    assert len(crits) > 0
+    # All criteria dicts must carry a test_ids key (may be empty list for some)
+    assert all("test_ids" in c for c in crits), "parse_criteria must include 'test_ids' key in each dict"
+    # At least some criteria must have non-empty test_ids
+    assert any(len(c["test_ids"]) > 0 for c in crits), "at least some criteria must have non-empty test_ids"
+    # Spot-check: AC-CMP-001 should have T-CMP-001
+    cmp001 = next((c for c in crits if c["id"] == "AC-CMP-001"), None)
+    assert cmp001 is not None
+    assert "T-CMP-001" in cmp001["test_ids"]

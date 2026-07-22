@@ -12,7 +12,9 @@ Dependency-free (no pyyaml) — parses the bundle's regular machine-generated YA
 Usage: python3 scripts/coverage_gate.py <doc>   e.g. doc01
 Exit 0 = fully covered; nonzero = gaps (printed).
 """
-import re, sys, pathlib
+import pathlib
+import re
+import sys
 from collections import defaultdict
 
 ROOT = pathlib.Path(__file__).parent.parent
@@ -34,14 +36,18 @@ def parse_requirements(path: pathlib.Path) -> dict[str, str]:
 
 
 def parse_criteria(path: pathlib.Path) -> list[dict]:
-    """list of {id, refs:[...], criticality, blocking}."""
+    """list of {id, refs:[...], criticality, blocking, test_ids:[...]}."""
     crits, cur = [], None
-    in_refs = False  # True while reading multi-line authority_refs list items
+    in_refs = False   # True while reading multi-line authority_refs list items
+    in_tids = False   # True while reading multi-line test_ids list items
     for line in path.read_text().splitlines():
         m = re.match(r"\s*-?\s*criterion_id:\s*(\S+)", line)
         if m:
             in_refs = False
-            cur = {"id": m.group(1).strip().strip('"'), "refs": [], "criticality": "?", "blocking": None}
+            in_tids = False
+            cur = {
+                "id": m.group(1).strip().strip('"'), "refs": [], "criticality": "?", "blocking": None, "test_ids": [],
+            }
             crits.append(cur)
             continue
         if cur is None:
@@ -50,14 +56,29 @@ def parse_criteria(path: pathlib.Path) -> list[dict]:
         r = re.match(r"\s*authority_refs:\s*\[(.*)\]", line)
         if r:
             in_refs = False
+            in_tids = False
             cur["refs"] = [x.strip().strip('"') for x in r.group(1).split(",") if x.strip()]
             continue
         # Multi-line start: authority_refs:  (value on next lines)
         r2 = re.match(r"\s*authority_refs:\s*$", line)
         if r2:
             in_refs = True
+            in_tids = False
             continue
-        # Multi-line list item: - R-doc02-JOIN-01
+        # Inline format: test_ids: [T-X, T-Y]
+        t = re.match(r"\s*test_ids:\s*\[(.*)\]", line)
+        if t:
+            in_refs = False
+            in_tids = False
+            cur["test_ids"] = [x.strip().strip('"') for x in t.group(1).split(",") if x.strip()]
+            continue
+        # Multi-line start: test_ids:  (value on next lines)
+        t2 = re.match(r"\s*test_ids:\s*$", line)
+        if t2:
+            in_tids = True
+            in_refs = False
+            continue
+        # Multi-line list item for authority_refs
         if in_refs:
             item = re.match(r"\s*-\s+(\S+)", line)
             if item:
@@ -65,6 +86,14 @@ def parse_criteria(path: pathlib.Path) -> list[dict]:
                 continue
             else:
                 in_refs = False  # non-list line ends the refs block
+        # Multi-line list item for test_ids
+        if in_tids:
+            item = re.match(r"\s*-\s+(\S+)", line)
+            if item:
+                cur["test_ids"].append(item.group(1).strip().strip('"'))
+                continue
+            else:
+                in_tids = False  # non-list line ends the test_ids block
         c = re.match(r"\s*criticality:\s*(\S+)", line)
         if c:
             cur["criticality"] = c.group(1).strip()
@@ -134,8 +163,12 @@ def main():
     if ok:
         print("\nGATE PASS: every requirement is covered, every criterion traces to a real requirement.")
         sys.exit(0)
-    print(f"\nGATE FAIL: {'; '.join(x for x, n in [('uncovered requirements', len(uncovered)), ('dangling refs', len(dangling)), ('authorityless criteria', len(authorityless))] if n)}."
-          f"  A sealed bundle MUST NOT ship with coverage gaps.")
+    gap_parts = [x for x, n in [
+        ("uncovered requirements", len(uncovered)),
+        ("dangling refs", len(dangling)),
+        ("authorityless criteria", len(authorityless)),
+    ] if n]
+    print(f"\nGATE FAIL: {'; '.join(gap_parts)}.  A sealed bundle MUST NOT ship with coverage gaps.")
     if p0_uncovered:
         print(f"  {len(p0_uncovered)} of the uncovered are P0/P1 (blocking) — highest priority to fix.")
     sys.exit(1)
