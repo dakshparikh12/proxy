@@ -452,3 +452,92 @@
     - {tier: lint}
     - {tier: unit}
 
+
+# ── AC-SEAM-012: ERROR chunk surfaces as ProviderError at BehaviorRunner ───────
+
+- criterion_id: AC-SEAM-012
+  name: "ERROR chunk from stream_deltas is surfaced as ProviderError at BehaviorRunner boundary"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-SEAM-16]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A stream where the provider yields an ERROR chunk with metadata={'message': 'rate limit'}"
+    when: "BehaviorRunner.run() processes the stream"
+    then:
+      - "BehaviorRunner.run() raises ProviderError (or equivalent typed exception)"
+      - "The ERROR chunk is not silently discarded, logged-only, or forwarded raw to downstream consumers as a chunk"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: pytest.raises(ProviderError) wrapping BehaviorRunner.run() over error-containing stream fixture"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-012]
+  dependency_class: null
+  mock_boundary: "provider stream mocked with synthetic ERROR chunk"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-SEAM-013: CRITICAL tripwire fires in sandbox mode ──────────────────────
+
+- criterion_id: AC-SEAM-013
+  name: "CRITICAL log emitted when non-MCP built-in tool (Read/Grep/Bash) fires in remote/sandbox mode"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-SEAM-17]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A run in remote/sandbox mode whose delta'd stream contains a TOOL_USE chunk with
+      metadata={'name': 'Read', 'input': {}, 'id': 'tu1'}
+    when: "The BehaviorRunner or tripwire layer processes the TOOL_USE chunk"
+    then:
+      - "A log entry at [CRITICAL] level is emitted indicating isolation triad leakage"
+      - "The log entry names the offending tool (e.g., 'Read')"
+      - "The [CRITICAL] log is not suppressed by any configuration flag"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: capture log output; assert '[CRITICAL]' in captured_logs and 'Read' in captured_logs"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-013]
+  dependency_class: null
+  mock_boundary: "sandbox mode flag set in-process; log capture via logging handler"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-SEAM-013-NEG: no CRITICAL log in local (non-sandbox) mode ──────────────
+
+- criterion_id: AC-SEAM-013-NEG
+  name: "No CRITICAL isolation tripwire log when non-MCP built-in fires in local (non-sandbox) mode"
+  evidence_class: "[negative]"
+  authority_refs: [R-doc04-SEAM-17]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A run in local (non-sandbox) mode with a TOOL_USE chunk for a built-in tool (Read)"
+    when: "The tripwire layer processes the TOOL_USE chunk"
+    then:
+      - "No [CRITICAL] isolation leakage log is emitted"
+      - "The run continues normally"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: capture logs; assert 'isolation triad' not in captured_logs when mode=local"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-013-NEG]
+  dependency_class: null
+  mock_boundary: "local mode flag set in-process"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
