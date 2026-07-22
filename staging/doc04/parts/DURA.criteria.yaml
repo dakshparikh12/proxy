@@ -124,6 +124,7 @@ criteria:
     verification_ladder:
       - {tier: lint}
       - {tier: unit}
+      - {tier: integration}
       - {tier: negative}
 
   # ── AC-DURA-003: stale-session detection — BOTH markers matched ──────────
@@ -735,4 +736,5 @@ criteria:
     verification_ladder:
       - {tier: lint}
       - {tier: unit}
+      - {tier: integration}
       - {tier: negative}
