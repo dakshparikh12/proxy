@@ -1,0 +1,235 @@
+# Requirements — Doc 08 Behavior · §2.5 The shared screen — show the work
+# Source: product/v0-spec/08-BEHAVIOR.md §2.5 + §3 build rule for screen
+# ID prefix: R-doc08-SCREEN-NN
+# Authority: DOC-08 §2.5; CANONICAL §12.3 (show_screen delivery tool); CANONICAL §12.12 (V0 scope)
+# Status: qualified
+#
+# dependency_class values used downstream:
+#   db:postgres  — staged_drafts (final artifact preview fetch)
+#   gcs:objects  — file content fetch for pin-to-source mode
+#
+# Scope:
+#   §2.5 — Shared screen: activation gate, three V0 content modes, deferred exclusions,
+#           detail-on-screen / ambience-on-tile rule, camera ↔ screenshare mutual exclusivity,
+#           swap announcement, show_screen delivery tool wiring.
+#   NOT in scope here: §2.6 join/close lines (screen-join-close.criteria.yaml);
+#                      projector CanvasPatch routing (projector.requirements.yaml).
+
+# ── R-doc08-SCREEN-01: activation gate — human ask or human yes only ──────────
+
+- requirement_id: R-doc08-SCREEN-01
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.5, paragraph 1, sentence 1"
+  source_quote: "The screen activates only on a human's ask or a human's yes to Proxy's offer (§2.4 #13) — never self-initiated."
+  normalized_statement: >
+    WHEN the screenshare activation gate evaluates a trigger THE SYSTEM SHALL activate
+    screenshare if and only if the trigger is classified as human_ask or human_yes_to_offer;
+    no other trigger class SHALL cause activation.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc08-SCREEN-02: no self-initiation ──────────────────────────────────────
+
+- requirement_id: R-doc08-SCREEN-02
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.5, paragraph 1, sentence 1"
+  source_quote: "never self-initiated"
+  normalized_statement: >
+    THE SYSTEM SHALL NOT contain any code path that activates screenshare without a
+    prior human trigger (human_ask or human_yes_to_offer); static analysis SHALL confirm
+    that every screenshare.activate() call site is guarded by the activation gate.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc08-SCREEN-03: "Stop sharing" wins immediately — no condition blocks it ─
+
+- requirement_id: R-doc08-SCREEN-03
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.5, paragraph 1, sentence 2"
+  source_quote: "gives it back the moment anyone says stop"
+  normalized_statement: >
+    WHEN any participant issues a stop-sharing signal DURING an active screenshare
+    THE SYSTEM SHALL deactivate screenshare immediately with no intervening confirmation
+    prompt, guard, or delay; no condition SHALL prevent or defer this deactivation.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── R-doc08-SCREEN-04: structured-progress mode — renders Doc 05 envelopes ────
+
+- requirement_id: R-doc08-SCREEN-04
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.5, paragraph 3, bullet 1; §3 build rule, sentence 2"
+  source_quote: "Structured progress view. The task's own progress envelopes (Doc 05) rendered as a clean, legible step view — plan → subtasks → checkpoints → verifier result — not a raw terminal/browser mirror."
+  normalized_statement: >
+    WHEN screenshare is active and structured-progress mode is selected THE SYSTEM SHALL
+    render the task's Doc 05 progress envelopes as a step view in the order
+    plan → subtasks → checkpoints → verifier result; the render SHALL NOT include
+    a raw terminal stream or live browser mirror window.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc08-SCREEN-05: pin-to-source mode — actual file + highlighted lines ───
+
+- requirement_id: R-doc08-SCREEN-05
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.5, paragraph 3, bullet 2"
+  source_quote: "Pin-to-source. When the discussion is about specific code, the screen shows the actual file with the cited lines highlighted — 'this function, these three lines' becomes literal instead of verbal."
+  normalized_statement: >
+    WHEN screenshare is active and pin-to-source mode is selected with a file path and
+    line range THE SYSTEM SHALL render the actual indexed file content with exactly the
+    cited line range visually highlighted; no paraphrased, summarized, or substitute
+    representation SHALL be rendered in place of the actual file content.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc08-SCREEN-06: final-artifact-preview mode — finished artifact ─────────
+
+- requirement_id: R-doc08-SCREEN-06
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.5, paragraph 3, bullet 3"
+  source_quote: "Final artifact preview. When a task lands, the screen shows the finished artifact (the diff/report/document) for the room to read before it's forwarded — the payoff, framed for the meeting."
+  normalized_statement: >
+    WHEN screenshare is active and final-artifact-preview mode is selected for a
+    completed task THE SYSTEM SHALL render the finished artifact (diff, report, or
+    document) on the screen BEFORE the artifact is forwarded or sent; no summary or
+    placeholder SHALL be substituted for the actual artifact body.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc08-SCREEN-07: exactly three V0 content modes — no fourth mode ─────────
+
+- requirement_id: R-doc08-SCREEN-07
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.5, paragraph 2, lead sentence; §3 build rule, sentence 2"
+  source_quote: "V0 content modes — three, each a render of something that already exists"
+  normalized_statement: >
+    THE SYSTEM SHALL implement exactly three screen content modes in V0: structured_progress,
+    pin_to_source, and final_artifact_preview; the screen_mode enumeration SHALL contain
+    exactly these three members and no others; any dispatch path that produces screen
+    content for an unrecognized mode IS a build error.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc08-SCREEN-08: deferred Expansion features MUST NOT be built in V0 ──────
+
+- requirement_id: R-doc08-SCREEN-08
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.5, paragraph 4; CANONICAL §12.12"
+  source_quote: "Deferred to Expansion (do not build in V0): the live browser/terminal sandbox mirror ('the AI's hands, visible'), drawn boxes-and-arrows architecture diagrams, and the animated visible cursor."
+  normalized_statement: >
+    THE SYSTEM SHALL NOT contain any code path for the live sandbox mirror (browser or
+    terminal stream), drawn architecture diagrams, or animated cursor in V0; static
+    analysis SHALL confirm that no symbol matching these features is present in any
+    screen rendering module; any such symbol IS a build error.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc08-SCREEN-09: detail on screen, ambience on tile ─────────────────────
+
+- requirement_id: R-doc08-SCREEN-09
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.5, paragraph 5, sentence 1"
+  source_quote: "detail belongs on the screen, ambience on the tile (platforms downscale camera streams — small text on the tile is unreadable, so the tile never carries anything the room must read)"
+  normalized_statement: >
+    WHEN content that the room must read (code, structured output, artifact text, or
+    highlighted source lines) is to be presented THE SYSTEM SHALL route that content
+    to the screenshare canvas; the tile render code SHALL NOT contain any render path
+    that places multi-line readable text, code blocks, or structured data on the tile.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc08-SCREEN-10: camera ↔ screenshare mutually exclusive ────────────────
+
+- requirement_id: R-doc08-SCREEN-10
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.5, paragraph 5, sentence 2"
+  source_quote: "Camera ↔ screenshare are mutually exclusive (transport constraint)"
+  normalized_statement: >
+    THE SYSTEM SHALL ensure that camera_active and screenshare_active are never both
+    true simultaneously; this mutual exclusivity is a transport constraint and SHALL be
+    enforced at every state transition in the transport FSM; the state
+    (camera_active=true AND screenshare_active=true) SHALL be unreachable.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc08-SCREEN-11: swap announced before transport swap ────────────────────
+
+- requirement_id: R-doc08-SCREEN-11
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.5, paragraph 5, sentence 3"
+  source_quote: "The swap itself is announced ('sharing my screen —') so it never feels abrupt."
+  normalized_statement: >
+    WHEN a screenshare activation is about to occur THE SYSTEM SHALL emit the spoken
+    announcement "sharing my screen —" (or a registered equivalent phrase) at or before
+    the transport swap event; no silent transport swap SHALL occur; the announcement
+    phrase SHALL be defined as a named constant and SHALL NOT be hard-coded inline.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc08-SCREEN-12: screen driven by show_screen delivery tool ──────────────
+
+- requirement_id: R-doc08-SCREEN-12
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§3 build rule for screen, sentence 3; CANONICAL §12.3"
+  source_quote: "Mode changes are driven by Proxy's show_screen delivery decisions (Doc 04). The screen = the same canvas at screenshare size with the three V0 content modes."
+  normalized_statement: >
+    WHEN a screen content mode is selected or changed THE SYSTEM SHALL derive that
+    selection exclusively from the model's show_screen(artifact) TOOL_USE event
+    (the delivery tool); no code path outside the delivery-tool projection chain
+    SHALL directly mutate the active screen content mode; the projector SHALL map
+    the structured TOOL_RESULT from show_screen to a CanvasPatch for the canvas.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc08-SCREEN-13: show_screen produces CanvasPatch from TOOL_RESULT ────────
+
+- requirement_id: R-doc08-SCREEN-13
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§3 build rule for screen, sentence 3; CANONICAL §12.3; §4.5 projector code"
+  source_quote: "The live-mirror spectacle is deferred, not cut ... the projector maps structured TOOL_RESULT → CanvasPatch for the screen"
+  normalized_statement: >
+    WHEN the projector receives a show_screen TOOL_USE chunk OR a TOOL_RESULT chunk
+    with a non-null structured payload THE SYSTEM SHALL yield a CanvasPatch; the
+    CanvasPatch SHALL carry the artifact or structured payload verbatim without
+    re-interpretation or additional content selection by the projector.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified

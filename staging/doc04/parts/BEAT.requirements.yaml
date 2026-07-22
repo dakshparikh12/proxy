@@ -1,0 +1,384 @@
+# BEAT.requirements.yaml — Doc 04 (Proxy Orchestrator) — §3.7 The Harness as a Heartbeated Durable-Operation Row
+# Atomic EARS requirements. Each carries source_location + verbatim source_quote + criticality.
+# ID scheme: R-doc04-BEAT-NN
+# Authority document: DOC-04 (§3.7), CANONICAL-DECISIONS (§2, §12.10, §12.12)
+#
+# Scope: the with_operation_run context manager, HEARTBEAT_S=10 beat cadence, the conditional
+#   WHERE id=$1 AND status='running' fencing check (rowcount-0 → is_owner=False), activity.bump()
+#   keepalive, terminal-status writes (completed/failed), error truncation to 500 chars, heartbeat
+#   task cancellation in finally, STALE_AFTER_S=40 staleness boundary, mark_stale_operations_interrupted()
+#   boot-time sweep, check_pause() human-interrupt mechanism, progress crash-recovery state,
+#   and the is_owner gate on every side-effect (speak/send_chat/apply/dispatch).
+# NOT in scope here: operation_runs row creation (§3.6 claim_meeting owns the INSERT), workroom
+#   dispatch internals, provider seam (§3.3), Tier-1/Tier-2 session durability (§3.5).
+#
+# Canonical overrides applied:
+#   §2    — ONE canonical operation_runs table; with_operation_run ADOPTS the run_id, no second INSERT
+#   §12.10 — fencing: UPDATE WHERE id=$1 AND status='running'; rowcount 0 → is_owner=False → self-terminate;
+#             every side-effect gated on is_owner
+#   §12.12 — HEARTBEAT_S≈10 / STALE_AFTER_S≈40
+
+# ── Architectural intent: asyncio Task + Postgres row lifecycle ───────────────
+
+- requirement_id: R-doc04-BEAT-01
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.7 paragraph 1"
+  source_quote: "Keep the asyncio Task as the executor; make its lifecycle a Postgres row. This keeps \"asyncio Task, no bus\" honest while adding crash-detection, pause-of-a-running-build, and resume-state — without a broker."
+  normalized_statement: >
+    THE SYSTEM SHALL implement the harness lifecycle as a combination of an asyncio Task
+    (the executor) and a Postgres operation_runs row (the durable lifecycle record); the
+    Postgres row SHALL provide crash-detection, pause-of-a-running-build, and resume-state
+    without introducing a message broker; no broker dependency SHALL be added to satisfy
+    these capabilities.
+  requirement_type: architecture_invariant
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── with_operation_run ADOPTS the claimed run_id — no second INSERT ───────────
+
+- requirement_id: R-doc04-BEAT-02
+  authority_type: canonical_decision
+  authority_document: DOC-04
+  source_location: "§3.7 paragraph 2; CANONICAL-DECISIONS §2"
+  source_quote: "the row was already created by §3.6's atomic claim, so with_operation_run adopts that claimed run_id (it does not insert a second row) and owns only the heartbeat + terminal-status lifecycle."
+  normalized_statement: >
+    WHEN with_operation_run is entered THE SYSTEM SHALL adopt the run_id supplied by the
+    §3.6 claim_meeting caller; it SHALL NOT issue any INSERT INTO operation_runs statement;
+    the single operation_runs row for the meeting-harness operation SHALL be created exactly
+    once, by §3.6's atomic claim, and with_operation_run SHALL own only the heartbeat and
+    terminal-status lifecycle of that row.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-BEAT-03
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.7 paragraph 2"
+  source_quote: "scope_id = meeting_id and operation_type = 'meeting-harness'"
+  normalized_statement: >
+    THE SYSTEM SHALL set scope_id = meeting_id and operation_type = 'meeting-harness' on the
+    operation_runs row that with_operation_run adopts; no other scope_id or operation_type
+    value SHALL be used for the meeting-harness operation row.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── is_owner fencing flag ─────────────────────────────────────────────────────
+
+- requirement_id: R-doc04-BEAT-04
+  authority_type: canonical_decision
+  authority_document: DOC-04
+  source_location: "§3.7 OperationRun class block; CANONICAL-DECISIONS §12.10"
+  source_quote: "self.is_owner = True   # fencing flag: every side-effect is gated on this"
+  normalized_statement: >
+    THE SYSTEM SHALL initialise OperationRun.is_owner = True when the object is constructed;
+    every side-effect operation (speak, send_chat, apply, dispatch, or any other world-touching
+    action) SHALL be gated on is_owner being True before execution; a side-effect SHALL NOT
+    be performed when is_owner is False.
+  requirement_type: safety
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Heartbeat cadence: HEARTBEAT_S = 10 ──────────────────────────────────────
+
+- requirement_id: R-doc04-BEAT-05
+  authority_type: canonical_decision
+  authority_document: DOC-04
+  source_location: "§3.7 constants block; CANONICAL-DECISIONS §12.12"
+  source_quote: "HEARTBEAT_S = 10"
+  normalized_statement: >
+    THE SYSTEM SHALL define HEARTBEAT_S = 10 (seconds) as the heartbeat sleep interval;
+    the _heartbeat coroutine SHALL call asyncio.sleep(HEARTBEAT_S) at the top of its loop
+    before each UPDATE; the interval SHALL NOT be less than 10 seconds nor more than
+    STALE_AFTER_S / 2 (20 seconds) to ensure at least two beats before staleness.
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Staleness boundary: STALE_AFTER_S = 40 ───────────────────────────────────
+
+- requirement_id: R-doc04-BEAT-06
+  authority_type: canonical_decision
+  authority_document: DOC-04
+  source_location: "§3.7 constants block; CANONICAL-DECISIONS §12.12"
+  source_quote: "STALE_AFTER_S = 40             # ~4 missed 10s beats → the owning instance is dead"
+  normalized_statement: >
+    THE SYSTEM SHALL define STALE_AFTER_S = 40 (seconds); an operation_runs row whose
+    last_heartbeat_at < NOW() - INTERVAL '40 seconds' SHALL be considered belonging to a
+    dead instance; this threshold represents approximately four missed HEARTBEAT_S beats;
+    the STALE_AFTER_S value SHALL be applied consistently in the lazy per-read staleness
+    check and in mark_stale_operations_interrupted().
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Heartbeat UPDATE: conditional WHERE status='running' (fencing) ────────────
+
+- requirement_id: R-doc04-BEAT-07
+  authority_type: canonical_decision
+  authority_document: DOC-04
+  source_location: "§3.7 _heartbeat code block; CANONICAL-DECISIONS §12.10"
+  source_quote: "# FENCING self-check: scope the beat to status='running'.\n                # If a reaper already flipped this row (replacement instance re-claimed),\n                # rowcount is 0 → fenced out. Drop ownership and self-terminate.\n                status = await pool.execute(\n                    \"UPDATE operation_runs SET last_heartbeat_at=NOW() \"\n                    \"WHERE id=$1 AND status='running'\", run_id)"
+  normalized_statement: >
+    WHEN the heartbeat fires THE SYSTEM SHALL issue exactly the UPDATE:
+    "UPDATE operation_runs SET last_heartbeat_at=NOW() WHERE id=$1 AND status='running'"
+    using the run_id; the WHERE clause SHALL include both the id primary-key predicate AND
+    the status='running' predicate; an unconditional UPDATE (WHERE id=$1 only) is a
+    fencing violation and SHALL NOT be used.
+  requirement_type: safety
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Heartbeat rowcount 0 → fenced out → is_owner=False + self-terminate ──────
+
+- requirement_id: R-doc04-BEAT-08
+  authority_type: canonical_decision
+  authority_document: DOC-04
+  source_location: "§3.7 _heartbeat code block; CANONICAL-DECISIONS §12.10"
+  source_quote: "if status.endswith(\" 0\"):          # rowcount 0 → reclaimed / fenced\n                    op.is_owner = False\n                    log.warning(\"fenced out of meeting %s — self-terminating harness\", meeting_id)\n                    return"
+  normalized_statement: >
+    WHEN the heartbeat UPDATE returns rowcount 0 (status string ends with " 0") THE SYSTEM
+    SHALL immediately set op.is_owner = False, emit a WARNING-level log entry containing
+    "fenced out" and the meeting_id, and return from the _heartbeat coroutine, terminating
+    the heartbeat loop; the harness SHALL NOT continue issuing further heartbeat UPDATEs
+    after being fenced out.
+  requirement_type: safety
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── activity.bump() called on each successful heartbeat ──────────────────────
+
+- requirement_id: R-doc04-BEAT-09
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.7 _heartbeat code block"
+  source_quote: "activity.bump(meeting_id)   # keeps the sandbox alive during silent work"
+  normalized_statement: >
+    WHEN the heartbeat UPDATE succeeds (rowcount > 0) THE SYSTEM SHALL call
+    activity.bump(meeting_id) immediately after the successful UPDATE; activity.bump()
+    SHALL NOT be called if the UPDATE returned rowcount 0 (fenced); the bump keeps
+    the sandbox alive during periods of silent agent thinking.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Heartbeat exception: log and continue ────────────────────────────────────
+
+- requirement_id: R-doc04-BEAT-10
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.7 _heartbeat code block"
+  source_quote: "except Exception as e:\n                log.error(\"heartbeat failed for %s: %s\", run_id, e)"
+  normalized_statement: >
+    WHEN the heartbeat UPDATE raises an exception THE SYSTEM SHALL log the exception at
+    ERROR level including the run_id and the exception text; the _heartbeat loop SHALL
+    continue (not exit) after a transient exception; a single heartbeat failure SHALL NOT
+    trigger fencing or terminate the harness.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Normal exit → status='completed', completed_at=NOW() ──────────────────────
+
+- requirement_id: R-doc04-BEAT-11
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.7 with_operation_run try block (normal exit)"
+  source_quote: "yield op\n        await pool.execute(\n            \"UPDATE operation_runs SET status='completed', completed_at=NOW() WHERE id=$1\", run_id)"
+  normalized_statement: >
+    WHEN the with_operation_run body exits without raising an exception THE SYSTEM SHALL
+    execute: "UPDATE operation_runs SET status='completed', completed_at=NOW() WHERE id=$1"
+    before the finally block cancels the heartbeat task; the status SHALL be set to
+    'completed' and completed_at SHALL be set to the current database timestamp.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Exception exit → status='failed', error=str(e)[:500], completed_at=NOW() ──
+
+- requirement_id: R-doc04-BEAT-12
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.7 with_operation_run except block"
+  source_quote: "except Exception as e:\n        await pool.execute(\n            \"UPDATE operation_runs SET status='failed', error=$2, completed_at=NOW() \"\n            \"WHERE id=$1\", run_id, str(e)[:500])\n        raise"
+  normalized_statement: >
+    WHEN the with_operation_run body raises an exception THE SYSTEM SHALL execute:
+    "UPDATE operation_runs SET status='failed', error=$2, completed_at=NOW() WHERE id=$1"
+    with the error value set to str(e)[:500] (first 500 characters of the stringified
+    exception, not the full stack trace); the exception SHALL be re-raised after the
+    UPDATE so the caller receives it.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-BEAT-13
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.7 with_operation_run except block"
+  source_quote: "str(e)[:500]"
+  normalized_statement: >
+    THE SYSTEM SHALL truncate the error string to at most 500 characters when writing
+    to the operation_runs.error column; the full exception stack trace SHALL NOT be
+    written to the error column; str(e)[:500] is the exact truncation expression.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── finally: heartbeat task cancelled regardless of outcome ──────────────────
+
+- requirement_id: R-doc04-BEAT-14
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.7 with_operation_run finally block"
+  source_quote: "finally:\n        hb.cancel()"
+  normalized_statement: >
+    THE SYSTEM SHALL cancel the heartbeat asyncio Task in a finally block that executes
+    regardless of whether the body completed normally or raised an exception; the heartbeat
+    task SHALL be cancelled after the terminal-status UPDATE (completed or failed), never
+    before; a leaked heartbeat task (not cancelled) is a correctness violation.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Crash detection by staleness read (not broker ack) ───────────────────────
+
+- requirement_id: R-doc04-BEAT-15
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.7 paragraph 3"
+  source_quote: "Crash detection is a staleness read, not a broker ack. A harness whose last_heartbeat_at < NOW() - STALE_AFTER_S (~40s) belongs to a killed instance."
+  normalized_statement: >
+    THE SYSTEM SHALL detect crashed harness instances by reading last_heartbeat_at from
+    operation_runs and comparing it against NOW() - INTERVAL '40 seconds'; any row with
+    status='running' and last_heartbeat_at older than 40 seconds SHALL be classified as
+    belonging to a dead instance; no message-broker acknowledgement mechanism SHALL be used
+    for crash detection.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── mark_stale_operations_interrupted(): bulk reaper SQL ─────────────────────
+
+- requirement_id: R-doc04-BEAT-16
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.7 mark_stale_operations_interrupted code block"
+  source_quote: "async def mark_stale_operations_interrupted(pool) -> int:\n    return await pool.fetchval(\n        \"\"\"UPDATE operation_runs SET status='interrupted', completed_at=NOW()\n           WHERE status='running' AND last_heartbeat_at < NOW() - INTERVAL '40 seconds'\n           RETURNING count(*)\"\"\") or 0"
+  normalized_statement: >
+    THE SYSTEM SHALL implement mark_stale_operations_interrupted(pool) as an async function
+    that issues exactly the UPDATE:
+    "UPDATE operation_runs SET status='interrupted', completed_at=NOW()
+     WHERE status='running' AND last_heartbeat_at < NOW() - INTERVAL '40 seconds'
+     RETURNING count(*)"
+    and returns the count of rows updated (0 if none); the status value used SHALL be
+    'interrupted', not 'failed' or 'dead'.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Boot-time sweep runs BEFORE any other work ───────────────────────────────
+
+- requirement_id: R-doc04-BEAT-17
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.7 paragraph 4"
+  source_quote: "a boot-time bulk sweep (mark_stale_operations_interrupted()) so a rebooting instance heals the DB before doing anything else"
+  normalized_statement: >
+    WHEN a harness instance boots or restarts THE SYSTEM SHALL call
+    mark_stale_operations_interrupted() before performing any other database write,
+    before claiming any new meeting run, and before accepting any incoming request;
+    the boot-time sweep SHALL complete (with its UPDATE committed) before subsequent
+    work proceeds.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── check_pause(): human-interrupt via pause_requested column ─────────────────
+
+- requirement_id: R-doc04-BEAT-18
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.7 paragraph 5"
+  source_quote: "check_pause() / pause_requested is the first-class \"a human interrupts the running build\" mechanism."
+  normalized_statement: >
+    THE SYSTEM SHALL implement check_pause() as a method on OperationRun that reads the
+    pause_requested column from the operation_runs row for the current run_id and returns
+    True if pause_requested is set; pause_requested is the first-class mechanism by which
+    a human interrupts a running meeting harness; no other out-of-band interrupt channel
+    is required for this purpose.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── progress column: crash-recovery + resume state ───────────────────────────
+
+- requirement_id: R-doc04-BEAT-19
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.7 paragraph 5"
+  source_quote: "progress is the crash-recovery + resume state."
+  normalized_statement: >
+    THE SYSTEM SHALL use the progress column of the operation_runs row as the durable
+    store for crash-recovery and resume state; update_progress(progress: dict) SHALL
+    persist the supplied dict to the progress column of the current run's row;
+    the progress column SHALL NOT be used for any purpose other than crash-recovery
+    and resume state.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Fenced-out harness stays silent (no speak/send_chat/apply/dispatch) ────────
+
+- requirement_id: R-doc04-BEAT-20
+  authority_type: canonical_decision
+  authority_document: DOC-04
+  source_location: "§3.7 paragraph 6; CANONICAL-DECISIONS §12.10"
+  source_quote: "FENCING: every side-effect (speak/send_chat/apply/dispatch) is gated on op.is_owner. A fenced-out harness stays silent."
+  normalized_statement: >
+    WHEN op.is_owner is False THE SYSTEM SHALL produce no externally-observable output;
+    specifically it SHALL NOT call speak, send_chat, apply, dispatch, or any other
+    world-touching function; every call site for each side-effect function SHALL check
+    op.is_owner before invoking the function; a fenced-out harness that produces any
+    external output is a P0 safety violation.
+  requirement_type: safety
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Structural: is_owner gate present at ALL side-effect call sites ───────────
+
+- requirement_id: R-doc04-BEAT-21
+  authority_type: canonical_decision
+  authority_document: DOC-04
+  source_location: "§3.7 paragraph 6; CANONICAL-DECISIONS §12.10"
+  source_quote: "every side-effect (speak/send_chat/apply/dispatch) is gated on op.is_owner"
+  normalized_statement: >
+    THE SYSTEM SHALL contain an is_owner guard at every call site of every side-effect
+    function (speak, send_chat, apply, dispatch, and any future side-effect additions);
+    the absence of an is_owner check at any single side-effect call site is a structural
+    violation; this is verified by static code inspection across all harness modules.
+  requirement_type: safety
+  criticality: P0
+  testability: executable
+  status: qualified

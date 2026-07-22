@@ -1,0 +1,571 @@
+# Doc 05 (Workroom) — S5 requirements slice
+# Coverage: §3.5 (The sandbox tool transport — JWT-gated MCP-over-HTTP)
+# ID scheme: R-doc05-S5-NN
+# Authority: DOC-05 §3.5 (verbatim spec text below)
+# Referenced by: staging/doc05/parts/s5.criteria.yaml
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TRANSPORT — stateless per-request server
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S5-01
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 1"
+  source_quote: "Stateless per-request transport — fresh MCP server + StreamableHTTPServerTransport(sessionIdGenerator=undefined) per POST, discarded after."
+  normalized_statement: >
+    WHEN a POST request is received at the sandbox MCP endpoint THE SYSTEM SHALL
+    instantiate a fresh MCP server and a new StreamableHTTPServerTransport with
+    sessionIdGenerator=undefined, handle the request, and discard both objects
+    after the response is sent, leaving no state shared with any prior or
+    subsequent request.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-02
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 1"
+  source_quote: "Lets a fleet of short-lived sandboxes answer independently with no session store."
+  normalized_statement: >
+    WHEN multiple sandboxes in a fleet process concurrent requests THE SYSTEM SHALL
+    operate without any shared session store, so that each sandbox answers requests
+    independently and no cross-sandbox session state is possible.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-03
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 1"
+  source_quote: "a Node workspace-mcp-server run as an E2B sidecar"
+  normalized_statement: >
+    WHEN the sandbox MCP server process initializes THE SYSTEM SHALL bind its HTTP
+    listener to port 8081 inside the E2B sandbox.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JWT SECURITY — per-sandbox secret
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S5-04
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 2"
+  source_quote: "Each sandbox gets its OWN random HS256 secret, minted at provision time (host keeps the sandbox→secret map)"
+  normalized_statement: >
+    WHEN a sandbox is provisioned THE SYSTEM SHALL generate a cryptographically
+    random HS256 secret unique to that sandbox instance and make it available
+    inside the sandbox as the JWT_SECRET environment variable.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-05
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 2"
+  source_quote: "host keeps the sandbox→secret map; fleet-shared secret deleted."
+  normalized_statement: >
+    WHEN sandboxes are provisioned THE SYSTEM SHALL maintain a host-side
+    sandbox-to-secret map containing each sandbox's unique secret, and SHALL
+    ensure no fleet-shared JWT secret exists.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-06
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 2"
+  source_quote: "JWT_SECRET missing → exit(1) at boot."
+  normalized_statement: >
+    WHEN the sandbox MCP server process starts and the JWT_SECRET environment
+    variable is absent THE SYSTEM SHALL exit immediately with exit code 1 and
+    SHALL NOT open any HTTP port or accept any requests.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-07
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 2"
+  source_quote: "Per-request: Authorization: Bearer <jwt>, verify HS256 against THIS sandbox's secret"
+  normalized_statement: >
+    WHEN a POST request is received at the sandbox MCP endpoint THE SYSTEM SHALL
+    extract the Bearer token from the Authorization header and verify its HS256
+    signature against the sandbox's own JWT_SECRET; a missing or invalid
+    Authorization header SHALL result in HTTP 401 and no tool invocation.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-08
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 2"
+  source_quote: "per-sandbox claim check: decoded session_id MUST equal env.SESSION_ID, else 403."
+  normalized_statement: >
+    WHEN a POST request carries a JWT that passes HS256 signature verification
+    THE SYSTEM SHALL compare the decoded session_id claim against the sandbox's
+    SESSION_ID environment variable; if they do not match THE SYSTEM SHALL return
+    HTTP 403 and SHALL NOT invoke any tool.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-09
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 2"
+  source_quote: "verify HS256 against THIS sandbox's secret … decoded session_id MUST equal env.SESSION_ID, else 403"
+  normalized_statement: >
+    WHEN a request fails HS256 signature verification THE SYSTEM SHALL return
+    HTTP 401; WHEN a request passes signature verification but the session_id
+    claim does not match SESSION_ID THE SYSTEM SHALL return HTTP 403; in both
+    cases no MCP tool handler SHALL be invoked.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-10
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 2"
+  source_quote: "Each sandbox gets its OWN random HS256 secret … fleet-shared secret deleted."
+  normalized_statement: >
+    WHEN a JWT minted for sandbox A (signed with sandbox A's secret and bearing
+    sandbox A's session_id) is presented to sandbox B THE SYSTEM SHALL reject
+    it with HTTP 401 because sandbox B's secret differs from sandbox A's secret.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ─────────────────────────────────────────────────────────────────────────────
+# /health ENDPOINT
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S5-11
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 3"
+  source_quote: "/health (unauth) — reports baked code-hash (sha256 of MCP bundle + build recipe, stamped into E2B template image) and clone status."
+  normalized_statement: >
+    WHEN GET /health is called on the sandbox MCP server (with or without an
+    Authorization header) THE SYSTEM SHALL return HTTP 200 with a response body
+    containing the baked code-hash (sha256 of the MCP bundle and build recipe,
+    stamped into the E2B template image at build time) and the current clone
+    status.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-12
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 3"
+  source_quote: "This is the preflight target (§3.9)."
+  normalized_statement: >
+    WHEN the Workroom preflight (§3.9) runs before the first agent turn THE SYSTEM
+    SHALL call GET /health on the sandbox MCP server and SHALL allow the session to
+    proceed only when the response is HTTP 200 with a non-null code_hash field.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATH VALIDATION — validate_path
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S5-13
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 4 (validate_path)"
+  source_quote: "reject null bytes → realpath → re-check against allowed roots"
+  normalized_statement: >
+    WHEN any sandbox tool receives a path argument THE SYSTEM SHALL pass it through
+    validate_path, which SHALL reject the path and return an error if the path
+    string contains a null byte, before performing any filesystem access.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-14
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 4 (validate_path)"
+  source_quote: "reject null bytes → realpath → re-check against allowed roots"
+  normalized_statement: >
+    WHEN a path argument has passed the null-byte check THE SYSTEM SHALL resolve
+    it to a canonical path via realpath and re-check the result against the
+    configured allowed roots; if the resolved path falls outside all allowed roots
+    THE SYSTEM SHALL return an error and perform no filesystem I/O.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-15
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 4 (validate_path)"
+  source_quote: "for not-yet-existing file, walk up to nearest existing ancestor and re-check"
+  normalized_statement: >
+    WHEN a path argument refers to a file that does not yet exist THE SYSTEM SHALL
+    walk up the directory tree to the nearest existing ancestor, resolve that
+    ancestor via realpath, and check the resolved ancestor path against allowed
+    roots; if the resolved ancestor falls outside all allowed roots THE SYSTEM
+    SHALL return an error and perform no filesystem I/O.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ATOMIC WRITES
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S5-16
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 4 (validate_path + atomic writes)"
+  source_quote: "atomic writes (exclusive-create wx for new files"
+  normalized_statement: >
+    WHEN write_file creates a file that does not yet exist THE SYSTEM SHALL open
+    the target path with the exclusive-create flag (wx / O_EXCL | O_CREAT) so
+    that a concurrent creation of the same path fails with EEXIST rather than
+    silently overwriting.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-17
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 4 (validate_path + atomic writes)"
+  source_quote: "temp-file + rename for overwrite → no TOCTOU, no partial writes"
+  normalized_statement: >
+    WHEN write_file or edit_file overwrites an existing file THE SYSTEM SHALL
+    write the new content to a temporary file in the same directory and then
+    atomically rename it to the target path, ensuring readers never observe a
+    partial intermediate state and eliminating TOCTOU vulnerability.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ─────────────────────────────────────────────────────────────────────────────
+# run_command — output truncation and timeout
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S5-18
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 4 (run_command)"
+  source_quote: "output auto-truncated (head 200 + tail 300, tail_lines param), 5-min default timeout."
+  normalized_statement: >
+    WHEN run_command executes a shell command THE SYSTEM SHALL auto-truncate its
+    combined output to the first 200 lines and the last 300 lines (or fewer if the
+    caller supplies a tail_lines parameter), and SHALL terminate the command process
+    after a default timeout of 5 minutes if it has not already exited.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ─────────────────────────────────────────────────────────────────────────────
+# run_command — structured receipt
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S5-19
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 4 (run_command)"
+  source_quote: "Emits host-observed structured receipt per command: {command_id, argv, exit_code, stdout_ref, artifact_hashes}"
+  normalized_statement: >
+    WHEN run_command completes THE SYSTEM SHALL emit a structured receipt
+    containing the fields command_id, argv, exit_code, stdout_ref, and
+    artifact_hashes as part of the tools/result payload returned to the host.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-20
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 4 (run_command)"
+  source_quote: "captured by transport on host (not parsed from model prose)."
+  normalized_statement: >
+    WHEN the host-side transport receives a run_command tools/result THE SYSTEM
+    SHALL read the structured receipt fields directly from the structured result
+    payload and SHALL NOT attempt to parse exit_code, artifact_hashes, or any
+    other receipt fields from the natural-language prose of the model's response.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ─────────────────────────────────────────────────────────────────────────────
+# artifact_hashes — write_file / edit_file / ast_grep
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S5-21
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 4 (run_command receipt)"
+  source_quote: "Emits host-observed structured receipt per command: {command_id, argv, exit_code, stdout_ref, artifact_hashes}"
+  normalized_statement: >
+    WHEN write_file, edit_file, or ast_grep modifies one or more files THE SYSTEM
+    SHALL include an artifact_hashes field in its tool result, mapping each
+    modified file path to the sha256 hash of its post-write contents.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-22
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 4 (edit_file)"
+  source_quote: "edit_file (unique-match string replace, replace_all opt)"
+  normalized_statement: >
+    WHEN edit_file is called without the replace_all option THE SYSTEM SHALL
+    verify that the target string appears exactly once in the file; if the string
+    appears zero times or more than once THE SYSTEM SHALL return an error and leave
+    the file unmodified.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-23
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 4 (ast_grep)"
+  source_quote: "ast_grep — structural search-and-refactor, baked into E2B template, exposed as explicit sandbox tool."
+  normalized_statement: >
+    WHEN the E2B template image is built THE SYSTEM SHALL bake the ast_grep binary
+    into the image and register ast_grep as an explicit named tool in the sandbox
+    MCP server's tool manifest.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-24
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 4 (ast_grep)"
+  source_quote: "Write tool → in write_tools partition (worker disposition only), blocked for read-only dispositions."
+  normalized_statement: >
+    WHEN the Workroom is configured for any disposition other than worker (i.e.,
+    quick, plan, critic, or verifier) THE SYSTEM SHALL include ast_grep in
+    disallowed_tools so that the SDK blocks any attempt by the agent to invoke it.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ─────────────────────────────────────────────────────────────────────────────
+# grep — 100-match cap + totalMatches
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S5-25
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 4 (grep)"
+  source_quote: "grep (regex, 100-match cap + totalMatches)"
+  normalized_statement: >
+    WHEN grep is invoked and the corpus contains more than 100 matching lines THE
+    SYSTEM SHALL return at most 100 match entries in the result and SHALL report
+    the actual total count of matches across the corpus in a totalMatches field.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ─────────────────────────────────────────────────────────────────────────────
+# tools/call + tools/result journaling
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S5-26
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 5"
+  source_quote: "Full tools/call + tools/result journaling to sandbox log (100 KB cap)"
+  normalized_statement: >
+    WHEN any sandbox tool is invoked THE SYSTEM SHALL write a tools/call record to
+    the sandbox log before invocation and a tools/result record after the invocation
+    completes; the total size of the sandbox log SHALL NOT exceed 100 KB (102400
+    bytes), with older entries dropped or rotated to enforce the cap.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-27
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 2, bullet 5"
+  source_quote: "Full tools/call + tools/result journaling to sandbox log (100 KB cap)"
+  normalized_statement: >
+    WHEN the sandbox log reaches its 100 KB capacity THE SYSTEM SHALL enforce the
+    cap by discarding or truncating the oldest journal entries so that the log
+    file size remains at or below 102400 bytes at all times.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ─────────────────────────────────────────────────────────────────────────────
+# always_load — GAL-383 prevention
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S5-28
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 3 (Registration to host-side SDK)"
+  source_quote: "always_load=True: block turn-1 until MCP handshake connects (~5s cap). Over network, handshake can lose race to turn 1 → agent runs tool-less (GAL-383 scar). always_load closes it."
+  normalized_statement: >
+    WHEN the Workroom agent is initialized THE SYSTEM SHALL register the code MCP
+    server with always_load=True so that the SDK blocks the start of turn 1 until
+    the MCP handshake completes (up to approximately 5 seconds), preventing the
+    agent from running its first turn without any tools available.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DISPOSITION CURATED SUBSETS
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S5-29
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 4 (Disposition curated subsets)"
+  source_quote: "quick: read_file, list_files, grep, glob + map tools (get_dependents, who_writes, list_entry_points). No write tools, no propose_change."
+  normalized_statement: >
+    WHEN the Workroom is configured for quick disposition THE SYSTEM SHALL restrict
+    the agent to read_file, list_files, grep, glob, and all map tools
+    (get_dependents, who_writes, list_entry_points), and SHALL block all write
+    tools and propose_change via disallowed_tools.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-30
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 4 (Disposition curated subsets)"
+  source_quote: "plan: same read + map subset as quick."
+  normalized_statement: >
+    WHEN the Workroom is configured for plan disposition THE SYSTEM SHALL apply
+    the identical allowed and disallowed tool sets as the quick disposition:
+    read_file, list_files, grep, glob, and map tools allowed; all write tools and
+    propose_change blocked via disallowed_tools.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-31
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 4 (Disposition curated subsets)"
+  source_quote: "critic/verifier: read + map + run_command but NO write_file/edit_file/ast_grep/propose_change."
+  normalized_statement: >
+    WHEN the Workroom is configured for critic or verifier disposition THE SYSTEM
+    SHALL allow read_file, list_files, grep, glob, map tools, and run_command, and
+    SHALL block write_file, edit_file, ast_grep, and propose_change via
+    disallowed_tools.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-32
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 4 (Disposition curated subsets)"
+  source_quote: "worker (readwrite): full read + map + sandbox-write (run_command, write_file, edit_file, ast_grep) + mcp__propose_change__propose_change."
+  normalized_statement: >
+    WHEN the Workroom is configured for worker disposition THE SYSTEM SHALL make
+    available the full read tool set, all map tools, all sandbox write tools
+    (run_command, write_file, edit_file, ast_grep), and
+    mcp__propose_change__propose_change, with no tools in disallowed_tools.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-33
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 4 (Disposition curated subsets)"
+  source_quote: "Write/propose_change block goes through disallowed_tools (allowed_tools does NOT filter MCP tools — SDK design)."
+  normalized_statement: >
+    WHEN write tools or propose_change must be blocked for a given disposition THE
+    SYSTEM SHALL place them in disallowed_tools; omitting them from allowed_tools
+    alone is insufficient because the Claude SDK does not filter MCP tools via
+    allowed_tools.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ─────────────────────────────────────────────────────────────────────────────
+# token_provider — cached re-mint
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S5-34
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 5 (token_provider)"
+  source_quote: "Mint HS256 JWT {session_id, issued_at} with short TTL, cache it, re-mint only once within ~5-min margin of exp (read exp from token itself — no TTL duplication)."
+  normalized_statement: >
+    WHEN token_provider is called THE SYSTEM SHALL return a cached HS256 JWT
+    containing session_id and issued_at claims if the cached token's exp claim is
+    more than approximately 5 minutes in the future; otherwise THE SYSTEM SHALL
+    transparently re-mint a new JWT; the expiry decision SHALL be derived solely
+    from parsing the cached token's exp claim with no separate TTL constant.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S5-35
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.5 paragraph 5 (token_provider)"
+  source_quote: "always_load calls token_provider() at registration; long runs never hit expiry."
+  normalized_statement: >
+    WHEN a Workroom session runs for an extended duration (beyond a single JWT TTL)
+    THE SYSTEM SHALL ensure that token_provider transparently re-mints the JWT
+    before expiry so that no tool call ever fails with a 401 due to an expired
+    token during the session.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified

@@ -1,0 +1,761 @@
+# Requirements — Doc 08 (Experience, UI & Surfaces) — §2.4 Small features (items 1–14)
+# ID prefix: R-doc08-FEAT-NN
+# Authority: DOC-08 §2.4
+# Status: qualified
+#
+# Criticality key:
+#   P0 — invariant (no hallucination path, no self-activate, no wrong tenant)
+#   P1 — core feature obligation
+#   P2 — soft polish / measurement (non-blocking)
+#
+# CANONICAL overrides applied:
+#   §12.12 — decision/action chat line is deterministic harness formatter, never model wake
+#   §4     — draft_id from staged_drafts persisted row; in-memory review_session dies at teardown
+#   §8     — verbal walkthrough is a DELIVERY MODE, not a disposition
+#   §6     — CAPABILITIES is a static dict, not a runtime HTTP endpoint
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE 1 · Catch-me-up
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FEAT-01
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 1"
+  source_quote: "\"Proxy, catch me up\" → a ~20-second recap from the notes (what's been discussed, decided, and is open)."
+  normalized_statement: >
+    WHEN a participant says "Proxy, catch me up" THE SYSTEM SHALL produce a spoken recap
+    of approximately 20 seconds covering what has been discussed, decided, and remains open,
+    sourced from the committed notes object.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-02
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 1"
+  source_quote: "A late joiner gets it privately where DM exists."
+  normalized_statement: >
+    WHEN a catch-me-up is triggered for a late joiner AND a DM channel is available in the
+    meeting platform THE SYSTEM SHALL deliver the recap privately to that participant's DM
+    channel and SHALL NOT broadcast it to the full meeting chat.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-03
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 1"
+  source_quote: "Rides: the notes object."
+  normalized_statement: >
+    WHEN producing a catch-me-up recap THE SYSTEM SHALL derive all content exclusively from
+    the committed notes object and SHALL NOT fabricate content absent from the notes.
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE 2 · Where-are-we
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FEAT-04
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 2"
+  source_quote: "\"Proxy, where did we land?\" → the current decisions + open questions, spoken briefly."
+  normalized_statement: >
+    WHEN a participant asks "where did we land?" THE SYSTEM SHALL produce a brief spoken
+    response listing the current committed decisions and open questions from the notes object,
+    omitting full narrative discussion content.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-05
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 2"
+  source_quote: "Same machinery as catch-me-up, different slice."
+  normalized_statement: >
+    WHEN producing a where-are-we response THE SYSTEM SHALL use the same notes-retrieval
+    machinery as catch-me-up, selecting only the decisions and open-questions slice of the
+    notes object.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE 3 · Decision + action-item acknowledgments
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FEAT-06
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 3"
+  source_quote: "When the Scribe commits a decision or action-item note-delta, a quiet chat line marks it: \"— noted: decision — ship Friday (Priya, Sam agreed)\" · \"— action: Sam → fix the retry test (by Fri)\"."
+  normalized_statement: >
+    WHEN the Scribe commits a decision note-delta THE SYSTEM SHALL post exactly one quiet
+    chat line matching the pattern "— noted: decision — <text> (<names agreed>)", and WHEN
+    the Scribe commits an action-item note-delta THE SYSTEM SHALL post exactly one quiet chat
+    line matching the pattern "— action: <assignee> → <task> (by <deadline>)".
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-07
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 3"
+  source_quote: "This line is a deterministic harness formatter keyed on a committed `note_delta` (CANONICAL §12.12) — never a wake, never model-generated — so it is free, race-free, and cannot hallucinate a decision."
+  normalized_statement: >
+    WHEN a decision or action-item chat acknowledgment line is produced THE SYSTEM SHALL
+    generate it by a deterministic harness formatter keyed exclusively on the committed
+    note_delta fields and SHALL NOT invoke any model inference call or non-deterministic
+    generator in the formatter path.
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-08
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 3"
+  source_quote: "Never spoken, never interrupting — just visible bookkeeping."
+  normalized_statement: >
+    WHEN a decision or action-item acknowledgment chat line is emitted THE SYSTEM SHALL NOT
+    produce any TTS or voice event for that line, and SHALL NOT generate any barge-in or
+    speech-interrupt event.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-09
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 3"
+  source_quote: "it honors the session disable (§2.4 #9 \"stop posting decision notes\")."
+  normalized_statement: >
+    WHEN the session preference "stop posting decision notes" is active THE SYSTEM SHALL
+    suppress all decision and action-item acknowledgment chat lines for the remainder of
+    that session.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-10
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 3"
+  source_quote: "Rides: Doc 03's committed note-deltas, rendered as chat lines."
+  normalized_statement: >
+    WHEN generating a decision or action-item acknowledgment line THE SYSTEM SHALL key the
+    formatter exclusively on a Doc 03 committed note_delta row and SHALL NOT trigger any
+    new notes read or model wake to produce the line.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE 4 · Live corrections, acknowledged
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FEAT-11
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 4"
+  source_quote: "\"Proxy, it's Friday, not Monday\" → the notes patch instantly (Doc 03 §3.6) and it confirms in one line: \"— corrected: ship Friday.\""
+  normalized_statement: >
+    WHEN a participant speaks a correction to a value in the notes THE SYSTEM SHALL apply a
+    notes patch via Doc 03 §3.6 and post exactly one confirmation line matching the pattern
+    "— corrected: <new value>".
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-12
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 4"
+  source_quote: "Trust behavior, made visible."
+  normalized_statement: >
+    WHEN a correction is acknowledged THE SYSTEM SHALL ensure the confirmation line reflects
+    the new corrected value and SHALL NOT confirm a correction that was not committed to the
+    notes.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE 5 · Dry-run
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FEAT-13
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 5"
+  source_quote: "\"What *would* you do?\" → the plan, without executing: the workroom's plan artifact returned as the answer."
+  normalized_statement: >
+    WHEN a participant asks "what would you do?" THE SYSTEM SHALL return the workroom's plan
+    artifact as the response without executing any side-effecting tools.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-14
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 5"
+  source_quote: "Rides: Plan Mode — literally free."
+  normalized_statement: >
+    WHEN responding to a dry-run request THE SYSTEM SHALL operate in Plan Mode exclusively
+    and SHALL NOT invoke any tool that has external side effects (file writes, API calls,
+    code execution).
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE 6 · Show-your-work
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FEAT-15
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 6"
+  source_quote: "\"How did you get that?\" → the receipt expands: what it ran, what it read, cited lines."
+  normalized_statement: >
+    WHEN a participant asks "how did you get that?" THE SYSTEM SHALL return the task telemetry
+    receipt containing: tools run, files and sources read, and specific cited lines.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-16
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 6"
+  source_quote: "Rides: the task telemetry that already exists."
+  normalized_statement: >
+    WHEN producing a show-your-work response THE SYSTEM SHALL read the receipt from the
+    persisted task telemetry artifact and SHALL NOT reconstruct or fabricate the receipt from
+    model memory.
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE 7 · Progress transparency
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FEAT-17
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 7"
+  source_quote: "Long tasks produce periodic one-line updates in chat (\"still building — tests running, ~3 min\"), and the tile's working line stays current."
+  normalized_statement: >
+    WHEN a long-running task is in progress THE SYSTEM SHALL post one-line chat updates
+    reflecting task state and SHALL keep the tile's working line current.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-18
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 7"
+  source_quote: "the render policy is: update on real state change, never on a timer."
+  normalized_statement: >
+    WHEN the progress-update renderer determines when to post an update THE SYSTEM SHALL
+    emit an update only on a real Doc 05 progress-envelope state-change event and SHALL NOT
+    use a timer, polling loop, sleep, or scheduled callback to trigger any progress update.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-19
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 7"
+  source_quote: "the tile's working line stays current."
+  normalized_statement: >
+    WHEN a new Doc 05 progress envelope is received THE SYSTEM SHALL update the tile's
+    working line within one render cycle to reflect the current state description from the
+    envelope.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE 8 · Draft cards
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FEAT-20
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 8"
+  source_quote: "Every staged draft posts as a consistent chat card: what it is → what it changes (one-line summary) → the link → \"approve = your click.\""
+  normalized_statement: >
+    WHEN a staged draft is produced THE SYSTEM SHALL post a chat card containing in order:
+    (1) what the draft is, (2) a one-line summary of what it changes, (3) the review link,
+    (4) the text "approve = your click".
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-21
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 8"
+  source_quote: "The link points at the authenticated `/m/{meeting_id}` home (§2.8), never a raw GCS URI."
+  normalized_statement: >
+    WHEN a draft card link is set THE SYSTEM SHALL point the link at the authenticated
+    /m/{meeting_id} home URL and SHALL NOT use a raw GCS URI or any other unauthenticated
+    storage URL as the link target.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-22
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 8"
+  source_quote: "The card carries the persisted `draft_id` (the `staged_drafts` row Doc 05 wrote at `propose_change` time, CANONICAL §4)."
+  normalized_statement: >
+    WHEN a draft card is rendered THE SYSTEM SHALL set the card's draft_id to the value
+    from the persisted staged_drafts database row written at propose_change time and SHALL
+    NOT use any invented or in-memory identifier.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-23
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 8"
+  source_quote: "the accept click posts that `draft_id` to `POST /m/{meeting_id}/drafts/{draft_id}/accept`, which server-side re-checks `meeting/draft→tenant`, reads the persisted row, and calls Doc 04's accept handler."
+  normalized_statement: >
+    WHEN POST /m/{meeting_id}/drafts/{draft_id}/accept is called THE SYSTEM SHALL re-check
+    that the draft's tenant matches the meeting's tenant, read the persisted staged_drafts
+    row, and then call Doc 04's accept handler; THE SYSTEM SHALL reject the request if the
+    tenant check fails.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-24
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 8"
+  source_quote: "never an in-memory `review_session` object (which dies at sandbox teardown)."
+  normalized_statement: >
+    WHEN the accept route handles an accept request THE SYSTEM SHALL read draft data from
+    the persisted staged_drafts database row and SHALL NOT reference any in-memory
+    review_session object to fulfill the accept.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-25
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 8"
+  source_quote: "the approve/reject buttons live there, tenant-checked and idempotent."
+  normalized_statement: >
+    WHEN POST /m/{meeting_id}/drafts/{draft_id}/accept is called more than once for the same
+    draft_id THE SYSTEM SHALL handle duplicate invocations idempotently, calling Doc 04's
+    accept handler at most once and returning a success response on duplicates.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-26
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 8"
+  source_quote: "The `draft_id` the card renders is the `Envelope.draft_id` field: the `Bundle` (04→05) and `Envelope` (05→04) Pydantic models both live in `libs/contracts` (CANONICAL §11.5)."
+  normalized_statement: >
+    WHEN the draft card renderer and the accept route both access draft_id THE SYSTEM SHALL
+    read it from the typed Envelope.draft_id or Bundle.draft_id field defined in
+    libs/contracts and SHALL NOT define an ad-hoc draft_id field independently in either
+    module.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE 9 · Session preferences, spoken
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FEAT-27
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 9"
+  source_quote: "\"Proxy, keep answers shorter\" / \"stop posting decision notes\" → acknowledged and held for the session (it lands in Proxy's session-state digest — Doc 04 — and shapes behavior)."
+  normalized_statement: >
+    WHEN a participant speaks a session preference THE SYSTEM SHALL acknowledge the preference
+    and store it in the Doc 04 session-state digest for the duration of the session.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-28
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 9"
+  source_quote: "No settings page; the meeting *is* the settings page."
+  normalized_statement: >
+    WHEN session preferences are set THE SYSTEM SHALL accept them exclusively via spoken
+    commands during the meeting and SHALL NOT require any separate settings page or UI to
+    configure session behavior.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-29
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 9"
+  source_quote: "Session-scoped only in V0; persistent preferences are V1."
+  normalized_statement: >
+    WHEN a session ends THE SYSTEM SHALL discard all session preferences and SHALL NOT carry
+    them forward to any subsequent session; cross-session preference persistence is not
+    implemented in V0.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE 10 · Capability answer
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FEAT-30
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 10"
+  source_quote: "\"Proxy, what can you do?\" → a crisp spoken+chat summary of its actual abilities on this repo."
+  normalized_statement: >
+    WHEN a participant asks "Proxy, what can you do?" THE SYSTEM SHALL produce a spoken
+    response and post a chat summary both describing Proxy's actual capabilities in the
+    context of the active repository.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-31
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 10"
+  source_quote: "Rides: the system prompt knowing its own toolbelt."
+  normalized_statement: >
+    WHEN generating the capability answer THE SYSTEM SHALL derive the capabilities list from
+    the static CAPABILITIES constants (CANONICAL §6) available in the active context and
+    SHALL NOT hard-code a static capability list directly in the handler or fabricate
+    capabilities not present in the catalog.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE 11 · Readiness in the consent line
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FEAT-32
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 11"
+  source_quote: "The join line includes the grounding status: \"…I can see `acme/checkout` (indexed 20 minutes ago).\""
+  normalized_statement: >
+    WHEN Proxy posts its join line THE SYSTEM SHALL include the repository name and the
+    elapsed time since the last index in human-readable form (e.g. "indexed 20 minutes ago").
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-33
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 11"
+  source_quote: "Rides: Doc 01's readiness/freshness signal."
+  normalized_statement: >
+    WHEN rendering the join line freshness timestamp THE SYSTEM SHALL read the value from
+    Doc 01's readiness/freshness signal and SHALL NOT compute an independent timestamp or
+    fabricate a stale value when the signal is unavailable.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE 12 · Verbal walkthrough — human-activated only
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FEAT-34
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 12"
+  source_quote: "Off by default, always."
+  normalized_statement: >
+    WHEN a new meeting session begins THE SYSTEM SHALL initialize the verbal walkthrough mode
+    to OFF; narration SHALL NOT occur unless explicitly activated.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-35
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 12"
+  source_quote: "It turns on only when a human asks — \"walk us through how you're doing it,\" \"talk us through it\" — or says yes to Proxy's offer."
+  normalized_statement: >
+    WHEN a human explicitly requests walkthrough or responds affirmatively to Proxy's offer
+    THE SYSTEM SHALL activate walkthrough mode; walkthrough SHALL NOT activate by any other
+    means.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-36
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 12"
+  source_quote: "silence or no = off, and it doesn't re-offer."
+  normalized_statement: >
+    WHEN Proxy offers walkthrough and the human responds with silence or "no" THE SYSTEM SHALL
+    keep walkthrough mode OFF and SHALL NOT offer walkthrough again for that task instance.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-37
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 12"
+  source_quote: "when starting a substantial task it may ask once."
+  normalized_statement: >
+    WHEN starting a substantial task with walkthrough OFF THE SYSTEM SHALL offer walkthrough
+    at most once per task instance.
+  requirement_type: constraint
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-38
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 12"
+  source_quote: "\"Quiet narration\" (or \"quiet\") ends it instantly."
+  normalized_statement: >
+    WHEN a participant says "quiet narration" or "quiet" while walkthrough is ON THE SYSTEM
+    SHALL immediately deactivate walkthrough mode and cease all narration events.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-39
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 12"
+  source_quote: "narrate the current action, never the backlog (if the work outruns the voice, stale lines are dropped, not read like a log)."
+  normalized_statement: >
+    WHEN walkthrough is ON and task actions proceed faster than narration delivery THE SYSTEM
+    SHALL narrate only the most-recent action state and SHALL drop stale intermediate lines
+    rather than queuing and replaying them.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-40
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 12"
+  source_quote: "it speaks only into silence, yields mid-word like all voice, and drops to the tile/chat the moment people talk."
+  normalized_statement: >
+    WHEN walkthrough narration is in progress and another participant begins speaking THE
+    SYSTEM SHALL interrupt narration immediately (mid-word if necessary) and yield the floor.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-41
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 12"
+  source_quote: "every narration line routes through Proxy's normal delivery judgment — so if the room's conversation has genuinely resumed elsewhere, narration drops to tile/chat and the result arrives at the end."
+  normalized_statement: >
+    WHEN walkthrough is ON and Proxy's delivery judgment determines the room's conversation
+    has genuinely resumed THE SYSTEM SHALL route remaining narration to tile and chat rather
+    than speaking, delivering the task result via chat at completion.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-42
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 12"
+  source_quote: "when narration is on, the worker adds a one-line *why* to its action events."
+  normalized_statement: >
+    WHEN walkthrough is ON and the worker emits an action event THE SYSTEM SHALL attach a
+    non-empty one-line rationale explaining why that action is being taken.
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE 13 · Screen sharing — human-activated only
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FEAT-43
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 13"
+  source_quote: "The screen turns on only in response to a human — an explicit command (\"share your screen,\" \"show us\"), an ask that implies it (\"show us the trace\"), or a yes to Proxy's offer."
+  normalized_statement: >
+    WHEN a human explicitly commands screen sharing, asks something that implies it, or
+    responds affirmatively to Proxy's offer THE SYSTEM SHALL activate screen sharing; screen
+    sharing SHALL NOT activate by any other means.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-44
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 13"
+  source_quote: "Proxy never self-promotes to the shared screen."
+  normalized_statement: >
+    WHEN no human has requested screen sharing or responded affirmatively to an offer THE
+    SYSTEM SHALL NOT activate screen sharing autonomously under any task state or condition.
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-45
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 13"
+  source_quote: "\"Stop sharing\" returns to the tile immediately and always wins."
+  normalized_statement: >
+    WHEN a participant says "stop sharing" THE SYSTEM SHALL immediately deactivate screen
+    sharing, return to the tile, and SHALL NOT automatically restore screen sharing until
+    a new human request is received.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE 14 · Reconciliation card
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FEAT-46
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 14"
+  source_quote: "When Proxy detects the same figure asserted two different ways across time (Doc 03 already catches contradiction-across-time — the detection exists), it doesn't render a spoken \"you're wrong.\" It posts a reconciliation card."
+  normalized_statement: >
+    WHEN Doc 03's contradiction-across-time detection fires for a figure asserted two
+    different ways THE SYSTEM SHALL post a reconciliation card to chat and SHALL NOT
+    produce a spoken correction asserting that any participant is wrong.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-47
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 14"
+  source_quote: "the two values side by side, each with its as-of source and date — \"deck: $2.4M · Q3 filing: $2.19M, as of Q3 close.\""
+  normalized_statement: >
+    WHEN a reconciliation card is rendered THE SYSTEM SHALL display both conflicting values
+    side by side, each annotated with its source reference and as-of date or temporal context.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-48
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 14"
+  source_quote: "a sourced comparison the room resolves for itself, not a correction Proxy delivers at someone."
+  normalized_statement: >
+    WHEN a reconciliation card is rendered THE SYSTEM SHALL NOT assert which value is correct
+    and SHALL present the comparison neutrally, leaving resolution to the room.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FEAT-49
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.4 item 14"
+  source_quote: "It is a render variant of the pin-to-source / draft-card format (§2.4 #8, §2.5), a contested-figure layout on the same card renderer."
+  normalized_statement: >
+    WHEN rendering a reconciliation card THE SYSTEM SHALL use the same card renderer as
+    draft cards and pin-to-source cards, passing a contested-figure layout variant, and
+    SHALL NOT implement a separate card rendering pipeline for reconciliation.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified

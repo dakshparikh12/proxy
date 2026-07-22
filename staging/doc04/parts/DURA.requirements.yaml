@@ -1,0 +1,300 @@
+# DURA.requirements.yaml — Doc 04 (Proxy Orchestrator) — §3.5 Two-Tier Session Durability
+# Atomic EARS requirements. Each carries source_location + verbatim source_quote + criticality.
+# ID scheme: R-doc04-DURA-NN
+# Authority document: DOC-04 (§3.5), CANONICAL-DECISIONS (§6, §11.9, §12.12)
+#
+# Scope: Tier-1 (session_id persist + resume-by-pointer), Tier-2 (stale-session replay
+#   from Postgres transcript plane), abort-is-final safety rule, JSON-truncation retry,
+#   the CUT Tier-2 Postgres mirror (CANONICAL §6), and the canonical import of
+#   resume_with_fallback (CANONICAL §11.9/§12.12).
+# NOT in scope here: Workroom session durability (Doc 05), Scribe transcript store
+#   internals (Doc 03/VI.3), provider seam AgentChunk normalization (§3.3).
+
+# ── Tier-1: capture session_id on INIT chunk ─────────────────────────────────
+
+- requirement_id: R-doc04-DURA-01
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.5 paragraph 2 (Tier 1), sentence 1"
+  source_quote: >
+    On the INIT chunk of the first turn, capture metadata.session_id and write it to
+    the meeting's Postgres row.
+  normalized_statement: >
+    WHEN the INIT chunk is received on the first turn of a new meeting session THE SYSTEM
+    SHALL extract metadata.session_id from the chunk and write it to the meeting's Postgres
+    row before the turn continues; the write SHALL occur on the INIT chunk, not at turn end.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Tier-1: resume on every subsequent wake ──────────────────────────────────
+
+- requirement_id: R-doc04-DURA-02
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.5 paragraph 2 (Tier 1), sentence 2"
+  source_quote: >
+    Every subsequent wake passes resume=<session_id> into the provider query. Cheap, and
+    covers the common case (same instance still alive).
+  normalized_statement: >
+    WHEN the harness wakes the agent for any turn after the first THE SYSTEM SHALL pass
+    resume=<session_id> (the session_id stored in the meeting's Postgres row) into the
+    provider query; no subsequent wake SHALL omit the resume parameter while a valid
+    session_id is stored.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Tier-2: stale-session detection — match BOTH markers ─────────────────────
+
+- requirement_id: R-doc04-DURA-03
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.5 paragraph 3 (Tier 2), sentence 2"
+  source_quote: >
+    When resume fails because the session is gone, the SDK reports it two ways across
+    versions — match BOTH: "no conversation found with session id" and "process exited".
+  normalized_statement: >
+    WHEN a ProviderError is raised during a resume attempt THE SYSTEM SHALL classify it
+    as a stale-session error if and only if the lowercased error message contains at least
+    one of the two STALE_MARKERS: "no conversation found with session id" OR "process exited";
+    both markers SHALL be matched; matching only one marker is insufficient.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Tier-2: history read from Postgres transcript plane, not a mirror ─────────
+
+- requirement_id: R-doc04-DURA-04
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.5 paragraph 3 (Tier 2), sentence 3"
+  source_quote: >
+    rebuild context from app-level meeting history (the Postgres transcript plane, Doc 03/VI.3
+    — the single source of durable meeting history; there is no separate SDK-session mirror)
+  normalized_statement: >
+    WHEN a stale-session error is detected THE SYSTEM SHALL rebuild context by reading the
+    Postgres transcript plane (the Doc 03/VI.3 durable meeting history); THE SYSTEM SHALL
+    NOT read from any separate SDK-session mirror; the Postgres transcript plane is the sole
+    authoritative history source for context rebuild.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Tier-2: emit RESTORED_NOTICE before replay ───────────────────────────────
+
+- requirement_id: R-doc04-DURA-05
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.5 paragraph 3 (Tier 2), sentence 4"
+  source_quote: >
+    prepend a delimited preamble, emit a user-visible "session restored" notice so
+    recovery is transparent rather than silent amnesia
+  normalized_statement: >
+    WHEN a stale-session replay is performed THE SYSTEM SHALL emit the RESTORED_NOTICE
+    ("_My session was restored from the meeting so far; some working context may be
+    missing._") as a user-visible AgentChunk before passing the rebuilt preamble to the
+    new run; silent recovery without emitting the RESTORED_NOTICE is a violation.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Tier-2: RESTORED_NOTICE emitted BEFORE preamble, preamble BEFORE retry ──
+
+- requirement_id: R-doc04-DURA-06
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.5 code block (resume_with_fallback)"
+  source_quote: >
+    yield AgentChunk(type="TEXT", text=RESTORED_NOTICE, metadata={"msg_id": "restored"})
+    preamble = build_history_preamble(history)   # "--- BEGIN PRIOR MEETING ---" ...
+    async for chunk in runner.run(behavior,
+                                  {**inputs, "resume": None, "preamble": preamble},
+                                  abort):
+        yield chunk
+  normalized_statement: >
+    WHEN a stale-session replay is triggered THE SYSTEM SHALL execute the following ordered
+    sequence: (1) emit the RESTORED_NOTICE AgentChunk, (2) build the history preamble from
+    the history records, (3) call runner.run with resume=None and preamble set; these three
+    steps SHALL occur in this strict order; the preamble SHALL NOT be passed before
+    RESTORED_NOTICE is yielded.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Tier-2: retry without resume; new session_id overwrites stale pointer ────
+
+- requirement_id: R-doc04-DURA-07
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.5 paragraph 3 (Tier 2), sentence 5"
+  source_quote: >
+    retry without resume (the new session's session_id overwrites the stale pointer).
+  normalized_statement: >
+    WHEN a stale-session replay starts a new SDK session THE SYSTEM SHALL pass resume=None
+    in the retry run; once the new session's INIT chunk arrives, the new session_id SHALL
+    overwrite the stale session_id in the meeting's Postgres row; the stale pointer SHALL
+    NOT persist after successful replay.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Abort-is-final: caller-initiated abort bypasses all recovery ─────────────
+
+- requirement_id: R-doc04-DURA-08
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.5 paragraph 4 (abort-is-final rule)"
+  source_quote: >
+    abort-is-final rule: a caller-initiated abort short-circuits BEFORE any recovery so a
+    killed build can't be resurrected by resume/JSON retry
+  normalized_statement: >
+    WHEN a ProviderError is caught during resume AND abort.aborted is True THE SYSTEM SHALL
+    re-raise the exception immediately without attempting any recovery (no stale-session
+    replay, no JSON-truncation retry); caller-initiated abort is the highest-priority
+    condition and SHALL NOT be overridden by any recovery path.
+  requirement_type: safety
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Abort-is-final: also blocks JSON-truncation retry ────────────────────────
+
+- requirement_id: R-doc04-DURA-09
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.5 paragraph 4 (abort-is-final rule)"
+  source_quote: >
+    abort-is-final rule: a caller-initiated abort short-circuits BEFORE any recovery so a
+    killed build can't be resurrected by resume/JSON retry
+  normalized_statement: >
+    WHEN abort.aborted is True at the time a JSON-truncation SyntaxError is caught THE
+    SYSTEM SHALL NOT attempt the JSON-truncation retry; the abort state SHALL be checked
+    before every recovery path, including the JSON-truncation retry; a killed build SHALL
+    NOT be resurrected by the JSON-truncation retry path.
+  requirement_type: safety
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── JSON-truncation retry: retry on same session, cap 2 ──────────────────────
+
+- requirement_id: R-doc04-DURA-10
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.5 paragraph 4 (JSON-truncation retry)"
+  source_quote: >
+    JSON-truncation retry: the SDK's stdio pipe can truncate a large tool-result frame →
+    SyntaxError: unterminated string in json; retry on the same session, cap 2
+  normalized_statement: >
+    WHEN a SyntaxError containing "unterminated string" is raised on a tool-result frame
+    (indicating stdio pipe truncation) THE SYSTEM SHALL retry the same session without
+    changing the session_id; the retry count SHALL be capped at 2 attempts; a third
+    SyntaxError SHALL NOT trigger a third retry.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── CUT: no session_transcripts mirror (CANONICAL §6) ────────────────────────
+
+- requirement_id: R-doc04-DURA-11
+  authority_type: canonical_decision
+  authority_document: DOC-04
+  source_location: "CANONICAL-DECISIONS §6 / §3.5 paragraph 5"
+  source_quote: >
+    The Tier-2 Postgres session-mirror is CUT (CANONICAL-DECISIONS §6): keep Tier 1
+    (persist session_id, resume-by-pointer) + Tier 3 (stale-session replay rebuilt from
+    Doc 03's transcript plane). The session_transcripts mirror, append-queue, retention
+    sweep, and durable_meeting_sessions flag are all removed.
+  normalized_statement: >
+    THE SYSTEM SHALL NOT contain a session_transcripts table, session-mirror append-queue,
+    session-mirror retention sweep, or a durable_meeting_sessions flag in any Alembic
+    migration or schema definition; these structures are permanently cut and SHALL NOT be
+    re-introduced.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Canonical import: resume_with_fallback from libs/agentkit, NOT redefined ─
+
+- requirement_id: R-doc04-DURA-12
+  authority_type: canonical_decision
+  authority_document: DOC-04
+  source_location: "CANONICAL-DECISIONS §11.9 / §3.5 inline note"
+  source_quote: >
+    resume_with_fallback is imported from libs/agentkit/resume.py — NOT redefined here
+    (CANONICAL §11.9/§12.12). Pinned full 6-arg signature.
+  normalized_statement: >
+    THE SYSTEM SHALL import resume_with_fallback exclusively from libs/agentkit/resume.py;
+    no orchestrator module or any other module outside libs/agentkit SHALL define or
+    redefine a function named resume_with_fallback; exactly one definition SHALL exist in
+    the codebase.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Canonical signature: full 6-arg signature pinned ─────────────────────────
+
+- requirement_id: R-doc04-DURA-13
+  authority_type: canonical_decision
+  authority_document: DOC-04
+  source_location: "CANONICAL-DECISIONS §12.12 / §3.5 inline note"
+  source_quote: >
+    Pinned full 6-arg signature:
+    async def resume_with_fallback(runner, behavior, inputs, resume_id, abort, history_fn):
+  normalized_statement: >
+    THE SYSTEM SHALL implement resume_with_fallback with exactly the 6-argument signature:
+    (runner, behavior, inputs, resume_id, abort, history_fn); no additional positional or
+    keyword arguments SHALL be added; no argument SHALL be removed or reordered; the
+    signature is pinned and load-bearing.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── SDK upgrade: re-audit STALE_MARKERS ──────────────────────────────────────
+
+- requirement_id: R-doc04-DURA-14
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.5 paragraph 3 (Tier 2), final sentence"
+  source_quote: >
+    Re-audit the two match strings on every SDK upgrade.
+  normalized_statement: >
+    WHEN the Claude Agent SDK dependency version is incremented THE SYSTEM SHALL include a
+    STALE_MARKERS re-audit step in the upgrade checklist, verifying that both "no
+    conversation found with session id" and "process exited" still match the SDK's actual
+    error message strings; the re-audit SHALL be documented as part of the upgrade.
+  requirement_type: process
+  criticality: P1
+  testability: reviewable
+  status: qualified
+
+# ── Single-writer invariant (§3.6 cross-reference) ───────────────────────────
+
+- requirement_id: R-doc04-DURA-15
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.5 paragraph 1, sentence 3"
+  source_quote: >
+    Single-writer-per-meeting is an explicit invariant (§3.6 guarantees exactly one harness
+    owns a meeting).
+  normalized_statement: >
+    THE SYSTEM SHALL maintain the invariant that exactly one harness instance owns a meeting
+    at any time; §3.6 provides the enforcement mechanism; the session durability design
+    (Tier-1 and Tier-2) SHALL assume and depend on this single-writer guarantee — no
+    concurrent resume_with_fallback execution for the same meeting_id SHALL occur.
+  requirement_type: architecture_invariant
+  criticality: P0
+  testability: executable
+  status: qualified

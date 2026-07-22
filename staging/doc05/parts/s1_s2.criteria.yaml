@@ -1,0 +1,1333 @@
+# Doc 05 (Workroom) — §1 + §2 acceptance criteria
+# Coverage: §1 (The end goal) and §2.1–2.6 (The design)
+# ID scheme: AC-S1-NNN for §1 items, AC-S2-NNN for §2 items
+# NEG pairs emitted for every non-null dependency_class criterion.
+# Golden-path criteria: AC-S1-001 (adopt, not build), AC-S2-001 (direct-path latency), AC-S2-025 (staged-draft floor end-to-end)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §1 · THE END GOAL
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Adopt, not build ──────────────────────────────────────────────────────────
+
+- criterion_id: AC-S1-001
+  name: "No task-type router or intake classifier exists anywhere in the Workroom codebase"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S1-01, R-doc05-S1-02, R-doc05-S1-04]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The complete Workroom service source tree."
+    when: "The source is inspected for routing logic."
+    then:
+      - "Zero functions, classes, or branches implement a task-type router or intake classifier."
+      - "The SDK's ClaudeAgentOptions is constructed via workroom_options only — no direct construction bypasses it."
+      - "No conditional branch routes on detected task type (e.g. 'if task_type == quick else large')."
+  primary_oracle:
+    type: static_analysis
+    artifact: "Grep for router/classifier patterns; AST scan for task_type branching; assert zero hits; assert all ClaudeAgentOptions construction passes through workroom_options."
+  thresholds:
+    task_type_router_instances: 0
+    intake_classifier_instances: 0
+    direct_claude_agent_options_constructions_outside_workroom_options: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: e2e}
+  test_ids: [T-S1-001]
+
+- criterion_id: AC-S1-002
+  name: "Workroom adds only the prescribed thin shell — no re-implementation of SDK internals"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S1-02, R-doc05-S1-03, R-doc05-S1-04]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The Workroom service source."
+    when: "The source is audited for SDK-internal re-implementations."
+    then:
+      - "No re-implementation of the SDK agent loop is present."
+      - "No re-implementation of planning-within-a-turn logic is present."
+      - "No re-implementation of effort-control or adaptive-effort logic is present."
+      - "The permitted additions (system prompt, toolbelt declaration, output format, safety/cost floors, big-build discipline shell) are the only additions."
+  primary_oracle:
+    type: static_analysis
+    artifact: "AST scan for loop re-implementation patterns (e.g. manual message-append loops duplicating SDK internals), effort-control scoring, and task-type scoring; assert zero instances."
+  thresholds:
+    sdk_internal_reimplementations: 0
+    effort_control_implementations_outside_sdk: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S1-002]
+
+- criterion_id: AC-S1-003
+  name: "V0 executes large-task subtasks sequentially in one resumed SDK session — no concurrent workers"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S1-05, R-doc05-S2-22]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A large task with 3 subtasks is submitted to the Workroom."
+    when: "The task executes to completion."
+    then:
+      - "Subtasks execute in order: subtask N+1 does not begin until subtask N has committed and published."
+      - "All subtasks run in the same resumed SDK session (same session_id)."
+      - "No concurrent worker threads or asyncio tasks execute distinct subtasks simultaneously."
+  primary_oracle:
+    type: deterministic
+    artifact: "Instrument subtask start/end events; assert temporal ordering: start(N+1) > end(N) for all N; assert session_id is constant across all subtask query() calls."
+  thresholds:
+    subtask_concurrency_violations: 0
+    session_id_changes_within_task: 0
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK invocation with cassette at LLM boundary; subtask prompts are scripted; session_id checked from SDK response metadata."
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S1-003]
+
+- criterion_id: AC-S1-003-NEG
+  name: "Removing the sequential guard allows concurrent subtasks — confirms guard is load-bearing"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S1-05]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The sequential subtask guard is removed (control experiment); 3 subtasks are submitted."
+    when: "The tasks execute."
+    then:
+      - "At least two subtasks execute with overlapping timelines — confirming the guard prevented this."
+  primary_oracle:
+    type: deterministic
+    artifact: "Remove sequential gate; run 3 subtasks; assert at least one overlap: start(N+1) < end(N) for some N."
+  thresholds:
+    concurrent_subtask_pairs_in_control: {minimum: 1}
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK with cassette; guard disabled in test harness only."
+  golden_path: false
+  verification_ladder:
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S1-003-NEG]
+
+- criterion_id: AC-S1-004
+  name: "Mid-task human correction rewrites the live plan artifact without restarting the SDK session"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc05-S1-07, R-doc05-S2-20]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A large task is executing subtask 2 of 4; subtask 1 is committed."
+    when: "A human correction ('cap at 100/min, not 60') arrives."
+    then:
+      - "The live plan artifact on disk is updated to reflect the correction in the relevant unit."
+      - "The SDK session_id does not change after the correction."
+      - "Subtask 1 is not re-executed; execution continues from subtask 2 with the amended plan."
+      - "The final artifact reflects the correction, not the original value."
+  primary_oracle:
+    type: deterministic
+    artifact: "Read plan artifact before and after correction injection; diff shows correction applied; assert session_id unchanged; assert subtask 1 commit unchanged in git log."
+  thresholds:
+    session_restarts_on_correction: 0
+    completed_subtask_reruns_on_correction: 0
+  dependency_class: db:postgres
+  mock_boundary: "Postgres test instance; E2B sandbox replaced by temp dir fixture; SDK cassette at LLM boundary."
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  test_ids: [T-S1-004]
+
+- criterion_id: AC-S1-004-NEG
+  name: "Without live plan update, correction is lost after restart — confirms plan persistence is required"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S2-20]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Correction is applied only to in-context memory, not to the persisted plan artifact."
+    when: "The session is interrupted and resumed."
+    then:
+      - "The correction is absent from the resumed execution — confirming plan persistence is the durable record."
+  primary_oracle:
+    type: deterministic
+    artifact: "Simulate interruption + resume without plan-artifact update; assert final artifact uses original value, not corrected value."
+  thresholds:
+    corrections_surviving_resume_without_plan_update: 0
+  dependency_class: db:postgres
+  mock_boundary: "Postgres test instance; SDK cassette."
+  golden_path: false
+  verification_ladder:
+    - {tier: integration}
+    - {tier: negative}
+  test_ids: [T-S1-004-NEG]
+
+- criterion_id: AC-S1-005
+  name: "Workroom does not touch the canonical repo copy or execute outside its sandbox"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S1-08]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A Workroom session is running with a declared sandbox MCP."
+    when: "The agent is prompted to modify the canonical repo or execute outside the sandbox."
+    then:
+      - "No write to the canonical repo path occurs."
+      - "No file operation executes on the orchestrator host filesystem."
+      - "All effects are confined to the E2B sandbox (detectable via sandbox file receipts)."
+  primary_oracle:
+    type: deterministic
+    artifact: "Monitor orchestrator host filesystem writes; assert zero writes to canonical repo paths during session; assert all artifact_hashes receipts reference sandbox paths only."
+  thresholds:
+    canonical_repo_writes: 0
+    host_filesystem_writes_outside_sandbox: 0
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK with cassette at LLM boundary; filesystem watcher on host canonical path."
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S1-005]
+
+- criterion_id: AC-S1-005-NEG
+  name: "Without sandbox confinement, agent can write to orchestrator host — confirms confinement is the gate"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S1-08]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Sandbox confinement (triad) is disabled; agent is prompted to write a file."
+    when: "The write tool is invoked."
+    then:
+      - "The write executes on the orchestrator host filesystem — confirming confinement prevents this."
+  primary_oracle:
+    type: deterministic
+    artifact: "Control: disable triad; prompt file write; assert host filesystem write count >= 1."
+  thresholds:
+    host_writes_in_control: {minimum: 1}
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK in isolated test env; cassette at LLM boundary; no sensitive data on host."
+  golden_path: false
+  verification_ladder:
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S1-005-NEG]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §2.1 · HOW QUICK ASKS ARE QUICK
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S2-001
+  name: "Direct-path quick ask (host-side code_intel, no sandbox) completes in ~1–2 seconds"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc05-S2-01, R-doc05-S2-06]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A warm meeting session: sandbox pre-provisioned, system prompt cached, code_intel LSP warm."
+    when: "A code-lookup quick ask (e.g. 'where is the retry logic?') is submitted via the direct path."
+    then:
+      - "End-to-end response time from request receipt to first envelope returned is <= 2000ms (p50 across 5 runs)."
+      - "No sandbox tool calls are made (only host-side code_intel tools appear in the trace)."
+      - "The response includes at least one file:line citation."
+  primary_oracle:
+    type: latency_measurement
+    artifact: "Measure wall-clock time from task dispatch to envelope delivery; assert p50 <= 2000ms; inspect tool call trace for absence of mcp__code__* sandbox tools."
+  thresholds:
+    p50_latency_ms: {maximum: 2000}
+    sandbox_tool_calls_on_direct_path: 0
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK with cassette at LLM boundary for reproducibility; real code_intel service against test repo."
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: e2e}
+  test_ids: [T-S2-001]
+
+- criterion_id: AC-S2-001-NEG
+  name: "Direct-path latency degrades to >2s when prompt cache is cold — confirms warm cache is the SLA gate"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc05-S2-05, R-doc05-S2-06]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A cold session: prompt cache is cleared, system prompt not yet cached."
+    when: "The same quick ask is submitted."
+    then:
+      - "End-to-end response time exceeds 2000ms — confirming the cached prefix is required to hit the SLA."
+  primary_oracle:
+    type: latency_measurement
+    artifact: "Clear prompt cache; measure latency; assert p50 > 2000ms; confirms the positive SLA depends on the warm cache."
+  thresholds:
+    p50_latency_ms_cold: {minimum: 2001}
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK with cleared cache; cassette at LLM boundary with cache-miss response timing."
+  golden_path: false
+  verification_ladder:
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S2-001-NEG]
+
+- criterion_id: AC-S2-002
+  name: "Sandbox-reaching quick ask completes in single-digit seconds (no sandbox cold-start mid-meeting)"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc05-S2-02, R-doc05-S2-05]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A warm meeting session with pre-provisioned sandbox."
+    when: "A quick ask requiring a sandbox tool call (e.g. ripgrep) is submitted."
+    then:
+      - "End-to-end response time is <= 8000ms (p50 across 5 runs)."
+      - "No sandbox cold-boot occurs (sandbox health check shows already-running state)."
+  primary_oracle:
+    type: latency_measurement
+    artifact: "Wall-clock timing from task dispatch to envelope; sandbox /health hit before timing shows warm; assert p50 <= 8000ms."
+  thresholds:
+    p50_latency_ms: {maximum: 8000}
+    sandbox_cold_boot_events: 0
+  dependency_class: vendor:e2b
+  mock_boundary: "Real E2B sandbox (pre-provisioned in test fixture); SDK cassette at LLM boundary."
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S2-002]
+
+- criterion_id: AC-S2-002-NEG
+  name: "Cold-sandbox quick ask breaches SLA — confirms pre-provisioning is required"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc05-S2-05]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Sandbox is not pre-provisioned (cold start)."
+    when: "A sandbox-reaching quick ask is submitted."
+    then:
+      - "End-to-end latency exceeds 8000ms — confirming cold start violates the SLA."
+  primary_oracle:
+    type: latency_measurement
+    artifact: "Start from cold E2B sandbox; measure latency; assert p50 > 8000ms."
+  thresholds:
+    p50_latency_ms_cold_start: {minimum: 8001}
+  dependency_class: vendor:e2b
+  mock_boundary: "Real E2B cold-start; SDK cassette at LLM boundary."
+  golden_path: false
+  verification_ladder:
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S2-002-NEG]
+
+- criterion_id: AC-S2-003
+  name: "No router, classifier, or extra overhead code exists on the quick-ask path"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S2-03, R-doc05-S2-06, R-doc05-S1-01]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The Workroom source code."
+    when: "The hot path from task receipt to query() is traced."
+    then:
+      - "No task-type classification function is called before query()."
+      - "No routing decision branch dispatches to a different handler based on estimated task type."
+      - "No effort-scoring or complexity-scoring code exists on the hot path."
+  primary_oracle:
+    type: static_analysis
+    artifact: "Trace call graph from task ingress to query(); assert zero classification or routing calls; grep for 'classifier', 'router', 'task_type', 'effort_score' on the hot path returns 0."
+  thresholds:
+    classification_calls_before_query: 0
+    routing_branches_by_task_type: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S2-003]
+
+- criterion_id: AC-S2-004
+  name: "System prompt and map are prompt-cached with the 1-hour TTL breakpoint"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S2-05]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A Workroom session is initialized."
+    when: "The ClaudeAgentOptions is constructed and the first query() is made."
+    then:
+      - "A cache_control breakpoint with a 1-hour TTL is set on the stable prefix (system prompt + map tool defs)."
+      - "Per-task volatile content (bundle, transcript tail) is placed after the breakpoint."
+      - "The SDK's token usage response shows cache_read_input_tokens > 0 on the second query() (confirming the prefix was cached)."
+  primary_oracle:
+    type: deterministic
+    artifact: "Inspect ClaudeAgentOptions system_prompt for cache_control breakpoint with ttl=3600; on second query() assert cache_read_input_tokens > 0 in usage response."
+  thresholds:
+    cache_control_breakpoint_present: 1
+    cache_ttl_seconds: 3600
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK invocation with cassette that returns realistic usage.cache_read_input_tokens values."
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S2-004]
+
+- criterion_id: AC-S2-004-NEG
+  name: "Without the 1-hour cache breakpoint, cache misses between subtasks — confirms TTL is required"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S2-05]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "cache_control breakpoint TTL is set to the SDK default 5 minutes instead of 1 hour."
+    when: "A multi-subtask build runs with inter-subtask delays > 5 minutes."
+    then:
+      - "cache_read_input_tokens == 0 on the second query() after the TTL expiry — confirming cache miss."
+  primary_oracle:
+    type: deterministic
+    artifact: "Set TTL to 300s; simulate 6-minute delay; assert cache_read_input_tokens == 0 on resumed query()."
+  thresholds:
+    cache_hits_after_ttl_expiry: 0
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK cassette with simulated TTL expiry behavior."
+  golden_path: false
+  verification_ladder:
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S2-004-NEG]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §2.2 · THE DISPOSITION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S2-005
+  name: "System prompt verbatim opening line is present and exact"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S2-07]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The Workroom system prompt construction code or template."
+    when: "The generated system prompt text is inspected."
+    then:
+      - "The first substantive instruction in the system prompt is exactly: 'If this can be answered with a straight lookup, a single tool call, or one step — answer it quickly and simply, now. Otherwise: plan, build, and verify.'"
+      - "No word, punctuation, or character differs from the verbatim text above."
+  primary_oracle:
+    type: deterministic
+    artifact: "Extract system_prompt string from workroom_options output; assert prompt.lstrip().startswith('If this can be answered with a straight lookup, a single tool call, or one step — answer it quickly and simply, now. Otherwise: plan, build, and verify.')."
+  thresholds:
+    verbatim_opening_line_present: 1
+    character_deviations_from_verbatim: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S2-005]
+
+- criterion_id: AC-S2-006
+  name: "System prompt contains all required disposition instructions"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S2-08, R-doc05-S2-09, R-doc05-S2-10, R-doc05-S2-11, R-doc05-S2-12, R-doc05-S2-13, R-doc05-S2-14, R-doc05-S2-15, R-doc05-S2-16]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The Workroom system prompt."
+    when: "The full system prompt text is inspected."
+    then:
+      - "The prompt contains an instruction prohibiting task-type classification ('never classify into task types')."
+      - "The prompt contains a file:line citation instruction."
+      - "The prompt contains a no-fabrication instruction with clearly-marked-defaults fallback."
+      - "The prompt contains a one-clarifying-question limit instruction."
+      - "The prompt contains a world-touching acts → staged draft instruction."
+      - "The prompt contains a speakable headlines instruction."
+      - "The prompt contains a budget/replan cap → honest state instruction."
+      - "The prompt contains an honest decline with named missing access instruction."
+      - "The prompt contains map-orient / parallel tool calls / big outputs in files instructions."
+  primary_oracle:
+    type: deterministic
+    artifact: "Assert each of the 9 required instruction topics is present by substring/keyword match in the system_prompt string; assert none of the 9 is absent."
+  thresholds:
+    required_disposition_instructions_present: 9
+    required_disposition_instructions_absent: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S2-006]
+
+- criterion_id: AC-S2-007
+  name: "Engine asks at most one clarifying question per task and only when alternatives change the action"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S2-11]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "A task that admits a clarifying question but for which a reasonable default exists."
+    when: "The engine processes the task."
+    then:
+      - "The engine asks at most one clarifying question."
+      - "If the engine can proceed without ambiguity, it does not ask any clarifying question."
+  primary_oracle:
+    type: simulation
+    artifact: "Run 5 test tasks designed to elicit over-clarification; assert total clarifying questions per task <= 1; assert tasks with unambiguous defaults produce 0 questions."
+  thresholds:
+    clarifying_questions_per_task: {maximum: 1}
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK with cassette at LLM boundary; test tasks scripted."
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S2-007]
+
+- criterion_id: AC-S2-007-NEG
+  name: "Without the one-question limit in the system prompt, engine over-clarifies — confirms instruction is required"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S2-11]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "System prompt with the clarifying-question instruction removed."
+    when: "A task is submitted that admits multiple clarifying questions."
+    then:
+      - "The engine asks 2 or more clarifying questions — confirming the limit instruction is the gate."
+  primary_oracle:
+    type: simulation
+    artifact: "Remove one-question limit instruction; run multi-clarification task; assert question count >= 2."
+  thresholds:
+    clarifying_questions_without_limit: {minimum: 2}
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK with cassette; modified system prompt."
+  golden_path: false
+  verification_ladder:
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S2-007-NEG]
+
+- criterion_id: AC-S2-008
+  name: "Engine includes file:line citations in responses to code-claim questions"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S2-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A code-question ask (e.g. 'Where is the retry logic?') submitted to a warmed session."
+    when: "The engine returns its response."
+    then:
+      - "The response detail field contains at least one file:line citation in the format <path>:<line_number>."
+      - "The cited file exists in the sandbox checkout."
+  primary_oracle:
+    type: deterministic
+    artifact: "Extract envelope.detail; assert re.search(r'[\\w/\\.]+:\\d+', detail) is not None; resolve cited path in sandbox; assert file exists."
+  thresholds:
+    file_line_citations_in_code_response: {minimum: 1}
+    cited_files_not_found_in_sandbox: 0
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK with cassette returning a scripted response with at least one file:line; sandbox replaced by temp dir fixture with matching file."
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S2-008]
+
+- criterion_id: AC-S2-008-NEG
+  name: "Without file:line instruction, engine omits citations — confirms instruction is the gate"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S2-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "System prompt with file:line citation instruction removed."
+    when: "A code-question ask is submitted."
+    then:
+      - "The response contains zero file:line citations — confirming the instruction drives citation behavior."
+  primary_oracle:
+    type: deterministic
+    artifact: "Remove citation instruction; run code question; assert file:line citation count == 0."
+  thresholds:
+    citations_without_instruction: 0
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK with cassette; modified system prompt."
+  golden_path: false
+  verification_ladder:
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S2-008-NEG]
+
+- criterion_id: AC-S2-009
+  name: "Engine stops at K-budget and returns honest partial state in the envelope"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S2-14, R-doc05-S2-23]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A subtask with a max_turns budget of 2 is submitted."
+    when: "The subtask is forced to require 5 turns to complete."
+    then:
+      - "The subtask terminates at turn 2."
+      - "The returned envelope.status is 'partial' or 'needs_review' (never 'done')."
+      - "The envelope.receipts field describes what was completed and what was not."
+  primary_oracle:
+    type: deterministic
+    artifact: "Set max_turns=2 on a scripted multi-turn task; assert SDK session terminates at turn 2; assert envelope.status in ('partial', 'needs_review'); assert envelope.receipts is non-empty."
+  thresholds:
+    turns_past_budget: 0
+    false_done_status_at_budget_exhaustion: 0
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK with cassette; max_turns=2 forced; scripted multi-turn prompts."
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S2-009]
+
+- criterion_id: AC-S2-009-NEG
+  name: "Without a budget cap, engine runs indefinitely — confirms cap is the structural bound"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S2-14]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "max_turns is set to the SDK default (1000); a scripted 50-turn task is submitted."
+    when: "The task runs."
+    then:
+      - "The engine runs for more than 2 turns without stopping — confirming per-task budget is required."
+  primary_oracle:
+    type: deterministic
+    artifact: "Remove tight max_turns; run scripted looping task; assert turn count > 2 before natural termination."
+  thresholds:
+    turns_with_no_budget_cap: {minimum: 3}
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Real SDK with cassette returning scripted multi-turn responses."
+  golden_path: false
+  verification_ladder:
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S2-009-NEG]
+
+- criterion_id: AC-S2-010
+  name: "Envelope headline is speakable (no unpronounceable identifiers or raw JSON in headline)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S2-13]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "A completed task of any type (quick ask or large build)."
+    when: "The envelope is inspected."
+    then:
+      - "envelope.headline contains no raw JSON strings (no '{', '}', '[', ']' except in quoted literals)."
+      - "envelope.headline is <= 200 characters."
+      - "envelope.headline contains no UUID strings or bare hash digests not embedded in a natural sentence."
+  primary_oracle:
+    type: deterministic
+    artifact: "Assert envelope.headline has no raw JSON chars; assert len(headline) <= 200; assert no bare UUID pattern outside a sentence."
+  thresholds:
+    headlines_with_raw_json: 0
+    headlines_exceeding_200_chars: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S2-010]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §2.3 · LARGE TASKS: THE DISCIPLINE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S2-011
+  name: "Large-task plan is repo-persisted multi-file Markdown with all required per-unit fields"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S2-17, R-doc05-S2-18]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A large multi-file task is submitted and the planning turn completes."
+    when: "The plan artifact is inspected on the sandbox filesystem."
+    then:
+      - "A Markdown file (or files) exists in the repo-persisted plan path."
+      - "Each plan unit contains: acceptance criteria tags (AC-tag), files-to-touch list, verification steps with exact pass rules, and ordering constraint."
+      - "No plan unit is missing any of the four required fields."
+  primary_oracle:
+    type: deterministic
+    artifact: "Read plan Markdown from sandbox filesystem after planning turn; parse per-unit structure; assert all four fields present in every unit; assert 0 units with missing fields."
+  thresholds:
+    plan_units_missing_ac_tags: 0
+    plan_units_missing_files_to_touch: 0
+    plan_units_missing_verification_steps: 0
+    plan_units_missing_order: 0
+  dependency_class: vendor:e2b
+  mock_boundary: "Real E2B sandbox (or temp dir fixture); SDK cassette at LLM boundary returning a scripted plan turn."
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S2-011]
+
+- criterion_id: AC-S2-011-NEG
+  name: "A plan unit missing AC-tags is detected and rejected before execution"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S2-18]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The plan validator is invoked with a plan unit missing acceptance criteria tags."
+    when: "Validation runs."
+    then:
+      - "Validation fails and returns an error naming the missing field."
+      - "Execution does not begin until the plan is amended."
+  primary_oracle:
+    type: deterministic
+    artifact: "Construct a plan unit without AC-tags; invoke plan validator; assert ValidationError raised naming missing AC-tags field."
+  thresholds:
+    invalid_plans_allowed_to_execute: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: negative}
+  test_ids: [T-S2-011-NEG]
+
+- criterion_id: AC-S2-012
+  name: "Multi-step plans are posted to chat and execution waits for human response"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc05-S2-19]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A large multi-step plan is ready."
+    when: "The plan-post step executes."
+    then:
+      - "The plan is written to the chat output channel before any subtask begins execution."
+      - "Execution does not begin until a human response (or a silence timeout) is received."
+      - "After silence timeout, execution begins automatically (silence = go)."
+  primary_oracle:
+    type: deterministic
+    artifact: "Instrument chat channel writes and subtask start events; assert chat write timestamp < first subtask start timestamp; assert execution begins after silence timeout."
+  thresholds:
+    subtask_starts_before_plan_posted: 0
+    execution_starts_without_human_gate: 0
+  dependency_class: db:postgres
+  mock_boundary: "Postgres test instance; chat channel as in-memory mock; SDK cassette."
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  test_ids: [T-S2-012]
+
+- criterion_id: AC-S2-012-NEG
+  name: "Without the plan-post gate, execution begins before human sees the plan"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S2-19]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The plan-post gate is removed."
+    when: "A large task is submitted."
+    then:
+      - "Execution begins before the plan is visible to the human — confirming the gate is required."
+  primary_oracle:
+    type: deterministic
+    artifact: "Remove plan-post gate; run large task; assert subtask 1 starts before any chat message is written."
+  thresholds:
+    subtask_starts_before_chat_post_in_control: {minimum: 1}
+  dependency_class: db:postgres
+  mock_boundary: "Postgres test instance; chat channel mock; SDK cassette."
+  golden_path: false
+  verification_ladder:
+    - {tier: integration}
+    - {tier: negative}
+  test_ids: [T-S2-012-NEG]
+
+- criterion_id: AC-S2-013
+  name: "Builder never self-grades — verification is always run by a separate fresh-context critic"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S2-24, R-doc05-S2-37]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The Workroom verification flow source."
+    when: "The call chain from build-complete to verification is traced."
+    then:
+      - "The verification query() is constructed with a new, empty context (no session resume from the builder's session)."
+      - "The builder's success log is not included in the critic's system_prompt or initial messages."
+      - "The critic's session_id differs from the builder's session_id."
+  primary_oracle:
+    type: static_analysis
+    artifact: "Trace the verify-flow code; assert critic query() uses a fresh session (no resume=builder_session_id); assert builder success log is filtered from critic context; assert critic session_id != builder session_id."
+  thresholds:
+    critic_sessions_reusing_builder_session: 0
+    builder_success_logs_in_critic_context: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S2-013]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §2.4 · THE ENVIRONMENT AND THE TOOLBELT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S2-014
+  name: "notes_ref in bundle is a UUID meeting_id string — never the notes object or a non-UUID identifier"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S2-29, R-doc05-S2-31]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A task bundle is constructed and passed to the Workroom."
+    when: "The bundle is inspected."
+    then:
+      - "bundle.notes_ref is a string matching the UUID4 pattern (8-4-4-4-12 hex)."
+      - "bundle.notes_ref is NOT a dict, object, or any non-string type."
+      - "No notes content (note text, delta list, etc.) is included inline in the bundle."
+  primary_oracle:
+    type: deterministic
+    artifact: "Deserialize task bundle; assert isinstance(bundle.notes_ref, str); assert re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', bundle.notes_ref); assert 'notes' not in bundle or bundle.notes is None."
+  thresholds:
+    non_uuid_notes_refs: 0
+    inline_notes_content_in_bundle: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S2-014]
+
+- criterion_id: AC-S2-015
+  name: "Notes are fetched via GET /internal/notes/{meeting_id} — no other notes access path exists"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S2-30]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The Workroom source code."
+    when: "All notes-access code paths are traced."
+    then:
+      - "The only notes read path calls GET /internal/notes/{meeting_id}."
+      - "No code path reads NOTES_CACHE, a Scribe in-process store, or a direct database query for note_deltas from within the Workroom."
+      - "The request is authenticated with a token header."
+  primary_oracle:
+    type: static_analysis
+    artifact: "Grep for notes access patterns in Workroom source; assert only GET /internal/notes/ pattern present; assert zero direct NOTES_CACHE references; assert zero direct DB queries for note_deltas from Workroom code."
+  thresholds:
+    non_api_notes_access_paths: 0
+    direct_notes_cache_references: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S2-015]
+
+- criterion_id: AC-S2-016
+  name: "GET /internal/notes/{meeting_id} returns folded notes object (note_deltas from Postgres) and is token-gated"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc05-S2-30]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A meeting_id with 3 note_deltas persisted in Postgres."
+    when: "GET /internal/notes/{meeting_id} is called with a valid token."
+    then:
+      - "The response is 200 and body contains the folded notes object reflecting all 3 deltas."
+      - "A call with no token returns 401."
+      - "A call with an invalid token returns 401 or 403."
+  primary_oracle:
+    type: deterministic
+    artifact: "Seed Postgres with 3 note_deltas; GET /internal/notes/{meeting_id} with valid token; assert 200 + folded content; repeat without token; assert 401."
+  thresholds:
+    authenticated_response_status: 200
+    unauthenticated_response_status: 401
+    note_deltas_missing_from_folded_response: 0
+  dependency_class: db:postgres
+  mock_boundary: "Postgres test instance; HTTP test client for the internal API."
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  test_ids: [T-S2-016]
+
+- criterion_id: AC-S2-016-NEG
+  name: "GET /internal/notes/{meeting_id} without token is rejected — confirms token gate is enforced"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S2-30]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The /internal/notes endpoint is running."
+    when: "A GET request is made with no Authorization header."
+    then:
+      - "The response status is 401."
+      - "No notes content is returned in the body."
+  primary_oracle:
+    type: deterministic
+    artifact: "GET /internal/notes/{valid_meeting_id} with no token; assert status == 401; assert response body contains no note content."
+  thresholds:
+    unauthenticated_note_access_allowed: 0
+  dependency_class: db:postgres
+  mock_boundary: "Postgres test instance; HTTP test client."
+  golden_path: false
+  verification_ladder:
+    - {tier: integration}
+    - {tier: negative}
+  test_ids: [T-S2-016-NEG]
+
+- criterion_id: AC-S2-017
+  name: "E2B sandbox is mutable; code_intel (dep graph, LSP) is host-side read-only only — no in-sandbox LSP"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S2-26]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The Workroom source and E2B sandbox template definition."
+    when: "The sandbox contents and MCP server registrations are inspected."
+    then:
+      - "No LSP process or code_intel MCP server is configured inside the E2B sandbox template."
+      - "The code_intel MCP server is registered as a host-side in-process server in workroom_options."
+      - "The sandbox mcp_servers list contains no 'code_intel' entry that points inside the sandbox."
+  primary_oracle:
+    type: static_analysis
+    artifact: "Inspect E2B template spec for LSP/code_intel entries; assert zero LSP processes in template; inspect workroom_options mcp_servers dict; assert code_intel server url is host-side (not sandbox URL)."
+  thresholds:
+    in_sandbox_lsp_instances: 0
+    in_sandbox_code_intel_mcp_instances: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S2-017]
+
+- criterion_id: AC-S2-018
+  name: "Web search and fetch execute on the orchestrator host — zero arbitrary E2B outbound in core"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S2-32]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A Workroom session with the triad applied and egress-default-deny on the E2B sandbox."
+    when: "The agent performs a web search or web fetch."
+    then:
+      - "The web search/fetch tool call is handled by a host-side tool (not a sandbox MCP tool)."
+      - "No outbound HTTP request originates from within the E2B sandbox to an external URL."
+  primary_oracle:
+    type: deterministic
+    artifact: "Instrument network calls: assert web search/fetch tool name is NOT mcp__code__*; assert no external HTTP from sandbox network namespace; assert tool executes on host."
+  thresholds:
+    web_calls_originating_from_sandbox: 0
+  dependency_class: vendor:e2b
+  mock_boundary: "Real E2B sandbox with network monitoring; SDK cassette at LLM boundary; web search tool replaced by test double on host."
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S2-018]
+
+- criterion_id: AC-S2-018-NEG
+  name: "Sandbox with outbound allowed can reach external URLs — confirms egress-deny is the control"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S2-32]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "E2B sandbox with outbound network explicitly allowed (control)."
+    when: "A network call to an external URL is made from within the sandbox."
+    then:
+      - "The network call succeeds — confirming egress-deny is the effective control in production."
+  primary_oracle:
+    type: deterministic
+    artifact: "Control: remove sandbox egress restrictions; make outbound HTTP from sandbox; assert response received; confirms production deny is the gate."
+  thresholds:
+    outbound_calls_succeeding_with_allow: {minimum: 1}
+  dependency_class: vendor:e2b
+  mock_boundary: "Real E2B sandbox with egress allowed; test-controlled external endpoint."
+  golden_path: false
+  verification_ladder:
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S2-018-NEG]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §2.5 · THE FLOORS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S2-019
+  name: "propose_change is the ONLY code path that writes to the world — no other world-touching write path exists"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S2-34, R-doc05-S2-35]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The complete Workroom source tree."
+    when: "All write-to-world code paths are traced."
+    then:
+      - "The only path that writes outside the sandbox is the propose_change MCP tool handler."
+      - "No direct git push, file write to canonical repo, send via connector, or external API write occurs from any other code path."
+      - "propose_change is registered as a host-side in-process MCP server, not a sandbox tool."
+  primary_oracle:
+    type: static_analysis
+    artifact: "Grep for git push, external API write, connector send patterns outside propose_change; assert zero hits; assert propose_change is in host-side mcp_servers, not in sandbox mcp_servers."
+  thresholds:
+    alternative_world_write_paths: 0
+    propose_change_registered_as_sandbox_tool: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S2-019]
+
+- criterion_id: AC-S2-020
+  name: "propose_change returns draft_id with status=needs_review and persists bundle durably without landing the change"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc05-S2-35, R-doc05-S2-36]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A Workroom agent invokes propose_change with a multi-file code-change payload."
+    when: "propose_change executes."
+    then:
+      - "propose_change returns a non-null draft_id (UUID) and status='needs_review'."
+      - "A staged_drafts row is created in Postgres with the same draft_id and status='proposed'."
+      - "The full file bundle is persisted in GCS Object-Versioned storage at the artifact_ref path."
+      - "No file in the canonical repo is modified at this point."
+      - "No git push occurs."
+  primary_oracle:
+    type: deterministic
+    artifact: "Call propose_change with a test payload; assert return value contains draft_id and status='needs_review'; query staged_drafts in Postgres; assert row exists; verify GCS object at artifact_ref; inspect canonical repo for no-change."
+  thresholds:
+    propose_change_calls_without_draft_id: 0
+    staged_drafts_rows_missing_after_call: 0
+    gcs_bundles_missing_after_call: 0
+    canonical_repo_modifications_on_propose: 0
+    git_pushes_on_propose: 0
+  dependency_class: db:postgres
+  mock_boundary: "Postgres test instance; GCS replaced by test double (in-memory object store); canonical repo is a temp dir; SDK cassette."
+  golden_path: true
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+    - {tier: e2e}
+  test_ids: [T-S2-020]
+
+- criterion_id: AC-S2-020-NEG
+  name: "propose_change bundle is durable: sandbox teardown does not destroy an unaccepted draft"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S2-35, R-doc05-S2-36]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "propose_change has been called and returned draft_id; the E2B sandbox is then torn down."
+    when: "The staged_drafts row and GCS bundle are inspected after sandbox teardown."
+    then:
+      - "The staged_drafts row still exists in Postgres with status='proposed'."
+      - "The GCS bundle still exists at the artifact_ref path."
+      - "The draft is still acceptible by a human after sandbox teardown."
+  primary_oracle:
+    type: deterministic
+    artifact: "Call propose_change; tear down sandbox fixture; query staged_drafts; fetch GCS object; assert both still present."
+  thresholds:
+    drafts_lost_on_sandbox_teardown: 0
+    gcs_bundles_lost_on_sandbox_teardown: 0
+  dependency_class: db:postgres
+  mock_boundary: "Postgres test instance; GCS test double; sandbox as destroyable fixture."
+  golden_path: false
+  verification_ladder:
+    - {tier: integration}
+    - {tier: negative}
+  test_ids: [T-S2-020-NEG]
+
+- criterion_id: AC-S2-021
+  name: "Human accept action applies the draft — no automated or timeout-based apply occurs"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc05-S2-36]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A staged draft with status='proposed' exists."
+    when: "The accept endpoint is called by a named human."
+    then:
+      - "The staged_drafts row status transitions to 'accepted'."
+      - "The branch/diff bundle is exposed for download."
+      - "No git push occurs (PR push is Expansion)."
+    and_when: "The accept endpoint is NOT called within an extended period."
+    then_also:
+      - "The draft status remains 'proposed' — no automated apply occurs."
+  primary_oracle:
+    type: deterministic
+    artifact: "Call accept endpoint; assert staged_drafts.status == 'accepted'; assert download bundle accessible; assert git push count == 0. Sleep without calling accept; assert status remains 'proposed'."
+  thresholds:
+    git_pushes_on_accept: 0
+    automated_applies_without_human_action: 0
+  dependency_class: db:postgres
+  mock_boundary: "Postgres test instance; GCS test double; git bare repo for push-monitoring."
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  test_ids: [T-S2-021]
+
+- criterion_id: AC-S2-021-NEG
+  name: "Without the accept gate, draft would auto-apply — confirms gate is structural"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S2-36]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The accept gate is removed and propose_change is wired to apply directly."
+    when: "propose_change is called."
+    then:
+      - "The change lands without human action — confirming the accept gate is the structural control."
+  primary_oracle:
+    type: deterministic
+    artifact: "Remove accept gate; call propose_change; assert change applied to canonical repo; confirms gate is required."
+  thresholds:
+    changes_landing_without_accept_in_control: {minimum: 1}
+  dependency_class: db:postgres
+  mock_boundary: "Postgres test instance; temp dir canonical repo; control experiment only."
+  golden_path: false
+  verification_ladder:
+    - {tier: integration}
+    - {tier: negative}
+  test_ids: [T-S2-021-NEG]
+
+- criterion_id: AC-S2-022
+  name: "Per-task dollar cap is pre-checked before execution begins"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S2-38]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A task is dispatched when the meeting has already consumed 95% of its dollar budget."
+    when: "The pre-spend check runs before the first query()."
+    then:
+      - "If the estimated task cost would exceed the remaining budget, the task is rejected before any query() call."
+      - "The rejection envelope has status='failed' with a reason citing the cost cap."
+      - "No query() call is made after the cap check fails."
+  primary_oracle:
+    type: deterministic
+    artifact: "Set meeting budget to $0.01 remaining; submit a task with estimated cost > $0.01; assert query() is never called; assert envelope.status == 'failed'; assert 'budget' in envelope.receipts."
+  thresholds:
+    query_calls_after_pre_spend_failure: 0
+    budget_exceeded_tasks_silently_executed: 0
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S2-022]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §2.6 · PROACTIVE TASKS AND FOLLOW-UPS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S2-023
+  name: "Sandbox persists per meeting — follow-up tasks see prior artifacts without re-seeding"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc05-S2-40]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "Task A completes and writes a file 'mockup.png' to the sandbox; Task B is then submitted."
+    when: "Task B executes."
+    then:
+      - "Task B can read 'mockup.png' from the sandbox filesystem without any re-seeding step."
+      - "The sandbox_id is the same for both tasks (same E2B sandbox instance)."
+  primary_oracle:
+    type: deterministic
+    artifact: "Task A writes test file; Task B reads it via mcp__code__read_file; assert read succeeds and content matches; assert sandbox_id is identical across both task records."
+  thresholds:
+    cross_task_file_access_failures: 0
+    sandbox_id_changes_within_meeting: 0
+  dependency_class: vendor:e2b
+  mock_boundary: "Real E2B sandbox; SDK cassette at LLM boundary; tasks dispatched as direct test calls."
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S2-023]
+
+- criterion_id: AC-S2-023-NEG
+  name: "Re-seeding between tasks would destroy prior artifacts — confirms per-meeting persistence is required"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S2-40]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "Sandbox is torn down and re-seeded between tasks (control — incorrect behavior)."
+    when: "Task B tries to read a file written by Task A."
+    then:
+      - "Task B cannot find the file — confirming per-meeting persistence is required."
+  primary_oracle:
+    type: deterministic
+    artifact: "Tear down sandbox between tasks; Task B read fails; assert FileNotFoundError or empty result."
+  thresholds:
+    cross_task_file_reads_succeeding_after_reseed: 0
+  dependency_class: vendor:e2b
+  mock_boundary: "Real E2B sandbox with teardown between tasks."
+  golden_path: false
+  verification_ladder:
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S2-023-NEG]
+
+- criterion_id: AC-S2-024
+  name: "Proactive task results are written to meeting notes via the internal notes API"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc05-S2-39, R-doc05-S2-40]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "A judge-initiated proactive task completes with a result."
+    when: "The task result is published."
+    then:
+      - "A note_delta is written to the meeting notes via the internal notes API."
+      - "The note_delta content reflects the proactive task result."
+      - "The surfacing decision (whether to speak the result) is NOT made by the Workroom but remains with Doc 06."
+  primary_oracle:
+    type: deterministic
+    artifact: "Run proactive task; inspect note_deltas in Postgres; assert at least one delta with proactive task content; assert no automatic speak/alert was triggered by the Workroom."
+  thresholds:
+    proactive_results_not_written_to_notes: 0
+    proactive_speak_decisions_made_by_workroom: 0
+  dependency_class: db:postgres
+  mock_boundary: "Postgres test instance; Doc 06 surfacing replaced by mock that tracks calls."
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  test_ids: [T-S2-024]
+
+- criterion_id: AC-S2-024-NEG
+  name: "Workroom does not autonomously surface proactive results without judge gate — confirms surfacing is Doc 06"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S2-39]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "A proactive task completes; Doc 06 judge gate is replaced by a mock that blocks surfacing."
+    when: "The Workroom processes the proactive result."
+    then:
+      - "No speak/surface action is initiated by the Workroom directly."
+      - "The result is written to notes but not spoken until Doc 06 approves."
+  primary_oracle:
+    type: deterministic
+    artifact: "Block Doc 06 gate; run proactive task; assert zero Workroom-initiated speak events; assert note_delta written."
+  thresholds:
+    workroom_initiated_speaks_without_judge_gate: 0
+  dependency_class: db:postgres
+  mock_boundary: "Postgres test instance; Doc 06 gate as blocking mock."
+  golden_path: false
+  verification_ladder:
+    - {tier: integration}
+    - {tier: negative}
+  test_ids: [T-S2-024-NEG]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# END-TO-END GOLDEN PATH — staged-draft floor from build to human accept
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S2-025
+  name: "Golden path: 'push this change' yields a persisted multi-file staged draft, no push, durable after sandbox teardown"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc05-S2-34, R-doc05-S2-35, R-doc05-S2-36, R-doc05-S2-37]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A Workroom session is running with a pre-provisioned warm sandbox seeded from a
+      test repo snapshot; the triad is applied; propose_change is mounted as a host-side
+      MCP server; the worker disposition is active.
+    when: "'Push the rate-limiter change we built' is submitted as a task."
+    then:
+      - "The engine builds the change in the sandbox (no direct push occurs during build)."
+      - "propose_change is called and returns draft_id with status='needs_review'."
+      - "A staged_drafts row exists in Postgres with the draft_id."
+      - "The GCS bundle contains all modified files."
+      - "After sandbox teardown, the draft is still present in Postgres and GCS."
+      - "A named human accept action exposes the branch bundle for download."
+      - "No git push occurs at any point."
+  primary_oracle:
+    type: deterministic
+    artifact: "End-to-end test: submit task; assert no git push during run; assert propose_change invoked; assert staged_drafts row present; assert GCS bundle present; tear down sandbox; assert draft survives; call accept; assert bundle downloadable; assert git push count == 0."
+  thresholds:
+    git_pushes_in_golden_path: 0
+    staged_drafts_rows_missing: 0
+    gcs_bundles_missing: 0
+    drafts_surviving_sandbox_teardown: 1
+  dependency_class: db:postgres
+  mock_boundary: "Postgres test instance; GCS test double; git bare repo for push monitoring; SDK cassette at LLM boundary; E2B replaced by temp dir for file effects."
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: e2e}
+  test_ids: [T-S2-025]
+
+- criterion_id: AC-S2-025-NEG
+  name: "Without GCS + Postgres persistence, draft is lost after sandbox teardown — confirms durability is required"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S2-35, R-doc05-S2-36]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "propose_change is modified to store the bundle only in the sandbox filesystem (not GCS/Postgres)."
+    when: "The sandbox is torn down after propose_change is called."
+    then:
+      - "The draft_id is no longer resolvable — the bundle is lost and the human cannot accept it."
+      - "This confirms GCS Object-Versioned + staged_drafts Postgres row are both required for durability."
+  primary_oracle:
+    type: deterministic
+    artifact: "Remove GCS/Postgres writes from propose_change; call it; tear down sandbox; attempt draft lookup; assert draft not found (404/KeyError)."
+  thresholds:
+    drafts_surviving_sandbox_teardown_without_durable_storage: 0
+  dependency_class: db:postgres
+  mock_boundary: "Postgres test instance; GCS test double; sandbox as destroyable fixture; control experiment only."
+  golden_path: false
+  verification_ladder:
+    - {tier: integration}
+    - {tier: negative}
+  test_ids: [T-S2-025-NEG]

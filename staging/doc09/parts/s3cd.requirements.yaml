@@ -1,0 +1,264 @@
+# Doc 09 — Section 3: Scenario criteria S5–S9
+# Requirements slice (paired with s3cd.criteria.yaml).
+# Scope: instance recycle / resume, concurrency isolation, cost circuit-breaker,
+#        honest failure, tenant isolation.
+
+# ─── S5: Hours-long meeting survives an instance recycle ───────────────────────
+
+- requirement_id: R-doc09-S3-50
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S5"
+  source_quote: "Kill the orchestrator mid-meeting → a replacement re-claims the meeting (atomic claim frees after reap) → replays recent transcript → continues; meeting_cost reloads (budget not reset to 0)"
+  normalized_statement: >
+    WHEN the orchestrator process is killed mid-meeting THE SYSTEM SHALL free the
+    operation_runs row (via mark_stale_operations_interrupted()) so that a replacement
+    orchestrator can perform an INSERT ... ON CONFLICT DO NOTHING RETURNING id that
+    succeeds; the stale row SHALL transition out of the running state before the
+    replacement claim attempt is made.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-51
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S5"
+  source_quote: "Kill the orchestrator mid-meeting → a replacement re-claims the meeting (atomic claim frees after reap) → replays recent transcript → continues; meeting_cost reloads (budget not reset to 0)"
+  normalized_statement: >
+    WHEN a replacement orchestrator re-claims a recycled meeting THE SYSTEM SHALL
+    replay recent transcript content from the transcript_segments table (Tier-3 replay)
+    so that continuity of context is restored before serving resumes.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-52
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S5"
+  source_quote: "meeting_cost reloads (budget not reset to 0)"
+  normalized_statement: >
+    WHEN a replacement orchestrator reclaims a meeting after an instance recycle
+    THE SYSTEM SHALL reload the meeting_cost row (model_usd + transport_usd + e2b_usd)
+    from Postgres and SHALL NOT reset any cost column to zero; previously accrued cost
+    SHALL be the starting budget for continued cost-check evaluation.
+  requirement_type: state_consistency
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-53
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S5"
+  source_quote: "Kill the orchestrator mid-meeting → a replacement re-claims the meeting (atomic claim frees after reap) → replays recent transcript → continues"
+  normalized_statement: >
+    WHEN an orchestrator recycle completes (atomic claim succeeds + transcript replay
+    finishes) THE SYSTEM SHALL resume serving meeting participants with no permanent
+    user-visible gap; the only allowable interruption is a brief reconnect window
+    bounded by STALE_AFTER_S (≈40 s) plus replay latency.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ─── S6: Concurrency — several meetings on one host at once ────────────────────
+
+- requirement_id: R-doc09-S3-54
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S6"
+  source_quote: "No cross-meeting starvation; each meeting's tenant isolation holds; sandboxes provisioned/reaped independently"
+  normalized_statement: >
+    WHEN multiple meetings run concurrently on one host THE SYSTEM SHALL prevent
+    cross-meeting LLM-budget starvation; each meeting's in-flight work SHALL make
+    forward progress independently of other meetings on the same host up to the
+    per-host in-flight bound.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-55
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S6"
+  source_quote: "No cross-meeting starvation; each meeting's tenant isolation holds; sandboxes provisioned/reaped independently"
+  normalized_statement: >
+    WHEN multiple meetings with distinct tenant_ids run concurrently THE SYSTEM SHALL
+    enforce per-meeting tenant isolation so that no meeting reads data (code, notes,
+    cost rows, transcript segments) belonging to another meeting's tenant.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-56
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S6"
+  source_quote: "sandboxes provisioned/reaped independently"
+  normalized_statement: >
+    WHEN a meeting's sandbox (e2b) is created or destroyed THE SYSTEM SHALL provision
+    and reap that sandbox independently of other meetings' sandboxes; termination or
+    failure of one meeting's sandbox SHALL NOT affect any other meeting's sandbox.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ─── S7: Cost circuit-breaker ──────────────────────────────────────────────────
+
+- requirement_id: R-doc09-S3-57
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S7"
+  source_quote: "Soft cap degrades (Orchestrator→Haiku, widen Scribe interval) with a spoken disclosure; hard cap → notes-only; never a silent cliff"
+  normalized_statement: >
+    WHEN check_meeting_budget() detects that cumulative cost (model_usd + transport_usd
+    + e2b_usd) has crossed the soft cap threshold THE SYSTEM SHALL downgrade the
+    Orchestrator model to Haiku AND widen the Scribe interval AND emit a spoken
+    disclosure to meeting participants before or simultaneously with executing the
+    downgrade; the disclosure SHALL NOT be deferred or omitted.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-58
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S7"
+  source_quote: "hard cap → notes-only; never a silent cliff"
+  normalized_statement: >
+    WHEN check_meeting_budget() detects that cumulative cost has crossed the hard cap
+    threshold ($1/hr envelope) THE SYSTEM SHALL switch to notes-only mode; no further
+    tool invocations or LLM inference beyond note accumulation SHALL be allowed until
+    the meeting ends; the hard-cap transition SHALL emit a spoken disclosure.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-59
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S7"
+  source_quote: "never a silent cliff"
+  normalized_statement: >
+    WHEN any cost-cap transition occurs (soft or hard) THE SYSTEM SHALL always emit a
+    spoken disclosure; a silent transition (cap crossed without a spoken participant
+    notification) is prohibited regardless of meeting state or concurrency.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-60
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S7 / CANONICAL §3"
+  source_quote: "check_meeting_budget() reads model_usd + transport_usd + e2b_usd"
+  normalized_statement: >
+    WHEN check_meeting_budget() evaluates the current meeting spend THE SYSTEM SHALL
+    compute total cost as the sum of model_usd, transport_usd, and e2b_usd from the
+    meeting_cost row; it SHALL NOT omit any of these three columns from the sum.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ─── S8: Honest failure ────────────────────────────────────────────────────────
+
+- requirement_id: R-doc09-S3-61
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S8"
+  source_quote: "Proxy says what it can't see; never a confident wrong answer (Law 1); a failed build returns needs_review/failed, never done"
+  normalized_statement: >
+    WHEN the codebase index readiness is not_ready or contains gaps THE SYSTEM SHALL
+    surface the list of gaps (labeled lower-bound) to the user and SHALL NOT answer
+    questions about code in those gaps as though the index were complete; a confident
+    answer about unseen code is prohibited (Law 1: Grounded or silent).
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-62
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S8"
+  source_quote: "a failed build returns needs_review/failed, never done"
+  normalized_statement: >
+    WHEN a tool invocation or build step fails THE SYSTEM SHALL return an EnvelopeStatus
+    of needs_review or failed; the status SHALL never be set to done when the tool
+    errored or the build did not pass the critic+evidence gate (Law 2: Never overstate).
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-63
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S8"
+  source_quote: "Proxy says what it can't see; never a confident wrong answer (Law 1)"
+  normalized_statement: >
+    WHEN a speech-to-text gap occurs in the transcript THE SYSTEM SHALL acknowledge
+    the gap to participants and SHALL NOT fabricate or infer transcript content to fill
+    the gap; any response about content in the gap SHALL be labeled as unheard.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ─── S9: Tenant isolation ──────────────────────────────────────────────────────
+
+- requirement_id: R-doc09-S3-64
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S9"
+  source_quote: "A message without a valid owned meeting_id is rejected; no cross-tenant read of customer code"
+  normalized_statement: >
+    WHEN a message arrives at the dispatch funnel without a valid meeting_id that is
+    owned by the authenticated principal THE SYSTEM SHALL reject the message at the
+    funnel boundary; the message SHALL NOT be forwarded to any tenant-scoped handler
+    or result in any read of customer data.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-65
+  authority_type: architecture_invariant
+  authority_document: DOC-09
+  source_location: "§3 table row S9 / Invariant 9"
+  source_quote: "no cross-tenant read of customer code"
+  normalized_statement: >
+    WHEN any query is executed against tenant-scoped tables THE SYSTEM SHALL include
+    tenant_id in every predicate that touches customer data; a query path that could
+    return rows belonging to a different tenant_id is a P0 breach (Invariant 9) and
+    SHALL be prevented by schema-level constraints or application-level enforcement.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S3-66
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§3 table row S9 / §11.5"
+  source_quote: "entity→owner→tenant server-side resolution"
+  normalized_statement: >
+    WHEN an inbound message references an entity (tile, connect-page token, or similar)
+    THE SYSTEM SHALL resolve entity→owner→tenant server-side using the authoritative
+    Postgres lookup; the tenant_id SHALL NOT be accepted from client-supplied fields
+    in the message payload.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified

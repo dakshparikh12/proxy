@@ -1,0 +1,1181 @@
+# GATE.criteria.yaml — Doc 04 (Orchestrator) — §3.1 Address Detection + §3.2 The Wake Turn
+# Acceptance criteria derived from GATE.requirements.yaml.
+# ID scheme: AC-GATE-NNN (NEG partner: AC-GATE-NNN-NEG)
+# Authority refs: R-doc04-GATE-NN
+#
+# dependency_class values used:
+#   null              — pure logic / static analysis; no external system required
+#   vendor:assemblyai — criteria that exercise the transcript feed (cassette-backed)
+#   vendor:recall     — criteria that exercise the chat/websocket feed (cassette-backed)
+#   vendor:claude-sdk — criteria that exercise the Claude Agent SDK session or provider seam
+#   db:postgres       — criteria that exercise the note_deltas Postgres read path
+#
+# mock_boundary (when dependency_class == vendor:*):
+#   "may mock via vcrpy cassette at the call_external layer; MUST NOT replace the
+#    anthropic client or websocket with Mock()"
+#
+# golden_path: true on exactly ONE criterion — the complete address→wake→agent-turn cycle.
+# NEG-pair rule: every non-null dependency_class criterion has a paired AC-GATE-NNN-NEG.
+#
+# Verification ladder tiers used:
+#   lint            — ruff/mypy/AST; no runtime
+#   unit            — deterministic in-process logic, no I/O
+#   negative        — paired negative-path unit/lint test
+#   integration     — real Postgres, no network vendor
+#   reality         — live SDK or cassette-backed vendor call
+#   e2e             — end-to-end from address detection through agent turn completion
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FAULT MODELS
+# ─────────────────────────────────────────────────────────────────────────────
+fault_models:
+
+  - id: F-GATE-SCAN-MISS
+    summary: "Mechanical scan misses a 'Proxy' name-hit or @proxy chat token due to case mismatch, buffering, or segment boundary split."
+
+  - id: F-GATE-DISAM-OVER-CALL
+    summary: "Disambiguation model call is issued on every transcript segment regardless of name-hit, burning cost on non-hits."
+
+  - id: F-GATE-DISAM-ZERO-CALL
+    summary: "A name-hit triggers no disambiguation call; Proxy wakes or stays silent based on raw text match alone."
+
+  - id: F-GATE-CHAT-DISAM
+    summary: "@proxy in chat incorrectly triggers a disambiguation call, adding latency and cost to an unambiguous signal."
+
+  - id: F-GATE-SELF-HIT
+    summary: "Proxy's own transcribed speech triggers a name-hit and disambiguation, causing a self-wake loop."
+
+  - id: F-GATE-ACK-SLOW
+    summary: "Ack reflex fires more than 500ms after the confirmed address, violating the near-instant response contract."
+
+  - id: F-GATE-WAKE-NO-ACK
+    summary: "Proxy wakes (agent turn fires) but the ack reflex is never sent, leaving the meeting participants without acknowledgment."
+
+  - id: F-GATE-ONE-SESSION-PER-MEETING
+    summary: "The harness creates more than one agent session per meeting, or tears down and recreates the session between wakes, losing history."
+
+  - id: F-GATE-PROVIDER-SEAM-BYPASS
+    summary: "The harness accesses the SDK session directly, bypassing the provider seam, producing non-normalized output."
+
+  - id: F-GATE-WAKE-MSG-BLOAT
+    summary: "The wake message includes raw session history or data beyond event + state digest, inflating token cost per wake."
+
+  - id: F-GATE-POLLING-WORKROOM
+    summary: "The harness polls for workroom completion via a sleep/check loop instead of using asyncio done-callbacks."
+
+  - id: F-GATE-SIGNAL-SYNCHRONOUS
+    summary: "A webhook, heartbeat, or boundary signal is processed synchronously outside the event queue, blocking the harness."
+
+  - id: F-GATE-TTL-WRONG
+    summary: "The cache_control breakpoint TTL is set to 5 minutes (the SDK default) rather than 1 hour, causing silent expiry between sporadic wakes."
+
+  - id: F-GATE-PREFIX-ORDER
+    summary: "Volatile content (wake event, transcript tail) is placed before the cache_control breakpoint, invalidating the cached prefix on every wake."
+
+  - id: F-GATE-DIGEST-STALE
+    summary: "The state digest is not regenerated at or before 15 wakes, causing the harness to prime the agent with stale state."
+
+  - id: F-GATE-DIGEST-RAW-HISTORY
+    summary: "The wake turn is primed with raw session history instead of the compact state digest, ballooning token cost."
+
+  - id: F-GATE-NOTES-FROM-CACHE
+    summary: "The Notes read path reads from the Scribe's in-process NOTES_CACHE rather than the note_deltas Postgres table, returning stale or wrong-tenant data."
+
+  - id: F-GATE-SDK-MCP-LEAK
+    summary: "strict_mcp_config is absent or False, allowing the SDK to load .mcp.json / claude.ai connectors into the meeting session."
+
+  - id: F-GATE-SDK-SETTINGS-LEAK
+    summary: "setting_sources is non-empty or absent, allowing the SDK to load host filesystem permissions, hooks, or CLAUDE.md."
+
+  - id: F-GATE-SDK-PRESET-LOAD
+    summary: "The computed tools list is absent or uses the default SDK preset, handing the agent host-level tools (Read/Bash/Grep)."
+
+  - id: F-GATE-HARDCODED-DISPATCH
+    summary: "The harness contains if event_type == X: action_Y logic, violating the no-static-dispatch law and making unanticipated events unhandled."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ACCEPTANCE CRITERIA
+# ─────────────────────────────────────────────────────────────────────────────
+criteria:
+
+  # ── AC-GATE-001: Mechanical scan detects "Proxy" name-hit ───────────────────
+
+  - criterion_id: AC-GATE-001
+    name: "Transcript scanner detects 'Proxy' name-hit without a model call"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-01]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The address-detection scanner with a simulated transcript segment stream"
+      when: "A transcript segment containing the word 'Proxy' (any capitalization) arrives"
+      then:
+        - "The scanner emits a name-hit event for that segment"
+        - "No model call is issued by the scanner itself (disambiguation is triggered separately)"
+    primary_oracle:
+      type: deterministic
+      artifact: "Inject synthetic transcript segments: one with 'Proxy', one without; assert name-hit event emitted for the hit segment; assert 0 model calls issued by the scanner."
+    thresholds:
+      violations_allowed: 0
+    fault_model_refs: [F-GATE-SCAN-MISS]
+    test_ids: [T-GATE-001]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  # ── AC-GATE-002: Chat @proxy detected without model call ─────────────────────
+
+  - criterion_id: AC-GATE-002
+    name: "Chat scanner detects @proxy token and emits a confirmed-address event without disambiguation"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-04]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The address-detection scanner receiving simulated chat messages"
+      when: "A chat message containing @proxy arrives"
+      then:
+        - "The scanner emits a confirmed-address event directly (no intermediate unconfirmed hit event)"
+        - "Zero disambiguation model calls are issued for the @proxy token"
+    primary_oracle:
+      type: deterministic
+      artifact: "Inject a chat message with '@proxy'; assert confirmed-address event emitted; assert 0 disambiguation calls in call_external log."
+    thresholds:
+      violations_allowed: 0
+      disambiguation_calls_for_chat_address: 0
+    fault_model_refs: [F-GATE-CHAT-DISAM]
+    test_ids: [T-GATE-002]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  - criterion_id: AC-GATE-002-NEG
+    name: "NEG: a chat message without @proxy does not emit a confirmed-address event"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-01, R-doc04-GATE-04]
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "The address-detection scanner receiving simulated chat messages"
+      when: "A chat message arrives that does not contain @proxy"
+      then:
+        - "No confirmed-address or name-hit event is emitted"
+        - "No model call is issued"
+    primary_oracle:
+      type: deterministic
+      artifact: "Inject a chat message without '@proxy'; assert 0 address events emitted; assert 0 model calls in call_external log."
+    thresholds:
+      violations_allowed: 0
+    fault_model_refs: [F-GATE-SCAN-MISS]
+    test_ids: [T-GATE-002-NEG]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-GATE-003: Name-hit triggers exactly one disambiguation call ────────────
+
+  - criterion_id: AC-GATE-003
+    name: "Each transcript name-hit triggers exactly one disambiguation model call"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-02]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The address-detection pipeline with disambiguation, using a cassette-mocked model"
+      when: "Two transcript segments arrive — one containing 'Proxy', one containing 'proxy server' — each should produce a name-hit"
+      then:
+        - "Exactly one disambiguation call is issued per name-hit (two calls total for two hits)"
+        - "No disambiguation call is issued for transcript segments without a name-hit"
+    primary_oracle:
+      type: deterministic
+      artifact: "Inject 3 segments: 'Proxy can you help', 'proxy server is down', 'unrelated text'. Assert 2 disambiguation calls in call_external log (one per hit), 0 for the third segment."
+    thresholds:
+      violations_allowed: 0
+      disambiguation_calls_per_hit: 1
+      disambiguation_calls_per_non_hit: 0
+    fault_model_refs: [F-GATE-DISAM-OVER-CALL, F-GATE-DISAM-ZERO-CALL]
+    test_ids: [T-GATE-003]
+    dependency_class: vendor:claude-sdk
+    mock_boundary: "may mock via vcrpy cassette at the call_external layer; MUST NOT replace the anthropic client with Mock()"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: reality}
+
+  - criterion_id: AC-GATE-003-NEG
+    name: "NEG: disambiguation call is NOT issued when no name-hit occurs in a transcript segment"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-02]
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "The address-detection pipeline with disambiguation"
+      when: "100 transcript segments arrive, none containing 'Proxy'"
+      then:
+        - "Zero disambiguation model calls are issued"
+        - "No wake event or confirmed-address event is emitted"
+    primary_oracle:
+      type: deterministic
+      artifact: "Inject 100 segments with no 'Proxy' token; assert 0 call_external calls; assert 0 wake events."
+    thresholds:
+      violations_allowed: 0
+      disambiguation_calls_on_no_hit: 0
+    fault_model_refs: [F-GATE-DISAM-OVER-CALL]
+    test_ids: [T-GATE-003-NEG]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-GATE-004: Confirmed address → ack reflex ≤500ms ──────────────────────
+
+  - criterion_id: AC-GATE-004
+    name: "Confirmed address triggers ack reflex within 500ms"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-03]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The address-detection pipeline with a cassette-mocked disambiguation response confirming address"
+      when: "A transcript name-hit is confirmed as addressed-to-Proxy"
+      then:
+        - "The ack reflex fires within 500ms of the confirmed-address event being emitted"
+        - "The ack reflex fires before the full agent wake turn begins"
+    primary_oracle:
+      type: deterministic
+      artifact: "Time from confirmed-address event emission to ack-reflex call; assert elapsed_ms <= 500 over 20 runs; assert ack timestamp < agent-turn-start timestamp."
+    thresholds:
+      violations_allowed: 0
+      ack_deadline_ms: 500
+    fault_model_refs: [F-GATE-ACK-SLOW, F-GATE-WAKE-NO-ACK]
+    test_ids: [T-GATE-004]
+    dependency_class: vendor:claude-sdk
+    mock_boundary: "may mock via vcrpy cassette at the call_external layer; MUST NOT replace the anthropic client with Mock()"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: reality}
+
+  - criterion_id: AC-GATE-004-NEG
+    name: "NEG: ack reflex is NOT fired when disambiguation returns 'not addressed to Proxy'"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-03]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "A cassette-mocked disambiguation response returning 'not addressed to Proxy' (e.g. 'proxy server' reference)"
+      when: "The disambiguation result is processed"
+      then:
+        - "No ack reflex is fired"
+        - "No wake event or agent turn is initiated"
+    primary_oracle:
+      type: deterministic
+      artifact: "Mock disambiguation to return not-addressed; assert 0 ack-reflex calls; assert 0 agent-session messages sent."
+    thresholds:
+      violations_allowed: 0
+      ack_calls_on_not_addressed: 0
+    fault_model_refs: [F-GATE-ACK-SLOW]
+    test_ids: [T-GATE-004-NEG]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-GATE-005: Proxy's own speech is never a name-hit ─────────────────────
+
+  - criterion_id: AC-GATE-005
+    name: "Proxy-originated speech segments are skipped by the name-hit scanner"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-05]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The address-detection scanner with transcript segments that carry a Proxy-speaker marker"
+      when: "A transcript segment containing 'Proxy' arrives but is marked as Proxy-originated speech"
+      then:
+        - "No name-hit event is emitted for this segment"
+        - "No disambiguation call is issued"
+        - "No ack reflex fires"
+    primary_oracle:
+      type: deterministic
+      artifact: "Inject a segment with text 'Proxy will handle that' and speaker_id=PROXY_SPEAKER; assert 0 name-hit events; assert 0 disambiguation calls; assert 0 ack calls."
+    thresholds:
+      violations_allowed: 0
+      name_hits_from_self_speech: 0
+    fault_model_refs: [F-GATE-SELF-HIT]
+    test_ids: [T-GATE-005]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  - criterion_id: AC-GATE-005-NEG
+    name: "NEG: a segment with 'Proxy' from a non-Proxy speaker does trigger a name-hit"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-01, R-doc04-GATE-05]
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "The address-detection scanner"
+      when: "A transcript segment containing 'Proxy' arrives with speaker_id set to a meeting participant (not Proxy)"
+      then:
+        - "A name-hit event is emitted for this segment"
+    primary_oracle:
+      type: deterministic
+      artifact: "Inject a segment with text 'Hey Proxy' and speaker_id=PARTICIPANT; assert 1 name-hit event emitted."
+    thresholds:
+      violations_allowed: 0
+      name_hits_expected: 1
+    fault_model_refs: [F-GATE-SCAN-MISS]
+    test_ids: [T-GATE-005-NEG]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-GATE-006: One persistent agent session per meeting ────────────────────
+
+  - criterion_id: AC-GATE-006
+    name: "Exactly one persistent agent SDK session is created per meeting and never recreated between wakes"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-09, R-doc04-GATE-12]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "A harness running for a simulated meeting with 5 wake events"
+      when: "All 5 wake events are processed"
+      then:
+        - "Exactly one SDK session object is created for the meeting lifetime"
+        - "All 5 wake messages are sent to the same session object"
+        - "The session is not torn down or recreated between wakes"
+    primary_oracle:
+      type: deterministic
+      artifact: "Instrument session constructor; simulate 5 wakes; assert constructor called exactly 1 time; assert all 5 send_message calls target the same session instance."
+    thresholds:
+      violations_allowed: 0
+      session_creations_per_meeting: 1
+    fault_model_refs: [F-GATE-ONE-SESSION-PER-MEETING]
+    test_ids: [T-GATE-006]
+    dependency_class: vendor:claude-sdk
+    mock_boundary: "may mock via vcrpy cassette at the call_external layer; MUST NOT replace the anthropic client with Mock()"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: reality}
+
+  - criterion_id: AC-GATE-006-NEG
+    name: "NEG: harness does not create a second session when a meeting reconnects after a transient disconnect"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-09]
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "A running harness that receives a transient websocket disconnect and reconnect"
+      when: "The harness recovers the websocket connection"
+      then:
+        - "No new SDK session is created; the existing session is reused"
+        - "Session creation count remains at 1"
+    primary_oracle:
+      type: deterministic
+      artifact: "Simulate disconnect→reconnect sequence; assert session constructor called exactly 1 time total; assert session instance identity unchanged post-reconnect."
+    thresholds:
+      violations_allowed: 0
+      session_creations_on_reconnect_allowed: 0
+    fault_model_refs: [F-GATE-ONE-SESSION-PER-MEETING]
+    test_ids: [T-GATE-006-NEG]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-GATE-007 (golden_path): Complete address→ack→wake→agent-turn cycle ────
+
+  - criterion_id: AC-GATE-007
+    name: "Complete address-to-wake cycle: 'Proxy' in transcript → ack ≤500ms → one wake message (event+digest) → model tool calls dispatched"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-01, R-doc04-GATE-02, R-doc04-GATE-03, R-doc04-GATE-09, R-doc04-GATE-10, R-doc04-GATE-11]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "A fully wired harness with cassette-mocked disambiguation (returns addressed=true) and cassette-mocked agent session (returns a speak tool call)"
+      when: "A transcript segment containing 'Proxy, can you summarize?' arrives from a participant speaker"
+      then:
+        - "The scanner emits a name-hit within one event-loop tick"
+        - "Exactly one disambiguation call is issued"
+        - "The ack reflex fires within 500ms of the confirmed-address event"
+        - "Exactly one wake message is sent to the agent session containing the event description and state digest"
+        - "The model's speak tool call is routed to the registered speak harness function"
+        - "No raw session history is included in the wake message"
+    primary_oracle:
+      type: deterministic
+      artifact: "End-to-end trace with cassette mocks: assert (1) name-hit event, (2) 1 disambiguation call, (3) ack_ts - confirmed_ts <= 500ms, (4) 1 session.send_message call with shape {event: ..., state_digest: ...}, (5) speak handler invoked exactly once, (6) no session_history field in wake message."
+    thresholds:
+      violations_allowed: 0
+      ack_deadline_ms: 500
+      disambiguation_calls: 1
+      wake_messages: 1
+      speak_handler_calls: 1
+    fault_model_refs: [F-GATE-SCAN-MISS, F-GATE-DISAM-ZERO-CALL, F-GATE-ACK-SLOW, F-GATE-WAKE-MSG-BLOAT, F-GATE-PROVIDER-SEAM-BYPASS]
+    test_ids: [T-GATE-007]
+    dependency_class: vendor:claude-sdk
+    mock_boundary: "may mock via vcrpy cassette at the call_external layer; MUST NOT replace the anthropic client with Mock()"
+    golden_path: true
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: reality}
+      - {tier: e2e}
+
+  - criterion_id: AC-GATE-007-NEG
+    name: "NEG: wake message without state digest is rejected before being sent to the agent session"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-10]
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "The wake-message builder with a deliberately empty state digest"
+      when: "A wake message is assembled"
+      then:
+        - "The builder raises a validation error before sending the message to the session"
+        - "No malformed wake message reaches the SDK session"
+    primary_oracle:
+      type: deterministic
+      artifact: "Call wake-message builder with state_digest=None; assert ValidationError raised; assert 0 session.send_message calls."
+    thresholds:
+      violations_allowed: 0
+      malformed_wake_messages_sent: 0
+    fault_model_refs: [F-GATE-WAKE-MSG-BLOAT]
+    test_ids: [T-GATE-007-NEG]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-GATE-008: Provider seam is the only path to the agent session ─────────
+
+  - criterion_id: AC-GATE-008
+    name: "All agent session calls pass through the provider seam (§3.3); no direct SDK client calls in harness code"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-09]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The harness source code and the provider seam module"
+      when: "Static analysis inspects all references to the SDK client in harness code"
+      then:
+        - "Zero direct SDK client instantiation or session.query() calls exist outside the provider seam module"
+        - "All harness code that initiates agent turns does so through the provider seam API"
+    primary_oracle:
+      type: static_analysis
+      artifact: "AST scan of harness module (excluding the provider seam module itself): assert 0 direct imports of anthropic SDK client; assert 0 direct calls to session.query() or ClaudeAgent() outside the provider_seam module."
+    thresholds:
+      violations_allowed: 0
+    fault_model_refs: [F-GATE-PROVIDER-SEAM-BYPASS]
+    test_ids: [T-GATE-008]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  - criterion_id: AC-GATE-008-NEG
+    name: "NEG: provider seam itself emits a normalized output stream regardless of underlying SDK response shape"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-09]
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "The provider seam receiving two SDK response shapes: a tool_call response and a text response"
+      when: "Each response is processed through the seam"
+      then:
+        - "Both responses are emitted as the same normalized stream type"
+        - "The harness consumer does not need to branch on SDK-internal response types"
+    primary_oracle:
+      type: deterministic
+      artifact: "Feed two cassette fixtures (tool_call, text) to the provider seam; assert both produce the same output type (e.g. NormalizedEvent) from the seam; assert 0 isinstance(response, sdk_internal_type) branches in harness consumer."
+    thresholds:
+      violations_allowed: 0
+    fault_model_refs: [F-GATE-PROVIDER-SEAM-BYPASS]
+    test_ids: [T-GATE-008-NEG]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-GATE-009: Workroom completion via done-callback, no polling ────────────
+
+  - criterion_id: AC-GATE-009
+    name: "Dispatched workroom tasks use asyncio.create_task with a done-callback; no polling loop present"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-07]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The harness dispatch function that creates workroom tasks"
+      when: "Static analysis inspects the workroom dispatch path"
+      then:
+        - "Every workroom task is created via asyncio.create_task(...)"
+        - "Every created task has an add_done_callback registered"
+        - "Zero sleep-in-loop, asyncio.wait, or asyncio.gather patterns polling for task completion appear in the harness dispatch path"
+    primary_oracle:
+      type: static_analysis
+      artifact: "AST scan of harness dispatch module: assert all task creation uses asyncio.create_task; assert add_done_callback call count == task creation count; grep for 'while.*not.*done', 'asyncio.sleep' in dispatch path returns 0 matches."
+    thresholds:
+      violations_allowed: 0
+      polling_constructs_in_dispatch_allowed: 0
+    fault_model_refs: [F-GATE-POLLING-WORKROOM]
+    test_ids: [T-GATE-009]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  - criterion_id: AC-GATE-009-NEG
+    name: "NEG: done-callback fires exactly once when the workroom task completes, not before"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-07]
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "A simulated workroom asyncio task that completes after a fixed delay"
+      when: "The task completes"
+      then:
+        - "The registered done-callback is called exactly once"
+        - "The callback is not called before the task is done"
+    primary_oracle:
+      type: deterministic
+      artifact: "Create a mock asyncio task; register a counting done-callback; await task completion; assert callback_count == 1; assert callback was not called before task.done() was True."
+    thresholds:
+      violations_allowed: 0
+      callback_calls_per_completion: 1
+      premature_callback_calls_allowed: 0
+    fault_model_refs: [F-GATE-POLLING-WORKROOM]
+    test_ids: [T-GATE-009-NEG]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-GATE-010: Signals land on the harness event queue ────────────────────
+
+  - criterion_id: AC-GATE-010
+    name: "Webhook, heartbeat, and boundary signals are enqueued as events, never processed synchronously"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-08]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The harness event ingestion path for webhooks, heartbeats, and boundary signals"
+      when: "One signal of each type arrives"
+      then:
+        - "Each signal is enqueued on the harness event queue before any processing logic is invoked"
+        - "No signal is processed synchronously in the ingestion callback (e.g. no model call, no harness state mutation inside the raw callback)"
+    primary_oracle:
+      type: deterministic
+      artifact: "Instrument the event queue and the raw signal callbacks; fire one webhook, one heartbeat, one boundary signal; assert each callback puts exactly one event on the queue before returning; assert 0 model calls inside the raw callbacks."
+    thresholds:
+      violations_allowed: 0
+      events_enqueued_per_signal: 1
+      model_calls_in_raw_callback_allowed: 0
+    fault_model_refs: [F-GATE-SIGNAL-SYNCHRONOUS]
+    test_ids: [T-GATE-010]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  - criterion_id: AC-GATE-010-NEG
+    name: "NEG: an unrecognized signal type is still enqueued and does not raise an exception"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-08, R-doc04-GATE-25]
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "The harness event ingestion path"
+      when: "A signal with an unrecognized type field arrives"
+      then:
+        - "The signal is enqueued as a generic event without raising an exception"
+        - "No signal is silently dropped"
+    primary_oracle:
+      type: deterministic
+      artifact: "Send a signal with type='unknown_future_signal'; assert queue.qsize() increased by 1; assert 0 exceptions raised in the ingestion callback."
+    thresholds:
+      violations_allowed: 0
+      dropped_unknown_signals_allowed: 0
+    fault_model_refs: [F-GATE-SIGNAL-SYNCHRONOUS, F-GATE-HARDCODED-DISPATCH]
+    test_ids: [T-GATE-010-NEG]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-GATE-011: cache_control breakpoint TTL is 1 hour ─────────────────────
+
+  - criterion_id: AC-GATE-011
+    name: "cache_control breakpoint TTL is set to 3600s (1 hour), not the 5-minute SDK default"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-14, R-doc04-GATE-15]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The agent session prompt builder that constructs the cached prefix"
+      when: "The cache_control breakpoint parameter is inspected"
+      then:
+        - "The TTL value is 3600 seconds (1 hour)"
+        - "The value 300 (5-minute default) does not appear as the TTL for the breakpoint"
+        - "The TTL is not hard-coded elsewhere; it is set via the canonical cache_control parameter"
+    primary_oracle:
+      type: static_analysis
+      artifact: "AST scan of prompt builder: assert cache_control breakpoint TTL == 3600; grep for TTL=300 or cache_ttl=300 returns 0 matches in the breakpoint construction."
+    thresholds:
+      violations_allowed: 0
+      required_ttl_seconds: 3600
+      five_minute_ttl_occurrences_allowed: 0
+    fault_model_refs: [F-GATE-TTL-WRONG]
+    test_ids: [T-GATE-011]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  - criterion_id: AC-GATE-011-NEG
+    name: "NEG: volatile tail content (wake event, transcript tail) is placed after the cache_control breakpoint"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-14]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The assembled prompt for a wake turn"
+      when: "The prompt structure is inspected for element ordering"
+      then:
+        - "The cache_control breakpoint marker appears in the prompt before the wake event content"
+        - "The wake event and transcript tail content appear after the breakpoint marker"
+        - "No volatile content (meeting-specific event text, transcript tail) appears before the breakpoint"
+    primary_oracle:
+      type: deterministic
+      artifact: "Assemble a wake prompt; parse the message list; assert breakpoint index < wake_event index; assert no volatile-content tokens appear in messages before the breakpoint index."
+    thresholds:
+      violations_allowed: 0
+      volatile_blocks_before_breakpoint_allowed: 0
+    fault_model_refs: [F-GATE-PREFIX-ORDER]
+    test_ids: [T-GATE-011-NEG]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-GATE-012: State digest regenerated at ≤15 wakes or material change ────
+
+  - criterion_id: AC-GATE-012
+    name: "State digest is regenerated at or before the 15th wake and on material-state changes"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-17]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "A harness processing 20 consecutive wake events with no material-state change between wakes 1 and 14, then a task-completion at wake 16"
+      when: "Each wake event is processed"
+      then:
+        - "The digest is regenerated at wake 15 (count boundary) even without a material-state change"
+        - "The digest is regenerated again at wake 16 (material-state change: task completion)"
+        - "The digest is NOT regenerated at each of wakes 1–14 (unnecessary cost)"
+    primary_oracle:
+      type: deterministic
+      artifact: "Instrument the digest generator; simulate 20 wakes with task-completion at wake 16; assert digest_generation_calls == 2 (at wake 15 and wake 16); assert no digest calls at wakes 1-14."
+    thresholds:
+      violations_allowed: 0
+      max_wakes_without_regeneration: 15
+    fault_model_refs: [F-GATE-DIGEST-STALE]
+    test_ids: [T-GATE-012]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  - criterion_id: AC-GATE-012-NEG
+    name: "NEG: wake message is rejected if it contains raw session history instead of state digest"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-16]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The wake-message builder"
+      when: "A caller passes raw session history as the priming context instead of a compact state digest"
+      then:
+        - "The builder raises a type or validation error"
+        - "The malformed wake message is not dispatched to the agent session"
+    primary_oracle:
+      type: deterministic
+      artifact: "Call wake-message builder with priming_context=raw_history_list; assert TypeError or ValidationError raised; assert 0 session.send_message calls."
+    thresholds:
+      violations_allowed: 0
+      wake_messages_with_raw_history_allowed: 0
+    fault_model_refs: [F-GATE-DIGEST-RAW-HISTORY]
+    test_ids: [T-GATE-012-NEG]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-GATE-013: Notes read via GET /internal/notes/{meeting_id} ─────────────
+
+  - criterion_id: AC-GATE-013
+    name: "Notes are read via GET /internal/notes/{meeting_id} from Postgres note_deltas, never from NOTES_CACHE"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-19, R-doc04-GATE-20]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The Proxy notes-read path with a real Postgres instance seeded with note_deltas rows for a meeting_id"
+      when: "Proxy fetches Notes for that meeting_id"
+      then:
+        - "Exactly one GET /internal/notes/{meeting_id} HTTP call is issued to the Notes service"
+        - "The response is derived from the note_deltas Postgres table (confirmed by row count match)"
+        - "No code path reads from a NOTES_CACHE object or any in-process scribe cache"
+    primary_oracle:
+      type: deterministic
+      artifact: "Seed note_deltas with 3 rows for meeting_id; assert GET /internal/notes/{meeting_id} returns folded notes matching those 3 rows; grep source for NOTES_CACHE references in the notes-read path returns 0 matches."
+    thresholds:
+      violations_allowed: 0
+      notes_cache_read_calls_allowed: 0
+    fault_model_refs: [F-GATE-NOTES-FROM-CACHE]
+    test_ids: [T-GATE-013]
+    dependency_class: db:postgres
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: integration}
+
+  - criterion_id: AC-GATE-013-NEG
+    name: "NEG: any code path that reads from NOTES_CACHE as the notes source fails the lint gate"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-20]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The harness codebase"
+      when: "A static lint rule scans for reads from NOTES_CACHE in the notes-read path"
+      then:
+        - "The lint rule flags any import of or call to NOTES_CACHE in harness code as an error"
+        - "The lint gate fails if any such reference exists"
+    primary_oracle:
+      type: static_analysis
+      artifact: "Grep harness module tree for 'NOTES_CACHE' and 'scribe.*cache' patterns; assert 0 matches in the notes-read call path."
+    thresholds:
+      violations_allowed: 0
+      notes_cache_references_in_harness_allowed: 0
+    fault_model_refs: [F-GATE-NOTES-FROM-CACHE]
+    test_ids: [T-GATE-013-NEG]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-GATE-014: SDK isolation — strict_mcp_config=True ─────────────────────
+
+  - criterion_id: AC-GATE-014
+    name: "strict_mcp_config=True is set on every agent session initialization in the harness"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-21]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The harness agent-session initialization code"
+      when: "Static analysis inspects every call site that constructs or initializes an agent session"
+      then:
+        - "strict_mcp_config=True is present as a keyword argument in every session initialization call"
+        - "No call site omits strict_mcp_config or passes strict_mcp_config=False"
+    primary_oracle:
+      type: static_analysis
+      artifact: "AST scan of harness: assert strict_mcp_config=True in all ClaudeAgent / session init call sites; grep for strict_mcp_config=False returns 0 matches."
+    thresholds:
+      violations_allowed: 0
+      strict_mcp_config_false_or_absent_allowed: 0
+    fault_model_refs: [F-GATE-SDK-MCP-LEAK]
+    test_ids: [T-GATE-014]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  - criterion_id: AC-GATE-014-NEG
+    name: "NEG: with strict_mcp_config=True, no external connectors (.mcp.json / claude.ai) are loaded into the session"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-21]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "A test environment where a .mcp.json file exists in the working directory and claude.ai connectors are simulated"
+      when: "A harness agent session is initialized with strict_mcp_config=True"
+      then:
+        - "No MCP tools sourced from .mcp.json or claude.ai connectors appear in the session's available tools"
+        - "The session tool list contains only the computed harness-registered tools"
+    primary_oracle:
+      type: deterministic
+      artifact: "Place a .mcp.json with a canary tool in the test working dir; initialize session with strict_mcp_config=True; assert canary tool not in session.available_tools; assert session tool names == computed_harness_tools."
+    thresholds:
+      violations_allowed: 0
+      external_connector_tools_in_session_allowed: 0
+    fault_model_refs: [F-GATE-SDK-MCP-LEAK]
+    test_ids: [T-GATE-014-NEG]
+    dependency_class: vendor:claude-sdk
+    mock_boundary: "may mock via vcrpy cassette at the call_external layer; MUST NOT replace the anthropic client with Mock()"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: reality}
+      - {tier: negative}
+
+  # ── AC-GATE-015: SDK isolation — setting_sources=[] ─────────────────────────
+
+  - criterion_id: AC-GATE-015
+    name: "setting_sources=[] is set on every agent session initialization in the harness"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-22]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The harness agent-session initialization code"
+      when: "Static analysis inspects every call site that constructs or initializes an agent session"
+      then:
+        - "setting_sources=[] is present as a keyword argument in every session initialization call"
+        - "No call site omits setting_sources or passes a non-empty list"
+    primary_oracle:
+      type: static_analysis
+      artifact: "AST scan of harness: assert setting_sources=[] (empty list) in all session init call sites; grep for 'setting_sources=[^]]' (non-empty list) returns 0 matches."
+    thresholds:
+      violations_allowed: 0
+      non_empty_setting_sources_allowed: 0
+    fault_model_refs: [F-GATE-SDK-SETTINGS-LEAK]
+    test_ids: [T-GATE-015]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  - criterion_id: AC-GATE-015-NEG
+    name: "NEG: with setting_sources=[], no CLAUDE.md or host filesystem permissions are loaded into the session"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-22]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "A test environment where a CLAUDE.md exists in the working directory with a canary instruction"
+      when: "A harness agent session is initialized with setting_sources=[]"
+      then:
+        - "The session does not incorporate the canary instruction from CLAUDE.md"
+        - "No host filesystem permission appears in the session configuration"
+    primary_oracle:
+      type: deterministic
+      artifact: "Place a CLAUDE.md with a canary instruction in the test working dir; initialize session with setting_sources=[]; assert canary instruction absent from session system_prompt and permissions; assert 0 filesystem-sourced config entries in session."
+    thresholds:
+      violations_allowed: 0
+      host_settings_in_session_allowed: 0
+    fault_model_refs: [F-GATE-SDK-SETTINGS-LEAK]
+    test_ids: [T-GATE-015-NEG]
+    dependency_class: vendor:claude-sdk
+    mock_boundary: "may mock via vcrpy cassette at the call_external layer; MUST NOT replace the anthropic client with Mock()"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: reality}
+      - {tier: negative}
+
+  # ── AC-GATE-016: SDK isolation — computed tools list, no preset ──────────────
+
+  - criterion_id: AC-GATE-016
+    name: "Agent session is initialized with a computed tools list; the SDK default preset is not used"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-23]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The harness agent-session initialization code"
+      when: "Static analysis and a runtime check inspect the tools parameter at initialization"
+      then:
+        - "The tools parameter is explicitly set to a computed list of registered harness tool functions"
+        - "The SDK default tools preset (claude_code or equivalent) is not passed or implied"
+        - "Host-level built-in tool names (Read, Bash, Grep, Glob) are absent from the session tool list"
+    primary_oracle:
+      type: static_analysis
+      artifact: "AST scan: assert tools= kwarg is always a computed list (not a preset constant); grep for 'claude_code' or 'default_tools' in session init returns 0; runtime: assert 'Bash' not in session.tool_names and 'Read' not in session.tool_names."
+    thresholds:
+      violations_allowed: 0
+      host_builtin_tools_in_session_allowed: 0
+    fault_model_refs: [F-GATE-SDK-PRESET-LOAD]
+    test_ids: [T-GATE-016]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  - criterion_id: AC-GATE-016-NEG
+    name: "NEG: a new harness tool registered in the computed list appears in the session tools; an unregistered tool does not"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-23]
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "The computed tools list builder"
+      when: "A new harness tool function is registered, and an unregistered tool name is queried"
+      then:
+        - "The newly registered tool name appears in the computed tools list passed to the session"
+        - "The unregistered tool name does not appear in the computed tools list"
+    primary_oracle:
+      type: deterministic
+      artifact: "Register a new canary_tool function; build computed tools list; assert 'canary_tool' in tools; assert 'unregistered_tool' not in tools."
+    thresholds:
+      violations_allowed: 0
+    fault_model_refs: [F-GATE-SDK-PRESET-LOAD]
+    test_ids: [T-GATE-016-NEG]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-GATE-017: No if event_type → action in harness code ──────────────────
+
+  - criterion_id: AC-GATE-017
+    name: "Zero if event_type == X: action_Y dispatch branches exist in harness code"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-24]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The full harness source tree (excluding tests, type stubs, and provider seam)"
+      when: "Static analysis scans for conditional dispatch on event_type"
+      then:
+        - "Zero patterns of the form 'if event.type == <literal>' or 'elif event.type == <literal>' that branch to a specific action appear in the harness modules"
+        - "Event routing uses only queue-put and model-turn dispatch, not branching on event content"
+    primary_oracle:
+      type: static_analysis
+      artifact: "AST scan of harness modules: count If-nodes where the test compares an event_type attribute to a literal; assert count == 0. Grep for 'event_type ==' and 'event.type ==' in harness source returns 0 matches outside of test files."
+    thresholds:
+      violations_allowed: 0
+      event_type_dispatch_branches_allowed: 0
+    fault_model_refs: [F-GATE-HARDCODED-DISPATCH]
+    test_ids: [T-GATE-017]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  - criterion_id: AC-GATE-017-NEG
+    name: "NEG: an unrecognized event type produces a well-formed event description delivered to the model, not a dropped or errored event"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-25]
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "The harness event pipeline"
+      when: "An event with an unrecognized type field ('type': 'future_signal_xyz') arrives"
+      then:
+        - "The event is enqueued and, when the agent is awoken, the wake message describes the unknown event in text"
+        - "No exception is raised; no event is silently dropped"
+        - "The wake message has a non-empty event description for the unrecognized event"
+    primary_oracle:
+      type: deterministic
+      artifact: "Inject event with type='future_signal_xyz'; assert it reaches the wake-message builder; assert wake_message.event_description is not empty; assert 0 exceptions in harness logs."
+    thresholds:
+      violations_allowed: 0
+      dropped_unknown_events_allowed: 0
+    fault_model_refs: [F-GATE-HARDCODED-DISPATCH]
+    test_ids: [T-GATE-017-NEG]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-GATE-018: Boundary value — ack at exactly 500ms ──────────────────────
+
+  - criterion_id: AC-GATE-018
+    name: "Ack reflex at exactly 500ms is accepted; at 501ms it is a violation"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-03]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The ack-reflex timing gate with a simulated confirmed-address event"
+      when: "The ack is recorded at exactly 500ms (at boundary) and then at 501ms (just over boundary)"
+      then:
+        - "At 500ms elapsed: the ack is accepted; no violation is recorded"
+        - "At 501ms elapsed: the ack is treated as a violation; a latency breach is emitted"
+    primary_oracle:
+      type: deterministic
+      artifact: "Use a mock clock; set ack elapsed to 500ms: assert violation_count == 0. Set ack elapsed to 501ms: assert violation_count == 1."
+    thresholds:
+      violations_allowed: 0
+      ack_deadline_ms: 500
+    fault_model_refs: [F-GATE-ACK-SLOW]
+    test_ids: [T-GATE-018]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  # ── AC-GATE-019: Boundary value — digest regeneration at exactly wake 15 ─────
+
+  - criterion_id: AC-GATE-019
+    name: "Digest is regenerated at wake 15 (boundary), not at wake 14 and not deferred to wake 16"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-17]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "A harness with a compaction counter and no material-state changes"
+      when: "Exactly 15 wake events are processed sequentially"
+      then:
+        - "After wake 14: digest_generation_calls == 0 (initial digest excluded from counter)"
+        - "After wake 15: digest_generation_calls == 1 (boundary triggers regeneration)"
+        - "After wake 16 with no material change: digest_generation_calls still == 1 (no extra regeneration before next boundary)"
+    primary_oracle:
+      type: deterministic
+      artifact: "Instrument digest generator with a call counter; simulate 16 wakes with no material changes; assert counter == 0 after wake 14; assert counter == 1 after wake 15; assert counter == 1 after wake 16."
+    thresholds:
+      violations_allowed: 0
+      wake_boundary_for_regeneration: 15
+    fault_model_refs: [F-GATE-DIGEST-STALE]
+    test_ids: [T-GATE-019]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  # ── AC-GATE-020: Session idles at zero tokens between wakes ─────────────────
+
+  - criterion_id: AC-GATE-020
+    name: "Agent session is idle (zero active tokens, no inference) between wakes"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-12]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "A harness agent session after one completed wake turn"
+      when: "No wake event has been received for 30 seconds"
+      then:
+        - "No new inference request is issued to the SDK (no polling, no keepalive inference call)"
+        - "Token usage reported by the SDK during the idle window is zero"
+        - "The session object remains open (not closed or garbage-collected)"
+    primary_oracle:
+      type: deterministic
+      artifact: "Complete one wake turn; instrument call_external; wait 30s without sending a new wake event; assert 0 inference calls in call_external log during idle window; assert session.is_open == True."
+    thresholds:
+      violations_allowed: 0
+      inference_calls_during_idle_allowed: 0
+    fault_model_refs: [F-GATE-ONE-SESSION-PER-MEETING, F-GATE-POLLING-WORKROOM]
+    test_ids: [T-GATE-020]
+    dependency_class: vendor:claude-sdk
+    mock_boundary: "may mock via vcrpy cassette at the call_external layer; MUST NOT replace the anthropic client with Mock()"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: reality}
+
+  - criterion_id: AC-GATE-020-NEG
+    name: "NEG: session is NOT closed and NOT recreated after an idle period when a new wake event arrives"
+    evidence_class: "[unit-example]"
+    authority_refs: [R-doc04-GATE-12]
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "A harness session that has been idle for 30 seconds after one completed wake turn"
+      when: "A new wake event arrives"
+      then:
+        - "The new wake message is sent to the existing session (same session instance)"
+        - "No new session is created for the new wake event"
+        - "Session creation count remains at 1"
+    primary_oracle:
+      type: deterministic
+      artifact: "Simulate idle then second wake; assert session instance identity unchanged; assert session constructor called exactly once total."
+    thresholds:
+      violations_allowed: 0
+      session_creations_after_idle_wake_allowed: 0
+    fault_model_refs: [F-GATE-ONE-SESSION-PER-MEETING]
+    test_ids: [T-GATE-020-NEG]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}

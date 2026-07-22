@@ -1,0 +1,721 @@
+# Acceptance Criteria — Doc 08 Experience, UI & Surfaces · §2.7 The connect page
+# Source: product/v0-spec/08-BEHAVIOR.md §2.7
+# ID scheme: AC-CONN-NNN
+# Authority: DOC-08
+#
+# dependency_class values used in this file:
+#   db:postgres — GET /connect/status reads the code_intel readiness record from Postgres
+#
+# mock_boundary rules (MANDATORY):
+#   db:postgres — real Postgres; MUST NOT mock asyncpg or stub the Readiness row directly
+#
+# NEG criteria are required for every non-null dependency_class.
+# Golden-path item marked golden_path: true.
+#
+# Ladder rules applied:
+#   lint+unit: always
+#   integration: iff db:postgres
+#   negative: -NEG pair only
+#   e2e: iff golden_path:true
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# THREE SECTIONS ONLY — V0 SCOPE
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-CONN-001
+  name: "Connect page renders exactly three sections and no additional content in V0"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-CONN-01, R-doc08-CONN-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A fully rendered connect page HTML response"
+    when: "The rendered page structure is inspected"
+    then:
+      - "Exactly three top-level content sections are present: GitHub App install, readiness status, and invite instructions"
+      - "No analytics section, settings section, or meeting history section is present"
+      - "No element with data-section in [analytics, settings, history] exists anywhere in the DOM"
+      - "No navigation links or content areas beyond the three setup sections are rendered"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert rendered page contains exactly three named section landmarks; assert no element with data-section in [analytics, settings, history]; assert no extraneous named content regions"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-001]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GITHUB APP INSTALL FLOW ACCESSIBLE
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-CONN-002
+  name: "GitHub App install flow is present and launchable from the connect page"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-CONN-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A rendered connect page"
+    when: "The install section is inspected"
+    then:
+      - "A control (button or link) that initiates the GitHub App install flow is present"
+      - "The control targets the install flow endpoint without requiring navigation to a separate page"
+      - "The control is visible and actionable regardless of the current readiness state"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert install-flow control present in rendered HTML; assert control href or action points to /connect/install/start (or configured install entry point); assert control not hidden"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-002]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ALL FIVE READINESS STATES RENDER — NO CRASH
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-CONN-003
+  name: "Connect page readiness widget renders all five Readiness enum states without error"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-CONN-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The readiness status widget is parameterized with each value of the CANONICAL §1.5 Readiness enum in turn"
+    when: "Each state value — connecting, cloning, indexing, ready, not_ready — is passed to the widget renderer"
+    then:
+      - "State 'connecting' renders a connecting indicator without raising an exception"
+      - "State 'cloning' renders a cloning indicator without raising an exception"
+      - "State 'indexing' renders an indexing indicator without raising an exception"
+      - "State 'ready' renders a ready indicator without raising an exception"
+      - "State 'not_ready' renders a not_ready terminal indicator without raising an exception"
+      - "Each rendered output is a distinct, named visual block distinguishable from the others"
+  primary_oracle:
+    type: deterministic
+    artifact: "parameterized unit test over all five enum values; assert each produces a distinct named rendered block with no exception raised; assert each output differs structurally from the others"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-003]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NO MAPPING STATE (STRUCTURAL NEGATIVE)
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-CONN-004
+  name: "No 'mapping' state is defined, handled, or rendered anywhere in the connect page"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-CONN-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The connect page widget source code, the Readiness enum definition, and the /connect/status route handler"
+    when: "The sources are statically analyzed for any reference to a 'mapping' readiness state"
+    then:
+      - "No Readiness enum definition includes a 'mapping' literal value"
+      - "No widget renderer branch handles a 'mapping' input value as a valid state"
+      - "No /connect/status response schema includes 'mapping' as a valid readiness value"
+      - "Passing 'mapping' to the widget renderer either raises a validation error or falls through to an unrecognized-state error path — it NEVER silently renders"
+  primary_oracle:
+    type: deterministic
+    artifact: "grep for 'mapping' in Readiness enum, widget renderer, and /connect/status schema; assert zero occurrences as a valid state value; unit test passing 'mapping' asserts error or unrecognized-state rendering"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-004]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NOT_READY STATE: GAPS LIST RENDERED VERBATIM
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-CONN-005
+  name: "not_ready state renders the gaps list verbatim and never shows a generic placeholder"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-CONN-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A Readiness payload with state=not_ready and gaps=['LSP index failed', 'dep-graph incomplete']"
+    when: "The connect page readiness widget renders the not_ready state"
+    then:
+      - "The string 'LSP index failed' appears verbatim in the rendered output"
+      - "The string 'dep-graph incomplete' appears verbatim in the rendered output"
+      - "No generic error placeholder such as 'Something went wrong', 'Setup failed', or 'Unknown error' is substituted"
+      - "The gaps are rendered as a human-readable list, not as an internal identifier or raw exception"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test: assert each gaps[i] string present verbatim in rendered HTML; assert no generic error string; assert rendered list element count equals len(gaps)"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-005]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NOT_READY STATE: NEVER SHOWS READY INDICATOR
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-CONN-006
+  name: "not_ready state is unambiguously terminal — never renders a ready indicator or synthetic coverage"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-CONN-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A Readiness payload with state=not_ready and any gaps list"
+    when: "The connect page readiness widget renders"
+    then:
+      - "No ready-state indicator, checkmark, or success badge is present in the rendered output"
+      - "No coverage_pct value is displayed (the field is not shown in not_ready context)"
+      - "The rendered UI element carrying the not_ready state is visually and structurally distinct from the ready-state element"
+      - "A user glancing at the page cannot reasonably mistake not_ready for a successful indexing result"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert rendered output contains no 'ready' indicator element; assert no coverage_pct numeric display; assert not_ready element has distinct data-state or class attribute"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-006]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# READY STATE: REAL COVERAGE NUMBER + FLAGGED FILES
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-CONN-007
+  name: "ready state displays the real coverage_pct and flagged file count from the Readiness payload"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-CONN-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A Readiness payload with state=ready, coverage_pct=94.0, and a flagged_files list of 12 entries each labeled 'generated'"
+    when: "The connect page readiness widget renders the ready state"
+    then:
+      - "The rendered output contains '94%' (or '94.0%') derived from coverage_pct=94.0"
+      - "The rendered output states '12 files flagged' (count derived from len(flagged_files))"
+      - "The rendered output includes the reason label 'generated'"
+      - "No hard-coded placeholder such as '100%', 'N/A', or '0 files flagged' is substituted"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test: assert str(coverage_pct) present in rendered output; assert str(len(flagged_files)) + ' files flagged' present; assert reason label present; assert no placeholder strings"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-007]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# COVERAGE NUMBER DERIVES FROM REAL INDEXING RESULT (SOURCE HONESTY)
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-CONN-008
+  name: "coverage_pct in /connect/status response is derived from the real indexing result, not hardcoded"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-CONN-10]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The /connect/status route handler source code and the readiness record storage"
+    when: "The source is statically analyzed for coverage_pct assignment"
+    then:
+      - "coverage_pct is read from the stored readiness record (Postgres row) — not set to a literal float constant in the handler"
+      - "No line in the handler assigns coverage_pct = 100, coverage_pct = 0, or any other literal numeric default"
+      - "The readiness record's coverage_pct field is populated by the indexing pipeline, not by the route handler"
+  primary_oracle:
+    type: deterministic
+    artifact: "grep for 'coverage_pct\s*=' literal assignments in /connect/status handler; assert zero literal numeric assignments; assert coverage_pct sourced from DB row field"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-008]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# INVITE INSTRUCTIONS PRESENT
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-CONN-009
+  name: "Invite instructions section is present on the connect page at all readiness states"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-CONN-11]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A rendered connect page with any Readiness state value"
+    when: "The invite instructions section is inspected"
+    then:
+      - "The invite instructions section is present regardless of whether the readiness state is connecting, cloning, indexing, ready, or not_ready"
+      - "The section includes at minimum a meeting link paste instruction and a calendar invite address instruction"
+      - "The invite instructions are human-readable and reference Proxy by its product name (not an internal component name)"
+  primary_oracle:
+    type: deterministic
+    artifact: "parameterized unit test over all five readiness states: assert invite-instructions section present in each rendered output; assert meeting link and calendar address text present; assert no internal component name in the instructions"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-009]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GET /connect/status IS A PUBLIC REST ENDPOINT (NO SESSION AUTH REQUIRED)
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-CONN-010
+  name: "GET /connect/status responds without session auth and returns a valid Readiness value"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-CONN-12, R-doc08-CONN-14]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A request to GET /connect/status with no session cookie and no Authorization header"
+    when: "The request is processed"
+    then:
+      - "The response status is 200"
+      - "The response body contains a readiness field whose value is one of: connecting, cloning, indexing, ready, not_ready"
+      - "The response is NOT delivered over a WebSocket — it is a plain HTTP response"
+      - "The route does NOT return 401 or 403 for a missing session"
+  primary_oracle:
+    type: deterministic
+    artifact: "integration test: unauthenticated GET /connect/status; assert 200; assert response.readiness in {'connecting','cloning','indexing','ready','not_ready'}; assert Content-Type is application/json not upgrade/websocket"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-010]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres; MUST NOT stub the Readiness row value directly in the route handler"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-CONN-010-NEG
+  name: "GET /connect/status degrades honestly when the readiness record is unavailable"
+  authority_refs: [R-doc08-CONN-12, R-doc08-CONN-14]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "An unauthenticated GET /connect/status request; Postgres is unreachable or the readiness record query fails"
+    when: "Postgres errors or times out during the readiness record fetch"
+    then:
+      - "The response does NOT return readiness=ready with fabricated data"
+      - "The response either returns a not_ready payload with an appropriate gap description or returns an explicit error response"
+      - "No silent proceed to a stale or invented ready state"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert response.readiness != 'ready' when Postgres faults; assert honest failure payload or error status returned"
+  thresholds:
+    silent_failures_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-010-NEG]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CONNECT PAGE CALLS ARE UNTRUSTED / HMAC OR CREDENTIALS ENFORCED
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-CONN-011
+  name: "Connect page backend treats all inbound requests as untrusted — no implicit session assumption"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-CONN-12, R-doc08-CONN-13]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Any request to a connect page backend endpoint (/connect/status, /connect/install/start, or any §4.6-listed connect route)"
+    when: "The route handler source code is statically analyzed for session assumptions"
+    then:
+      - "No handler derives authorization from an implicit session object without first explicitly validating the session or HMAC"
+      - "Webhook-type connect routes validate with HMAC before processing any payload"
+      - "Authenticated-read connect routes require explicit credentials on an allowlisted endpoint"
+      - "No handler proceeds with a privileged action based solely on the presence of a session cookie without explicit validation"
+  primary_oracle:
+    type: deterministic
+    artifact: "code review assertion: grep connect route handlers for implicit session access without explicit validation; assert zero bare session-object reads before validation; assert HMAC check present on webhook routes"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-011]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# POLLING USES REST NOT WEBSOCKET (STRUCTURAL)
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-CONN-012
+  name: "Connect page status polling uses REST GET — no WebSocket transport wired to readiness"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-CONN-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The connect page front-end source code and the /connect/status route handler"
+    when: "The transport used for readiness polling is statically analyzed"
+    then:
+      - "The front-end issues an HTTP GET to /connect/status (via fetch, XHR, or equivalent REST call)"
+      - "No WebSocket connection is opened by the connect page for the purpose of receiving readiness updates"
+      - "The /connect/status route handler is an HTTP handler — not a WebSocket handler"
+      - "No upgrade header or protocol-switch to WebSocket occurs on the /connect/status path"
+  primary_oracle:
+    type: deterministic
+    artifact: "grep front-end source for WebSocket usage on /connect/status path; assert zero WebSocket constructor calls targeting /connect/status; assert handler registered as HTTP GET not WS endpoint"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-012]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NO INTERNAL NAMES IN ANY CONNECT PAGE CONTENT
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-CONN-013
+  name: "No internal component names appear in any connect page user-visible string"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-CONN-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The fully rendered connect page HTML at each of the five readiness states"
+    when: "All user-visible text content is extracted"
+    then:
+      - "The strings 'Orchestrator', 'Scribe', 'workroom', 'code_intel', 'scribe', 'orchestrator' do not appear in any heading, paragraph, label, or status message"
+      - "The product is referred to as 'Proxy' (or by description) in all user-facing strings"
+      - "The naming lint (libs.lint.naming) passes on all connect page template files"
+  primary_oracle:
+    type: deterministic
+    artifact: "naming lint (libs.lint.naming) run on connect page templates; assert zero matches for internal component names in user-visible text; parameterized test over all five readiness states"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-013]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# V0 STRUCTURAL NEGATIVES — NO ANALYTICS, SETTINGS, HISTORY
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-CONN-014
+  name: "Connect page contains no analytics, settings, or meeting history in V0 (structural negative)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-CONN-02]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "The connect page template and route handler source code"
+    when: "The source is statically analyzed for out-of-scope V0 content"
+    then:
+      - "No analytics widget, event counter, aggregate metric, or tracking pixel is wired to the connect page"
+      - "No settings form, configuration panel, or preferences control is present"
+      - "No meeting history list, meeting index, or past-meeting entry is rendered"
+      - "These absences are correct; their presence would be a V0 over-implementation"
+  primary_oracle:
+    type: deterministic
+    artifact: "grep for analytics / settings / meeting_history / meeting_list patterns in connect page template and handler; assert zero occurrences; code review assertion"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-014]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STATE MACHINE TRANSITIONS — HAPPY PATH SEQUENCE
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-CONN-015
+  name: "Readiness widget transitions connecting → cloning → indexing → ready in forward order"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-CONN-15]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A sequence of poll responses returning connecting, then cloning, then indexing, then ready"
+    when: "Each poll response is applied to the readiness widget in sequence"
+    then:
+      - "After the first poll response the widget shows connecting"
+      - "After the second poll response the widget transitions to cloning (no backward jump)"
+      - "After the third poll response the widget transitions to indexing"
+      - "After the fourth poll response the widget transitions to ready and shows coverage_pct and flagged file count"
+      - "No state is skipped and no backward transition occurs during the happy-path sequence"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test: drive widget through four successive poll results; assert widget.state sequence equals ['connecting','cloning','indexing','ready']; assert ready render contains coverage_pct"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-015]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-CONN-016
+  name: "Readiness widget transitions any in-progress state → not_ready when API returns not_ready"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-CONN-16]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A readiness widget currently showing one of: connecting, cloning, or indexing"
+    when: "The next poll response returns not_ready with a non-empty gaps list"
+    then:
+      - "The widget transitions to the not_ready terminal state"
+      - "The gaps list from the response is rendered verbatim"
+      - "No connecting, cloning, or indexing indicator remains visible"
+      - "The widget does not automatically poll again (not_ready is a terminal state until user action)"
+  primary_oracle:
+    type: deterministic
+    artifact: "parameterized unit test from each of {connecting,cloning,indexing}: drive widget with not_ready response; assert widget.state == 'not_ready'; assert gaps rendered; assert in-progress indicator absent; assert polling halted"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-016]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-CONN-017
+  name: "Readiness widget transitions connecting → cloning accurately"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-CONN-15]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A readiness widget currently showing connecting"
+    when: "The next poll response returns cloning"
+    then:
+      - "The widget displays the cloning indicator"
+      - "The connecting indicator is no longer visible"
+      - "No ready or not_ready indicator appears prematurely"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test: widget starts at connecting, receive cloning response; assert widget.state == 'cloning'; assert no connecting element; assert no ready/not_ready element"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-017]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-CONN-018
+  name: "Readiness widget transitions cloning → indexing accurately"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-CONN-15]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A readiness widget currently showing cloning"
+    when: "The next poll response returns indexing"
+    then:
+      - "The widget displays the indexing indicator"
+      - "The cloning indicator is no longer visible"
+      - "No ready or not_ready indicator appears prematurely"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test: widget starts at cloning, receive indexing response; assert widget.state == 'indexing'; assert no cloning element; assert no ready/not_ready element"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-018]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-CONN-019
+  name: "Readiness widget transitions indexing → ready accurately with coverage and flagged files"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-CONN-15]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A readiness widget currently showing indexing"
+    when: "The next poll response returns ready with coverage_pct=87.5 and flagged_files of 5 entries"
+    then:
+      - "The widget displays the ready indicator"
+      - "The indexing indicator is no longer visible"
+      - "The coverage percentage '87.5%' (or '87%') is displayed"
+      - "The flagged file count '5 files flagged' is displayed"
+  primary_oracle:
+    type: deterministic
+    artifact: "unit test: widget starts at indexing, receive ready response with coverage_pct=87.5 and 5 flagged_files; assert widget.state == 'ready'; assert coverage displayed; assert flagged count displayed; assert no indexing element"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-019]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GOLDEN PATH — END-TO-END: GITHUB APP CONNECTED → READY WITH REAL COVERAGE
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-CONN-020
+  name: "Golden path: GitHub App connected → connect page renders ready with real coverage_pct and flagged file count"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-CONN-04, R-doc08-CONN-09, R-doc08-CONN-10, R-doc08-CONN-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A real GitHub App installation has completed and the indexing pipeline has run
+      to completion; the Postgres readiness record contains state=ready,
+      a real coverage_pct (non-zero, non-100 derived from actual file indexing),
+      and a non-empty flagged_files list; GET /connect/status is called unauthenticated.
+    when: "The connect page polls GET /connect/status and renders the result"
+    then:
+      - "The response to GET /connect/status is HTTP 200 with readiness=ready"
+      - "The coverage_pct in the response equals the value stored in the Postgres readiness record (not a hardcoded value)"
+      - "The connect page renders the ready indicator"
+      - "The real coverage percentage is displayed on the page"
+      - "The flagged file count derived from the actual flagged_files list is displayed"
+      - "No internal component names appear in the rendered page"
+      - "The invite instructions section is present"
+  primary_oracle:
+    type: deterministic
+    artifact: "e2e test: complete GitHub App install with fixture repo; await indexing pipeline; call GET /connect/status unauthenticated; assert readiness=ready; assert coverage_pct matches Postgres record; assert rendered page shows real values; assert no internal names; assert invite instructions present"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-020]
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres; MUST NOT stub the Readiness row value directly in the route handler"
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: e2e}
+
+- criterion_id: AC-CONN-020-NEG
+  name: "Golden path degrades honestly when Postgres readiness record is unavailable at e2e boundary"
+  authority_refs: [R-doc08-CONN-09, R-doc08-CONN-10]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The GitHub App install has completed; Postgres is made unavailable before GET /connect/status is called"
+    when: "GET /connect/status is called unauthenticated and Postgres faults"
+    then:
+      - "The response does NOT return readiness=ready with a fabricated coverage_pct"
+      - "The response returns a not_ready payload or an honest error — not a synthetic ready result"
+      - "No silent proceed to a stale or invented ready state"
+      - "The connect page, if rendered, shows an honest failure state"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert response.readiness != 'ready' when Postgres is faulted; assert no fabricated coverage_pct; assert honest failure rendered on connect page"
+  thresholds:
+    silent_failures_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-CONN-020-NEG]

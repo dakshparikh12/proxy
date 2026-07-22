@@ -1,0 +1,357 @@
+# Requirements — Doc 08 Experience, UI & Surfaces · §2.8 The authenticated /m/{meeting_id} home
+# Source: product/v0-spec/08-BEHAVIOR.md §2.8
+# ID prefix: R-doc08-HOME-NN
+# Authority: DOC-08
+# Status: qualified
+#
+# CANONICAL overrides applied:
+#   §11.2  — meeting_id is UUID everywhere; non-UUID rejected before DB lookup
+#   §11.4  — notes folded server-side from note_deltas via GET /internal/notes
+#   §4     — draft_id from staged_drafts table (persisted — never in-memory review_session)
+#   §12.9  — accept handler is Doc 04's (idempotent + audited); code-change drafts record
+#             approval only, NEVER push to remote; net-new surface = 2 routes + 1 page + token verifier
+#
+# Criticality key:
+#   P0 — invariant; violation is a build failure
+#   P1 — shipping requirement; violation blocks release
+#   P2 — refinement; expected in V0 but not gating
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# GET /m/{meeting_id} — Authenticated tenant member
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Render notes + staged_drafts for authenticated member ────────────────────
+
+- requirement_id: R-doc08-HOME-01
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.8 paragraph 3 bullet 1"
+  source_quote: "GET /m/{meeting_id} — renders the §2.6 notes markdown, folded server-side from note_deltas (via the existing GET /internal/notes/{meeting_id} reader, CANONICAL §11.4), plus that meeting's staged_drafts cards (§2.4 #8). protected() + server-side meeting→tenant check: a tenant member sees their meeting; anyone else gets Not found."
+  normalized_statement: >
+    WHEN an authenticated tenant member issues GET /m/{meeting_id}
+    THE SYSTEM SHALL return the notes markdown (folded server-side from note_deltas
+    via the internal notes reader) and the staged_drafts cards for that meeting.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Tenant isolation: wrong-tenant → 404 (P0) ───────────────────────────────
+
+- requirement_id: R-doc08-HOME-02
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.8 paragraph 3 bullet 1"
+  source_quote: "protected() + server-side meeting→tenant check: a tenant member sees their meeting; anyone else gets Not found."
+  normalized_statement: >
+    WHEN an authenticated session presents a meeting_id that belongs to a different tenant
+    THE SYSTEM SHALL return 404 Not Found and SHALL NOT return any notes, drafts, or
+    metadata from that meeting.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Non-existent meeting → 404 (indistinguishable from wrong-tenant) ─────────
+
+- requirement_id: R-doc08-HOME-03
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.8 paragraph 3 bullet 1"
+  source_quote: "anyone else gets Not found"
+  normalized_statement: >
+    WHEN a meeting_id does not exist in the database
+    THE SYSTEM SHALL return 404 Not Found, indistinguishable in status code and
+    response body from the wrong-tenant case, so that no existence oracle is exposed.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Non-UUID meeting_id rejected before DB lookup (CANONICAL §11.2) ──────────
+
+- requirement_id: R-doc08-HOME-04
+  authority_type: canonical_decision
+  authority_document: DOC-08
+  source_location: "§2.8 paragraph 3 + CANONICAL §11.2"
+  source_quote: "meeting_id is UUID everywhere (CANONICAL §11.2) — non-UUID rejected before DB lookup"
+  normalized_statement: >
+    WHEN a request arrives with a meeting_id path segment that is not a valid UUID
+    THE SYSTEM SHALL reject the request before any database query is issued and
+    SHALL return a 422 or 404 response.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GET /m/{meeting_id} — Capability-token path (public exemption)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Valid capability token grants read-only notes view ───────────────────────
+
+- requirement_id: R-doc08-HOME-05
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.8 paragraph 4"
+  source_quote: "Presenting it to GET /m/{meeting_id} grants a read-only view of the notes to a non-signed-in recipient (the forwarded-to VP) — never accept/reject, never another meeting."
+  normalized_statement: >
+    WHEN a valid, unexpired, unrevoked capability token scoped to meeting_id is presented
+    to GET /m/{meeting_id}
+    THE SYSTEM SHALL return a read-only view of the notes for that meeting and SHALL NOT
+    include staged_drafts cards or any mutation controls.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Token cross-meeting isolation: token for A cannot read B (P0) ────────────
+
+- requirement_id: R-doc08-HOME-06
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.8 capability token description"
+  source_quote: "a token for meeting A can't read B — the meeting_id is in the signed body and re-checked against the path"
+  normalized_statement: >
+    WHEN a capability token signed for meeting A is presented to the path
+    GET /m/{meeting_id_B} where meeting_id_B ≠ meeting_id_A
+    THE SYSTEM SHALL return 404 Not Found without exposing any data from meeting B.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Expired token → 404 ──────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-HOME-07
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.8 capability token description"
+  source_quote: "signed, short-TTL, meeting-scoped, revocable capability token"
+  normalized_statement: >
+    WHEN a capability token whose TTL has elapsed is presented to GET /m/{meeting_id}
+    THE SYSTEM SHALL return 404 Not Found and SHALL NOT serve notes data.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Revoked token → 404 ──────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-HOME-08
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.8 capability token description"
+  source_quote: "revocable (a revoked_tokens check, or a per-meeting token epoch bumped on demand)"
+  normalized_statement: >
+    WHEN a capability token that has been revoked (present in revoked_tokens or whose
+    epoch predates the current per-meeting epoch) is presented
+    THE SYSTEM SHALL return 404 Not Found and SHALL NOT serve notes data.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Token NEVER grants access to accept/reject routes ────────────────────────
+
+- requirement_id: R-doc08-HOME-09
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.8 paragraph 4"
+  source_quote: "Accept/reject remain protected() and are never reachable by token."
+  normalized_statement: >
+    WHEN a capability token (with or without an active session) is used to POST to
+    /m/{meeting_id}/drafts/{draft_id}/accept or .../reject
+    THE SYSTEM SHALL return 401 or 403 and SHALL NOT invoke the accept/reject handler.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════════════
+# POST /m/{meeting_id}/drafts/{draft_id}/accept  and  .../reject
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Accept: calls Doc 04 handler, idempotent, audited ────────────────────────
+
+- requirement_id: R-doc08-HOME-10
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.8 paragraph 3 bullet 2"
+  source_quote: "POST /m/{meeting_id}/drafts/{draft_id}/accept … calling Doc 04's accept handler (notes-edit apply for a core edit … idempotent + audit"
+  normalized_statement: >
+    WHEN an authenticated tenant member POSTs to /m/{meeting_id}/drafts/{draft_id}/accept
+    with a valid CSRF token and the draft belongs to that tenant
+    THE SYSTEM SHALL call Doc 04's accept handler, which is idempotent and records an
+    audit entry, and SHALL return success.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Reject: calls Doc 04 handler, idempotent, audited ────────────────────────
+
+- requirement_id: R-doc08-HOME-11
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.8 paragraph 3 bullet 2"
+  source_quote: "POST /m/{meeting_id}/drafts/{draft_id}/reject … protected() + a server-side meeting/draft→tenant check + CSRF + idempotent + audit"
+  normalized_statement: >
+    WHEN an authenticated tenant member POSTs to /m/{meeting_id}/drafts/{draft_id}/reject
+    with a valid CSRF token and the draft belongs to that tenant
+    THE SYSTEM SHALL call Doc 04's reject handler, which is idempotent and records an
+    audit entry, and SHALL return success.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── CSRF required; missing token → 403/422 ───────────────────────────────────
+
+- requirement_id: R-doc08-HOME-12
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.8 paragraph 3 bullet 2"
+  source_quote: "protected() + a server-side meeting/draft→tenant check + CSRF"
+  normalized_statement: >
+    WHEN a POST to accept or reject is received without a valid CSRF token
+    THE SYSTEM SHALL return 403 or 422 and SHALL NOT invoke the accept or reject handler.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Draft/tenant isolation: wrong-tenant draft_id → 404 ─────────────────────
+
+- requirement_id: R-doc08-HOME-13
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.8 paragraph 3 bullet 2"
+  source_quote: "a server-side meeting/draft→tenant check"
+  normalized_statement: >
+    WHEN a POST to accept or reject references a draft_id that does not belong to the
+    authenticated tenant (wrong-tenant or non-existent draft)
+    THE SYSTEM SHALL return 404 Not Found and SHALL NOT call the Doc 04 handler.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Idempotent accept: double-accept does not double-apply ───────────────────
+
+- requirement_id: R-doc08-HOME-14
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.8 paragraph 3 bullet 2"
+  source_quote: "idempotent"
+  normalized_statement: >
+    WHEN the same draft_id is accepted a second time by the same tenant member
+    THE SYSTEM SHALL return success without applying the change a second time, consistent
+    with the idempotent contract of Doc 04's accept handler.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── code-change accept: records approval only, NEVER pushes (P0, CANONICAL §12.9) ─
+
+- requirement_id: R-doc08-HOME-15
+  authority_type: canonical_decision
+  authority_document: DOC-08
+  source_location: "§2.8 paragraph 3 bullet 2 + CANONICAL §12.9"
+  source_quote: "a code-change draft records approval and exposes the diff bundle for download, never pushes — CANONICAL §12.9"
+  normalized_statement: >
+    WHEN a code-change draft is accepted via POST /m/{meeting_id}/drafts/{draft_id}/accept
+    THE SYSTEM SHALL record the approval and expose the diff bundle for download and
+    SHALL NEVER push code to any remote repository.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Accept/reject by capability token → 401/403 ──────────────────────────────
+
+- requirement_id: R-doc08-HOME-16
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.8 paragraph 4"
+  source_quote: "Accept/reject remain protected() and are never reachable by token."
+  normalized_statement: >
+    WHEN a POST to accept or reject is made by a request that carries only a
+    capability token (no authenticated session)
+    THE SYSTEM SHALL return 401 or 403 and SHALL NOT invoke the Doc 04 handler.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════════════
+# V0 scope / structural negatives
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── No cross-meeting list (structural negative) ───────────────────────────────
+
+- requirement_id: R-doc08-HOME-17
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.8 final paragraph"
+  source_quote: "It is deliberately not a dashboard — no cross-meeting list, no analytics, no history index (those are Expansion)"
+  normalized_statement: >
+    AT ALL TIMES in V0
+    THE SYSTEM SHALL NOT render any cross-meeting list on the /m/{meeting_id} surface;
+    the page is scoped to exactly one meeting's notes and drafts.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── No analytics, no history index (structural negative) ─────────────────────
+
+- requirement_id: R-doc08-HOME-18
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.8 final paragraph"
+  source_quote: "no analytics, no history index (those are Expansion)"
+  normalized_statement: >
+    AT ALL TIMES in V0
+    THE SYSTEM SHALL NOT include analytics panels, history indexes, or any aggregate
+    view on the /m/{meeting_id} surface; these are deferred to Expansion scope.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Net-new surface exactly: 2 routes + 1 page + token verifier ──────────────
+
+- requirement_id: R-doc08-HOME-19
+  authority_type: canonical_decision
+  authority_document: DOC-08
+  source_location: "§2.8 paragraph 2 + CANONICAL §12.9"
+  source_quote: "2 routes + 1 page + a token verifier; everything else is reused."
+  normalized_statement: >
+    WHEN the §2.8 surface is delivered
+    THE SYSTEM SHALL introduce exactly two new HTTP routes (GET /m/{meeting_id},
+    POST /m/{meeting_id}/drafts/{draft_id}/accept|reject counted as one pair),
+    exactly one new page template, and exactly one new token verifier; no additional
+    routes or page templates SHALL be added as part of this section.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── No raw GCS URI exposed to user ───────────────────────────────────────────
+
+- requirement_id: R-doc08-HOME-20
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.8 product invariant: No raw GCS URI exposed to user"
+  source_quote: "link is /m/{meeting_id} home, not GCS"
+  normalized_statement: >
+    WHEN the meeting home page renders any link or download reference
+    THE SYSTEM SHALL expose a /m/{meeting_id}-relative URL and SHALL NOT expose
+    a raw GCS URI (gs:// or storage.googleapis.com signed URL) in any user-visible
+    HTML attribute or link href.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified

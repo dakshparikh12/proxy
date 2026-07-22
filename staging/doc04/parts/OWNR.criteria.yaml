@@ -1,0 +1,675 @@
+# OWNR.criteria.yaml — Doc 04 (Proxy Orchestrator) — §3.6 Atomic-Claim Meeting Ownership
+# Acceptance criteria for the Postgres-arbitrated ownership claim.
+# ID prefix: AC-OWNR-NNN / AC-OWNR-NNN-NEG
+#
+# All criteria: golden_path: false — ownership is infrastructure, not the user-facing promise.
+#
+# Dependency vocabulary:
+#   db:postgres — operation_runs INSERT ON CONFLICT (local real, integration tier)
+#   null        — pure in-process (loser back-off logic, routing decision, structural checks)
+#
+# Verification ladder rules applied:
+#   dependency_class: null       → ladder: [lint, unit]
+#   dependency_class: db:postgres → ladder: [lint, unit, integration]
+#   Every non-null               → paired NEG criterion with ladder: [lint, unit, negative]
+
+# ════════════════════════════════════════════════════════════════
+# §3.6 · WINNER GETS RUN_ID; LOSER GETS NULL (concurrent claim)
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OWNR-001
+  name: "Concurrent claim — exactly one instance wins; the other returns NULL"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-OWNR-01, R-doc04-OWNR-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      Two asyncpg connection pools connected to the same Postgres instance; operation_runs
+      contains no existing 'running' row for meeting_id M; both instances call claim_meeting
+      with the same M simultaneously (or back-to-back within the same transaction window)
+    when: "Both claim_meeting calls complete"
+    then:
+      - "Exactly one call returns a non-NULL UUID (the operation_runs id of the winning row)"
+      - "The other call returns None (the ON CONFLICT DO NOTHING suppressed its INSERT, no RETURNING row)"
+      - "Exactly one operation_runs row exists with scope_id=M, operation_type='meeting-harness', status='running'"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      assert results.count(None) == 1 and len([r for r in results if r is not None]) == 1;
+      SELECT COUNT(*) FROM operation_runs WHERE scope_id=M AND operation_type='meeting-harness'
+      AND status='running' == 1
+  thresholds:
+    concurrent_harnesses_per_meeting: 0
+    extra_above_one: 0
+    operation_runs_rows_for_meeting: 1
+  fault_model_refs: [F-DOUBLE-HARNESS]
+  test_ids: [T-OWNR-001]
+  dependency_class: db:postgres
+  mock_boundary: >
+    MUST use a real test Postgres instance with the operation_runs table and its partial-unique
+    index (scope_id, operation_type) WHERE status='running'; MUST NOT mock the asyncpg pool —
+    real SQL INSERT ON CONFLICT must execute; the concurrency window may be forced via
+    asyncio.gather or a barrier
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-OWNR-001-NEG
+  name: "Two instances both returning non-NULL for the same meeting is impossible"
+  evidence_class: "[negative]"
+  authority_refs: [R-doc04-OWNR-01, R-doc04-OWNR-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      Two asyncpg pools connected to the same Postgres instance; no existing 'running' row
+      for meeting_id M; claims issued concurrently with asyncio.gather
+    when: "Both claim_meeting calls complete and both results are inspected"
+    then:
+      - "It is impossible for both calls to return a non-NULL id — if both returned non-NULL, it signals index corruption or a missing WHERE clause on the partial index"
+      - "If the partial index is absent (simulated by dropping it), both calls may return non-NULL; the test asserts this only as a fault-injection probe, not as an allowed outcome in production"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      With the index present: assert not (results[0] is not None and results[1] is not None).
+      With index dropped (fault injection): assert both non-NULL — confirms the index is load-bearing.
+  thresholds:
+    concurrent_harnesses_per_meeting: 0
+    double_win_allowed: 0
+  fault_model_refs: [F-DOUBLE-HARNESS, F-MISSING-PARTIAL-INDEX]
+  test_ids: [T-OWNR-001-NEG]
+  dependency_class: db:postgres
+  mock_boundary: >
+    Requires a real Postgres instance; fault-injection variant drops the partial index
+    before running the concurrent INSERT pair to prove the index is necessary
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ════════════════════════════════════════════════════════════════
+# §3.6 · WINNER OPENS HARNESS; LOSER BACKS OFF
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OWNR-002
+  name: "Winner opens the harness on the returned run_id"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc04-OWNR-04]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "claim_meeting returns a non-NULL run_id for instance A"
+    when: "Instance A's post-claim code path executes"
+    then:
+      - "The harness is initialized with the returned run_id as its operation_runs anchor"
+      - "The SDK session is opened exactly once with that run_id recorded"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: mock claim_meeting returning a UUID; assert harness_init called with
+      run_id=<that UUID> and sdk_session.open called exactly once
+  thresholds:
+    harness_opens_per_win: 1
+    sdk_sessions_per_win: 1
+  fault_model_refs: [F-WINNER-NO-OPEN]
+  test_ids: [T-OWNR-002]
+  dependency_class: null
+  mock_boundary: >
+    Mock claim_meeting to return a fixed UUID; the post-claim harness branching is pure
+    in-process and testable without a real Postgres pool
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-OWNR-002-NEG
+  name: "Loser does not open a harness or SDK session"
+  evidence_class: "[negative]"
+  authority_refs: [R-doc04-OWNR-04]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "claim_meeting returns None for instance B (the loser)"
+    when: "Instance B's post-claim code path executes"
+    then:
+      - "No harness is initialized on instance B for this meeting"
+      - "No SDK session is opened on instance B"
+      - "The back-off path completes without any meeting-level side effects"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit test: mock claim_meeting returning None; assert harness_init never called;
+      assert sdk_session.open never called; assert no meeting-level state mutated
+  thresholds:
+    harness_opens_on_loss: 0
+    sdk_sessions_on_loss: 0
+  fault_model_refs: [F-LOSER-OPENS-HARNESS]
+  test_ids: [T-OWNR-002-NEG]
+  dependency_class: null
+  mock_boundary: >
+    Mock claim_meeting to return None; the back-off path is pure in-process branching
+    with no Postgres dependency
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ════════════════════════════════════════════════════════════════
+# §3.6 · SQL SHAPE: ON CONFLICT PARTIAL INDEX CLAUSE
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OWNR-003
+  name: "claim_meeting SQL uses ON CONFLICT (scope_id, operation_type) WHERE status='running' DO NOTHING RETURNING id"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc04-OWNR-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The claim_meeting function implementation"
+    when: "The SQL string passed to pool.fetchval is inspected"
+    then:
+      - "The SQL contains the clause: ON CONFLICT (scope_id, operation_type) WHERE status = 'running'"
+      - "The SQL contains DO NOTHING"
+      - "The SQL contains RETURNING id"
+      - "The operation_type literal is meeting-harness and status literal is running"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Parse or regex-match the SQL string from claim_meeting source / captured call arg;
+      assert all four clauses present with correct literals
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-WRONG-CONFLICT-CLAUSE]
+  test_ids: [T-OWNR-003]
+  dependency_class: null
+  mock_boundary: >
+    Capture the SQL string passed to pool.fetchval by mocking the pool; real Postgres
+    not required for SQL-shape verification
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-OWNR-003-NEG
+  name: "An INSERT without ON CONFLICT permits double-claim (fault injection)"
+  evidence_class: "[negative]"
+  authority_refs: [R-doc04-OWNR-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      A variant of claim_meeting that uses a plain INSERT (no ON CONFLICT clause) against
+      a real test Postgres instance with a UNIQUE index on (scope_id, operation_type)
+      WHERE status='running'
+    when: "Two concurrent plain INSERTs are executed for the same meeting_id"
+    then:
+      - "The second INSERT raises a UniqueViolationError (not a silent DO NOTHING)"
+      - "This confirms the ON CONFLICT … DO NOTHING is the required form — a plain INSERT would crash rather than return None"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      pytest.raises(asyncpg.UniqueViolationError) on the second plain INSERT;
+      confirms DO NOTHING is necessary to make the loser receive None instead of an exception
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-WRONG-CONFLICT-CLAUSE]
+  test_ids: [T-OWNR-003-NEG]
+  dependency_class: db:postgres
+  mock_boundary: >
+    Requires a real Postgres instance; this is an intentional fault-injection test
+    that proves the DO NOTHING clause is load-bearing
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ════════════════════════════════════════════════════════════════
+# §3.6 · CREATED_BY CARRIES THE OWNER INSTANCE-ID
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OWNR-004
+  name: "Winning claim row has created_by set to the winning instance's identifier"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-OWNR-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      claim_meeting called with meeting_id M and instance_id 'instance-A' against a real
+      test Postgres; no existing 'running' row for M
+    when: "claim_meeting returns a non-NULL id"
+    then:
+      - "The operation_runs row with the returned id has created_by = 'instance-A'"
+      - "No other value (empty string, NULL, or a different instance-id) is stored in created_by"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      SELECT created_by FROM operation_runs WHERE id=<returned_id>;
+      assert created_by == 'instance-A'
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-MISSING-CREATED-BY]
+  test_ids: [T-OWNR-004]
+  dependency_class: db:postgres
+  mock_boundary: >
+    Requires a real Postgres instance to verify the persisted created_by value;
+    the instance_id parameter is a caller-supplied string — no mocking needed for it
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-OWNR-004-NEG
+  name: "Non-owner instance proxies or hands off — never opens a parallel harness"
+  evidence_class: "[negative]"
+  authority_refs: [R-doc04-OWNR-06, R-doc04-OWNR-07]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      Instance B receives a tile WS reconnect for meeting_id M; the operation_runs row for
+      M has created_by='instance-A' (instance B is not the owner); instance affinity routing
+      reads created_by from Postgres
+    when: "Instance B's routing logic inspects the created_by field"
+    then:
+      - "Instance B does NOT call claim_meeting or open a harness"
+      - "Instance B proxies the request to instance-A or enqueues a hand-off"
+      - "No second harness or SDK session appears for meeting M on instance B"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Mock the DB read returning created_by='instance-A' to instance B's routing code;
+      assert harness_init not called; assert proxy_to('instance-A') called exactly once
+  thresholds:
+    parallel_harnesses_on_non_owner: 0
+    proxy_or_handoff_calls: 1
+  fault_model_refs: [F-NON-OWNER-OPENS-HARNESS]
+  test_ids: [T-OWNR-004-NEG]
+  dependency_class: null
+  mock_boundary: >
+    Mock the DB read returning created_by='instance-A'; the routing decision is pure
+    in-process logic; real Postgres not required for the negative path assertion
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ════════════════════════════════════════════════════════════════
+# §3.6 · NO MEETING_HARNESS TABLE (structural / deleted-table check)
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OWNR-005
+  name: "No meeting_harness table exists in the codebase or schema"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc04-OWNR-02, R-doc04-OWNR-11]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The full monorepo source tree (services/, libs/, alembic/)"
+    when: "A structural search is performed for any reference to 'meeting_harness'"
+    then:
+      - "No Python source file defines a SQLAlchemy model, asyncpg query, or Alembic migration targeting a table named 'meeting_harness'"
+      - "No Alembic migration file creates a 'meeting_harness' table"
+      - "No ORM class is named MeetingHarness or meeting_harness"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      grep -r 'meeting_harness' services/ libs/ alembic/ must return zero matches;
+      assert returncode != 0 (no output)
+  thresholds:
+    meeting_harness_references_allowed: 0
+  fault_model_refs: [F-MEETING-HARNESS-TABLE-EXISTS]
+  test_ids: [T-OWNR-005]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-OWNR-005-NEG
+  name: "A crashed meeting with a reaped operation_runs row is reclaimable (no permanent lock)"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-OWNR-08, R-doc04-OWNR-11]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      An operation_runs row exists for meeting_id M with status='running'; the row's status
+      is then updated to 'failed' by the §3.8 reaper (simulated by direct UPDATE in the test);
+      the partial-unique index covers only rows WHERE status='running'
+    when: "A replacement instance calls claim_meeting for the same meeting_id M"
+    then:
+      - "claim_meeting returns a non-NULL id (the partial index is no longer blocking the INSERT)"
+      - "A new operation_runs row is created with status='running' for meeting M"
+      - "The replacement instance can open the harness on the new run_id"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      UPDATE operation_runs SET status='failed' WHERE scope_id=M AND status='running';
+      result = await claim_meeting(pool, M, 'replacement-instance');
+      assert result is not None;
+      SELECT COUNT(*) FROM operation_runs WHERE scope_id=M AND status='running' == 1
+  thresholds:
+    reclaim_failures_after_reap: 0
+    permanent_locks_after_crash: 0
+  fault_model_refs: [F-PERMANENT-UNCLAIM, F-MEETING-HARNESS-TABLE-EXISTS]
+  test_ids: [T-OWNR-005-NEG]
+  dependency_class: db:postgres
+  mock_boundary: >
+    Requires a real Postgres instance with the partial-unique index; the reaper transition
+    is simulated by a direct UPDATE; tests the re-claim path end-to-end in SQL
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ════════════════════════════════════════════════════════════════
+# §3.6 · MEETING_ID CAST: UUID→TEXT AT CALL SITE ONLY
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OWNR-006
+  name: "meeting_id is cast to text exactly at the claim_meeting call site, nowhere else"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc04-OWNR-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The monorepo source tree and the claim_meeting implementation"
+    when: "The codebase is scanned for UUID-to-text casts related to operation_runs.scope_id"
+    then:
+      - "The cast (str(meeting_id) or meeting_id::text equivalent) appears exactly at the claim_meeting call site"
+      - "No other module performs an explicit UUID→text cast for the scope_id path"
+      - "meeting_id is typed as UUID in meetings, meeting_cost, and staged_drafts table models (not text)"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      AST/grep scan: count occurrences of str(meeting_id) or ::text adjacent to scope_id
+      across the codebase; assert count == 1 at the claim_meeting call site;
+      mypy --strict on the affected modules passes without UUID/text type errors
+  thresholds:
+    uuid_to_text_cast_sites_for_scope_id: 1
+    violations_allowed: 0
+  fault_model_refs: [F-CAST-SCATTERED]
+  test_ids: [T-OWNR-006]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ════════════════════════════════════════════════════════════════
+# §3.6 · RE-CLAIM AFTER STALE HEARTBEAT (integration)
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OWNR-007
+  name: "Replacement instance becomes new affinity owner after heartbeat reap"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-OWNR-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      Instance A holds a 'running' operation_runs row for meeting M with created_by='instance-A';
+      the §3.8 reaper transitions the row to status='reaped' (simulated by UPDATE);
+      instance B then calls claim_meeting(pool, M, 'instance-B')
+    when: "claim_meeting returns for instance B"
+    then:
+      - "A new 'running' operation_runs row exists for M with created_by='instance-B'"
+      - "The new row's id is non-NULL (instance B is the winner)"
+      - "The old reaped row still exists with its original created_by='instance-A' (unchanged)"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      SELECT id, created_by, status FROM operation_runs WHERE scope_id=M ORDER BY started_at;
+      assert row[-1].status == 'running' AND row[-1].created_by == 'instance-B';
+      assert row[-2].status == 'reaped' AND row[-2].created_by == 'instance-A'
+  thresholds:
+    reclaim_failures: 0
+    running_rows_after_reclaim: 1
+  fault_model_refs: [F-PERMANENT-UNCLAIM]
+  test_ids: [T-OWNR-007]
+  dependency_class: db:postgres
+  mock_boundary: >
+    Requires real Postgres; the reaper transition is simulated with a direct UPDATE;
+    tests the full re-claim SQL path including created_by update
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+# ════════════════════════════════════════════════════════════════
+# §3.6 · PG_ADVISORY_XACT_LOCK FOR CRITICAL SECTIONS
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OWNR-008
+  name: "Per-meeting critical section acquires pg_advisory_xact_lock(hashtext(meeting_id), 0)"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-OWNR-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      Two asyncpg connections connected to the same Postgres instance; both attempt to enter
+      the same per-meeting critical section (e.g. notes finalization at close) for meeting M
+    when: "Both concurrent attempts execute their critical section logic"
+    then:
+      - "The second connection's critical section body does not begin executing until the first connection COMMITs its transaction and auto-releases the advisory lock"
+      - "All critical-section work runs on the single connection that holds the advisory lock — no second pooled connection is checked out while the lock is held"
+      - "After COMMIT the lock is released automatically; no explicit lock-release call is needed"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Instrument the critical section with a sequence log; assert that the sequence log
+      shows strictly non-overlapping execution windows; assert no pg_advisory_unlock call
+      exists in the critical-section code (auto-release is the contract)
+  thresholds:
+    overlapping_critical_section_executions: 0
+    second_pooled_connection_while_locked: 0
+  fault_model_refs: [F-ADVISORY-LOCK-DEADLOCK, F-CRITICAL-SECTION-RACE]
+  test_ids: [T-OWNR-008]
+  dependency_class: db:postgres
+  mock_boundary: >
+    Requires real Postgres for pg_advisory_xact_lock semantics; the two concurrent
+    attempts may be coordinated via asyncio.gather with a barrier to ensure lock contention
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-OWNR-008-NEG
+  name: "Checking out a second pooled connection while holding the advisory lock deadlocks (documented hazard)"
+  evidence_class: "[negative]"
+  authority_refs: [R-doc04-OWNR-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A connection C1 holds pg_advisory_xact_lock(hashtext(M), 0); the pool has exactly one
+      free connection; code inside the critical section attempts to acquire a second connection
+      from the pool
+    when: "The pool.acquire() call executes inside the locked transaction"
+    then:
+      - "The pool.acquire() call blocks indefinitely (deadlock) because C1 occupies the only free connection and cannot release it while the transaction is open"
+      - "This documents the hazard: all critical-section work must run on the locked connection, never on a second checkout"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Fault-injection test: pool with max_size=1 + pg_advisory_xact_lock held;
+      inner pool.acquire() times out with asyncio.TimeoutError confirming deadlock behavior;
+      the production code path must never enter this branch
+  thresholds:
+    second_pool_acquire_inside_locked_tx: 0
+  fault_model_refs: [F-ADVISORY-LOCK-DEADLOCK]
+  test_ids: [T-OWNR-008-NEG]
+  dependency_class: db:postgres
+  mock_boundary: >
+    Requires real Postgres and a pool with max_size=1 to reliably reproduce the deadlock;
+    this is a hazard-documentation test, not a happy-path test
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ════════════════════════════════════════════════════════════════
+# §3.6 · TWO-LAYER MUTEX ARCHITECTURE
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OWNR-009
+  name: "In-process mutex and Postgres advisory lock both present in critical-section path"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc04-OWNR-10]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The implementation of the per-meeting critical section (notes finalization at close)"
+    when: "The code path is statically inspected and unit-tested"
+    then:
+      - "An asyncio.Lock (or equivalent in-process mutex) is acquired before the database transaction begins"
+      - "pg_advisory_xact_lock(hashtext(meeting_id), 0) is called inside the database transaction"
+      - "The in-process mutex is released only after the transaction COMMITs"
+      - "Neither layer is used in isolation as a substitute for the other"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Mock pool.fetchval to capture SQL; assert in-process lock.acquire() called before pool
+      entry; assert SQL contains 'pg_advisory_xact_lock'; assert lock.release() called after
+      COMMIT; both checks must pass in the same test run
+  thresholds:
+    missing_in_process_lock: 0
+    missing_advisory_lock: 0
+  fault_model_refs: [F-MISSING-IN-PROCESS-MUTEX, F-CRITICAL-SECTION-RACE]
+  test_ids: [T-OWNR-009]
+  dependency_class: null
+  mock_boundary: >
+    Mock the asyncpg pool to capture advisory lock SQL; the in-process mutex behavior
+    is observable without real Postgres — unit-tier is sufficient
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-OWNR-009-NEG
+  name: "Removing the in-process mutex allows within-process concurrent critical section (fault injection)"
+  evidence_class: "[negative]"
+  authority_refs: [R-doc04-OWNR-10]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A variant of the critical section with the in-process asyncio.Lock removed (but
+      pg_advisory_xact_lock still present); two coroutines on the same process attempt
+      the critical section concurrently
+    when: "Both coroutines execute simultaneously in the same event loop"
+    then:
+      - "Both coroutines enter their critical-section body before either COMMITs (visible via sequence log)"
+      - "This is an interleaving that the in-process mutex would have prevented"
+      - "Confirms the in-process mutex is necessary and cannot be omitted"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Sequence log shows overlapping execution windows when in-process lock absent;
+      assert interleaved == True (the fault condition) — this is the proof of necessity
+  thresholds:
+    interleaved_critical_sections_on_fault_injection: 1
+  fault_model_refs: [F-MISSING-IN-PROCESS-MUTEX]
+  test_ids: [T-OWNR-009-NEG]
+  dependency_class: null
+  mock_boundary: >
+    Pure in-process test with asyncio.gather; pg_advisory_xact_lock may be mocked
+    since the test is exercising in-process mutex absence, not the DB lock
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ════════════════════════════════════════════════════════════════
+# §3.6 · NO REDIS / NO IN-PROCESS CHECK-THEN-ACT (structural)
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OWNR-010
+  name: "No Redis client and no check-then-act meeting lock in the ownership path"
+  evidence_class: "[unit]"
+  authority_refs: [R-doc04-OWNR-01]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The orchestrator service source tree (services/orchestrator/)"
+    when: "A structural scan is performed for Redis usage and check-then-act patterns in the ownership path"
+    then:
+      - "No import of redis, aioredis, or any Redis client appears in the ownership/claim modules"
+      - "No read-then-write pattern (SELECT … then INSERT) for meeting ownership exists outside of the atomic INSERT ON CONFLICT"
+      - "The claim_meeting function uses only pool.fetchval with the ON CONFLICT SQL as the sole ownership check"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      grep -r 'import redis\|import aioredis\|from redis' services/orchestrator/ returns zero matches;
+      AST scan of claim_meeting: no SELECT before INSERT in the same claim logic
+  thresholds:
+    redis_imports_in_ownership_path: 0
+    check_then_act_patterns: 0
+  fault_model_refs: [F-REDIS-USED, F-CHECK-THEN-ACT]
+  test_ids: [T-OWNR-010]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ════════════════════════════════════════════════════════════════
+# §3.6 · OPERATION_RUNS ROW FIELDS COMPLETENESS
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-OWNR-011
+  name: "claim_meeting INSERT populates all required fields: scope_id, operation_type, status, created_by, last_heartbeat_at, started_at"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-OWNR-03, R-doc04-OWNR-06]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: >
+      claim_meeting called with meeting_id M and instance_id 'instance-X' against a real
+      test Postgres; no existing 'running' row for M
+    when: "claim_meeting returns a non-NULL id"
+    then:
+      - "scope_id = str(M) (the text-cast UUID)"
+      - "operation_type = 'meeting-harness'"
+      - "status = 'running'"
+      - "created_by = 'instance-X'"
+      - "last_heartbeat_at is a recent timestamp (within 5 seconds of NOW())"
+      - "started_at is a recent timestamp (within 5 seconds of NOW())"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      SELECT scope_id, operation_type, status, created_by, last_heartbeat_at, started_at
+      FROM operation_runs WHERE id=<returned_id>;
+      assert all six fields match expected values with timestamp tolerance of 5s
+  thresholds:
+    missing_required_fields: 0
+    violations_allowed: 0
+  fault_model_refs: [F-MISSING-FIELDS]
+  test_ids: [T-OWNR-011]
+  dependency_class: db:postgres
+  mock_boundary: >
+    Requires real Postgres to verify the persisted row contents; all field values
+    are supplied as literals or NOW() by the INSERT — no additional mocking needed
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}

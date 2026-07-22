@@ -1,0 +1,406 @@
+# GATE.requirements.yaml — Doc 04 (Orchestrator) — §3.1 Address Detection + §3.2 The Wake Turn
+# Atomic EARS requirements. Each carries source_location + verbatim source_quote + criticality.
+# ID scheme: R-doc04-GATE-NN
+# Authority document: DOC-04
+#
+# Scope: the mechanical name/chat scan (§3.1), the one-call disambiguation for name-hits,
+#   the ack reflex, the harness architecture (asyncio program, pipes, task table, registered
+#   tool functions), the persistent agent session through the provider seam, the wake-turn
+#   message shape (event + state digest), the cached prefix and 1-hour TTL (CANONICAL §10.1),
+#   the state-digest compaction (CANONICAL §10.2), the Notes read path (CANONICAL §11.4),
+#   SDK isolation on every call, and the no-if-event-type dynamism law.
+# NOT in scope here: the Notes schema, the note_deltas store mechanics, workroom dispatch
+#   internals, or delivery tools (speak/chat/screen) detailed contracts.
+
+# ── §3.1 — Transcript and chat scanning ─────────────────────────────────────
+
+- requirement_id: R-doc04-GATE-01
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.1, paragraph 1, sentence 1"
+  source_quote: "The transcript feed is scanned mechanically for the name (\"Proxy\") and chat for @proxy."
+  normalized_statement: >
+    THE SYSTEM SHALL continuously scan the transcript feed for the literal string "Proxy"
+    (case-insensitive per the product name) and SHALL continuously scan the chat feed for
+    the literal token "@proxy"; these scans SHALL be mechanical (no model call required)
+    and SHALL operate on every incoming transcript segment and chat message.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-GATE-02
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.1, paragraph 1, sentence 2"
+  source_quote: "A name-hit triggers one tiny disambiguation call (\"addressed to me, or 'proxy server'?\" — pennies, only on hits)."
+  normalized_statement: >
+    WHEN a name-hit ("Proxy") is detected in the transcript feed THE SYSTEM SHALL issue
+    exactly one disambiguation model call to determine whether the utterance is addressed
+    to Proxy or refers to a different meaning (e.g. "proxy server"); this call SHALL be
+    issued only on name-hits, never speculatively; no disambiguation call is issued when
+    no name-hit has occurred.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-GATE-03
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.1, paragraph 1, sentence 3"
+  source_quote: "Confirmed → the ack reflex fires and Proxy wakes."
+  normalized_statement: >
+    WHEN a disambiguation call confirms that the transcript name-hit is addressed to Proxy
+    THE SYSTEM SHALL fire the ack reflex and transition Proxy to the woken state; the ack
+    reflex and wake transition SHALL occur only after a confirmed address, not on an
+    unconfirmed hit.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-GATE-04
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.1, paragraph 1, sentence 4"
+  source_quote: "Chat @proxy needs no disambiguation."
+  normalized_statement: >
+    WHEN the chat feed contains an @proxy token THE SYSTEM SHALL treat it as a confirmed
+    address without issuing a disambiguation model call; the wake sequence SHALL proceed
+    directly from the @proxy detection to ack reflex and wake, bypassing the disambiguation
+    step.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-GATE-05
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.1, paragraph 1, sentence 5"
+  source_quote: "Proxy's own transcribed speech is never a hit (Doc 02 marks it)."
+  normalized_statement: >
+    THE SYSTEM SHALL NOT treat Proxy's own transcribed speech as a name-hit; the transcript
+    pipeline (per Doc 02) marks Proxy's own speech segments; the address-detection scanner
+    SHALL skip any segment marked as Proxy-originated speech; no self-hit SHALL trigger
+    disambiguation or wake.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.2 — Harness architecture ─────────────────────────────────────────────
+
+- requirement_id: R-doc04-GATE-06
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.2, paragraph 2, sentence 1"
+  source_quote: "The harness — one plain asyncio program per meeting. It owns the real environment: the transcript/chat websockets, the standing pipes (pure forwarding), the task table, and the registered tool functions (speak/chat/screen/dispatch/… — thin wrappers over the other docs' APIs)."
+  normalized_statement: >
+    THE SYSTEM SHALL implement the orchestrator harness as exactly one plain asyncio
+    program per meeting; the harness SHALL own: the transcript and chat websocket connections,
+    the standing pipes (forwarding only, no business logic), the task table, and the registered
+    tool functions (speak, send_chat, show_screen, dispatch, and others as thin wrappers over
+    other subsystem APIs).
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-GATE-07
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.2, paragraph 2, sentence 2"
+  source_quote: "\"Knowing when things are done\" is a completion callback: every dispatched workroom is an asyncio.create_task(...) with a done-callback — the runtime delivers the done-moment; nothing polls."
+  normalized_statement: >
+    THE SYSTEM SHALL track every dispatched workroom via asyncio.create_task with a
+    done-callback; the done-moment SHALL be delivered by the asyncio runtime through the
+    callback; THE SYSTEM SHALL NOT poll for workroom completion; no polling loop, sleep loop,
+    or repeated status-check for workroom done-state is permitted.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-GATE-08
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.2, paragraph 2, sentence 3"
+  source_quote: "Every signal (webhook, heartbeat, boundary) likewise lands as an event on a queue."
+  normalized_statement: >
+    THE SYSTEM SHALL route every incoming signal — including webhooks, heartbeats, and
+    boundary events — as an event onto the harness event queue; no signal SHALL be
+    processed synchronously outside of the queue; queue-based event delivery is the sole
+    signal ingestion path in the harness.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §3.2 — Agent session and provider seam ───────────────────────────────────
+
+- requirement_id: R-doc04-GATE-09
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.2, paragraph 3, sentence 1"
+  source_quote: "The agent — one persistent Claude Agent SDK session ([Haiku-class]) the harness keeps open all meeting, reached only through the provider seam (§3.3) so its output is a normalized stream."
+  normalized_statement: >
+    THE SYSTEM SHALL maintain exactly one persistent Claude Agent SDK session per meeting
+    using a Haiku-class model; the session SHALL remain open for the duration of the meeting;
+    the session SHALL be reached only through the provider seam (§3.3) so its output is a
+    normalized stream; the harness SHALL NOT access the SDK session directly bypassing the
+    provider seam.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-GATE-10
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.2, paragraph 3, sentence 2"
+  source_quote: "A wake = the harness sends one message: the event + a compact state digest (tasks in flight, pending items, mouth free/busy, component health)."
+  normalized_statement: >
+    WHEN Proxy wakes THE SYSTEM SHALL send exactly one message to the agent session comprising:
+    (a) the wake event description, and (b) a compact state digest containing tasks in flight,
+    pending items, mouth free/busy status, and component health; no additional context beyond
+    these two elements SHALL be prepended to the wake message.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-GATE-11
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.2, paragraph 3, sentence 3"
+  source_quote: "The model replies with tool calls; the SDK routes each to its registered harness function, which does the real thing."
+  normalized_statement: >
+    THE SYSTEM SHALL register harness tool functions with the SDK so that the model's tool
+    call replies are routed by the SDK to the corresponding registered harness function;
+    each registered harness function SHALL perform the real action; the harness SHALL NOT
+    intercept tool calls before the SDK can route them.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-GATE-12
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.2, paragraph 3, sentence 4"
+  source_quote: "Turn over; the session idles (idle = stored history, zero tokens)."
+  normalized_statement: >
+    WHEN the agent turn completes THE SYSTEM SHALL leave the session in an idle state;
+    idle state SHALL be defined as: session history stored (in SDK context), zero tokens
+    consumed, and no active inference; the idle session SHALL NOT be torn down and
+    recreated between wakes.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §3.2 — Cached prefix and 1-hour TTL (CANONICAL §10.1) ──────────────────
+
+- requirement_id: R-doc04-GATE-13
+  authority_type: canonical
+  authority_document: DOC-04
+  source_location: "§3.2, paragraph 4 (CANONICAL §10.1)"
+  source_quote: "Cached prefix (1-hour-TTL breakpoint — CANONICAL §10.1): identity, delivery rules, roster, state digest — so each wake pays only the event (~1s, cents per meeting)."
+  normalized_statement: >
+    THE SYSTEM SHALL construct the agent session prompt with a stable cached prefix
+    containing identity, delivery rules, roster, and state digest; a cache_control
+    breakpoint SHALL be placed at the end of this stable prefix; each wake SHALL pay only
+    the token cost of the volatile tail (the wake event plus transcript tail), not the
+    full prefix.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-GATE-14
+  authority_type: canonical
+  authority_document: DOC-04
+  source_location: "§3.2, paragraph 4 (CANONICAL §10.1)"
+  source_quote: "The manual cache_control breakpoint sits at the end of this stable prefix and carries a 1-hour TTL (not the 5-min default); the volatile tail — the wake event + the transcript tail — is placed after the breakpoint so it never invalidates the cached block."
+  normalized_statement: >
+    THE SYSTEM SHALL set the cache_control breakpoint TTL to 1 hour (3600 seconds); the
+    default 5-minute TTL SHALL NOT be used; the volatile tail (wake event and transcript
+    tail) SHALL be placed strictly after the breakpoint so that volatile content never
+    invalidates the cached prefix block.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-GATE-15
+  authority_type: canonical
+  authority_document: DOC-04
+  source_location: "§3.2, paragraph 4 (CANONICAL §10.1)"
+  source_quote: "The long TTL is load-bearing: wakes are sporadic over an hour-plus meeting, so a 5-min cache would silently expire between wakes."
+  normalized_statement: >
+    THE SYSTEM SHALL use a 1-hour TTL on the cache breakpoint specifically because meeting
+    wakes are sporadic and a shorter TTL (e.g. 5 minutes) would cause silent cache expiry
+    between wakes; the TTL value SHALL NOT be configurable to less than 1 hour without
+    explicit documented rationale; the 1-hour TTL is a load-bearing architectural constraint.
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.2 — State-digest compaction (CANONICAL §10.2) ────────────────────────
+
+- requirement_id: R-doc04-GATE-16
+  authority_type: canonical
+  authority_document: DOC-04
+  source_location: "§3.2, paragraph 5 (CANONICAL §10.2)"
+  source_quote: "State-digest compaction (CANONICAL §10.2): the wake turn is primed by the compact state digest, never raw session history."
+  normalized_statement: >
+    THE SYSTEM SHALL prime every wake turn with the compact state digest; the wake turn
+    SHALL NOT be primed with raw session history; the state digest is the sole priming
+    mechanism for the wake context.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-GATE-17
+  authority_type: canonical
+  authority_document: DOC-04
+  source_location: "§3.2, paragraph 5 (CANONICAL §10.2)"
+  source_quote: "That digest (tasks in flight, pending items, mouth free/busy, component health) is regenerated every [~15] wakes or on a material-state change."
+  normalized_statement: >
+    THE SYSTEM SHALL regenerate the state digest at least every 15 wakes and SHALL also
+    regenerate it on any material-state change (e.g. a task completing, a pending item
+    resolved, component health transition); the digest SHALL NOT be regenerated on every
+    wake (unnecessary cost), but SHALL never be stale beyond 15 wakes without regeneration.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-GATE-18
+  authority_type: canonical
+  authority_document: DOC-04
+  source_location: "§3.2, paragraph 5 (CANONICAL §10.2)"
+  source_quote: "The Notes object is the durable memory that survives compaction: Proxy reads it on demand through notes_ref (= the meeting_id) rather than carrying it in the session history."
+  normalized_statement: >
+    THE SYSTEM SHALL designate the Notes object as the durable memory that persists across
+    digest compaction; Proxy SHALL access Notes on demand via notes_ref (= meeting_id);
+    the Notes object SHALL NOT be embedded in session history; it SHALL NOT be re-injected
+    into the prompt at each wake.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.2 — Notes read path (CANONICAL §11.4) ────────────────────────────────
+
+- requirement_id: R-doc04-GATE-19
+  authority_type: canonical
+  authority_document: DOC-04
+  source_location: "§3.2, paragraph 5 (CANONICAL §11.4)"
+  source_quote: "The read path is the durable one (CANONICAL §11.4): the live notes are folded from the note_deltas Postgres table via GET /internal/notes/{meeting_id} — NOT the Scribe's in-process NOTES_CACHE."
+  normalized_statement: >
+    WHEN Proxy reads the Notes object THE SYSTEM SHALL issue a GET /internal/notes/{meeting_id}
+    request that folds the live notes from the note_deltas Postgres table; THE SYSTEM SHALL
+    NOT read from the Scribe's in-process NOTES_CACHE; the Postgres-backed read path is the
+    sole authoritative source for the Notes object at wake time.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-GATE-20
+  authority_type: canonical
+  authority_document: DOC-04
+  source_location: "§3.2, paragraph 5 (CANONICAL §11.4)"
+  source_quote: "the live notes are folded from the note_deltas Postgres table via GET /internal/notes/{meeting_id} — NOT the Scribe's in-process NOTES_CACHE."
+  normalized_statement: >
+    THE SYSTEM SHALL NOT include any code path that reads from the Scribe's in-process
+    NOTES_CACHE as the source for Notes at wake time; any such read path is a correctness
+    violation because the NOTES_CACHE is a stale derived cache, not the durable source of
+    truth.
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.2 — SDK isolation triad ───────────────────────────────────────────────
+
+- requirement_id: R-doc04-GATE-21
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.2, paragraph 7 (PLATFORM-ADOPTION.md III.2)"
+  source_quote: "SDK isolation on every call (mandatory — PLATFORM-ADOPTION.md III.2): strict_mcp_config=True (ignore ALL discovered .mcp.json / user settings / claude.ai connectors like Gmail/Slack/Drive), setting_sources=[] (load no filesystem permissions/hooks/CLAUDE.md), and a computed built-in tools list."
+  normalized_statement: >
+    THE SYSTEM SHALL pass strict_mcp_config=True on every Claude Agent SDK session
+    initialization; this setting SHALL cause the SDK to ignore all discovered .mcp.json
+    files, user settings, and claude.ai connectors (Gmail, Slack, Drive, etc.).
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-GATE-22
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.2, paragraph 7 (PLATFORM-ADOPTION.md III.2)"
+  source_quote: "setting_sources=[] (load no filesystem permissions/hooks/CLAUDE.md)"
+  normalized_statement: >
+    THE SYSTEM SHALL pass setting_sources=[] on every Claude Agent SDK session
+    initialization; this setting SHALL prevent the SDK from loading any filesystem
+    permissions, hooks, or CLAUDE.md content; no filesystem-sourced configuration
+    SHALL reach the agent session.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-GATE-23
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.2, paragraph 7 (PLATFORM-ADOPTION.md III.2)"
+  source_quote: "and a computed built-in tools list."
+  normalized_statement: >
+    THE SYSTEM SHALL pass a computed (not default or preset) built-in tools list on every
+    Claude Agent SDK session initialization; the tools list SHALL be computed from the
+    registered harness tool functions; the default SDK tools preset (which includes
+    host-level tools such as Read, Bash, Grep) SHALL NOT be loaded.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.2 — Dynamism: no if event_type → action in harness ───────────────────
+
+- requirement_id: R-doc04-GATE-24
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.2, paragraph 6, sentence 1"
+  source_quote: "The dynamism: there is no if event_type → action anywhere in the harness. The harness only says \"here's what happened, here's the state\"; the situation→action mapping lives entirely in the model's turn."
+  normalized_statement: >
+    THE SYSTEM SHALL NOT contain any conditional dispatch logic of the form
+    if event_type == X: take_action_Y anywhere in the harness; the harness SHALL only
+    describe the event and the current state to the agent; all situation-to-action mapping
+    SHALL reside in the model's turn, not in harness code.
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-GATE-25
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.2, paragraph 6, sentence 2"
+  source_quote: "An unanticipated situation is just another event description handled by the same judgment."
+  normalized_statement: >
+    THE SYSTEM SHALL handle any unanticipated event type through the same event-description
+    and model-turn pathway used for all known events; the harness SHALL NOT require a code
+    change to handle a new event type; unanticipated events SHALL produce a well-formed event
+    description rather than an error or dropped event.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified

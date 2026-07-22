@@ -1,0 +1,736 @@
+# Acceptance Criteria — Doc 08 §4.1 libs/contracts (import-time message registry)
+#                     + §4.2 Pydantic-per-message (inbound channel_action validation)
+# ID prefix: AC-REG-NNN / AC-REG-NNN-NEG
+# All criteria: golden_path: false, dependency_class: null
+
+# ════════════════════════════════════════════════════════════════
+# §4.1 · REGISTRATION AT IMPORT TIME
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-REG-001
+  name: "ProxyMessage subclass registers itself in CHANNEL_REGISTRY at import time"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A module defining a valid ProxyMessage subclass (with message_type declared) is not yet imported"
+    when: "The module is imported"
+    then:
+      - "CHANNEL_REGISTRY contains an entry mapping the subclass's MessageType to the subclass, visible to any code that runs after the import"
+      - "No explicit registration call is made outside __init_subclass__"
+  primary_oracle: {type: deterministic, artifact: "assert MessageType.X in CHANNEL_REGISTRY after import"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-001]
+
+- criterion_id: AC-REG-002
+  name: "Missing message_type on a subclass raises TypeError at import time"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A class definition that subclasses ProxyMessage without declaring message_type"
+    when: "Python evaluates the class body (import time)"
+    then:
+      - "TypeError is raised immediately during class construction"
+      - "The class is not added to CHANNEL_REGISTRY"
+  primary_oracle: {type: deterministic, artifact: "pytest.raises(TypeError) around the class definition"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-002]
+
+- criterion_id: AC-REG-003
+  name: "Duplicate MessageType registration raises TypeError at import time"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A ProxyMessage subclass for MessageType.X is already registered in CHANNEL_REGISTRY"
+    when: "A second ProxyMessage subclass declaring the same MessageType.X is defined"
+    then:
+      - "TypeError is raised immediately when the second class body is evaluated"
+      - "CHANNEL_REGISTRY still maps MessageType.X to the first subclass (or is unchanged)"
+  primary_oracle: {type: deterministic, artifact: "pytest.raises(TypeError) around second class definition"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-003]
+
+# ════════════════════════════════════════════════════════════════
+# §4.1 · SET-EQUALITY: assert_registry_closed()
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-REG-004
+  name: "assert_registry_closed() passes when every MessageType has exactly one model"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "All ten MessageType values each have exactly one registered ProxyMessage subclass in CHANNEL_REGISTRY and no extra undeclared model exists"
+    when: "assert_registry_closed() is called"
+    then:
+      - "assert_registry_closed() returns without raising"
+  primary_oracle: {type: deterministic, artifact: "call assert_registry_closed(); assert no exception raised"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-004]
+
+- criterion_id: AC-REG-004-NEG-A
+  name: "assert_registry_closed() raises RuntimeError when a MessageType has no model"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-04, R-doc08-REG-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "One MessageType value has been removed from CHANNEL_REGISTRY (simulating a missing model)"
+    when: "assert_registry_closed() is called"
+    then:
+      - "RuntimeError is raised"
+      - "The exception message names the unmodeled MessageType"
+  primary_oracle: {type: deterministic, artifact: "pytest.raises(RuntimeError, match=<type name>)"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-004-NEG-A]
+
+- criterion_id: AC-REG-004-NEG-B
+  name: "assert_registry_closed() raises RuntimeError when a model has no declared MessageType"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-04, R-doc08-REG-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A ProxyMessage subclass is patched into CHANNEL_REGISTRY under a key not in the MessageType enum (simulating an undeclared model)"
+    when: "assert_registry_closed() is called"
+    then:
+      - "RuntimeError is raised"
+      - "The exception message names the undeclared model"
+  primary_oracle: {type: deterministic, artifact: "pytest.raises(RuntimeError, match=<model name>)"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-004-NEG-B]
+
+- criterion_id: AC-REG-005
+  name: "assert_registry_closed() raises RuntimeError when an INBOUND type has no handler"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-05, R-doc08-REG-07]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "MessageType.CHANNEL_ACTION has no registered handler (handler registry is empty or missing the entry)"
+    when: "assert_registry_closed() is called"
+    then:
+      - "RuntimeError is raised"
+      - "The exception message names CHANNEL_ACTION as inbound-without-handler"
+  primary_oracle: {type: deterministic, artifact: "pytest.raises(RuntimeError, match='CHANNEL_ACTION')"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-005]
+
+- criterion_id: AC-REG-006
+  name: "assert_registry_closed() raises RuntimeError when an OUTBOUND type has no projector"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-06, R-doc08-REG-07]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "One outbound MessageType (e.g. MessageType.RESPONSE_START) has no registered projector"
+    when: "assert_registry_closed() is called"
+    then:
+      - "RuntimeError is raised"
+      - "The exception message names the outbound type as outbound-without-projector"
+  primary_oracle: {type: deterministic, artifact: "pytest.raises(RuntimeError, match='RESPONSE_START')"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-006]
+
+- criterion_id: AC-REG-007
+  name: "assert_registry_closed() error message lists all defect categories in a single call"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Multiple defect categories are simultaneously present: one unmodeled MessageType, one undeclared model, CHANNEL_ACTION without a handler, and one outbound type without a projector"
+    when: "assert_registry_closed() is called"
+    then:
+      - "Exactly one RuntimeError is raised"
+      - "The error message mentions all four defect categories: unmodeled, undeclared, inbound-without-handler, and outbound-without-projector"
+  primary_oracle: {type: deterministic, artifact: "inspect exc.args[0] for all four category strings"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-007]
+
+# ════════════════════════════════════════════════════════════════
+# §4.1 · CI GATE
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-REG-008
+  name: "test_contract_graph_closed() imports libs.contracts and calls assert_registry_closed() in CI"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The CI test suite is executed and libs.contracts is in its fully-wired state"
+    when: "pytest discovers and runs test_contract_graph_closed()"
+    then:
+      - "The test imports libs.contracts"
+      - "assert_registry_closed() is called as part of the test body"
+      - "The test passes (no exception is raised)"
+  primary_oracle: {type: deterministic, artifact: "pytest --collect-only confirms test_contract_graph_closed exists; test passes green"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-008]
+
+- criterion_id: AC-REG-008-NEG
+  name: "CI fails when assert_registry_closed() raises inside test_contract_graph_closed()"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A defect is introduced in libs.contracts (e.g. one MessageType removed from CHANNEL_REGISTRY)"
+    when: "test_contract_graph_closed() runs in CI"
+    then:
+      - "The test fails (RuntimeError propagates and is not caught)"
+      - "The CI build is marked non-green"
+  primary_oracle: {type: deterministic, artifact: "pytest exit code non-zero; test marked FAILED"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-008-NEG]
+
+# ════════════════════════════════════════════════════════════════
+# §4.1 · BOOT-TIME FAIL-FAST
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-REG-009
+  name: "FastAPI lifespan calls assert_registry_closed() before accepting traffic"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The FastAPI application is fully wired (all models, handlers, and projectors registered)"
+    when: "The FastAPI application lifespan startup hook executes"
+    then:
+      - "assert_registry_closed() is called as part of the startup sequence"
+      - "The application proceeds to accept traffic"
+  primary_oracle: {type: deterministic, artifact: "mock assert_registry_closed; assert it was called exactly once during lifespan startup"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-009]
+
+- criterion_id: AC-REG-009-NEG
+  name: "Application terminates and does not accept traffic when assert_registry_closed() fails at boot"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "assert_registry_closed() is patched to raise RuntimeError (simulating an incomplete registry)"
+    when: "The FastAPI application lifespan startup hook executes"
+    then:
+      - "The application raises the RuntimeError (or re-raises it) from the lifespan hook"
+      - "No WebSocket or HTTP listener becomes ready"
+      - "The process exits with a non-zero exit code"
+  primary_oracle: {type: deterministic, artifact: "lifespan raises; uvicorn exit code != 0; no port bound"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-009-NEG]
+
+# ════════════════════════════════════════════════════════════════
+# §4.1 · requires_meeting_scope DEFAULT
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-REG-010
+  name: "ProxyMessage subclass defaults to requires_meeting_scope = True"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-10]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A ProxyMessage subclass is defined with no explicit requires_meeting_scope attribute"
+    when: "requires_meeting_scope is read from the class"
+    then:
+      - "The value is True"
+  primary_oracle: {type: deterministic, artifact: "assert MyMessage.requires_meeting_scope is True"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-010]
+
+# ════════════════════════════════════════════════════════════════
+# §4.1 · SIGNAL-SURFACE TYPES EXCLUDED
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-REG-011
+  name: "Doc 02 signal-surface event types are absent from CHANNEL_REGISTRY"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-11]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "libs.contracts is imported in its production state"
+    when: "CHANNEL_REGISTRY keys are inspected"
+    then:
+      - "None of the following names appear as registered MessageType values or model class names: transcript, roster, speaking, boundary, barge-in, bot-status, meeting-end, channel-report (or their camel-case or underscore equivalents)"
+  primary_oracle: {type: deterministic, artifact: "assert no key name or model __name__ matches the excluded signal-surface identifiers"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-011]
+
+# ════════════════════════════════════════════════════════════════
+# §4.1 · PER-FIELD PRODUCE/CONSUME GRAPH-DIFF
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-REG-012
+  name: "CI graph-diff flags a field produced but consumed by no registered consumer"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-12]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A contract model field is present in MESSAGE_PRODUCERS (produced by at least one producer) but absent from all consumer declarations"
+    when: "The per-field produce/consume graph-diff CI step runs"
+    then:
+      - "The step reports the orphaned field name and the model it belongs to"
+      - "The CI step exits non-zero"
+  primary_oracle: {type: deterministic, artifact: "inject orphan field; assert CI step fails and names the field"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-012]
+
+- criterion_id: AC-REG-013
+  name: "CI graph-diff detects deprecated field aliases (.kind, verified/draft, dm?) as violations"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-13]
+  criticality: P2
+  blocking: true
+  behavior:
+    given: "A contract model field is named .kind instead of .type, or uses the string literals verified/draft instead of EnvelopeStatus, or is named dm? instead of dm_available"
+    when: "The per-field graph-diff CI step runs"
+    then:
+      - "The step reports the offending field alias and the canonical name that should be used"
+      - "The CI step exits non-zero"
+  primary_oracle: {type: deterministic, artifact: "inject deprecated alias into a test model; assert CI step fails with the alias named"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-013]
+
+# ════════════════════════════════════════════════════════════════
+# §4.2 · meeting_id UUID VALIDATION BEFORE DB LOOKUP
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-REG-014
+  name: "Valid UUID string in meeting_id is accepted by ChannelAction validation"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-14]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "An otherwise-valid ChannelAction payload with meeting_id set to a well-formed UUID string (e.g. '12345678-1234-5678-1234-567812345678')"
+    when: "The payload is parsed by the ChannelAction Pydantic model"
+    then:
+      - "Parsing succeeds and the resulting model instance has meeting_id as a UUID object"
+  primary_oracle: {type: deterministic, artifact: "ChannelAction(**payload); assert isinstance(msg.meeting_id, UUID)"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-014]
+
+- criterion_id: AC-REG-015
+  name: "Non-UUID meeting_id is rejected before any DB lookup"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-14]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "An inbound ChannelAction payload with meeting_id set to 'abc' (a non-UUID string) and a mock DB session that records any calls made to it"
+    when: "The WS funnel attempts to parse and dispatch the message"
+    then:
+      - "Pydantic raises a ValidationError for meeting_id"
+      - "The mock DB session records zero calls (no query was issued)"
+  primary_oracle: {type: deterministic, artifact: "pytest.raises(ValidationError); assert db_mock.execute.call_count == 0"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-015]
+
+# ════════════════════════════════════════════════════════════════
+# §4.2 · FREE-TEXT FIELD LENGTH (arg max_length=2000)
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-REG-016
+  name: "arg field at exactly 2000 characters is accepted"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-15]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A valid ChannelAction payload with arg set to a string of exactly 2000 characters"
+    when: "The payload is parsed by the ChannelAction Pydantic model"
+    then:
+      - "Parsing succeeds and model.arg has length 2000"
+  primary_oracle: {type: deterministic, artifact: "ChannelAction(**payload); assert len(msg.arg) == 2000"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-016]
+
+- criterion_id: AC-REG-017
+  name: "arg field at 2001 characters is rejected with a ValidationError"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-15]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A ChannelAction payload with arg set to a string of exactly 2001 characters"
+    when: "The payload is parsed by the ChannelAction Pydantic model"
+    then:
+      - "Pydantic raises a ValidationError citing max_length on the arg field"
+  primary_oracle: {type: deterministic, artifact: "pytest.raises(ValidationError); check error loc == ('arg',)"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-017]
+
+- criterion_id: AC-REG-018
+  name: "Socket-level payload cap rejects oversized raw messages before Pydantic parsing"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-16]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A WebSocket message whose byte length exceeds the configured socket payload cap"
+    when: "The server-side WS message handler receives the message"
+    then:
+      - "The message is dropped (connection closed or error frame sent) before the bytes are passed to Pydantic for parsing"
+      - "The Pydantic model constructor is never invoked for this message"
+  primary_oracle: {type: deterministic, artifact: "mock Pydantic parse; send oversized message; assert parse never called"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-018]
+
+# ════════════════════════════════════════════════════════════════
+# §4.2 · SURFACE FIELD: CLOSED LITERAL
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-REG-019
+  name: "Each of the four valid surface values is accepted by ChannelAction"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-17]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Four separate ChannelAction payloads each with surface set to one of: 'voice', 'chat', 'canvas', 'screen'"
+    when: "Each payload is parsed by the ChannelAction Pydantic model"
+    then:
+      - "All four payloads parse successfully"
+  primary_oracle: {type: deterministic, artifact: "parametrize surface in ['voice','chat','canvas','screen']; assert no ValidationError"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-019]
+
+- criterion_id: AC-REG-020
+  name: "Surface value 'tile' is rejected with ValidationError"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-17]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A ChannelAction payload with surface set to 'tile'"
+    when: "The payload is parsed by the ChannelAction Pydantic model"
+    then:
+      - "Pydantic raises a ValidationError for the surface field"
+      - "The message is not dispatched to any handler"
+  primary_oracle: {type: deterministic, artifact: "pytest.raises(ValidationError); check error loc == ('surface',)"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-020]
+
+- criterion_id: AC-REG-021
+  name: "An unknown surface value is rejected with ValidationError (not silently dropped)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-17]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A ChannelAction payload with surface set to an arbitrary unknown value such as 'dashboard'"
+    when: "The payload is parsed by the ChannelAction Pydantic model"
+    then:
+      - "Pydantic raises a ValidationError for the surface field"
+      - "No handler branch is entered for this message"
+  primary_oracle: {type: deterministic, artifact: "pytest.raises(ValidationError); check error loc == ('surface',)"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-021]
+
+# ════════════════════════════════════════════════════════════════
+# §4.2 · ACTION FIELD: CLOSED LITERAL
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-REG-022
+  name: "All nine declared action values are accepted by ChannelAction"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-18]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Nine separate ChannelAction payloads, one for each declared action literal: 'share_screen', 'stop_share', 'walkthrough_on', 'walkthrough_off', 'catch_me_up', 'where_are_we', 'shorter', 'capabilities', 'show_your_work'"
+    when: "Each payload is parsed by the ChannelAction Pydantic model"
+    then:
+      - "All nine payloads parse successfully"
+  primary_oracle: {type: deterministic, artifact: "parametrize action over all nine values; assert no ValidationError for any"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-022]
+
+- criterion_id: AC-REG-023
+  name: "An unknown action value is rejected with ValidationError, not handled as default"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-18]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A ChannelAction payload with action set to an arbitrary unknown value such as 'do_something'"
+    when: "The payload is parsed by the ChannelAction Pydantic model"
+    then:
+      - "Pydantic raises a ValidationError for the action field"
+      - "No handler branch is entered (no if/else fall-through occurs)"
+  primary_oracle: {type: deterministic, artifact: "pytest.raises(ValidationError); assert handler mock never called"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-023]
+
+# ════════════════════════════════════════════════════════════════
+# §4.2 · SINGLE CENTRAL VALIDATION POINT
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-REG-024
+  name: "Pydantic validation occurs exactly once at the WS funnel, not inside handlers"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-19]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A valid ChannelAction raw JSON payload arrives at the WS funnel; a mock tracks ChannelAction.model_validate (or __init__) invocations across the full dispatch chain"
+    when: "The payload is processed end-to-end from funnel through handler"
+    then:
+      - "The Pydantic model constructor or model_validate is called exactly once"
+      - "No handler module calls ChannelAction.model_validate or json.loads on the same payload"
+  primary_oracle: {type: deterministic, artifact: "monkeypatch ChannelAction.__init__; assert call_count == 1 after full dispatch"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-024]
+
+# ════════════════════════════════════════════════════════════════
+# §4.2 · canvas_id: SERVER-SIDE OWNING MEETING RESOLUTION
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-REG-025
+  name: "canvas_id owning meeting is resolved server-side, not from client meeting_id"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-20]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A ChannelAction message with a non-null canvas_id and a meeting_id that does not own the canvas; the server has the correct canvas→meeting mapping in the DB"
+    when: "The WS funnel processes the message (§4.3 canvas resolution path)"
+    then:
+      - "The canvas's owning meeting is fetched from the server-side DB by canvas_id key"
+      - "The client-supplied meeting_id is NOT used to authorize or scope the canvas entity"
+      - "If client meeting_id does not match the DB-resolved owning meeting, the request is rejected"
+  primary_oracle: {type: deterministic, artifact: "mock DB returning mismatched canvas owner; assert rejection + assert client meeting_id never used for canvas auth"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-025]
+
+# ════════════════════════════════════════════════════════════════
+# §4.2 · STRUCTURAL NEGATIVES
+# ════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-REG-026
+  name: "No TileAddress ProxyMessage subclass exists in libs/contracts"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-21]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "libs.contracts is imported in its production state"
+    when: "All ProxyMessage subclasses registered in CHANNEL_REGISTRY are inspected"
+    then:
+      - "No class is named TileAddress or any variant (TileMsg, InboundTile, etc.) that represents a tile-originated inbound message"
+      - "No MessageType value encodes a tile-inbound concept"
+  primary_oracle: {type: deterministic, artifact: "assert 'TileAddress' not in [c.__name__ for c in CHANNEL_REGISTRY.values()]"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-026]
+
+- criterion_id: AC-REG-027
+  name: "No Connect* ProxyMessage subclass exists in libs/contracts"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-REG-22]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "libs.contracts is imported in its production state"
+    when: "All ProxyMessage subclasses registered in CHANNEL_REGISTRY are inspected"
+    then:
+      - "No class name starts with 'Connect' or represents a connect-page interaction as a WS message"
+  primary_oracle: {type: deterministic, artifact: "assert not any(c.__name__.startswith('Connect') for c in CHANNEL_REGISTRY.values())"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-REG-027]

@@ -1,0 +1,382 @@
+# BOOK.requirements.yaml — Doc 04 (Proxy Orchestrator) — §3.14 Dispatch Funnel + §3.15 In-Flight Bookkeeping
+# Atomic EARS requirements. Each carries source_location + verbatim source_quote + criticality.
+# ID scheme: R-doc04-BOOK-NN
+# Authority document: DOC-04
+#
+# Scope:
+#   §3.14 — the inbound dispatch funnel (rate-limit → validate → isolate → resolve → handler);
+#            funnel is CANONICAL to libs/http (Doc 08 §4.3; CANONICAL-DECISIONS §5); Doc 04 does
+#            NOT redefine it; Proxy handlers register INTO it; default message scope = meeting.
+#   §3.15 — the in-flight task list: [3–5] semaphore, duplicate-attach, mid-task correction
+#            injection, ~2s detach threshold, "cancel that" abort, FIFO-honest ack, completion
+#            callback (no polling), is_owner fencing on all side-effects, agent decides collisions.
+#
+# NOT in scope here: the abort controller internals (§3.11, CTRL.requirements.yaml), the
+#   workroom behavior dispatch details (BHVR.requirements.yaml), delivery-tool contracts
+#   (speak/send_chat/show_screen — FLOW.requirements.yaml).
+#
+# Dependency classes used:
+#   null        — pure in-process logic (semaphore, duplicate detection, detach timer, FIFO ack)
+#   db:postgres — if task list is persisted to operation_runs (integration tier required)
+#
+# Criticality key:
+#   P0 — cross-tenant safety, is_owner fencing, "cancel that" finality (hard invariants)
+#   P1 — semaphore boundary, duplicate-attach, FIFO ack, detach/callback (UX-critical)
+#   P2 — structural/static constraints (funnel-not-redefined, default-meeting-scope)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §3.14 · The Dispatch Funnel
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── R-doc04-BOOK-01: Funnel is canonical to libs/http; Doc 04 does NOT redefine it ──
+
+- requirement_id: R-doc04-BOOK-01
+  authority_type: canonical
+  authority_document: DOC-04
+  source_location: "§3.14 paragraph 1"
+  source_quote: >
+    The inbound dispatch funnel — rate-limit → Pydantic-validate → meeting/tenant isolation
+    keyed on meeting_id presence → entity→owner→tenant server-side resolution → handler,
+    with auth at the WS upgrade — is specified once in libs/http (Doc 08 §4.3;
+    CANONICAL-DECISIONS §5). Doc 04 does not redefine it.
+  normalized_statement: >
+    THE SYSTEM SHALL implement the inbound dispatch funnel (rate-limit → Pydantic-validate
+    → meeting/tenant isolation → entity→owner→tenant resolution → handler) exactly once, in
+    libs/http per Doc 08 §4.3 and CANONICAL-DECISIONS §5; Doc 04 (the orchestrator) SHALL
+    NOT contain a duplicate or alternative definition of the funnel pipeline; any orchestrator
+    code that participates in the funnel SHALL do so only by registering into the single
+    libs/http funnel.
+  requirement_type: constraint
+  criticality: P2
+  testability: executable
+  status: qualified
+
+# ── R-doc04-BOOK-02: Proxy handlers register into the one funnel ──────────────
+
+- requirement_id: R-doc04-BOOK-02
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.14 paragraph 1"
+  source_quote: >
+    Proxy's own inbound handlers (the accept-handler §3.16.1, control commands) register
+    into that one funnel.
+  normalized_statement: >
+    WHEN Proxy's inbound handlers (the accept-handler defined in §3.16.1 and any control
+    command handlers) are wired up THE SYSTEM SHALL register them into the single libs/http
+    funnel; no Proxy inbound handler SHALL establish its own parallel dispatch path outside
+    the funnel; all inbound traffic to Proxy SHALL flow through the canonical funnel before
+    reaching any handler.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc04-BOOK-03: New message type defaults to meeting-scoped ──────────────
+
+- requirement_id: R-doc04-BOOK-03
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.14 paragraph 1"
+  source_quote: >
+    the standing rule it enforces is that a new message type defaults to meeting-scoped
+    unless explicitly marked global.
+  normalized_statement: >
+    WHEN a new inbound message type is introduced into the funnel and no explicit global
+    scope marker is present THE SYSTEM SHALL treat that message type as meeting-scoped;
+    meeting-scoped messages SHALL be isolated and dispatched with a meeting_id context;
+    a new message type SHALL NOT be treated as global unless the message type definition
+    carries an explicit global-scope marker.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §3.15 · In-Flight Bookkeeping
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── R-doc04-BOOK-04: Semaphore [3–5] — at most [3–5] concurrent workroom tasks ─
+
+- requirement_id: R-doc04-BOOK-04
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.15 paragraph 1"
+  source_quote: >
+    A task list under a [3–5] semaphore
+  normalized_statement: >
+    THE SYSTEM SHALL maintain the in-flight task list under an asyncio semaphore with a
+    capacity in the closed interval [3, 5] (inclusive); at any point in time, the number
+    of concurrently active workroom tasks per meeting SHALL NOT exceed the configured
+    semaphore capacity.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc04-BOOK-05: Semaphore boundary — new ask waits when at capacity ──────
+
+- requirement_id: R-doc04-BOOK-05
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.15 paragraph 2 (Concretely: Semaphore [3–5])"
+  source_quote: >
+    Semaphore [3–5]: at most [3–5] concurrent workroom tasks per meeting
+  normalized_statement: >
+    WHEN the in-flight task count is at the semaphore capacity (i.e. N tasks active where
+    N = semaphore_limit) and a new ask arrives that would require a new task THE SYSTEM SHALL
+    block the new task from spawning until the semaphore is released; the new ask SHALL NOT
+    be silently dropped, and no exception SHALL be raised to the caller by the semaphore
+    mechanism alone.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc04-BOOK-06: Semaphore boundary — task allowed at capacity-1 ──────────
+
+- requirement_id: R-doc04-BOOK-06
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.15 paragraph 2 (Concretely: Semaphore [3–5])"
+  source_quote: >
+    Semaphore [3–5]: at most [3–5] concurrent workroom tasks per meeting
+  normalized_statement: >
+    WHEN the in-flight task count is strictly less than the semaphore capacity (i.e. N − 1
+    tasks active where N = semaphore_limit) and a new ask arrives that would require a new
+    task THE SYSTEM SHALL permit the new task to start without delay; no queuing or blocking
+    SHALL occur when the semaphore has remaining capacity.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc04-BOOK-07: Duplicate ask attaches to existing in-flight task ─────────
+
+- requirement_id: R-doc04-BOOK-07
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.15 paragraph 1"
+  source_quote: >
+    a duplicate of an in-flight ask attaches to it rather than spawning
+  normalized_statement: >
+    WHEN an inbound ask arrives that is a duplicate of an in-flight ask (same question
+    already being processed in the task list) THE SYSTEM SHALL attach the duplicate
+    requester to the existing in-flight task; THE SYSTEM SHALL NOT spawn a new task for
+    the duplicate ask; the duplicate attach SHALL NOT consume a semaphore slot.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc04-BOOK-08: Duplicate-ask: Concretely — attach, not new spawn ─────────
+
+- requirement_id: R-doc04-BOOK-08
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.15 paragraph 2 (Concretely: Duplicate ask)"
+  source_quote: >
+    Duplicate ask: an in-flight ask from the same question attaches to the existing task
+    (not a new task)
+  normalized_statement: >
+    WHEN an ask is received whose question content matches an already-running task in the
+    in-flight task list THE SYSTEM SHALL resolve the duplicate by attaching to the running
+    task's completion future; the task list entry count SHALL NOT increase as a result of
+    the duplicate; what to do about the collision (e.g. whether to notify the requester)
+    is the agent's decision on wake, not a hard-coded code branch.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc04-BOOK-09: Correction mid-task injects into running session ──────────
+
+- requirement_id: R-doc04-BOOK-09
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.15 paragraph 1"
+  source_quote: >
+    a correction mid-task injects into that task's session
+  normalized_statement: >
+    WHEN a correction arrives while a task is in-flight THE SYSTEM SHALL inject the
+    correction into that task's live agent session; THE SYSTEM SHALL NOT spawn a new task
+    for the correction; the running task's session SHALL receive the correction as an
+    input to its active turn.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc04-BOOK-10: Correction mid-task: Concretely — injects into live plan ──
+
+- requirement_id: R-doc04-BOOK-10
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.15 paragraph 2 (Concretely: Correction mid-task)"
+  source_quote: >
+    Correction mid-task: injects into the running task's live plan (not a new task)
+  normalized_statement: >
+    WHEN a mid-task correction is processed THE SYSTEM SHALL route it into the running
+    task's live plan (the active agent session context); the task list SHALL reflect one
+    task entry (the original, now corrected) and SHALL NOT show a second task entry for
+    the correction; the correction is delivered to the agent's running context, not to
+    a separate workroom session.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc04-BOOK-11: ~2s detach threshold — past threshold becomes detached task
+
+- requirement_id: R-doc04-BOOK-11
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.15 paragraph 1"
+  source_quote: >
+    anything past ~2s is a detached task ("I'll have it in a moment") whose completion
+    re-wakes Proxy
+  normalized_statement: >
+    WHEN a dispatched task has not completed within approximately 2 seconds of dispatch
+    THE SYSTEM SHALL transition that task to detached status and SHALL cause Proxy to emit
+    the async-etiquette acknowledgment line ("I'll have it in a moment" or equivalent);
+    the detached task SHALL continue executing; upon completion the detached task SHALL
+    re-wake Proxy via the completion callback mechanism.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc04-BOOK-12: Detach: Concretely — async-etiquette line emitted ────────
+
+- requirement_id: R-doc04-BOOK-12
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.15 paragraph 2 (Concretely: Past ~2s detach threshold)"
+  source_quote: >
+    Past ~2s detach threshold: becomes a detached task; Proxy says async-etiquette line
+  normalized_statement: >
+    WHEN a task crosses the ~2-second detach threshold THE SYSTEM SHALL emit the
+    async-etiquette spoken line (the "I'll have it in a moment" line or the delivery-rule
+    equivalent) via the wake-turn tools (speak/send_chat) per CANONICAL-DECISIONS §12.3;
+    the async-etiquette line SHALL be emitted once per task detachment, not on every
+    polling interval.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc04-BOOK-13: "cancel that" kills by task id via abort — abort is final ─
+
+- requirement_id: R-doc04-BOOK-13
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.15 paragraph 1"
+  source_quote: >
+    cancel that kills by task id (via §3.11 abort). The list is plain state; what to do
+    about collisions is the agent's call on wake.
+  normalized_statement: >
+    WHEN the user issues a "cancel that" command THE SYSTEM SHALL kill the targeted task
+    by its task id using the §3.11 abort mechanism; the abort SHALL be final (the task
+    SHALL NOT be resumed or re-queued after abort); the task SHALL be removed from the
+    in-flight task list upon abort completion; what to do about any resulting collision
+    state is the agent's decision, not a hard-coded resolution branch.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── R-doc04-BOOK-14: "cancel that": Concretely — kills by task id, final ───────
+
+- requirement_id: R-doc04-BOOK-14
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.15 paragraph 2 (Concretely: 'cancel that')"
+  source_quote: >
+    "cancel that": kills by task id via abort; the abort is final
+  normalized_statement: >
+    WHEN the abort is issued for a task id THE SYSTEM SHALL deliver the abort signal to
+    the running task's asyncio task and agent session via §3.11 AbortController; the abort
+    SHALL be irreversible — no subsequent event SHALL re-start the aborted task under the
+    same task id; the semaphore slot held by the aborted task SHALL be released upon abort.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── R-doc04-BOOK-15: FIFO-honest ack — "on it — right after Sam's" ────────────
+
+- requirement_id: R-doc04-BOOK-15
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.15 paragraph 2 (Concretely: FIFO-honest ack)"
+  source_quote: >
+    FIFO-honest ack: if Proxy is mid-answer, the ack for a new ask is
+    "on it — right after Sam's"
+  normalized_statement: >
+    WHEN a new ask arrives while Proxy is mid-answer (mouth busy delivering a response)
+    THE SYSTEM SHALL emit a FIFO-honest acknowledgment that accurately reflects processing
+    order, such as "on it — right after Sam's" or equivalent; THE SYSTEM SHALL NOT silently
+    queue the ask without acknowledgment, and SHALL NOT falsely imply immediate processing
+    when another task is actively in-mouth.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc04-BOOK-16: Task completion callback re-wakes Proxy — no polling ──────
+
+- requirement_id: R-doc04-BOOK-16
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.15 paragraph 2 (Concretely: Task completion callback)"
+  source_quote: >
+    Task completion callback: re-wakes Proxy (no polling)
+  normalized_statement: >
+    WHEN a detached task completes THE SYSTEM SHALL re-wake Proxy via a done-callback
+    registered on the asyncio task; THE SYSTEM SHALL NOT poll for task completion via a
+    sleep-loop, asyncio.gather, or repeated status-check; the done-callback is the sole
+    delivery mechanism for the task-completion wake signal.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── R-doc04-BOOK-17: is_owner gate on every side-effect ──────────────────────
+
+- requirement_id: R-doc04-BOOK-17
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.15 paragraph 3"
+  source_quote: >
+    Every mouth/apply/dispatch side-effect is gated on op.is_owner (§3.7 fencing) —
+    a fenced-out harness stays silent.
+  normalized_statement: >
+    THE SYSTEM SHALL gate every side-effect (speak/mouth, apply/patch, workroom dispatch)
+    on the op.is_owner predicate per §3.7 fencing semantics; WHEN op.is_owner evaluates
+    to false for the current operation context THE SYSTEM SHALL suppress the side-effect
+    entirely (stay silent/skip apply/skip dispatch) without error or log noise; no
+    side-effect SHALL reach the meeting or external system when op.is_owner is false.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── R-doc04-BOOK-18: Task list is plain state; agent decides collisions ─────────
+
+- requirement_id: R-doc04-BOOK-18
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.15 paragraph 1"
+  source_quote: >
+    The list is plain state; what to do about collisions is the agent's call on wake.
+  normalized_statement: >
+    THE SYSTEM SHALL implement the in-flight task list as plain, observable state (not a
+    policy engine); THE SYSTEM SHALL NOT encode collision-resolution logic as code branches
+    in the harness; WHEN a collision condition is present (duplicate, correction, abort
+    aftermath) the harness SHALL represent the state faithfully in the wake-turn state
+    digest and delegate resolution to the agent's judgment on the next wake turn.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified

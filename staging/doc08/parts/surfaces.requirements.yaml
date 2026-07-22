@@ -1,0 +1,15 @@
+# Requirements — Doc 08 Behavior · §2.7 The connect page + §2.8 /m/{meeting_id} home
+# Source: product/v0-spec/08-BEHAVIOR.md §2.7-§2.8
+# ID prefix: R-doc08-SURF-NN
+# Authority: DOC-08 §2.7, §2.8
+# Status: qualified
+#
+# dependency_class values:
+#   db:postgres  - meetings, sessions, note_deltas, staged_drafts, revoked_tokens, audit log
+#   fs:git       - readiness status from code_intel (connect page status poll)
+#
+# Scope:
+#   §2.7 - The connect page: GitHub App install, five readiness states, invite instructions.
+#           Public URL; all backend calls untrusted + validated.
+#   §2.8 - /m/{meeting_id}: GET (session or capability token), POST accept/reject,
+#           capability-token read path, CSRF, idempotency, audit.

@@ -11,6 +11,7 @@ faking a pass on a divergent/absent DB is forbidden.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 
@@ -151,7 +152,8 @@ def _raw_fold(deltas: list[dict[str, object]]) -> dict[str, object]:
     for d in deltas:
         eid = str(d["entry_id"])
         op = str(d["op"])
-        payload = dict(d["payload"])  # type: ignore[arg-type]
+        _raw = d["payload"]
+        payload = json.loads(_raw) if isinstance(_raw, str) else dict(_raw)  # jsonb via asyncpg is a str
         if op == "add":
             state[eid] = dict(payload)
         elif op == "patch":

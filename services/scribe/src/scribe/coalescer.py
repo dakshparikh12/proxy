@@ -43,7 +43,7 @@ class BoundaryType(str, Enum):
     SPEAKER_TURN = "speaker_turn"
     PAUSE_WITHIN_TURN = "pause_within_turn"
     TIME_CAP = "time_cap_60s"  # spec's cap label; the enforced value is WINDOW_TIME_CAP_S
-    TOKEN_CAP = "token_cap"
+    TOKEN_CAP = "token_cap"  # nosec B105 - a boundary-type enum label, not a secret
     STREAM_END = "stream_end"
 
 
@@ -179,7 +179,7 @@ class Coalescer:
 
     # -- input ---------------------------------------------------------------
 
-    def push(self, seg: TranscriptSegment) -> list[Window]:
+    def feed(self, seg: TranscriptSegment) -> list[Window]:
         """Add one stream segment; return any windows that closed as a result."""
         if not seg.is_speech:
             # VAD-off / silence: contributes no tokens and no window. Silence costs
@@ -304,6 +304,6 @@ def coalesce(
             coalescer.push_chat(msg)
     windows: list[Window] = []
     for seg in segments:
-        windows.extend(coalescer.push(seg))
+        windows.extend(coalescer.feed(seg))
     windows.extend(coalescer.flush())
     return windows

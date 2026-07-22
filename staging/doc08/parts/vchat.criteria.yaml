@@ -1,0 +1,1008 @@
+# Acceptance Criteria — Doc 08 Behavior · §2.3 Voice & Chat (how it communicates)
+# Source: product/v0-spec/08-BEHAVIOR.md §2.3
+# ID prefix: AC-VCHAT-NNN / AC-VCHAT-NNN-NEG
+# Authority: DOC-08
+#
+# Dependency classes in use:
+#   vendor:recall  — per-meeting channel report (dm_available bool signal from Doc 02)
+#
+# mock_boundary rules:
+#   vendor:recall  : cassette-backed; MUST NOT replace the call_external seam in libs/http
+#
+# NEG criteria are mandatory for every non-null dependency_class.
+# Golden-path: AC-VCHAT-030 — full Q&A turn (voice ask → ACK ≤500ms → spoken + chat receipt).
+#
+# Verification ladder abbreviations used below:
+#   lint        : always present
+#   unit        : always present
+#   integration : iff dependency_class in {db:postgres, gcs:objects}
+#   reality     : iff dependency_class == vendor:*  (cassette-backed)
+#   negative    : only on -NEG pairs
+#   e2e         : only iff golden_path: true
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 1 — Speak the headline; detail lives in chat
+# ══════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-VCHAT-001
+  name: "structured content (links, code, lists, tables, receipts) routes to send_chat() only"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy is composing a response that contains at least one of: a URL link, a code block, a list, a numerical table, or a receipt"
+    when: "The response is dispatched through the delivery tools"
+    then:
+      - "The structured content appears in a send_chat() call"
+      - "The speak() call contains no links, code blocks, list items, tabular data, or receipt tokens"
+      - "No structured-content element appears in any speak() argument"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert speak() arg contains zero occurrences of URL pattern, code-fence marker, list prefix, pipe-table row, or receipt token; assert send_chat() carries the structured content"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-001]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-VCHAT-002
+  name: "speak() voice turn is bounded to one or two sentences"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy produces a voice turn response"
+    when: "The speak() call is captured and its argument parsed"
+    then:
+      - "The spoken text contains at most two sentence-terminating punctuation boundaries (period, exclamation mark, question mark)"
+      - "The spoken text contains no more than two natural-language sentences by any reasonable sentence-split"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert sentence_count(speak_arg) <= 2 using regex-based sentence splitter; parameterized over a test corpus of simple/complex responses"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-002]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-VCHAT-003
+  name: "TTS character cost bounded: speak() receives only headline, never full detail"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-03]
+  criticality: P2
+  blocking: false
+  behavior:
+    given: "A response whose full detail (chat portion) is ≥100 characters"
+    when: "Proxy dispatches the response"
+    then:
+      - "The character count of the speak() argument is strictly less than the character count of the full answer"
+      - "The speak() argument does not duplicate detail already placed in send_chat()"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert len(speak_arg) < len(full_answer_text); assert speak_arg content not duplicated verbatim in send_chat arg beyond the mirrored text record"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-003]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 2 — Worst news first
+# ══════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-VCHAT-004
+  name: "multi-part answer with blocker leads with the blocker, not the positive summary"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy is composing a multi-part answer containing both a blocker/caveat/risk and positive summary material"
+    when: "The answer text is assembled and dispatched"
+    then:
+      - "The first sentence of the spoken turn contains or directly references the blocker, caveat, or risk"
+      - "The positive summary appears after the blocker statement, not before"
+      - "No spoken or chat turn begins with positive summary material when a blocker is known"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert index_of(blocker_sentinel) < index_of(positive_summary_sentinel) in both speak_arg and send_chat_arg; parameterized test corpus with labelled blocker and summary spans"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-004]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-VCHAT-005
+  name: "answer with no blocker does not prepend a fabricated caveat"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy is composing an answer that has been classified as containing no blockers, caveats, or risks"
+    when: "The answer is dispatched"
+    then:
+      - "No caveat-prefix token (e.g., 'however', 'but note', 'one concern', 'caveat') appears as the leading content"
+      - "The answer opens with its genuine first material"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert answer classified as no-blocker does not have fabricated_caveat_prefix == true by the ordering linter; spot-check set of no-blocker test cases"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-005]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 3 — Everything spoken is also posted as text
+# ══════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-VCHAT-006
+  name: "every speak() call produces a corresponding send_chat() mirror in the same turn"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy has issued one or more speak() calls in a turn"
+    when: "All tool calls for the turn are captured"
+    then:
+      - "For every speak(text) call there is a corresponding send_chat(text) call where the text is identical to the spoken text"
+      - "No speak() call exists without a paired send_chat() containing the same content"
+      - "The send_chat() mirror is issued within the same turn, not a future turn"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert for each speak_call in turn_log: exists send_chat_call in same turn where send_chat_call.text == speak_call.text; violations_count == 0"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-006]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-VCHAT-007
+  name: "chat mirror is derived from speak() source text without a second model synthesis call"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A speak() call has been issued with a specific text argument"
+    when: "The harness mirror logic runs to produce the chat counterpart"
+    then:
+      - "No additional LLM/model call is made to produce the chat text"
+      - "The send_chat() argument is produced by passing the same string from speak() to the mirror path, not by re-inferring"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert model_calls_in_mirror_path == 0; the mirror function is a pass-through, testable as a pure function with no side-effects to external APIs"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-007]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 4 — <0.5s acknowledgment (latency boundary-value criteria)
+# ══════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-VCHAT-008
+  name: "acknowledgment fires within 500ms of ask arrival (passing boundary)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-08, R-doc08-VCHAT-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy receives a voice or chat ask"
+    when: "Time is measured from ask receipt to first acknowledgment speak() or send_chat() call"
+    then:
+      - "The elapsed time from ask receipt to acknowledgment dispatch is strictly less than 500ms"
+      - "The acknowledgment is the first tool call in the turn, preceding any substantive answer work"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert ack_dispatch_time - ask_receipt_time < 500; measured in test harness by recording monotonic timestamps at ask receipt and first ack tool call; mock answer latency to isolate ack path"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-008]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-VCHAT-009
+  name: "acknowledgment at exactly 500ms is a FAIL (boundary: <500ms required, not ≤)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy receives an ask and the acknowledgment dispatch is simulated to arrive at exactly T+500ms"
+    when: "The timing gate evaluates the ack"
+    then:
+      - "The timing gate classifies the ack as a violation (not a pass)"
+      - "The threshold is strictly less-than 500ms, so 500ms itself is a failure"
+  primary_oracle:
+    type: deterministic
+    artifact: "inject mock clock; set ack_dispatch_time = ask_receipt_time + 500; assert timing_gate.result == FAIL; confirms strict inequality enforced"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-009]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-VCHAT-010
+  name: "acknowledgment absent (dead air) is always a FAIL regardless of system load"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-10]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy receives an ask and no acknowledgment speak() or send_chat() call is emitted before substantive answer processing begins"
+    when: "The turn log is inspected at T+500ms"
+    then:
+      - "The dead-air condition is detected and logged as a P1 violation"
+      - "No scenario (slow answer, high load, model timeout) excuses the absence of an acknowledgment"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert ack_present_in_first_500ms == true for all ask inputs; inject delayed answer path; confirm ack still fires within 500ms independent of answer completion"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-010]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-VCHAT-011
+  name: "acknowledgment is independent of substantive answer completion time"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy receives an ask where the substantive answer requires 5 seconds to produce"
+    when: "The turn unfolds"
+    then:
+      - "The acknowledgment is emitted within 500ms of ask receipt"
+      - "The substantive answer arrives at T+5s"
+      - "The late answer does not cause the ack to be retroactively reclassified or suppressed"
+  primary_oracle:
+    type: deterministic
+    artifact: "mock answer path with 5000ms artificial delay; assert ack_time < 500ms; assert answer arrives at T+5000ms; both conditions must hold simultaneously"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-011]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 5 — Interrupted mid-answer → finishes in chat
+# ══════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-VCHAT-012
+  name: "barge-in stops speak() within 200ms and posts remainder to chat with prefix"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-11]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy is mid-way through a speak() voice turn delivering a known planned answer"
+    when: "A barge-in interrupt event is received"
+    then:
+      - "The speak() call is halted within 200ms of the interrupt signal"
+      - "A send_chat() call is issued with the remainder of the planned answer"
+      - "The send_chat() content begins with the prefix '(finishing here —)'"
+  primary_oracle:
+    type: deterministic
+    artifact: "inject barge-in interrupt at midpoint of a scripted speak() turn; assert speak() stops within 200ms; assert send_chat(text) where text starts with '(finishing here —)' and contains the un-spoken remainder"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-012]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-VCHAT-013
+  name: "no content is lost or silently dropped when barge-in occurs"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-12]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy is delivering a planned answer consisting of N known content units (sentences or segments)"
+    when: "A barge-in interrupt occurs after unit K (K < N)"
+    then:
+      - "Units 1..K that were spoken appear in the chat mirror record"
+      - "Units K+1..N appear in the chat remainder posted after barge-in"
+      - "The union of spoken-mirror and chat-remainder covers all N content units with no gaps"
+  primary_oracle:
+    type: deterministic
+    artifact: "scripted N-unit answer; inject barge-in at varying K values; assert coverage(spoken_mirror ∪ chat_remainder) == all_N_units for each K; zero content-loss violations"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-013]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 6 — Chat receipts + honesty tags (trust-texture)
+# ══════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-VCHAT-014
+  name: "code citations in chat render in exactly file:line format"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-13]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy produces a chat result containing a reference to a code location"
+    when: "The send_chat() argument is inspected"
+    then:
+      - "Every code citation appears in the form 'filepath:linenumber' (colon separator, no spaces)"
+      - "No citation uses angle brackets, parentheses, line keyword, or any other separator"
+      - "Each citation's filepath resolves to an existing file in the project clone"
+  primary_oracle:
+    type: deterministic
+    artifact: "regex assert all citation tokens match r'[^\\s:]+:\\d+' and no citation matches alternative formats; parameterized test with corpus of citation-bearing responses"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-014]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-VCHAT-015
+  name: "verified results carry exactly the token '✓ resolved' and nothing else"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy produces a chat result for a claim grounded in a directly verified source"
+    when: "The send_chat() argument is inspected for honesty tags"
+    then:
+      - "The text contains the exact token '✓ resolved'"
+      - "The token '~ lower bound' is absent for this result"
+      - "No alternative verified-marker token (e.g., '✔ confirmed', '(resolved)', '[verified]') is used instead"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert '✓ resolved' in send_chat_arg; assert '~ lower bound' not in send_chat_arg; assert no alternative marker token present; test corpus: verified lookup results"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-015]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-VCHAT-016
+  name: "search-derived results carry exactly '~ lower bound' and not '✓ resolved'"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-15]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy produces a chat result for a claim derived from search or static analysis"
+    when: "The send_chat() argument is inspected for honesty tags"
+    then:
+      - "The text contains the exact token '~ lower bound'"
+      - "The token '✓ resolved' is absent for this result"
+      - "No alternative bounded-marker token is substituted"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert '~ lower bound' in send_chat_arg; assert '✓ resolved' not in send_chat_arg; test corpus: search-derived results"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-016]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-VCHAT-017
+  name: "every substantive claim in chat carries a visible honesty tag (zero untagged)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-16]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy produces a chat result containing one or more substantive claims (factual assertions about code, data, or events)"
+    when: "Each claim span in the send_chat() argument is inspected"
+    then:
+      - "Every substantive claim is associated with either '✓ resolved' or '~ lower bound'"
+      - "Zero substantive claims appear without any honesty tag"
+      - "Non-substantive text (meta-commentary, transitions) is not required to carry tags"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert claim_tagging_coverage == 1.0 across a labelled test corpus where each claim span is annotated; violations_count == 0"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-017]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 7 — Correcting the record, not the person
+# ══════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-VCHAT-018
+  name: "participant correction leads with receipt (evidence), not verdict, and ends with out-question"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-17]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A participant has stated a claim that Proxy's grounded evidence contradicts"
+    when: "Proxy issues a correction response"
+    then:
+      - "The first substantive element of the response is the evidence receipt (e.g., 'The trace shows 3.4%')"
+      - "No verdict phrase ('that's wrong', 'you are incorrect', 'that is false') appears anywhere in the response"
+      - "The response ends with an explicit out-question (e.g., 'am I missing something?', 'does that match what you see?')"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert correction_response starts with evidence_token; assert no verdict_phrase in VERDICT_PHRASES list; assert response ends with out_question_pattern r'\\?\\s*$'; test corpus: correction scenarios"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-018]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-VCHAT-019
+  name: "correction frames as provenance comparison, never as scoring or grading the participant"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-18]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy has issued a participant correction"
+    when: "The full correction text is inspected"
+    then:
+      - "No phrase scores, grades, or characterizes the participant's statement as an error attributable to them personally"
+      - "The framing is 'what the record shows' versus 'what was said', not 'you were wrong'"
+      - "Tone-checker finds zero occurrences of forbidden scoring patterns"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert none of SCORING_PATTERNS found in correction_text; SCORING_PATTERNS = ['that's wrong','you are incorrect','you were wrong','that is false','mistake','error on your part']; parameterized over correction corpus"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-019]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 8 — Name-aware addressing and attribution
+# ══════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-VCHAT-020
+  name: "direct address to a participant uses their roster name as prefix"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-19]
+  criticality: P2
+  blocking: false
+  behavior:
+    given: "Proxy is composing a response directed at a specific participant whose name ('Sam') is in the session roster"
+    when: "The speak() or send_chat() call is emitted"
+    then:
+      - "The response begins with the participant's name (e.g., 'Sam, …')"
+      - "No generic pronoun or placeholder substitutes for the known name"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert response_text.startswith(participant_name + ',') or response_text.startswith(participant_name + ' '); test corpus: directed-response scenarios with known roster"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-020]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-VCHAT-021
+  name: "prior-speaker attribution uses roster name, not generic placeholder"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-20]
+  criticality: P2
+  blocking: false
+  behavior:
+    given: "Proxy is attributing a statement made earlier by a known participant ('Priya') from the session transcript"
+    when: "The attribution is rendered in speak() or send_chat()"
+    then:
+      - "The attribution includes the participant's name (e.g., 'as Priya said earlier')"
+      - "No attribution uses 'someone said', 'a participant noted', or any other non-name placeholder"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert attribution_token contains known_speaker_name; assert GENERIC_ATTRIBUTION_PATTERNS absent from attribution span; test corpus: attribution scenarios with identified speakers"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-021]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 9 — Private delivery where dm_available (DM routing)
+# ══════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-VCHAT-022
+  name: "personal delivery routes to DM when dm_available == true"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-21]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A participant requests a personal delivery and the per-meeting channel report carries dm_available == true"
+    when: "Proxy dispatches the response"
+    then:
+      - "The response is sent via send_chat(text, dm=true) to the requesting participant's channel"
+      - "No broadcast send_chat() call is made for this content"
+      - "The DM channel identity matches the requesting participant's entry in the roster"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert send_chat calls contain exactly one DM call with dm=true targeting requester; assert no send_chat call without dm=true for same content; cassette provides dm_available=true signal"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-022]
+  dependency_class: vendor:recall
+  mock_boundary: "cassette for dm_available=true on channel report signal; MUST NOT replace the call_external seam in libs/http"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+
+- criterion_id: AC-VCHAT-022-NEG
+  name: "personal delivery degrades honestly when dm_available == false (channel report says no DM)"
+  authority_refs: [R-doc08-VCHAT-22, R-doc08-VCHAT-23]
+  dependency_class: vendor:recall
+  mock_boundary: "negative cassette: channel report returns dm_available=false; MUST NOT replace the call_external seam in libs/http"
+  golden_path: false
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A participant requests a personal delivery and the per-meeting channel report carries dm_available == false"
+    when: "Proxy attempts to dispatch the personal delivery"
+    then:
+      - "Proxy explicitly states that DM is unavailable"
+      - "Proxy offers a public version of the response"
+      - "Proxy does NOT silently post the private content to the public chat without first disclosing the limitation"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert response contains dm_unavailable_disclosure and public_offer_token; assert no silent_public_broadcast before disclosure; cassette supplies dm_available=false"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-022-NEG]
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+- criterion_id: AC-VCHAT-023
+  name: "DM availability is read from dm_available field on channel report, not inferred"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-23]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy is making a DM routing decision"
+    when: "The routing logic is traced"
+    then:
+      - "The routing decision reads the boolean field named exactly 'dm_available' from the per-meeting channel report"
+      - "No alternate field name, inferred default, or hardcoded assumption substitutes for the signal"
+  primary_oracle:
+    type: deterministic
+    artifact: "static analysis: assert routing code reads channel_report.dm_available (not dm?, dm-available, default=True, etc.); unit test with channel_report stub carrying field 'dm_available'"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-023]
+  dependency_class: vendor:recall
+  mock_boundary: "stub channel report with dm_available field; MUST NOT replace the call_external seam in libs/http"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+
+- criterion_id: AC-VCHAT-023-NEG
+  name: "DM routing degrades honestly when channel report signal is absent or malformed"
+  authority_refs: [R-doc08-VCHAT-23]
+  dependency_class: vendor:recall
+  mock_boundary: "negative cassette: channel report returns 500 error or missing dm_available field; MUST NOT replace the call_external seam in libs/http"
+  golden_path: false
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy needs to make a DM routing decision but the channel report is unavailable or malformed"
+    when: "The routing logic runs without a valid dm_available signal"
+    then:
+      - "Proxy defaults to dm_available=false (safe: no silent private-content broadcast)"
+      - "An honest failure line is emitted disclosing the routing uncertainty"
+      - "No unhandled exception is raised and no silent failure occurs"
+  primary_oracle:
+    type: deterministic
+    artifact: "inject missing/malformed channel report; assert routing defaults to dm_available=false; assert honest_failure_line emitted; assert no exception propagated"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-023-NEG]
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 10 — Honest failure lines, never silent
+# ══════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-VCHAT-024
+  name: "disconnection gap is announced with time range, never left silent"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-24]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Proxy experienced a disconnection or coverage gap between time T1 and T2 during the meeting"
+    when: "Proxy next has the floor (speak or chat opportunity)"
+    then:
+      - "A speak() or send_chat() call is issued disclosing the gap"
+      - "The disclosure includes the start time T1 and end time T2 of the gap"
+      - "No gap is silently omitted from the record"
+  primary_oracle:
+    type: deterministic
+    artifact: "inject disconnection event with T1/T2; assert disclosure_event emitted with time_range containing T1 and T2; assert no turn passes without disclosure after reconnect; violations_count == 0"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-024]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-VCHAT-025
+  name: "access limitation is stated explicitly with partial result offered if available"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-25]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Proxy is asked for information from a resource it cannot access (e.g., production dashboard)"
+    when: "Proxy produces its response"
+    then:
+      - "The response explicitly names the access limitation (e.g., 'I can't see the production dashboard')"
+      - "If a partial result from an accessible alternative is available, it is offered with its source named"
+      - "The partial result is not presented as if it were the requested resource"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert response contains access_limitation_disclosure; assert partial_result_token includes source_name when partial_available; assert no silent substitution; test corpus: access-denied scenarios"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-025]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-VCHAT-026
+  name: "build or tool failure is announced with partial output and stopping point, never silent"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-26]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A build or tool invocation returns a failure status"
+    when: "Proxy produces its response"
+    then:
+      - "The response announces the failure ('That build hit an error')"
+      - "Whatever partial output was available before the error is included"
+      - "The stopping point or last-known-good state is named"
+      - "Proxy does not proceed as if the invocation succeeded"
+  primary_oracle:
+    type: deterministic
+    artifact: "inject tool failure with partial output; assert failure_announcement in response; assert partial_output_included; assert no success_assumed_path taken; violations_count == 0"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-026]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 11 — Three distinct honesties + handoff naming
+# ══════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-VCHAT-027
+  name: "recuse signal uses distinct phrasing and names the judgment owner"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-27, R-doc08-VCHAT-31]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy is asked to make a judgment call that is outside its authority (e.g., a staffing or strategic decision)"
+    when: "Proxy produces its honesty response"
+    then:
+      - "The response uses phrasing semantically equivalent to 'that's outside what I can judge'"
+      - "The response names the likely owner of that judgment (resolved from owner(path) or roster)"
+      - "The phrasing is distinguishable from 'I don't know' (unknown) and from 'here's the part I can prove' (partial)"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert response contains RECUSE_PATTERN; assert owner_name present and non-generic; assert UNKNOWN_PATTERN and PARTIAL_PATTERN absent; test corpus: recuse-triggering scenarios"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-027]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-VCHAT-028
+  name: "unknown signal uses distinct phrasing and names next owner or step"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-28, R-doc08-VCHAT-31]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy is asked a question for which it has no grounding in the codebase, roster, or meeting record"
+    when: "Proxy produces its honesty response"
+    then:
+      - "The response uses phrasing semantically equivalent to 'I don't know'"
+      - "The response names the likely owner or next step using roster/codeowner data where available"
+      - "The phrasing is distinguishable from 'that's outside what I can judge' (recuse) and from 'here's the part I can prove' (partial)"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert response contains UNKNOWN_PATTERN; assert owner_or_next_step_name present when derivable; assert RECUSE_PATTERN and PARTIAL_PATTERN absent; test corpus: unknown-answer scenarios"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-028]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-VCHAT-029
+  name: "partial signal demarcates proved portion from unproved remainder explicitly"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-29, R-doc08-VCHAT-31]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy has partial grounding: it can prove some claims but not all of what was asked"
+    when: "Proxy produces its honesty response"
+    then:
+      - "The response uses phrasing semantically equivalent to 'here's the part I can prove — the rest I can't'"
+      - "The proved and unproved portions are explicitly demarcated with a visible boundary"
+      - "The phrasing is distinguishable from both recuse and unknown shapes"
+      - "Proved claims carry '✓ resolved'; unproved claims carry '~ lower bound' or are explicitly flagged as unproved"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert response contains PARTIAL_PATTERN with proved_section and unproved_section; assert RECUSE_PATTERN and UNKNOWN_PATTERN absent; assert proved claims tagged resolved; test corpus: partial-grounding scenarios"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-029]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-VCHAT-030-HANDOFF
+  name: "recuse and unknown handoffs name a real person from owner(path), not a generic placeholder"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-30]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy is emitting a recuse or unknown response where the question relates to a file path in the codebase"
+    when: "Proxy resolves the handoff name via owner(path) code_intel tool"
+    then:
+      - "The handoff names a real person present in the codeowner file or last-touched metadata for the path"
+      - "No generic placeholder ('someone', 'your team', 'the owner', 'a developer') is used when a real name is resolvable"
+      - "If owner(path) returns no result, Proxy states that no owner was found rather than fabricating a name"
+  primary_oracle:
+    type: deterministic
+    artifact: "mock owner(path) returning a known name; assert handoff_name == known_name; mock owner(path) returning no result; assert 'no owner found' disclosure, not fabricated name"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-030]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-VCHAT-031
+  name: "three honesty shapes are non-interchangeable: conflating any two is a violation"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-31]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A test corpus of scenarios labelled as requiring recuse, unknown, or partial responses"
+    when: "Each scenario is run and Proxy's honesty signal type is classified"
+    then:
+      - "Each scenario receives exactly the expected signal type"
+      - "Zero recuse scenarios receive an unknown or partial response"
+      - "Zero unknown scenarios receive a recuse or partial response"
+      - "Zero partial scenarios receive a recuse or unknown response"
+  primary_oracle:
+    type: deterministic
+    artifact: "parameterized test over labelled scenario corpus; classify each response as RECUSE|UNKNOWN|PARTIAL using pattern matcher; assert confusion_matrix diagonal == 1.0 (no misclassifications)"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-031]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 12 — Belongs to the room (access rule)
+# ══════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-VCHAT-032
+  name: "any meeting participant can address Proxy regardless of whether they are the inviter"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-32]
+  criticality: P2
+  blocking: false
+  behavior:
+    given: "Participant A invited Proxy and Participant B is a non-inviter in the meeting"
+    when: "Participant B addresses Proxy by voice or @proxy in chat"
+    then:
+      - "Proxy treats the address as a valid ask"
+      - "No gate or filter blocks B's ask on the basis of inviter-only privilege"
+      - "The response to B is processed identically to how a response to A would be processed"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert ask_from_non_inviter.is_valid == true; assert no privilege_gate_rejection for non-inviter participant; parameterized: inviter vs non-inviter inputs produce equivalent processing paths"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-032]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-VCHAT-033
+  name: "voice and @proxy chat addressing modes are functionally equivalent ask triggers"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-33]
+  criticality: P2
+  blocking: false
+  behavior:
+    given: "The same question is posed to Proxy via voice in one test and via @proxy chat in another"
+    when: "Both asks are processed"
+    then:
+      - "Both addressing modes result in a valid ask being enqueued for processing"
+      - "The response path taken is equivalent for both modes"
+      - "No functional difference (e.g., feature gating, different processing pipeline) exists between the two addressing modes"
+  primary_oracle:
+    type: deterministic
+    artifact: "assert ask_type=='voice' and ask_type=='@proxy_chat' both route to same processing function; diff the processing graph for both; assert graphs are isomorphic"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-033]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ══════════════════════════════════════════════════════════════════════
+# GOLDEN-PATH — Full Q&A turn: voice ask → ACK ≤500ms → spoken + chat receipt
+# Covers the core voice product promise end-to-end.
+# ══════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-VCHAT-034
+  name: "golden path: voice question → ACK within 500ms → spoken answer + chat receipt both delivered"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-VCHAT-08, R-doc08-VCHAT-06, R-doc08-VCHAT-14, R-doc08-VCHAT-16]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy is active in a live session with a participant on the session roster and a grounded answer available"
+    when: "A participant poses a factual question by voice"
+    then:
+      - "An acknowledgment speak() or send_chat() is emitted within 500ms of ask receipt"
+      - "A substantive spoken answer is delivered via speak() in one or two sentences"
+      - "An exact text mirror of the spoken answer is posted to chat via send_chat()"
+      - "The chat result includes at least one honesty tag ('✓ resolved' or '~ lower bound') on the substantive claim"
+      - "All four events occur in order: ACK → substantive speak() → chat mirror → honesty tag present"
+  primary_oracle:
+    type: deterministic
+    artifact: "end-to-end test harness: fire voice ask; assert ack_time < 500ms; assert speak() emitted with ≤2 sentences; assert mirroring send_chat() present; assert honesty tag in chat; assert event order [ack, speak, chat_mirror, honesty_tag]"
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-VCHAT-034]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: e2e}

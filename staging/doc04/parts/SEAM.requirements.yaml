@@ -1,0 +1,392 @@
+# SEAM.requirements.yaml — Doc 04 (Proxy Orchestrator) — §3.3 Provider Seam + AgentChunk + stream_deltas
+# Atomic EARS requirements. Each carries source_location + verbatim source_quote + criticality.
+# ID scheme: R-doc04-SEAM-NN
+# Authority documents: DOC-04 (§3.3), CANONICAL-DECISIONS (§1.1, §11.3, §12.3, AMENDMENT C2)
+#
+# Dependency classes used in paired NEG criteria (per AMBIGUITY RULE: null for in-process contracts):
+#   null — pure in-process logic (AgentChunk schema, stream_deltas, field access, static structure checks)
+#   db:postgres — if cost meter writes total_cost_usd to meeting_cost (integration boundary)
+
+# ── Seam boundary: SDK never called directly from harness business logic ──────
+
+- requirement_id: R-doc04-SEAM-01
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.3, paragraph 1"
+  source_quote: >
+    The SDK is never called from harness business logic. Every seam-routed agent call —
+    Proxy's wake turn and the Workroom build (Doc 05) — goes through one provider seam
+    that yields a normalized, provider-neutral stream of AgentChunk.
+  normalized_statement: >
+    WHEN any harness business-logic module initiates an agent call THE SYSTEM SHALL route
+    that call exclusively through the provider seam; no module outside the provider seam
+    implementation SHALL import or instantiate an SDK client directly.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Scribe micro-call is the ONE explicit seam exception ─────────────────────
+
+- requirement_id: R-doc04-SEAM-02
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.3, paragraph 1"
+  source_quote: >
+    The one exception is the Scribe micro-call (Doc 03): it is a bare
+    anthropic.AsyncAnthropic().messages.create and does NOT go through the seam.
+  normalized_statement: >
+    THE SYSTEM SHALL permit exactly one exception to the provider-seam routing rule: the
+    Scribe micro-call (Doc 03) MAY call anthropic.AsyncAnthropic().messages.create directly;
+    all other agent calls MUST go through the seam; no second bare SDK call site SHALL exist
+    outside the Scribe module.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── AgentChunk: canonical type with six-member ChunkType discriminator ────────
+
+- requirement_id: R-doc04-SEAM-03
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.3, AgentChunk dataclass block"
+  source_quote: >
+    AgentChunk and its ChunkType discriminator are the canonical type from libs/contracts:
+    ChunkType = Literal["INIT", "TEXT", "TOOL_USE", "TOOL_RESULT", "RESULT", "ERROR"]
+  normalized_statement: >
+    THE SYSTEM SHALL define AgentChunk and ChunkType exclusively in libs/contracts; ChunkType
+    SHALL be a Literal with exactly the six string members "INIT", "TEXT", "TOOL_USE",
+    "TOOL_RESULT", "RESULT", "ERROR"; no other module SHALL redefine or shadow these types.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Field access: discriminator is .type, NOT .kind ──────────────────────────
+
+- requirement_id: R-doc04-SEAM-04
+  authority_type: canonical
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§3.3 field-access block; CANONICAL-DECISIONS §1.1"
+  source_quote: >
+    Field access is chunk.type, chunk.metadata["name"], chunk.metadata["structured"] —
+    never .kind / .tool / .structured as top-level attrs.
+  normalized_statement: >
+    WHEN any consumer reads the chunk discriminator THE SYSTEM SHALL use chunk.type; the
+    attributes .kind, .tool, and .structured SHALL NOT exist as top-level fields on
+    AgentChunk; consumers SHALL NOT access metadata values via top-level attribute access.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── TEXT.text is accumulated per msg_id at the producer ──────────────────────
+
+- requirement_id: R-doc04-SEAM-05
+  authority_type: canonical
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§3.3 consumer contract; CANONICAL-DECISIONS §1.1"
+  source_quote: >
+    raw TEXT.text is accumulated per msg_id, so no consumer reads raw chunks.
+    stream_deltas() turns the raw stream into true deltas
+  normalized_statement: >
+    THE SYSTEM SHALL accumulate TEXT.text per msg_id in the provider implementation so
+    that each TEXT chunk carries the full accumulated text for that msg_id, not an
+    incremental delta; no consumer SHALL read raw AgentChunk TEXT chunks directly from
+    the provider stream.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── AgentProvider Protocol ────────────────────────────────────────────────────
+
+- requirement_id: R-doc04-SEAM-06
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.3, AgentProvider protocol block"
+  source_quote: >
+    class AgentProvider(Protocol):
+        name: str
+        def matches(self, model: str) -> bool: ...
+        def stream(self, prompt: str, q: "ProviderQuery") -> AsyncIterator[AgentChunk]: ...
+  normalized_statement: >
+    WHEN an AgentProvider implementation is registered THE SYSTEM SHALL implement a class
+    satisfying the AgentProvider Protocol with: a name attribute, a matches(model: str) ->
+    bool method, and a stream(prompt: str, q: ProviderQuery) -> AsyncIterator[AgentChunk]
+    method; any implementation failing to satisfy all three SHALL be rejected at type-check
+    time.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── pick_provider routes by model-id; unknown → Claude ───────────────────────
+
+- requirement_id: R-doc04-SEAM-07
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.3, pick_provider line"
+  source_quote: >
+    def pick_provider(model: str) -> AgentProvider: ...  # route by model-id; unknown → Claude
+  normalized_statement: >
+    WHEN pick_provider is called with a model identifier THE SYSTEM SHALL return the first
+    registered AgentProvider whose matches() returns True for that model; WHEN no provider
+    matches the model identifier THE SYSTEM SHALL return the Claude provider as the default
+    fallback; pick_provider SHALL NOT raise an exception for unknown model identifiers.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── stream_deltas: signature and output type ──────────────────────────────────
+
+- requirement_id: R-doc04-SEAM-08
+  authority_type: canonical
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§3.3 stream_deltas block; CANONICAL-DECISIONS §11.3"
+  source_quote: >
+    async def stream_deltas(chunks: AsyncIterator[AgentChunk]) -> AsyncIterator[AgentChunk]:
+    """Delta-izes only TEXT (emits the new suffix per msg_id, resets on a new msg_id);
+    passes INIT / TOOL_USE / TOOL_RESULT / RESULT / ERROR through UNCHANGED.
+    Yields AgentChunk (not str). Every consumer reads THIS, never raw AgentChunk."""
+  normalized_statement: >
+    THE SYSTEM SHALL implement stream_deltas as an async generator that accepts
+    AsyncIterator[AgentChunk] and yields AgentChunk (never str or any other type);
+    stream_deltas SHALL delta-ize TEXT chunks by emitting only the new suffix since the
+    last TEXT chunk with the same msg_id; it SHALL reset its accumulator when msg_id
+    changes; it SHALL pass INIT, TOOL_USE, TOOL_RESULT, RESULT, and ERROR chunks through
+    unchanged.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── stream_deltas: TEXT delta logic (new suffix, resets on new msg_id) ────────
+
+- requirement_id: R-doc04-SEAM-09
+  authority_type: canonical
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§3.3 stream_deltas docstring; CANONICAL-DECISIONS §11.3"
+  source_quote: >
+    Delta-izes only TEXT (emits the new suffix per msg_id, resets on a new msg_id)
+  normalized_statement: >
+    WHEN stream_deltas receives a TEXT chunk for msg_id M THE SYSTEM SHALL emit a TEXT
+    chunk whose .text is only the suffix added since the previous TEXT chunk for msg_id M;
+    WHEN a TEXT chunk arrives with a new msg_id THE SYSTEM SHALL reset the accumulator for
+    the previous msg_id and begin accumulating for the new msg_id; a TEXT chunk carrying
+    the entire accumulated text from the provider SHALL yield only the incremental new
+    characters to the consumer.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── stream_deltas: non-TEXT chunks pass through UNCHANGED ─────────────────────
+
+- requirement_id: R-doc04-SEAM-10
+  authority_type: canonical
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§3.3 stream_deltas docstring; CANONICAL-DECISIONS §11.3"
+  source_quote: >
+    passes INIT / TOOL_USE / TOOL_RESULT / RESULT / ERROR through UNCHANGED.
+  normalized_statement: >
+    WHEN stream_deltas receives a chunk of type INIT, TOOL_USE, TOOL_RESULT, RESULT, or
+    ERROR THE SYSTEM SHALL yield that chunk object unchanged (same identity or equivalent
+    value, no field modifications, no accumulation); stream_deltas SHALL NOT alter the
+    metadata or text of any non-TEXT chunk.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── stream_deltas: applied EXACTLY ONCE in BehaviorRunner.run() ──────────────
+
+- requirement_id: R-doc04-SEAM-11
+  authority_type: canonical
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§3.3 paragraph 2; CANONICAL-DECISIONS §12.3; AMENDMENT C2"
+  source_quote: >
+    stream_deltas is applied EXACTLY ONCE, and the single application site is
+    BehaviorRunner.run() (§3.4, CANONICAL §12.3). The runner wraps the provider's raw
+    stream once; every downstream consumer receives the already-delta'd typed stream and
+    MUST NOT re-wrap it. There is no second stream_deltas call anywhere.
+  normalized_statement: >
+    THE SYSTEM SHALL call stream_deltas exactly once per agent run, inside
+    BehaviorRunner.run(); no other module, consumer, projector, cost meter, or transcript
+    logger SHALL call stream_deltas; the codebase SHALL contain exactly one call site for
+    stream_deltas, located in BehaviorRunner.run().
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── No consumer reads raw AgentChunk from the provider stream ─────────────────
+
+- requirement_id: R-doc04-SEAM-12
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.3 consumer contract (canonical, CANONICAL-DECISIONS §1.1)"
+  source_quote: >
+    every consumer — the per-channel projector (Doc 08), the cost meter, the transcript
+    logger — reads the stream_deltas output, never a raw AgentChunk.
+  normalized_statement: >
+    THE SYSTEM SHALL ensure every downstream consumer (per-channel projector, cost meter,
+    transcript logger) receives only the stream_deltas-processed stream; no consumer SHALL
+    receive or iterate the raw provider-yielded AgentChunk stream directly.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── stream_deltas never raises, never meters ──────────────────────────────────
+
+- requirement_id: R-doc04-SEAM-13
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.3, cross-cutting concerns"
+  source_quote: >
+    stream_deltas itself never raises and never meters — it only delta-izes TEXT and forwards
+  normalized_statement: >
+    THE SYSTEM SHALL implement stream_deltas so that it never raises any exception (it
+    propagates the underlying async iteration but does not introduce new exception paths)
+    and it performs no cost metering or telemetry; stream_deltas is a pure transformation
+    with no side effects.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Cost meter reads RESULT.metadata["total_cost_usd"] ───────────────────────
+
+- requirement_id: R-doc04-SEAM-14
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.3, cross-cutting concerns"
+  source_quote: >
+    cost meter reads RESULT.metadata["total_cost_usd"] off this stream (§3.13)
+  normalized_statement: >
+    WHEN the cost meter processes the delta'd stream THE SYSTEM SHALL read the cost value
+    from the RESULT chunk's metadata["total_cost_usd"] key; the cost meter SHALL NOT
+    compute token counts manually or read cost from any other chunk type or field name.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Durability: INIT.metadata["session_id"] captured for resume ───────────────
+
+- requirement_id: R-doc04-SEAM-15
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.3, cross-cutting concerns"
+  source_quote: >
+    durability layer captures INIT.metadata["session_id"] for resume (§3.5)
+  normalized_statement: >
+    WHEN the durability layer processes the delta'd stream THE SYSTEM SHALL capture the
+    session identifier from the INIT chunk's metadata["session_id"] key; this value SHALL
+    be persisted to enable resume; the durability layer SHALL NOT derive the session_id
+    from any other chunk type or field.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── ERROR chunk surfaced as ProviderError at BehaviorRunner boundary ──────────
+
+- requirement_id: R-doc04-SEAM-16
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.3, cross-cutting concerns"
+  source_quote: >
+    pass-through ERROR chunk is surfaced as ProviderError at the BehaviorRunner boundary (§3.5)
+  normalized_statement: >
+    WHEN stream_deltas passes through an ERROR chunk THE SYSTEM SHALL surface that chunk
+    as a ProviderError exception at the BehaviorRunner boundary; the ERROR chunk SHALL NOT
+    be silently swallowed, logged only, or forwarded raw to downstream consumers.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── CRITICAL tripwire: non-MCP built-in tool fires in sandbox mode ────────────
+
+- requirement_id: R-doc04-SEAM-17
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.3, runtime tripwire"
+  source_quote: >
+    A runtime [CRITICAL] tripwire: if a non-MCP built-in tool (Read/Grep/Bash) fires
+    while the run is in remote/sandbox mode, log [CRITICAL] (means isolation triad leaked).
+  normalized_statement: >
+    WHEN a TOOL_USE chunk is observed in remote/sandbox mode and the tool name matches a
+    non-MCP built-in tool (Read, Grep, or Bash) THE SYSTEM SHALL emit a [CRITICAL] log
+    entry indicating isolation triad leakage; this log entry SHALL NOT be suppressed,
+    downgraded, or gated on any configuration flag.
+  requirement_type: safety
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Env sanitization: curated env with auth keys stripped ─────────────────────
+
+- requirement_id: R-doc04-SEAM-18
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.3, env sanitization"
+  source_quote: >
+    Env sanitization: hand the SDK subprocess a curated env with mutually-exclusive auth
+    keys stripped, and route SDK stderr through a sk-ant-*/Bearer/token=… redactor before
+    logging.
+  normalized_statement: >
+    WHEN the provider seam launches an SDK subprocess THE SYSTEM SHALL pass a curated
+    environment dict that strips all mutually-exclusive auth keys; the system SHALL NOT
+    pass the full process environment to the SDK subprocess.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── SDK stderr: secret redaction before logging ───────────────────────────────
+
+- requirement_id: R-doc04-SEAM-19
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.3, env sanitization"
+  source_quote: >
+    route SDK stderr through a sk-ant-*/Bearer/token=… redactor before logging.
+  normalized_statement: >
+    WHEN the provider seam captures SDK stderr output THE SYSTEM SHALL route it through a
+    redactor that replaces sk-ant-* token values, Bearer token values, and token= query
+    parameter values with a redacted placeholder before any logging call; no secret key
+    material SHALL appear in log output.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── AgentChunk metadata keys per variant ──────────────────────────────────────
+
+- requirement_id: R-doc04-SEAM-20
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.3, AgentChunk metadata keys comment"
+  source_quote: >
+    metadata keys by variant:
+      INIT:        session_id, tools[], mcp_servers[{name,status}], model
+      TEXT:        msg_id, turn
+      TOOL_USE:    name, input, id
+      TOOL_RESULT: tool_use_id, is_error, structured
+      RESULT:      num_turns, total_cost_usd, structured_output, subtype, session_id
+  normalized_statement: >
+    THE SYSTEM SHALL populate AgentChunk.metadata with the variant-specific keys defined
+    for each ChunkType: INIT includes session_id, tools, mcp_servers, model; TEXT includes
+    msg_id and turn; TOOL_USE includes name, input, id; TOOL_RESULT includes tool_use_id,
+    is_error, structured; RESULT includes num_turns, total_cost_usd, structured_output,
+    subtype, session_id; no consumer SHALL assume metadata keys from one variant are
+    present on a different variant.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified

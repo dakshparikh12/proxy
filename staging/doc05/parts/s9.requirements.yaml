@@ -1,0 +1,548 @@
+# Doc 05 (Workroom) — §3.9 / §3.10 / §3.11 / §3.12 requirements
+# Coverage:
+#   §3.9  Cost & latency
+#   §3.10 Safety wiring
+#   §3.11 Abort discipline
+#   §3.12 The envelope (the one output contract)
+# ID scheme: R-doc05-S9-NN
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §3.9 COST & LATENCY
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S9-01
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.9 paragraph 1"
+  source_quote: "spin the one sandbox a meeting needs when the meeting is CREATED, not mid-meeting."
+  normalized_statement: >
+    WHEN a meeting is created
+    THE SYSTEM SHALL pre-provision the meeting's sandbox at that point
+    and SHALL NOT cold-boot a sandbox for the first time during a live meeting.
+  requirement_type: performance
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S9-02
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.9 paragraph 1"
+  source_quote: "Never cold-boot a sandbox mid-meeting."
+  normalized_statement: >
+    WHEN a task is dispatched during a live meeting
+    THE SYSTEM SHALL reuse a pre-provisioned sandbox
+    and SHALL NOT perform an initial sandbox cold-boot at that moment.
+  requirement_type: performance
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S9-03
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.9 paragraph 2"
+  source_quote: "The II.1 heartbeat's activity-bump keeps a silently-thinking build's sandbox from being reaped."
+  normalized_statement: >
+    WHEN a build is executing and the II.1 heartbeat fires
+    THE SYSTEM SHALL bump the sandbox's activity timestamp
+    so that the provider does not reap the sandbox during a silent thinking phase.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S9-04
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.9 paragraph 3"
+  source_quote: "Code-hash /health preflight before a big build — a GET /health before an expensive run."
+  normalized_statement: >
+    WHEN a big (expensive) build is about to be dispatched
+    THE SYSTEM SHALL issue a GET /health request to the sandbox and verify a 200 response with a non-null code-hash
+    before invoking the expensive run.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S9-05
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.9 paragraph 4"
+  source_quote: "Per-role model + min(env, model_ceiling) output clamp (§3.2) — one MAX_OUTPUT_TOKENS env, each model self-clamps."
+  normalized_statement: >
+    WHEN a model call is made for any Workroom role
+    THE SYSTEM SHALL clamp the max_tokens parameter to min(MAX_OUTPUT_TOKENS env value, that model's declared ceiling)
+    so that no role exceeds either its model-specific ceiling or the operator-set environment limit.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S9-06
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.9 paragraph 5"
+  source_quote: "on context-length blowup, don't widen; re-issue with escalating hints"
+  normalized_statement: >
+    WHEN a query fails with a context-length overflow error
+    THE SYSTEM SHALL re-issue the query with an escalating retrieval-shrink hint
+    rather than widening the context window.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S9-07
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.9 paragraph 5"
+  source_quote: "attempt 2 → 'grep first; always read with start/end lines; max 10 files'"
+  normalized_statement: >
+    WHEN a context-length retry is attempt 2
+    THE SYSTEM SHALL inject the hint "grep first; always read with start/end lines; max 10 files"
+    into the re-issued query.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S9-08
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.9 paragraph 5"
+  source_quote: "attempt 3 → 'max 5 files, 100 lines each; grep exclusively.'"
+  normalized_statement: >
+    WHEN a context-length retry is attempt 3
+    THE SYSTEM SHALL inject the hint "max 5 files, 100 lines each; grep exclusively — do not browse"
+    into the re-issued query.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S9-09
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.9 paragraph 5"
+  source_quote: "Bounded retry (cap 3), only known-recoverable classes (context overflow, transient tool error) — fail fast on everything else."
+  normalized_statement: >
+    WHEN a query error occurs
+    THE SYSTEM SHALL retry at most 3 times for known-recoverable error classes (context overflow, transient tool error)
+    and SHALL fail fast without retrying for all other error classes.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S9-10
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.9 paragraph 6"
+  source_quote: "1-hour-TTL prompt cache on stable Workroom prefix (CANONICAL §10.1): cache_control breakpoint with 1-hr TTL on system prompt + map prefix"
+  normalized_statement: >
+    WHEN the Workroom builds its prompt
+    THE SYSTEM SHALL place a cache_control breakpoint with a 1-hour TTL at the boundary between the stable prefix (system prompt + map prefix) and volatile content
+    so that the stable prefix is cached across turns.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S9-11
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.9 paragraph 6"
+  source_quote: "volatile work (bundle, transcript tail, subtask turns) after the breakpoint"
+  normalized_statement: >
+    WHEN the Workroom constructs its prompt
+    THE SYSTEM SHALL position bundle content, transcript tail, and subtask turns after the cache_control breakpoint
+    so that volatile content is never part of the cached prefix.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S9-12
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.9 paragraph 7"
+  source_quote: "Full total_cost_usd + cache-read/creation split telemetry per task, aggregated per meeting."
+  normalized_statement: >
+    WHEN a task completes
+    THE SYSTEM SHALL emit telemetry containing total_cost_usd and both the cache-read token count and cache-creation token count for that task
+    and SHALL aggregate these values per meeting.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §3.10 SAFETY WIRING
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S10-01
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.10 paragraph 1"
+  source_quote: "E2B/Firecracker isolation"
+  normalized_statement: >
+    WHEN code execution is required by the Workroom
+    THE SYSTEM SHALL run that code inside an E2B/Firecracker-isolated sandbox
+    providing VM-level isolation from the host.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S10-02
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.10 paragraph 2"
+  source_quote: "SDK-isolation triad on every call (§3.4)"
+  normalized_statement: >
+    WHEN the Workroom issues any SDK call
+    THE SYSTEM SHALL apply the isolation triad (per-tenant volume, per-tenant process, per-tenant index)
+    so that no two tenants share any of those three resources.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S10-03
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.10 paragraph 3"
+  source_quote: "Egress default-deny (server-side web search keeps research possible)"
+  normalized_statement: >
+    WHEN sandbox egress is configured
+    THE SYSTEM SHALL deny all outbound network traffic by default
+    and SHALL permit only the server-side web-search channel as an exception.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S10-04
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.10 paragraph 4"
+  source_quote: "Curated env into sandbox — allow-list, not deny-list."
+  normalized_statement: >
+    WHEN environment variables are injected into the sandbox
+    THE SYSTEM SHALL build the environment from an explicit allow-list
+    and SHALL NOT rely on a deny-list approach that strips only known-bad variables.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S10-05
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.10 paragraph 4"
+  source_quote: "Strip mutually-exclusive auth keys so a stray key can't flip SDK's auth path."
+  normalized_statement: >
+    WHEN the sandbox environment is assembled
+    THE SYSTEM SHALL strip any auth-key variables that are mutually exclusive with the intended SDK auth path
+    so that a stray key cannot redirect SDK authentication.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S10-06
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.10 paragraph 4"
+  source_quote: "Route SDK stderr through a sk-ant-*/Bearer/token= redactor before logging."
+  normalized_statement: >
+    WHEN SDK stderr is captured for logging
+    THE SYSTEM SHALL route it through a redactor that masks patterns matching sk-ant-*, Bearer tokens, and token= values
+    before writing any log entry.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S10-07
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.10 paragraph 5"
+  source_quote: "No live secrets (scoped short-lived tokens per job)"
+  normalized_statement: >
+    WHEN credentials are provided to a sandbox job
+    THE SYSTEM SHALL use scoped short-lived tokens valid only for that job
+    and SHALL NOT inject long-lived secrets or API keys into the sandbox environment.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S10-08
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.10 paragraph 6"
+  source_quote: "Transcript-derived content = DATA, never instructions. A central with_proxy_guardrails() appended last, meeting-tuned for injection resistance."
+  normalized_statement: >
+    WHEN the Workroom constructs a prompt that includes transcript-derived content
+    THE SYSTEM SHALL treat that content as data only and SHALL append with_proxy_guardrails() as the final element of the prompt
+    so that transcript-derived content cannot be interpreted as instructions.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S10-09
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.10 paragraph 7"
+  source_quote: "Every side effect staged via propose_change"
+  normalized_statement: >
+    WHEN the Workroom agent would produce any side effect
+    THE SYSTEM SHALL stage that effect via propose_change
+    and SHALL NOT apply any side effect directly without a staged draft.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S10-10
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.10 paragraph 8"
+  source_quote: "Full tool-call telemetry retained (it IS Doc 07's trace)"
+  normalized_statement: >
+    WHEN any tool call is made during a Workroom task
+    THE SYSTEM SHALL retain full tool-call telemetry (name, inputs, outputs, timestamps)
+    as the audit trace consumed by Doc 07.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §3.11 ABORT DISCIPLINE
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S11-01
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.11 paragraph 1"
+  source_quote: "AbortRegistry (dict[task_id, AbortController]) is IMPORTED from libs/agentkit/abort.py (CANONICAL §11.9), NOT reimplemented here."
+  normalized_statement: >
+    WHEN the Workroom service requires an AbortRegistry
+    THE SYSTEM SHALL import it from libs/agentkit/abort.py
+    and SHALL NOT define or instantiate a separate AbortRegistry implementation in the Workroom codebase.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-02
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.11 paragraph 2"
+  source_quote: "Thread an abort signal into every query()."
+  normalized_statement: >
+    WHEN the Workroom calls query()
+    THE SYSTEM SHALL pass the task's AbortController signal as a parameter to every such call
+    so that in-flight model calls can be cancelled.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-03
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.11 paragraph 3"
+  source_quote: "Registry lets a new judgment-moment preempt a stale one; 'meeting ended' cancels everything."
+  normalized_statement: >
+    WHEN a meeting-end event is received
+    THE SYSTEM SHALL cancel every task registered in the AbortRegistry for that meeting
+    so that no stale task continues executing after the meeting ends.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-04
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.11 paragraph 4"
+  source_quote: "Wire aborts to: meeting-end + whisper-'stop' + hard per-task timeout."
+  normalized_statement: >
+    WHEN any of the following occurs — meeting end, whisper "stop" command, or per-task hard timeout expiry —
+    THE SYSTEM SHALL trigger an abort on the corresponding task(s) via the AbortRegistry.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-05
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.11 paragraph 5"
+  source_quote: "ABORT IS FINAL, NEVER RETRIED — session-resume / JSON-retry can NEVER resurrect a build the user killed mid-meeting."
+  normalized_statement: >
+    WHEN a task has been aborted
+    THE SYSTEM SHALL treat that abort as final
+    and SHALL NOT resume, retry, or reconstruct that task through any mechanism including session-resume or JSON-retry.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S11-06
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.11 paragraph 6"
+  source_quote: "Default SDK max_turns is high (1000) — always set our own tight budgets."
+  normalized_statement: >
+    WHEN the Workroom invokes query()
+    THE SYSTEM SHALL always supply an explicit max_turns value appropriate to the task
+    and SHALL NOT rely on the SDK's default max_turns of 1000.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §3.12 THE ENVELOPE
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S12-01
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.12 paragraph 1"
+  source_quote: "Fields: {headline (speakable, ≤ a sentence or two) · detail · artifact? · receipts · status: EnvelopeStatus · verification? · task_id · the one question when needs_clarification}"
+  normalized_statement: >
+    WHEN the Workroom emits an output envelope
+    THE SYSTEM SHALL include exactly these fields: headline, detail, artifact (optional), receipts, status, verification (optional), task_id, and question (required when status is needs_clarification).
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S12-02
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.12 paragraph 2"
+  source_quote: "EnvelopeStatus enum (canonical): done | partial | failed | needs_clarification | needs_review"
+  normalized_statement: >
+    WHEN EnvelopeStatus is defined
+    THE SYSTEM SHALL define the enum with exactly five values: done, partial, failed, needs_clarification, needs_review
+    and SHALL NOT include any other values such as "verified" or "draft".
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S12-03
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.12 paragraph 3"
+  source_quote: "'verified' and 'draft' are NOT status values — proof state rides optional verification field"
+  normalized_statement: >
+    WHEN proof state must be communicated in an envelope
+    THE SYSTEM SHALL express it via the optional verification field with values 'verified' or 'unverified'
+    and SHALL NOT encode it as an EnvelopeStatus value.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S12-04
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.12 paragraph 3"
+  source_quote: "Staged draft awaiting human click → needs_review (carries artifact + receipts)"
+  normalized_statement: >
+    WHEN the Workroom emits an envelope for a staged draft awaiting human approval
+    THE SYSTEM SHALL set status to needs_review and SHALL include both artifact and receipts fields.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S12-05
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.12 paragraph 3"
+  source_quote: "Read-only answer or applied+verified result → done"
+  normalized_statement: >
+    WHEN the Workroom emits an envelope for a completed read-only answer or a successfully applied and verified result
+    THE SYSTEM SHALL set status to done.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S12-06
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.12 paragraph 3"
+  source_quote: "Build the critic/evidence-gate failed → failed"
+  normalized_statement: >
+    WHEN a build task's critic check or evidence gate fails
+    THE SYSTEM SHALL set the envelope status to failed.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S12-07
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.12 paragraph 1"
+  source_quote: "headline (speakable, ≤ a sentence or two)"
+  normalized_statement: >
+    WHEN the Workroom sets the headline field of an envelope
+    THE SYSTEM SHALL ensure the headline is speakable and does not exceed two sentences in length.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S12-08
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.12 paragraph 1"
+  source_quote: "the one question when needs_clarification"
+  normalized_statement: >
+    WHEN the Workroom emits an envelope with status needs_clarification
+    THE SYSTEM SHALL include exactly one question in the question field
+    and SHALL NOT include zero or more than one question.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S12-09
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.12 paragraph 4"
+  source_quote: "Progress events use same shape minus finality."
+  normalized_statement: >
+    WHEN the Workroom emits a progress event during task execution
+    THE SYSTEM SHALL use the same envelope shape as a final envelope
+    except that it SHALL NOT set a terminal status (done, failed) on a progress event.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S12-10
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.12 paragraph 1"
+  source_quote: "task_id"
+  normalized_statement: >
+    WHEN the Workroom emits any envelope (final or progress)
+    THE SYSTEM SHALL include the task_id field with a non-null value identifying the originating task.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified

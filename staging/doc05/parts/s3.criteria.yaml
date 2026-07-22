@@ -1,0 +1,743 @@
+# Doc 05 (Workroom) — S3 acceptance criteria slice
+# Coverage: §3.1 (Sessions & sandbox), §3.2 (Models), §3.3 (Native vs built)
+# ID scheme: AC-S3-NNN  (NEG pairs: AC-S3-NNN-NEG)
+#
+# dependency_class values:
+#   null              — pure structural / static analysis; zero external systems
+#   db:postgres       — depends on real Postgres (operation_runs table)
+#   vendor:claude-sdk — depends on actual SDK behavior (session ids, resume)
+#
+# NEG-pair rule: every non-null dependency_class criterion has a paired AC-S3-NNN-NEG.
+# db:postgres criteria carry {tier: integration} + NEG pair.
+# vendor:claude-sdk criteria carry {tier: reality} + NEG pair.
+# golden_path: true criteria carry {tier: e2e}.
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.1 — Task durability: operation_runs row only
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-001
+  name: "Task persisted as operation_runs row with workroom operation_type"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc05-S3-01]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A workroom task is submitted for an active meeting"
+    when: "The task is created by the workroom service"
+    then:
+      - "An operation_runs row exists with operation_type matching 'workroom:<id>'"
+      - "The row's progress jsonb contains the full task bundle"
+      - "No row exists in any table named workroom_tasks"
+  primary_oracle:
+    type: deterministic
+    artifact: "SELECT count(*) FROM operation_runs WHERE operation_type LIKE 'workroom:%' asserts 1; information_schema.tables asserts no workroom_tasks table exists"
+  thresholds: {task_rows_in_workroom_tasks: 0, missing_operation_runs_row: 0}
+  dependency_class: db:postgres
+  mock_boundary: "Postgres replaced by in-memory SQLite fixture with matching schema"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  test_ids: [T-S3-001]
+
+- criterion_id: AC-S3-001-NEG
+  name: "NEG: Task row absent from operation_runs when workroom service skips persistence"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S3-01]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The workroom service's persistence call is patched to no-op"
+    when: "A task is submitted"
+    then:
+      - "The integration test detects zero matching operation_runs rows"
+      - "This confirms the positive test relies on real persistence, not a side-channel"
+  primary_oracle:
+    type: deterministic
+    artifact: "Asserts operation_runs count == 0 when persistence is stubbed out"
+  thresholds: {}
+  dependency_class: db:postgres
+  mock_boundary: "Postgres replaced by in-memory SQLite fixture; persistence call monkey-patched"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: negative}
+  test_ids: [T-S3-001-NEG]
+
+- criterion_id: AC-S3-002
+  name: "Terminal Envelope stored in result_ref of the operation_runs row"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc05-S3-01]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A workroom task completes (success or error)"
+    when: "The task terminal state is written"
+    then:
+      - "The operation_runs row for the task has a non-null result_ref"
+      - "result_ref deserializes to a valid Envelope object matching the terminal output"
+  primary_oracle:
+    type: deterministic
+    artifact: "SELECT result_ref FROM operation_runs WHERE operation_type='workroom:<id>' asserts non-null and valid Envelope JSON"
+  thresholds: {missing_result_ref: 0}
+  dependency_class: db:postgres
+  mock_boundary: "Postgres replaced by in-memory SQLite fixture"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  test_ids: [T-S3-002]
+
+- criterion_id: AC-S3-002-NEG
+  name: "NEG: result_ref absent when terminal write is bypassed"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S3-01]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The terminal write path is patched to skip result_ref assignment"
+    when: "Task completion fires"
+    then:
+      - "result_ref remains null in the operation_runs row"
+      - "Confirms the positive test exercises the real write path"
+  primary_oracle:
+    type: deterministic
+    artifact: "Asserts result_ref IS NULL when write is stubbed"
+  thresholds: {}
+  dependency_class: db:postgres
+  mock_boundary: "Postgres replaced by in-memory SQLite fixture; terminal write monkey-patched"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: negative}
+  test_ids: [T-S3-002-NEG]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.1 — Semaphore [3-5] on sandbox sessions per meeting
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-003
+  name: "Concurrent task sessions per meeting capped at semaphore upper bound"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S3-02]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A meeting sandbox with semaphore limit N (N in [3,5]) and N already-active sessions"
+    when: "An (N+1)th task session is requested"
+    then:
+      - "The (N+1)th session acquisition blocks (or returns a capacity-exceeded signal) until one slot is released"
+      - "At no point are more than N sessions simultaneously active for the same meeting"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test drives N+1 concurrent coroutines against the semaphore; asserts max_concurrent observed == N"
+  thresholds: {sessions_exceeding_cap: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S3-003]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.1 — Cached prefix: new task pays only its bundle
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-004
+  name: "New task session reuses cached prefix; input tokens charged only for bundle delta"
+  evidence_class: "[reality]"
+  authority_refs: [R-doc05-S3-03]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "A warm sandbox whose prefix (system prompt + map) has been established"
+    when: "A second task session is started against the same sandbox"
+    then:
+      - "The SDK reports cache_read_input_tokens > 0 for the prefix portion"
+      - "The incremental input tokens billed match only the new task bundle size, not the full prefix"
+  primary_oracle:
+    type: deterministic
+    artifact: "SDK usage response: cache_read_input_tokens asserted > 0; incremental tokens asserted < full_prefix_tokens + bundle_tokens"
+  thresholds: {cache_miss_on_warm_prefix: 0}
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "SDK replaced by recorded-response fixture with preset usage fields"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+  test_ids: [T-S3-004]
+
+- criterion_id: AC-S3-004-NEG
+  name: "NEG: Cold sandbox charges full prefix tokens (no cache hit)"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S3-03]
+  criticality: P1
+  blocking: false
+  behavior:
+    given: "A fresh sandbox with no prior prefix established"
+    when: "A task session is started"
+    then:
+      - "cache_read_input_tokens == 0 in the SDK usage response"
+      - "Confirms the positive test's cache hit is driven by real prefix caching, not a fixture artefact"
+  primary_oracle:
+    type: deterministic
+    artifact: "Asserts cache_read_input_tokens == 0 against cold-sandbox SDK fixture"
+  thresholds: {}
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "SDK replaced by cold-sandbox recorded-response fixture"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: negative}
+  test_ids: [T-S3-004-NEG]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.1 — Shared sandbox filesystem: follow-ups see prior artifacts
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-005
+  name: "Follow-up task session observes artifacts written by prior session in same sandbox"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc05-S3-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Session A has written a file to the sandbox filesystem and completed"
+    when: "Session B starts in the same sandbox for the same meeting"
+    then:
+      - "Session B can read the file written by Session A without errors"
+      - "File content matches what Session A wrote"
+  primary_oracle:
+    type: deterministic
+    artifact: "Integration test: Session A writes sentinel file; Session B reads it; asserts content equality"
+  thresholds: {artifact_visibility_failures: 0}
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Sandbox filesystem simulated via shared tmpdir; SDK session mocked"
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: negative}
+    - {tier: e2e}
+  test_ids: [T-S3-005]
+
+- criterion_id: AC-S3-005-NEG
+  name: "NEG: Isolated sandboxes do not share artifacts across meetings"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S3-04]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Session A for meeting M1 writes a file; Session B is for a different meeting M2"
+    when: "Session B attempts to read Session A's file"
+    then:
+      - "Session B cannot see the file (file not found or empty directory)"
+      - "Confirms per-meeting sandbox isolation is enforced"
+  primary_oracle:
+    type: deterministic
+    artifact: "Asserts file from M1 sandbox is absent in M2 sandbox tmpdir"
+  thresholds: {cross_meeting_artifact_leaks: 0}
+  dependency_class: vendor:claude-sdk
+  mock_boundary: "Two separate tmpdir fixtures, one per meeting; SDK session mocked"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: negative}
+  test_ids: [T-S3-005-NEG]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.1 — Cancellation at next tool boundary
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-006
+  name: "Task cancellation halts execution at the next tool boundary, not mid-turn"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S3-05]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A task session is mid-turn with a tool call pending"
+    when: "Cancellation is requested via the per-task AbortController"
+    then:
+      - "Execution stops at the next tool boundary transition"
+      - "No partial tool results are committed after the cancellation signal"
+      - "The task row in operation_runs is updated to a cancelled terminal state"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test injects AbortController.abort(); asserts tool invocation count stops at N+1 boundary and operation_runs status=cancelled"
+  thresholds: {post_cancel_tool_invocations: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S3-006]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.1 — SDK session id persisted; stale-session replay
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-007
+  name: "SDK session id written to task record on session start"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc05-S3-06]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A workroom task session is initiated and the SDK returns a session_id"
+    when: "The session start completes"
+    then:
+      - "The operation_runs row for the task contains the SDK session_id in its progress jsonb"
+      - "The session_id matches the value returned by the SDK"
+  primary_oracle:
+    type: deterministic
+    artifact: "SELECT progress->>'session_id' FROM operation_runs WHERE ... asserts non-null and equals SDK-returned session_id"
+  thresholds: {missing_session_id: 0}
+  dependency_class: db:postgres
+  mock_boundary: "Postgres replaced by in-memory SQLite fixture; SDK session start mocked"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  test_ids: [T-S3-007]
+
+- criterion_id: AC-S3-007-NEG
+  name: "NEG: session_id absent when session start persistence is skipped"
+  evidence_class: "[adversarial]"
+  authority_refs: [R-doc05-S3-06]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The persistence of session_id is monkey-patched to no-op"
+    when: "A task session is started"
+    then:
+      - "progress->>'session_id' is null in the operation_runs row"
+      - "Confirms the positive test exercises real persistence"
+  primary_oracle:
+    type: deterministic
+    artifact: "Asserts session_id is null when write is stubbed"
+  thresholds: {}
+  dependency_class: db:postgres
+  mock_boundary: "Postgres replaced by in-memory SQLite fixture; session_id write monkey-patched"
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: negative}
+  test_ids: [T-S3-007-NEG]
+
+- criterion_id: AC-S3-008
+  name: "Stale-session replay: resume failure triggers bundle-rebuild and run continues"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S3-06]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A persisted session_id is stale (SDK returns session-not-found on resume)"
+    when: "resume_with_fallback is called"
+    then:
+      - "The function calls history_fn to rebuild context from the bundle"
+      - "Execution continues with the rebuilt context without raising to the caller"
+      - "No session-resume exception propagates out of resume_with_fallback"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: SDK resume stubbed to raise SessionNotFound; asserts history_fn called once; asserts no exception escapes; asserts task continues"
+  thresholds: {unhandled_session_resume_exceptions: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S3-008]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.1 — resume_with_fallback imported from libs/agentkit/resume.py
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-009
+  name: "resume_with_fallback imported from libs/agentkit/resume.py; not reimplemented"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S3-07]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The workroom service source tree"
+    when: "Static analysis scans all Python files under services/workroom/"
+    then:
+      - "Exactly one import of resume_with_fallback from libs.agentkit.resume (or agentkit.resume) is found"
+      - "No function or class named resume_with_fallback is defined within the workroom service package"
+  primary_oracle:
+    type: static_analysis
+    artifact: "grep -r 'def resume_with_fallback' services/workroom/ asserts zero hits; grep -r 'from.*agentkit.resume import resume_with_fallback' services/workroom/ asserts >= 1 hit"
+  thresholds: {local_reimplementations: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S3-009]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.2 — Per-role model table imported; never redefined
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-010
+  name: "Workroom service imports model table from libs/llm/routing.py; no local copy"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S3-08]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The workroom service source tree"
+    when: "Static analysis scans all Python files under services/workroom/"
+    then:
+      - "No dict, dataclass, or mapping that defines per-role model identifiers exists in the workroom package"
+      - "At least one import from libs.llm.routing (or llm.routing) is present for the model table"
+  primary_oracle:
+    type: static_analysis
+    artifact: "AST-based lint rule: no MODULE-level dict/mapping with keys matching role names (quick_ask, big_build, plan, critic, verifier, fan_out) in services/workroom/; import from llm.routing asserted"
+  thresholds: {local_model_table_definitions: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S3-010]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.2 — Verifier model stronger than worker
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-011
+  name: "Verifier model capability tier strictly exceeds big-build worker model tier"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S3-09]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The resolved per-role model configuration from libs/llm/routing.py"
+    when: "The verifier role model and big_build worker role model are compared by capability tier"
+    then:
+      - "capability_tier(verifier_model) > capability_tier(worker_model) evaluates to True"
+      - "No test fixture or config override can satisfy this by using the same model for both roles"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test loads routing table; asserts routing.VERIFIER_MODEL tier > routing.BIG_BUILD_MODEL tier using the tier ordering defined in libs/llm/routing.py"
+  thresholds: {verifier_not_stronger_than_worker: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S3-011]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.2 — MAX_OUTPUT_TOKENS self-clamp
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-012
+  name: "max_tokens passed to SDK equals min(MAX_OUTPUT_TOKENS_env, model_ceiling)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S3-10]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "MAX_OUTPUT_TOKENS env var set to a value V and a model with ceiling C"
+    when: "A model call is constructed for any role"
+    then:
+      - "The max_tokens field passed to the SDK equals min(V, C)"
+      - "When V > C the value is C (ceiling enforced)"
+      - "When V <= C the value is V (env respected)"
+  primary_oracle:
+    type: deterministic
+    artifact: "Parametric unit test over (V=high, C=low), (V=low, C=high), (V=C) asserts SDK call max_tokens == min(V,C) in all cases"
+  thresholds: {ceiling_exceeded_calls: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S3-012]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.2 — No runtime classifier for model selection
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-013
+  name: "No runtime classifier maps task content to a model choice"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S3-11]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The workroom service source tree"
+    when: "Static analysis scans all Python files under services/workroom/"
+    then:
+      - "No function that branches on task content (message text, task type string) to return a model identifier is present"
+      - "Model selection is traceable to a static config lookup only"
+  primary_oracle:
+    type: static_analysis
+    artifact: "Lint rule: no function in services/workroom/ has a return type of model-id AND branches on task-text or task-type parameters"
+  thresholds: {runtime_classifier_functions: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S3-013]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.3 — Tool handlers never throw
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-014
+  name: "All workroom tool handlers return structured errors; no uncaught exception escapes"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S3-12]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Any registered workroom tool handler"
+    when: "The handler is called and its internal implementation raises any exception"
+    then:
+      - "The handler returns a structured error result (is_error: true, content with error message)"
+      - "No exception propagates out of the handler function boundary"
+  primary_oracle:
+    type: deterministic
+    artifact: "Parametric unit test: for each handler in the workroom tool registry, inject a RuntimeError; assert return value is_error==True and no exception escapes the call"
+  thresholds: {handlers_that_throw: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S3-014]
+
+- criterion_id: AC-S3-014-STATIC
+  name: "Static: every tool handler decorated with error-wrapping boundary"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S3-12]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The workroom service source tree"
+    when: "AST analysis inspects all functions registered as tool handlers"
+    then:
+      - "Every such function is wrapped with the never-throw boundary from libs.agentkit.tools"
+      - "No handler function has a bare except-less body"
+  primary_oracle:
+    type: static_analysis
+    artifact: "AST lint: all @tool_handler-decorated functions in services/workroom/ have the agentkit never-throw boundary applied"
+  thresholds: {undecorated_handlers: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+  test_ids: [T-S3-014-STATIC]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.3 — No-progress detection + bounded replan
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-015
+  name: "No-progress detected via output-hash/action-effect similarity over last N turns"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S3-13]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A task session where the last N turns produce identical output hashes and action-effect fingerprints"
+    when: "The no-progress detector evaluates the turn window"
+    then:
+      - "no_progress_detected() returns True"
+      - "The replan counter is incremented"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: inject N identical (output_hash, action_effect) tuples; assert no_progress_detected() == True and replan_count incremented"
+  thresholds: {false_negative_no_progress_detections: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S3-015]
+
+- criterion_id: AC-S3-016
+  name: "Bounded replan: after 2 replans with persistent no-progress, task terminates with honest partial"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S3-13]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "A task session that has already triggered 2 replan attempts and still shows no-progress"
+    when: "The no-progress detector fires again"
+    then:
+      - "No further replan is triggered (replan budget exhausted)"
+      - "The task terminates with a partial result envelope marked honest_partial=True"
+      - "The operation_runs row is updated with this partial result"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test drives replan_count to 2 with continued no-progress; asserts replan not called a 3rd time; asserts terminal envelope contains honest_partial==True"
+  thresholds: {replans_beyond_budget: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S3-016]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.3 — Correction-into-the-plan: rewrites live plan artifact
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-017
+  name: "Mid-task correction rewrites live plan artifact; no SDK injection string used"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S3-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A task session with a live plan artifact stored in the task bundle"
+    when: "A mid-task correction is received"
+    then:
+      - "The live plan artifact is mutated to reflect the correction"
+      - "No call to the SDK's mid-turn injection API (inject_message, append_message, or equivalent) is made"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: send correction; assert plan artifact updated; assert SDK injection method not called (mock spy)"
+  thresholds: {sdk_injection_calls: 0, plan_artifact_not_updated: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S3-017]
+
+- criterion_id: AC-S3-017-STATIC
+  name: "Static: no call to SDK mid-turn injection API in workroom service"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S3-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The workroom service source tree"
+    when: "Static analysis scans all Python files under services/workroom/"
+    then:
+      - "No call to inject_message, append_message, or any SDK mid-turn injection method is present"
+  primary_oracle:
+    type: static_analysis
+    artifact: "grep -r 'inject_message\\|append_message' services/workroom/ asserts zero hits"
+  thresholds: {sdk_injection_calls: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+  test_ids: [T-S3-017-STATIC]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.3 — Exactly 8 BUILD items; nothing from USE NATIVE rebuilt
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-018
+  name: "Workroom service implements exactly the 8 BUILD items from §3.3; no USE NATIVE capabilities rebuilt"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S3-15, R-doc05-S3-17]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The workroom service source tree"
+    when: "Static analysis checks for presence of the 8 required BUILD modules and absence of reimplemented USE NATIVE capabilities"
+    then:
+      - "Modules or entry points covering each of the 8 BUILD items are present: sdk_isolation_triad, sandbox_tool_transport, big_build_contract, verify_loop, propose_change, progress_envelopes, no_progress_detection, correction_into_plan"
+      - "No local implementation of agentic loop, compaction, planning-within-a-turn, is_error loop-survival, or session resume is found in the workroom package"
+  primary_oracle:
+    type: static_analysis
+    artifact: "Checklist lint: asserts 8 required BUILD modules importable from workroom package; grep for prohibited reimplementations (compaction, loop, resume) asserts zero hits"
+  thresholds: {missing_build_items: 0, native_reimplementations: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S3-018]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.3 — Structured progress envelopes at tool boundaries
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-019
+  name: "Structured progress envelope emitted at each tool boundary during task execution"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-doc05-S3-16]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A task session executing a sequence of tool calls"
+    when: "Each tool boundary is crossed (tool call dispatched)"
+    then:
+      - "A structured progress envelope is emitted to the progress stream"
+      - "The envelope contains at minimum: task_id, turn_number, tool_name, status"
+      - "No tool boundary is silently skipped (envelope count == tool invocation count)"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: run a task with 3 tool calls via mocked tool dispatch; assert 3 progress envelopes emitted to the progress stream sink"
+  thresholds: {missing_progress_envelopes: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S3-019]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §3.3 — SDK Task tool blocked (isolation escape, §3.4)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-020
+  name: "SDK Task tool blocked in all workroom sandbox sessions"
+  evidence_class: "[static]"
+  authority_refs: [R-doc05-S3-15]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "The workroom service's SDK session configuration"
+    when: "Static analysis inspects session construction and disallowed_tools lists"
+    then:
+      - "'Task' appears in the disallowed_tools list for every sandbox session configuration"
+      - "No code path constructs a sandbox session without Task in disallowed_tools"
+  primary_oracle:
+    type: static_analysis
+    artifact: "AST lint: every ClaudeCode() / query() construction site in services/workroom/ that creates a sandbox session passes disallowed_tools containing 'Task'"
+  thresholds: {sessions_missing_task_block: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  test_ids: [T-S3-020]

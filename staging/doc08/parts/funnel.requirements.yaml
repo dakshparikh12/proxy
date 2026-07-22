@@ -1,0 +1,439 @@
+# Requirements: §4.3 The dispatch funnel — meeting/tenant isolation
+#               §4.4 The channel_action generic-surface family
+# ID prefix: R-doc08-FUN-NN
+# Authority: DOC-08 §4.3 / §4.4
+# Status: qualified
+#
+# Criticality key:
+#   P0 — cross-tenant isolation, auth-at-upgrade, error info-policy (security)
+#   P1 — rate limiting, single-dispatch path, capability gating
+#   P2 — operational/liveness concerns (sliding-TTL bump)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AUTH AT UPGRADE (§4.3 — Auth before 101 upgrade)
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FUN-01
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 Auth at connection upgrade"
+  source_quote: "Auth BEFORE the 101 upgrade — a WS that authenticates per-message is the classic hole"
+  normalized_statement: >
+    WHEN a WebSocket upgrade request is received THE SYSTEM SHALL complete all
+    authentication and authorisation checks (session resolution, origin allowlist,
+    per-user connection cap) before emitting the HTTP 101 response; per-message
+    authentication SHALL NOT be used.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FUN-02
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 authorize_upgrade — session resolution"
+  source_quote: "session = await resolve_session(request.cookies)  # signed cookie → sessions table\nif session is None:\n    raise RejectUpgrade(401)  # reject BEFORE socket opens"
+  normalized_statement: >
+    WHEN a WebSocket upgrade request carries no valid signed session cookie THE SYSTEM
+    SHALL reject the upgrade with HTTP 401 before the socket is opened.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FUN-03
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 authorize_upgrade — origin allowlist"
+  source_quote: "if not origin_allowed(request.headers.get(\"origin\")):  # prod origin allowlist\n    raise RejectUpgrade(403)"
+  normalized_statement: >
+    WHEN a WebSocket upgrade request carries an Origin header that is not in the
+    production origin allowlist THE SYSTEM SHALL reject the upgrade with HTTP 403
+    before the socket is opened.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FUN-04
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 authorize_upgrade — per-user connection cap"
+  source_quote: "if ctx.conn_limiter.count(session.user_id) >= MAX_CONN_PER_USER:\n    raise RejectUpgrade(429)  # per-user connection cap"
+  normalized_statement: >
+    WHEN a WebSocket upgrade request would cause the requesting user's concurrent
+    connection count to meet or exceed MAX_CONN_PER_USER THE SYSTEM SHALL reject the
+    upgrade with HTTP 429 before the socket is opened.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FUN-05
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 Auth at connection upgrade"
+  source_quote: "Connection carries tenant_id from session (never re-derived per message)"
+  normalized_statement: >
+    WHEN a WebSocket connection is established THE SYSTEM SHALL bind tenant_id to the
+    Connection object from the session record at upgrade time; tenant_id SHALL NOT be
+    re-derived from any per-message field on subsequent inbound messages.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DISPATCH FUNNEL STEP 1 — Rate limiting (§4.3 step 1)
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FUN-06
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 step 1"
+  source_quote: "Rate-limit per-connection; return generic \"Slow down.\" on excess — no internal detail"
+  normalized_statement: >
+    WHEN an inbound WebSocket message exceeds the per-connection rate limit THE SYSTEM
+    SHALL return the generic response "Slow down." and SHALL NOT include any internal
+    detail (limit values, retry-after times, internal counters) in the response.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FUN-07
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 Rate limiter — pinned (CANONICAL §11.11)"
+  source_quote: "`ctx.rate_limiter` is the **`limits`** library (or **`slowapi`** for FastAPI) with an **in-memory backend** for V0 — **not** a hand-rolled token bucket."
+  normalized_statement: >
+    THE SYSTEM SHALL implement per-connection rate limiting using the `limits` library
+    or `slowapi` (for FastAPI) with an in-memory backend; a hand-rolled token bucket
+    SHALL NOT be used.
+  requirement_type: structural
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FUN-08
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 Rate limiter — pinned (CANONICAL §11.11)"
+  source_quote: "Its `check()` is `limits`' fixed-/moving-window strategy, keyed per-connection (`conn.id`)"
+  normalized_statement: >
+    THE SYSTEM SHALL key the rate limiter on the connection identifier (conn.id) and
+    SHALL use the `limits` library's fixed-window or moving-window strategy; custom
+    windowing algorithms SHALL NOT be used.
+  requirement_type: structural
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DISPATCH FUNNEL STEP 2 — Registry lookup (§4.3 step 2)
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FUN-09
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 step 2"
+  source_quote: "Registry lookup by declared type; \"Not found\" if model is None (never \"unknown type X\" — no info leak)"
+  normalized_statement: >
+    WHEN an inbound message declares a type that is absent from the message registry
+    THE SYSTEM SHALL return the generic response "Not found" and SHALL NOT include the
+    undeclared type name or any registry detail in the response.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DISPATCH FUNNEL STEP 3 — Pydantic validation (§4.3 step 3)
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FUN-10
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 step 3"
+  source_quote: "Pydantic-validate ONCE, centrally; \"Not found\" on every failure (generic on every failure)"
+  normalized_statement: >
+    WHEN an inbound message fails Pydantic validation THE SYSTEM SHALL return the
+    generic response "Not found" regardless of the specific validation error;
+    validation SHALL be performed exactly once centrally in the dispatch funnel and
+    SHALL NOT be repeated or re-performed in individual handlers.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DISPATCH FUNNEL STEP 4 — Meeting/tenant isolation (§4.3 step 4)
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FUN-11
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 step 4 — meeting absent"
+  source_quote: "meeting absent OR wrong tenant → \"Not found\" (same error, never distinguish)"
+  normalized_statement: >
+    WHEN an inbound message's meeting_id is absent THE SYSTEM SHALL return "Not found"
+    using the same response as when the meeting is present but owned by a different
+    tenant; the two cases SHALL be indistinguishable in the response.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FUN-12
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 step 4 — wrong tenant"
+  source_quote: "meeting owned by another tenant: \"Not found\" (SAME response — never distinguish)"
+  normalized_statement: >
+    WHEN an inbound message's meeting_id refers to a meeting owned by a tenant other
+    than the connection's tenant_id THE SYSTEM SHALL return "Not found" using the
+    identical response used for an absent meeting_id; the cross-tenant and absent cases
+    SHALL be indistinguishable.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FUN-13
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 step 4 — UUID soundness"
+  source_quote: "meeting_id is already a UUID — Pydantic rejected non-UUIDs in step 3, making the lookup SOUND"
+  normalized_statement: >
+    WHEN the dispatch funnel reaches step 4 (meeting isolation) meeting_id SHALL
+    already have been validated as a UUID by the central Pydantic validation in step 3,
+    ensuring the meeting lookup is sound without additional format checks at this step.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FUN-14
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 step 4 — DEFAULT-REJECT"
+  source_quote: "DEFAULT-REJECT: no meeting_id and not explicitly global ⇒ refuse"
+  normalized_statement: >
+    WHEN an inbound message carries no meeting_id and the message type is not
+    explicitly marked as global-scope THE SYSTEM SHALL refuse the message with "Not
+    found"; requiring global scope SHALL be an explicit opt-in, not the default.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FUN-15
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 step 4 — requires_meeting_scope"
+  source_quote: "If `requires_meeting_scope=True` but no meeting_id → refuse with \"Not found\""
+  normalized_statement: >
+    WHEN an inbound message's type has requires_meeting_scope=True and the message
+    carries no meeting_id THE SYSTEM SHALL return "Not found".
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FUN-16
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 step 4 — sliding-TTL keep-alive"
+  source_quote: "`ctx.meeting_activity.bump(meeting_id)` — sliding-TTL keep-alive (Doc 04 §3.6)"
+  normalized_statement: >
+    WHEN an inbound message passes meeting isolation and meeting_id is present THE
+    SYSTEM SHALL call ctx.meeting_activity.bump(meeting_id) to advance the meeting's
+    sliding-TTL keep-alive before passing the message to the handler.
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FUN-17
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 step 4 — isolation is automatic"
+  source_quote: "a handler cannot forget it because a handler never sees an un-isolated message"
+  normalized_statement: >
+    THE SYSTEM SHALL apply meeting/tenant isolation in the central dispatch funnel
+    before invoking any handler; individual handlers SHALL NOT be responsible for
+    performing isolation checks and SHALL NOT receive un-isolated messages.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DISPATCH FUNNEL STEP 5 — Entity isolation (§4.3 step 5)
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FUN-18
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 step 5 — entity isolation"
+  source_quote: "`require_entity_access`: kills the \"smuggle a foreign entity_id\" bug class"
+  normalized_statement: >
+    WHEN an inbound message contains a canvas_id or artifact_id THE SYSTEM SHALL
+    resolve the entity's owning meeting from its own data store and perform a
+    tenant-check against that owning meeting; the client-supplied meeting_id SHALL NOT
+    be used to authorise access to the entity.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FUN-19
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 step 5 — entity owned by another tenant"
+  source_quote: "canvas_id / artifact_id present → resolve owning meeting from DB, tenant-check"
+  normalized_statement: >
+    WHEN the owning meeting of a canvas_id or artifact_id belongs to a different tenant
+    than the connection's tenant_id THE SYSTEM SHALL return "Not found" using the same
+    generic response used for all other access denials.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DISPATCH FUNNEL STEP 6 — Handler dispatch (§4.3 step 6)
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FUN-20
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 step 6"
+  source_quote: "Handler call: guaranteed validated, isolated; MESSAGE_HANDLERS has exactly 1 per inbound type"
+  normalized_statement: >
+    THE SYSTEM SHALL maintain exactly one handler per inbound message type in
+    MESSAGE_HANDLERS; a handler SHALL be called only after all preceding funnel steps
+    (rate-limit, registry lookup, validation, meeting isolation, entity isolation) have
+    passed successfully.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ERROR INFORMATION POLICY (§4.3 — cross-cutting)
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FUN-21
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.3 — error information policy"
+  source_quote: "ALL of these return the SAME \"Not found\": missing meeting, wrong tenant meeting, unknown message type, validation failure, unknown canvas_id"
+  normalized_statement: >
+    WHEN any of the following conditions is detected — absent meeting_id, cross-tenant
+    meeting access, unknown message type, Pydantic validation failure, or unknown
+    canvas_id / artifact_id — THE SYSTEM SHALL return the identical response "Not
+    found" with no distinguishing detail between the cases.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §4.4 — ChannelAction generic-surface family
+# ─────────────────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-FUN-22
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.4"
+  source_quote: "Five channels (voice/chat/tile/canvas/screen) are **surfaces**, not five separate message schemas. Inbound channel-specific actions are modelled as ONE ChannelAction family carrying a `surface: Literal[...]`"
+  normalized_statement: >
+    THE SYSTEM SHALL model all inbound channel-specific actions as a single
+    ChannelAction message type carrying a surface discriminator field; separate message
+    types, registry entries, handlers, or isolation checks per surface SHALL NOT be
+    introduced.
+  requirement_type: structural
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FUN-23
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.4"
+  source_quote: "Adding a surface is one edit to the Surface literal and the capability catalog — not a new message type, new registry entry, new handler, and new isolation check."
+  normalized_statement: >
+    WHEN a new surface is added to the system THE SYSTEM SHALL require only an edit to
+    the Surface Literal type and the capability catalog (CAPABILITIES); adding a new
+    message type, new registry entry, new handler, or new isolation check for the
+    surface SHALL be prohibited.
+  requirement_type: structural
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FUN-24
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.4"
+  source_quote: "Unknown surface+action combination → \"Not found\" (not a fall-through to unexpected behavior)"
+  normalized_statement: >
+    WHEN a ChannelAction message carries a surface+action combination that is not
+    present in the capability catalog THE SYSTEM SHALL return "Not found" and SHALL NOT
+    fall through to any default or unexpected behaviour.
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FUN-25
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.4"
+  source_quote: "Capability-gated: action not in cap.allowed_on(surface) → \"Not found\""
+  normalized_statement: >
+    WHEN a ChannelAction message carries an action that is not in the set returned by
+    cap.allowed_on(msg.surface) for the resolved capability THE SYSTEM SHALL return
+    "Not found".
+  requirement_type: security
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FUN-26
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.4"
+  source_quote: "Dispatch goes to orchestrator, not direct handler"
+  normalized_statement: >
+    WHEN a ChannelAction message passes capability gating THE SYSTEM SHALL dispatch it
+    via ctx.orchestrator.dispatch_capability and SHALL NOT call a surface-specific
+    handler directly.
+  requirement_type: structural
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-FUN-27
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§4.4"
+  source_quote: "They share one isolation guarantee."
+  normalized_statement: >
+    WHEN any ChannelAction message (regardless of surface) passes through the dispatch
+    funnel THE SYSTEM SHALL apply the same meeting/tenant isolation guarantee as all
+    other inbound message types; surface-specific isolation bypasses SHALL NOT exist.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified

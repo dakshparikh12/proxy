@@ -1,0 +1,840 @@
+# s6.criteria.yaml — Doc 05 (Workroom) · §3.6 The big-build contract
+# Acceptance criteria for plan → resumed session → checkpoint → read-back → publish-or-fail.
+# ID scheme: AC-S6-NNN  (NEG pairs: AC-S6-NNN-NEG)
+# Authority document: DOC-05 §3.6 + §3.14
+#
+# dependency_class values used:
+#   null              — pure structural / static; no external systems
+#   fs:git            — reads/writes git repo state (sandbox or real)
+#   vendor:claude-sdk — depends on actual SDK session/thinking/context-editing behavior
+#
+# NEG-pair rule: every non-null dependency_class criterion has a paired -NEG.
+# fs:git criteria carry {tier: integration}; vendor:claude-sdk carry {tier: reality}.
+#
+# Golden-path criteria (golden_path: true): AC-S6-005, AC-S6-011, AC-S6-012
+#   — these together prove the end-to-end big-build promise:
+#     plan produced → subtasks executed in one session → checkpoint verified from git
+#     → publish-or-fail → build complete.
+#
+# Fault models:
+#   F-S6-PLAN-SHAPE       — plan has wrong count/order of subtasks
+#   F-S6-PLAN-NO-TAGS     — subtask missing AC-tag or pass rule (mirror not done)
+#   F-S6-PLAN-RETRY-LOOP  — JSON parse failure causes unbounded retries
+#   F-S6-SESSION-LOST     — session id not persisted → restart spawns orphan session
+#   F-S6-THINK-BUDGET     — thinking budget equals MAX_OUTPUT_TOKENS → JSON truncated
+#   F-S6-THINK-FAST-PATH  — extended thinking on quick-ask → latency regression
+#   F-S6-NEW-SESSION      — subtasks run in separate sessions, losing context
+#   F-S6-NO-STOP          — subtask prompt omits "do NOT start next" → agent overruns
+#   F-S6-NARRATION-TRUST  — subtask marked done on agent claim, not git commit
+#   F-S6-PUBLISH-SILENT   — publish error swallowed → subtask falsely reported green
+#   F-S6-NO-STREAM        — tool_start / commit envelopes dropped → no progress visible
+#   F-S6-REPLAN-SPURIOUS  — replan fires on 2-step plan → unnecessary latency
+#   F-S6-REPLAN-ID-RESET  — replan reassigns subtask ids → state lost
+#   F-S6-REPLAN-OVERFLOW  — replan response proposes 9+ steps → accepted uncapped
+#   F-S6-REPLAN-ABORT     — parse failure during replan aborts build
+#   F-S6-CONTEXT-OVERFLOW — multi-subtask build lacks context-editing → OOM/truncation
+#   F-S6-ARTIFACT-MISSING — plan artifact omits required fields (files, AC-tag, verify, done-when)
+#   F-S6-NO-HUMAN-GATE    — plan not posted to chat before execution → no veto window
+
+fault_models:
+  - id: F-S6-PLAN-SHAPE
+    summary: "Plan emitted with <4 or >5 subtasks, or out of canonical order (setup→core→integration→testing)."
+  - id: F-S6-PLAN-NO-TAGS
+    summary: "Subtask missing AC-tag or exact pass rule; 'mirror the AC into the step' not fulfilled."
+  - id: F-S6-PLAN-RETRY-LOOP
+    summary: "JSON parse failure triggers more than one retry turn, or retry reuses wrong max_turns."
+  - id: F-S6-SESSION-LOST
+    summary: "Session id not persisted immediately after plan turn; a crash before next subtask causes orphan session and restart spawns a new one."
+  - id: F-S6-THINK-BUDGET
+    summary: "Thinking budget equals or exceeds MAX_OUTPUT_TOKENS; plan JSON object truncated mid-field."
+  - id: F-S6-THINK-FAST-PATH
+    summary: "Extended thinking enabled on quick-ask, should-I-speak, or Scribe turn; latency spikes."
+  - id: F-S6-NEW-SESSION
+    summary: "Each subtask is dispatched as a fresh SDK session; prior context lost; plan coherence broken."
+  - id: F-S6-NO-STOP
+    summary: "Subtask prompt omits explicit stop instruction; agent starts next subtask in same turn."
+  - id: F-S6-NARRATION-TRUST
+    summary: "Subtask marked done based on agent's narrated claim, not on git-verified commit list."
+  - id: F-S6-PUBLISH-SILENT
+    summary: "captureAndPublishCommits swallows publish exception; subtask reported green despite unpublished artifacts."
+  - id: F-S6-NO-STREAM
+    summary: "tool_start and commit progress envelopes not emitted during subtask execution."
+  - id: F-S6-REPLAN-SPURIOUS
+    summary: "Gated replan fires on a 2-step plan (< 3 steps), adding unnecessary latency."
+  - id: F-S6-REPLAN-ID-RESET
+    summary: "Replan response accepted with new subtask ids, wiping completion state of already-done subtasks."
+  - id: F-S6-REPLAN-OVERFLOW
+    summary: "Replan response proposing 9 or more remaining subtasks accepted without cap enforcement."
+  - id: F-S6-REPLAN-ABORT
+    summary: "Gated-replan response fails to parse and build is aborted rather than continuing with existing plan."
+  - id: F-S6-CONTEXT-OVERFLOW
+    summary: "SDK context-editing disabled on a multi-subtask build; stale tool_results accumulate and overflow the context window."
+  - id: F-S6-ARTIFACT-MISSING
+    summary: "Plan artifact unit omits one or more required fields: files-to-touch, AC-tag, verify line, done-when."
+  - id: F-S6-NO-HUMAN-GATE
+    summary: "Plan not posted to chat before execution begins; operator has no window to veto."
+
+# =============================================================================
+# PLAN SHAPE
+# =============================================================================
+
+criteria:
+
+  - criterion_id: AC-S6-001
+    name: "Plan contains 4-5 subtasks in canonical order (setup→core→integration→testing)"
+    evidence_class: "[unit-property]"
+    authority_refs: [R-doc05-S6-01]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "A completed big-build plan turn response"
+      when: "The parsed subtask list is inspected"
+      then:
+        - "The list contains between 4 and 5 subtasks inclusive"
+        - "Subtask sequence follows the canonical order: setup, then core, then integration, then testing"
+    primary_oracle:
+      type: deterministic
+      artifact: "Unit test parses plan JSON, asserts len in [4,5] and order labels match [setup, core, integration, testing]"
+    thresholds:
+      subtask_count_min: 4
+      subtask_count_max: 5
+      order_violations_allowed: 0
+    fault_model_refs: [F-S6-PLAN-SHAPE]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+    test_ids: [T-S6-001]
+
+  - criterion_id: AC-S6-002
+    name: "Every subtask carries AC-tag and exact pass rule (mirror-the-AC contract)"
+    evidence_class: "[unit-property]"
+    authority_refs: [R-doc05-S6-02]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "A parsed plan with N subtasks"
+      when: "Each subtask object is inspected"
+      then:
+        - "Every subtask has a non-empty ac_tag field naming the acceptance criterion it serves"
+        - "Every subtask has a verify field containing a non-empty, machine-checkable shell command"
+        - "Every subtask has a done_when field with at least one numeric bound"
+    primary_oracle:
+      type: deterministic
+      artifact: "Unit test iterates subtask list; asserts ac_tag, verify, done_when are non-empty and verify is a parseable shell command"
+    thresholds:
+      subtasks_missing_ac_tag_allowed: 0
+      subtasks_missing_verify_allowed: 0
+      subtasks_missing_done_when_allowed: 0
+    fault_model_refs: [F-S6-PLAN-NO-TAGS]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+    test_ids: [T-S6-002]
+
+  # =============================================================================
+  # PLAN JSON PARSE RETRY
+  # =============================================================================
+
+  - criterion_id: AC-S6-003
+    name: "Plan JSON parse failure triggers exactly one max_turns:1 retry then abort"
+    evidence_class: "[unit-property]"
+    authority_refs: [R-doc05-S6-03]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "A mock SDK session where the first plan turn returns unparseable JSON"
+      when: "The plan-extraction loop runs"
+      then:
+        - "Exactly one retry turn is issued with max_turns=1 and instruction containing 'return ONLY the JSON array'"
+        - "The retry reuses the same SDK session id (session not replaced)"
+        - "If the retry also fails to parse, the build is aborted with a PLAN_PARSE_FAILURE error and no further turns are issued"
+    primary_oracle:
+      type: deterministic
+      artifact: "Unit test with stubbed query() that returns bad JSON twice; asserts query called exactly twice, both calls carry same session id, second call uses max_turns=1 and prompt matches 'return ONLY the JSON array'; third call never made; exception raised on second failure"
+    thresholds:
+      retry_turns_allowed: 1
+      session_replacements_on_retry: 0
+    fault_model_refs: [F-S6-PLAN-RETRY-LOOP]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+    test_ids: [T-S6-003]
+
+  # =============================================================================
+  # SESSION ID PERSISTENCE
+  # =============================================================================
+
+  - criterion_id: AC-S6-004
+    name: "SDK session id is persisted immediately after plan turn (fire-and-forget)"
+    evidence_class: "[unit-property]"
+    authority_refs: [R-doc05-S6-04]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "A plan turn that returns a session id"
+      when: "The plan-extraction function completes"
+      then:
+        - "The session id is written to durable storage before the function returns to the caller"
+        - "The write is not awaited inline by the caller (fire-and-forget task)"
+        - "A subsequent process restart can retrieve the session id and resume the session"
+    primary_oracle:
+      type: deterministic
+      artifact: "Unit test confirms persist_session_id() is scheduled as a background task (not awaited) immediately after plan turn; integration test simulates restart and verifies resumed session id matches persisted value"
+    thresholds:
+      session_id_not_persisted_allowed: 0
+    fault_model_refs: [F-S6-SESSION-LOST]
+    dependency_class: fs:git
+    mock_boundary: "durable storage mocked with in-memory dict; SDK session not started"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: integration}
+    test_ids: [T-S6-004]
+
+  - criterion_id: AC-S6-004-NEG
+    name: "NEG: Session id not persisted — restart spawns orphan session"
+    evidence_class: "[adversarial]"
+    authority_refs: [R-doc05-S6-04]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "A patched plan loop that skips session id persistence"
+      when: "A restart is simulated and the build is resumed"
+      then:
+        - "The test harness detects that a new SDK session is created instead of the prior one being resumed"
+        - "This confirms the production persistence path is required and enforced"
+    primary_oracle:
+      type: deterministic
+      artifact: "Integration test with persistence step removed; assert resumed session id differs from original"
+    thresholds: {}
+    fault_model_refs: [F-S6-SESSION-LOST]
+    dependency_class: fs:git
+    mock_boundary: "durable storage mocked; SDK not started"
+    golden_path: false
+    verification_ladder:
+      - {tier: unit}
+      - {tier: negative}
+    test_ids: [T-S6-004-NEG]
+
+  # =============================================================================
+  # EXTENDED THINKING — PLANNING TURN
+  # =============================================================================
+
+  - criterion_id: AC-S6-005
+    name: "Extended thinking enabled on planning turn; thinking budget strictly below MAX_OUTPUT_TOKENS"
+    evidence_class: "[unit-property]"
+    authority_refs: [R-doc05-S6-05, R-doc05-S6-06]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The ClaudeAgentOptions construction for the planning turn"
+      when: "The options object is inspected before the query() call"
+      then:
+        - "thinking.type is set to 'interleaved' (or equivalent extended-thinking enable)"
+        - "thinking.budget_tokens is set and is strictly less than MAX_OUTPUT_TOKENS"
+        - "The plan JSON object is never truncated (fits within remaining output budget)"
+    primary_oracle:
+      type: deterministic
+      artifact: "Static assertion: thinking budget constant < MAX_OUTPUT_TOKENS constant; unit test with stubbed query() verifies options carry thinking.type='interleaved' and thinking.budget_tokens < MAX_OUTPUT_TOKENS"
+    thresholds:
+      thinking_budget_headroom_tokens_min: 1024
+    fault_model_refs: [F-S6-THINK-BUDGET]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: true
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: e2e}
+    test_ids: [T-S6-005]
+
+  - criterion_id: AC-S6-006
+    name: "Extended thinking is OFF for quick-ask, should-I-speak, and Scribe turns"
+    evidence_class: "[static]"
+    authority_refs: [R-doc05-S6-07]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "ClaudeAgentOptions construction sites for quick-ask disposition, should-I-speak gate, and Scribe component"
+      when: "Each options object is inspected statically"
+      then:
+        - "No thinking.type or extended-thinking flag is set (or it is explicitly disabled)"
+        - "Zero fast-path query sites pass thinking-related options"
+    primary_oracle:
+      type: static_analysis
+      artifact: "AST/grep scan of quick-ask, should-I-speak, and Scribe call sites: assert no thinking kwarg present or thinking.type='disabled'"
+    thresholds:
+      fast_path_thinking_enabled_allowed: 0
+    fault_model_refs: [F-S6-THINK-FAST-PATH]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+    test_ids: [T-S6-006]
+
+  # =============================================================================
+  # ONE RESUMED SDK SESSION
+  # =============================================================================
+
+  - criterion_id: AC-S6-007
+    name: "All subtasks execute within a single resumed SDK session (same session id across turns)"
+    evidence_class: "[unit-property]"
+    authority_refs: [R-doc05-S6-08]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "A big-build run with N > 1 subtasks"
+      when: "All subtask query() calls complete"
+      then:
+        - "Every subtask query() call uses the same SDK session id established during the plan turn"
+        - "No new SDK session is created between subtasks"
+    primary_oracle:
+      type: deterministic
+      artifact: "Unit test with stubbed query() records session_id per call; assert all session_ids identical and equal to plan-turn session_id"
+    thresholds:
+      distinct_session_ids_allowed: 1
+    fault_model_refs: [F-S6-NEW-SESSION]
+    dependency_class: vendor:claude-sdk
+    mock_boundary: "SDK mocked; session id returned by stub"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: reality}
+    test_ids: [T-S6-007]
+
+  - criterion_id: AC-S6-007-NEG
+    name: "NEG: Fresh session per subtask loses context, causing plan incoherence"
+    evidence_class: "[adversarial]"
+    authority_refs: [R-doc05-S6-08]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "A patched execution loop that creates a new SDK session per subtask"
+      when: "Two subtasks are executed and the second references an artifact from the first"
+      then:
+        - "The second subtask fails to locate or use the artifact from the first (no shared context)"
+        - "This confirms the production single-session path is required"
+    primary_oracle:
+      type: deterministic
+      artifact: "Integration test with patched loop; assert second subtask errors or references artifact by recomputation, not context"
+    thresholds: {}
+    fault_model_refs: [F-S6-NEW-SESSION]
+    dependency_class: vendor:claude-sdk
+    mock_boundary: "SDK stub simulates distinct sessions with no shared message history"
+    golden_path: false
+    verification_ladder:
+      - {tier: unit}
+      - {tier: negative}
+    test_ids: [T-S6-007-NEG]
+
+  - criterion_id: AC-S6-008
+    name: "Every subtask prompt includes explicit 'do NOT start the next subtask' stop instruction"
+    evidence_class: "[static]"
+    authority_refs: [R-doc05-S6-09]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "The subtask prompt template used by the execution loop"
+      when: "The rendered subtask prompt string is inspected for each subtask"
+      then:
+        - "The prompt contains language equivalent to 'do NOT start the next' subtask instruction"
+        - "The instruction is present in every rendered subtask prompt, not just the first"
+    primary_oracle:
+      type: static_analysis
+      artifact: "Unit test renders the subtask prompt template for subtasks 1..N; assert each contains pattern matching 'do not start the next' (case-insensitive)"
+    thresholds:
+      prompts_missing_stop_instruction_allowed: 0
+    fault_model_refs: [F-S6-NO-STOP]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+    test_ids: [T-S6-008]
+
+  # =============================================================================
+  # GIT CHECKPOINT READ-BACK
+  # =============================================================================
+
+  - criterion_id: AC-S6-009
+    name: "head_before captured from sandbox git before each subtask turn; commits read from headBefore..HEAD after"
+    evidence_class: "[unit-property]"
+    authority_refs: [R-doc05-S6-10]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "A sandbox with an existing git commit history and a subtask about to execute"
+      when: "The subtask execution wrapper runs"
+      then:
+        - "read_head() is called and its result stored as head_before before query() is issued"
+        - "After query() completes, list_commits(sandbox, '{head_before}..HEAD') is called to enumerate actual commits"
+        - "The head_before..HEAD range is used for all downstream operations (publish, progress stream)"
+    primary_oracle:
+      type: deterministic
+      artifact: "Unit test with mocked read_head and list_commits; assert read_head called before query(), list_commits called after with correct range string"
+    thresholds:
+      calls_without_head_before_capture_allowed: 0
+    fault_model_refs: [F-S6-NARRATION-TRUST]
+    dependency_class: fs:git
+    mock_boundary: "git operations mocked; HEAD fixed to known SHA"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: integration}
+    test_ids: [T-S6-009]
+
+  - criterion_id: AC-S6-009-NEG
+    name: "NEG: Subtask completion based on agent narration (no git read) accepts fabricated success"
+    evidence_class: "[adversarial]"
+    authority_refs: [R-doc05-S6-10, R-doc05-S6-11]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "A patched execution loop that marks subtask done when the agent narrates 'done' without calling list_commits"
+      when: "The agent narrates success but makes zero git commits"
+      then:
+        - "The test harness confirms the subtask is incorrectly marked done despite zero commits"
+        - "This confirms the production git-read path is required to prevent silent false-green"
+    primary_oracle:
+      type: deterministic
+      artifact: "Unit test with stub agent that narrates 'done' and patched loop that skips list_commits; assert subtask incorrectly passes; then restore list_commits and assert it correctly fails"
+    thresholds: {}
+    fault_model_refs: [F-S6-NARRATION-TRUST]
+    dependency_class: fs:git
+    mock_boundary: "git mocked to return empty commit list"
+    golden_path: false
+    verification_ladder:
+      - {tier: unit}
+      - {tier: negative}
+    test_ids: [T-S6-009-NEG]
+
+  # =============================================================================
+  # PUBLISH-OR-FAIL
+  # =============================================================================
+
+  - criterion_id: AC-S6-010
+    name: "captureAndPublishCommits throws on publish failure; subtask is marked FAIL, never green"
+    evidence_class: "[unit-property]"
+    authority_refs: [R-doc05-S6-12]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "A subtask execution where the publish step raises an exception"
+      when: "captureAndPublishCommits is called and the publish transport fails"
+      then:
+        - "The exception propagates out of captureAndPublishCommits (not swallowed)"
+        - "The subtask status is set to FAIL"
+        - "No success status, completion timestamp, or 'done' marker is written for the subtask"
+    primary_oracle:
+      type: deterministic
+      artifact: "Unit test stubs publish to raise; asserts exception propagates, subtask.status == FAIL, no success fields written"
+    thresholds:
+      silent_publish_failures_allowed: 0
+    fault_model_refs: [F-S6-PUBLISH-SILENT]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+    test_ids: [T-S6-010]
+
+  # =============================================================================
+  # END-TO-END BIG-BUILD (GOLDEN PATH)
+  # =============================================================================
+
+  - criterion_id: AC-S6-011
+    name: "Full big-build: plan produced, subtasks executed in one session, commits verified from git, published"
+    evidence_class: "[integration]"
+    authority_refs: [R-doc05-S6-01, R-doc05-S6-08, R-doc05-S6-10, R-doc05-S6-11, R-doc05-S6-12]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "A Workroom big-build request and a real (or realistic sandbox-emulated) git repository"
+      when: "The full plan→execute→checkpoint→publish pipeline runs end-to-end"
+      then:
+        - "A 4-5 subtask plan is produced and stored"
+        - "All subtasks execute within a single resumed SDK session"
+        - "Each subtask's completion is verified by reading commits from headBefore..HEAD"
+        - "captureAndPublishCommits succeeds for each subtask"
+        - "Final build status is SUCCESS with a non-empty commit list per subtask"
+    primary_oracle:
+      type: deterministic
+      artifact: "Integration test with real git sandbox; assert plan.subtask_count in [4,5]; all subtasks session_id identical; each subtask.commits non-empty from git range; publish called and succeeded for each subtask; overall status == SUCCESS"
+    thresholds:
+      subtask_count_min: 4
+      subtask_count_max: 5
+      publish_failures_allowed: 0
+      subtasks_with_empty_commits_allowed: 0
+    fault_model_refs: [F-S6-PLAN-SHAPE, F-S6-NEW-SESSION, F-S6-NARRATION-TRUST, F-S6-PUBLISH-SILENT]
+    dependency_class: fs:git
+    mock_boundary: "SDK mocked with scripted responses; git operations run against real tmp repo"
+    golden_path: true
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: integration}
+      - {tier: e2e}
+    test_ids: [T-S6-011]
+
+  - criterion_id: AC-S6-011-NEG
+    name: "NEG: publish failure during full pipeline causes build FAIL, not partial SUCCESS"
+    evidence_class: "[adversarial]"
+    authority_refs: [R-doc05-S6-12]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "A full pipeline run where publish fails on subtask 2 of 4"
+      when: "The pipeline completes"
+      then:
+        - "Build status is FAIL (not partial SUCCESS)"
+        - "Subtasks 1 (before failure) have status DONE; subtask 2 has status FAIL; subtasks 3-4 are not executed"
+        - "No success marker is emitted for subtask 2"
+    primary_oracle:
+      type: deterministic
+      artifact: "Integration test; stub publish to throw on second subtask; assert overall status=FAIL, subtask[1].status=DONE, subtask[2].status=FAIL, subtasks[3,4] not started"
+    thresholds: {}
+    fault_model_refs: [F-S6-PUBLISH-SILENT]
+    dependency_class: fs:git
+    mock_boundary: "git real tmp repo; SDK mocked; publish stubbed to throw on call 2"
+    golden_path: false
+    verification_ladder:
+      - {tier: unit}
+      - {tier: integration}
+      - {tier: negative}
+    test_ids: [T-S6-011-NEG]
+
+  # =============================================================================
+  # PROGRESS STREAMING
+  # =============================================================================
+
+  - criterion_id: AC-S6-012
+    name: "tool_start and commit envelopes streamed to caller during subtask execution"
+    evidence_class: "[unit-property]"
+    authority_refs: [R-doc05-S6-13]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "A subtask execution where the agent invokes tools and makes 2 commits"
+      when: "The progress stream is consumed"
+      then:
+        - "At least one tool_start progress envelope is emitted during the subtask turn"
+        - "Exactly 2 commit progress envelopes are emitted after the turn (one per commit)"
+        - "Envelopes are received by the caller in-order: tool_start events before commit events"
+    primary_oracle:
+      type: deterministic
+      artifact: "Unit test with stubbed stream_deltas that yields tool_start events; mocked list_commits returns 2 commits; assert progress collector receives ≥1 tool_start envelope and exactly 2 commit envelopes"
+    thresholds:
+      tool_start_envelopes_min: 1
+      commit_envelopes_per_subtask: "== commits_in_headBefore..HEAD"
+    fault_model_refs: [F-S6-NO-STREAM]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: true
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: e2e}
+    test_ids: [T-S6-012]
+
+  # =============================================================================
+  # GATED REPLAN
+  # =============================================================================
+
+  - criterion_id: AC-S6-013
+    name: "Gated replan fires after each subtask iff plan has ≥ 3 steps; skipped for < 3 steps"
+    evidence_class: "[unit-property]"
+    authority_refs: [R-doc05-S6-14]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "Two build runs: one with a 2-step plan and one with a 4-step plan"
+      when: "The first subtask completes in each run"
+      then:
+        - "In the 4-step run: a replan turn is issued (max_turns=1, no tools) after the subtask"
+        - "In the 2-step run: no replan turn is issued"
+    primary_oracle:
+      type: deterministic
+      artifact: "Unit test records replan_turn_issued flag; run with plan_length=2 asserts flag false; run with plan_length=4 asserts flag true after subtask 1"
+    thresholds:
+      replan_fires_on_short_plan_allowed: 0
+    fault_model_refs: [F-S6-REPLAN-SPURIOUS]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+    test_ids: [T-S6-013]
+
+  - criterion_id: AC-S6-014
+    name: "Gated replan is ID-preserving: existing subtask ids and state preserved by title match"
+    evidence_class: "[unit-property]"
+    authority_refs: [R-doc05-S6-15]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "A running plan where subtask 1 is DONE and a replan response renames subtask 2's title but keeps it recognizable"
+      when: "The replan response is merged into the live plan"
+      then:
+        - "Subtask 1 retains its id and DONE status (not reset)"
+        - "Subtask 2 is matched by title and its id is preserved"
+        - "No new ids are minted for subtasks that match by title"
+    primary_oracle:
+      type: deterministic
+      artifact: "Unit test: run replan merge with stub response; assert subtask[0].id unchanged, status==DONE; subtask[1].id unchanged"
+    thresholds:
+      id_reassignments_on_replan_allowed: 0
+      done_status_resets_on_replan_allowed: 0
+    fault_model_refs: [F-S6-REPLAN-ID-RESET]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+    test_ids: [T-S6-014]
+
+  - criterion_id: AC-S6-015
+    name: "Gated replan caps remaining subtasks at 8; plan with > 8 remaining is rejected"
+    evidence_class: "[unit-property]"
+    authority_refs: [R-doc05-S6-16]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "A replan response proposing 9 or more remaining (incomplete) subtasks"
+      when: "The replan merge function runs"
+      then:
+        - "The oversized plan is rejected"
+        - "The existing plan is retained unchanged"
+        - "No subtasks beyond 8 remaining are accepted"
+    primary_oracle:
+      type: deterministic
+      artifact: "Unit test stubs replan response with 9 remaining subtasks; assert existing plan retained (subtask count unchanged)"
+    thresholds:
+      remaining_subtasks_max: 8
+    fault_model_refs: [F-S6-REPLAN-OVERFLOW]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+    test_ids: [T-S6-015]
+
+  - criterion_id: AC-S6-016
+    name: "Gated replan parse failure retains existing plan; build continues uninterrupted"
+    evidence_class: "[unit-property]"
+    authority_refs: [R-doc05-S6-17]
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "A gated-replan turn that returns unparseable JSON"
+      when: "The replan merge function runs"
+      then:
+        - "The existing plan is retained unchanged"
+        - "No exception propagates to the build loop"
+        - "The build continues to the next subtask"
+    primary_oracle:
+      type: deterministic
+      artifact: "Unit test stubs replan response with invalid JSON; assert plan object identical before/after, no exception raised, subtask execution continues"
+    thresholds:
+      build_aborts_on_replan_parse_failure_allowed: 0
+    fault_model_refs: [F-S6-REPLAN-ABORT]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+    test_ids: [T-S6-016]
+
+  - criterion_id: AC-S6-017
+    name: "Mid-task human correction applied via gated-replan mechanism; no session restart"
+    evidence_class: "[unit-property]"
+    authority_refs: [R-doc05-S6-18]
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "A human correction message arriving during subtask 2 of 4"
+      when: "The correction is processed"
+      then:
+        - "The correction is injected into the gated-replan turn prompt"
+        - "The live plan is updated to reflect the correction (title/verify/done_when may change)"
+        - "The SDK session id remains the same (no restart)"
+        - "Execution resumes from subtask 3 with the updated plan"
+    primary_oracle:
+      type: deterministic
+      artifact: "Unit test: inject human_correction into execution state before subtask 2 completes; assert replan prompt contains correction text, live plan updated, session_id unchanged post-replan"
+    thresholds:
+      session_restarts_on_human_correction_allowed: 0
+    fault_model_refs: [F-S6-REPLAN-ABORT]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+    test_ids: [T-S6-017]
+
+  # =============================================================================
+  # EXPANSION GATE
+  # =============================================================================
+
+  - criterion_id: AC-S6-018
+    name: "V0: subtasks execute sequentially; withProjectCommitLock absent from V0 code paths"
+    evidence_class: "[static]"
+    authority_refs: [R-doc05-S6-19]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "The V0 big-build execution loop source"
+      when: "The source is inspected statically"
+      then:
+        - "No cross-worker fan-out or parallel subtask execution paths exist in V0"
+        - "withProjectCommitLock is absent from V0 code (deferred to Expansion §5)"
+        - "Subtasks are dispatched in a sequential for-loop or equivalent"
+    primary_oracle:
+      type: static_analysis
+      artifact: "grep for 'withProjectCommitLock' in V0 execution source returns 0 matches; AST confirms subtask dispatch is sequential (no asyncio.gather or parallel fan-out over subtask list)"
+    thresholds:
+      commit_lock_references_in_v0_allowed: 0
+      parallel_fan_out_paths_in_v0_allowed: 0
+    fault_model_refs: []
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+    test_ids: [T-S6-018]
+
+  # =============================================================================
+  # SDK CONTEXT-EDITING
+  # =============================================================================
+
+  - criterion_id: AC-S6-019
+    name: "SDK context-editing enabled on multi-subtask builds; disabled on single-turn quick asks"
+    evidence_class: "[unit-property]"
+    authority_refs: [R-doc05-S6-20, R-doc05-S6-21]
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "Two code paths: (a) a multi-subtask build session, (b) a single quick-ask turn"
+      when: "ClaudeAgentOptions is constructed for each path"
+      then:
+        - "In path (a): context-editing option is enabled in the SDK options"
+        - "In path (b): context-editing option is absent or disabled"
+    primary_oracle:
+      type: deterministic
+      artifact: "Unit test for path (a): assert sdk_options.context_editing == enabled; for path (b): assert sdk_options has no context_editing or context_editing == disabled"
+    thresholds:
+      multi_subtask_builds_without_context_editing_allowed: 0
+    fault_model_refs: [F-S6-CONTEXT-OVERFLOW]
+    dependency_class: vendor:claude-sdk
+    mock_boundary: "SDK not started; only options object construction tested"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: reality}
+    test_ids: [T-S6-019]
+
+  - criterion_id: AC-S6-019-NEG
+    name: "NEG: multi-subtask build without context-editing overflows context on large history"
+    evidence_class: "[adversarial]"
+    authority_refs: [R-doc05-S6-20]
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "A patched multi-subtask build with context-editing disabled and a large stale tool_result history"
+      when: "The 5th subtask turn is issued"
+      then:
+        - "The SDK raises a context-window overflow error (or the test harness detects token count > limit)"
+        - "This confirms context-editing is required for long builds"
+    primary_oracle:
+      type: simulation
+      artifact: "Synthetic test: build fake message history with N large tool_result blocks; assert token count exceeds model limit when context-editing disabled; assert it is within limit when enabled"
+    thresholds: {}
+    fault_model_refs: [F-S6-CONTEXT-OVERFLOW]
+    dependency_class: vendor:claude-sdk
+    mock_boundary: "SDK context-editing behavior simulated via token-count estimator"
+    golden_path: false
+    verification_ladder:
+      - {tier: unit}
+      - {tier: negative}
+    test_ids: [T-S6-019-NEG]
+
+  # =============================================================================
+  # §3.14 PLAN ARTIFACT FIELDS
+  # =============================================================================
+
+  - criterion_id: AC-S6-020
+    name: "Plan artifact unit contains files-to-touch, AC-tag, exit-0 verify command, and done-when condition"
+    evidence_class: "[unit-property]"
+    authority_refs: [R-doc05-S6-22]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "A parsed plan artifact with one or more units"
+      when: "Each unit is validated against the §3.14 schema"
+      then:
+        - "files_to_touch is a non-empty list of file paths"
+        - "ac_tag is a non-empty string matching a known acceptance criterion id"
+        - "verify is a non-empty shell command that the system can invoke to obtain an exit code"
+        - "done_when is a non-empty prose condition containing at least one numeric bound"
+    primary_oracle:
+      type: deterministic
+      artifact: "Unit test validates each plan unit against a Pydantic or dataclass schema requiring all four fields; assert zero validation errors across all units"
+    thresholds:
+      units_missing_required_field_allowed: 0
+    fault_model_refs: [F-S6-ARTIFACT-MISSING]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+    test_ids: [T-S6-020]
+
+  - criterion_id: AC-S6-021
+    name: "Multi-step plan posted to chat before execution; silence-window enforced before start"
+    evidence_class: "[unit-property]"
+    authority_refs: [R-doc05-S6-23]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "A big-build plan with 2 or more subtasks"
+      when: "The plan is ready and the execution pipeline starts"
+      then:
+        - "The plan artifact text is posted to the meeting chat before the first subtask query() is issued"
+        - "A silence window elapses (or a human 'go' acknowledgement is received) before execution begins"
+        - "If a veto is received during the silence window, execution does not start"
+    primary_oracle:
+      type: deterministic
+      artifact: "Unit test stubs chat_post and records call order; assert chat_post(plan_text) called before first query(); silence timer mock confirms delay; veto path asserts no query() called"
+    thresholds:
+      plans_executed_without_chat_post_allowed: 0
+    fault_model_refs: [F-S6-NO-HUMAN-GATE]
+    dependency_class: null
+    mock_boundary: null
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+    test_ids: [T-S6-021]
