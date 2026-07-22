@@ -160,8 +160,8 @@ def test_claim_from_adversarial_fields_is_typed(
             assert 0.0 <= inst.said_at_s <= 86_400.0
 
 
-def test_claim_said_at_s_nan_gap_is_a_known_bug() -> None:
-    """REGRESSION PIN — ``said_at_s=NaN`` is (wrongly) accepted (doc03 finding #2).
+def test_claim_said_at_s_nonfinite_is_rejected() -> None:
+    """said_at_s rejects every non-finite offset — NaN/+inf/-inf (doc03 finding #2, FIXED).
 
     The wall-clock guard rejects ``< 0`` and ``> ceiling``, but a NaN compares
     False to both, so it slips through. ``+inf``/``-inf`` are correctly rejected.
@@ -169,9 +169,7 @@ def test_claim_said_at_s_nan_gap_is_a_known_bug() -> None:
     doc03 hardens the validator to reject non-finite offsets, flip this test.
     """
     base = {"text": "x", "speaker": "s", "firmness": "firm", "provenance": "observed"}
-    nan_claim = Claim.model_validate({**base, "said_at_s": float("nan")})
-    assert math.isnan(nan_claim.said_at_s)  # accepted — the gap
-    for rejected in (float("inf"), float("-inf")):
+    for rejected in (float("nan"), float("inf"), float("-inf")):
         with pytest.raises(ValidationError):
             Claim.model_validate({**base, "said_at_s": rejected})
 
@@ -351,8 +349,8 @@ def test_coalesce_empty_is_empty() -> None:
     assert coalesce([]) == []
 
 
-def test_coalesce_token_cap_split_overshoots_time_cap_known_bug() -> None:
-    """REGRESSION PIN — a token-cap split can blow the 45s time cap (doc03 finding #1).
+def test_coalesce_token_cap_split_honours_time_cap() -> None:
+    """A token-cap split honours the 45s time cap too (doc03 finding #1, FIXED).
 
     ``feed()`` checks the token cap BEFORE the time cap, and the token-split
     apportions duration by token fraction. So a single 1,201-token / 10,000-second
@@ -364,10 +362,9 @@ def test_coalesce_token_cap_split_overshoots_time_cap_known_bug() -> None:
     """
     over = TranscriptSegment("a", "x", 0.0, 10_000.0, WINDOW_TOKEN_CAP + 1)
     windows = coalesce([over])
-    head = windows[0]
-    assert head.boundary_type is BoundaryType.TOKEN_CAP
-    assert head.token_count <= WINDOW_TOKEN_CAP          # token cap held
-    assert head.duration_s > WINDOW_TIME_CAP_S * 100     # time cap grossly exceeded — the bug
+    for w in windows:
+        assert w.token_count <= WINDOW_TOKEN_CAP          # token cap held
+        assert w.duration_s <= WINDOW_TIME_CAP_S + 1e-6   # time cap now honoured (fixed)
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +467,8 @@ def test_fold_all_is_deterministic(rows: list[dict[str, object]]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# FINDINGS — real doc03 robustness gaps these properties surfaced. Neither is a
+# FINDINGS — real doc03 robustness gaps these properties surfaced (BOTH NOW FIXED in
+# doc03 commit a5f18e9; the pins above assert the corrected behavior). Neither was a
 # crash (no uncontrolled exception escapes), so the suite is GREEN; both are
 # pinned by an explicit regression test above so they stay visible until fixed.
 #
