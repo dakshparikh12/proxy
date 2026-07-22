@@ -75,10 +75,10 @@ EOF
         exit 1
     fi
 
-    # Run the acceptance cmd — append -p no:cacheprovider
+    # Run the acceptance cmd — via bash -c so embedded quotes in the -k pattern
+    # (e.g. -k "a or b") are honored by the shell instead of reaching pytest literally.
     echo "Running: uv run $CMD -p no:cacheprovider"
-    # shellcheck disable=SC2086
-    uv run $CMD -p no:cacheprovider
+    bash -c "uv run $CMD -p no:cacheprovider"
     CMD_RC=$?
 
     if [[ $CMD_RC -eq 5 ]]; then
@@ -326,11 +326,10 @@ EOF
         C8_STATUS="DEFERRED"
         OVERALL_DEFERRED=$((OVERALL_DEFERRED + 1))
     else
-        # Step 1: run the ORIGINAL cmd and assert it exits 0 (real green)
-        # Capture exit code explicitly before the if construct (bash 3.2: $? inside
-        # `if ! cmd; then` reflects the negated result, not the raw cmd exit code).
-        # shellcheck disable=SC2086
-        uv run $REAL_CMD -p no:cacheprovider -p no:testmon > /tmp/done_check_c8_orig.txt 2>&1
+        # Step 1: run the ORIGINAL cmd and assert it exits 0 (real green).
+        # via bash -c so embedded -k quotes are honored. Capture exit code explicitly
+        # (bash 3.2: $? inside `if ! cmd` reflects the negated result, not the raw code).
+        bash -c "uv run $REAL_CMD -p no:cacheprovider -p no:testmon" > /tmp/done_check_c8_orig.txt 2>&1
         ORIG_RC=$?
         if [[ $ORIG_RC -ne 0 ]]; then
             if [[ $ORIG_RC -eq 5 ]]; then
@@ -343,8 +342,7 @@ EOF
         else
             # Step 2: run the MUTATED cmd and assert nonzero
             MUTATED_CMD="${REAL_CMD} -k NOPE_MUTATION_SPOTCHECK_XYZ_IMPOSSIBLE"
-            # shellcheck disable=SC2086
-            if uv run $MUTATED_CMD -p no:cacheprovider -p no:testmon > /tmp/done_check_c8.txt 2>&1; then
+            if bash -c "uv run $MUTATED_CMD -p no:cacheprovider -p no:testmon" > /tmp/done_check_c8.txt 2>&1; then
                 echo "FAIL (mutated cmd passed — acceptance cmd does not truly bind)"
                 C8_STATUS="FAIL"
                 OVERALL_FAIL=$((OVERALL_FAIL + 1))
