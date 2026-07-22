@@ -8,8 +8,8 @@ scaffold can be imported in the default offline suite without errors.
 import os
 
 # Pinned judge model (Sonnet, no Haiku per build-loop directive §7 / AMENDMENT-01).
-# Update the date suffix when a new stable snapshot is available.
-JUDGE_MODEL: str = "claude-sonnet-4-5-20251001"
+# claude-sonnet-4-6 is the canonical Sonnet seat (AGENTS.md routing table).
+JUDGE_MODEL: str = "claude-sonnet-4-6"
 
 # Cohen's κ floor from BUILD-LOOP §7 / AMENDMENT-01.
 KAPPA_FLOOR: float = 0.6
