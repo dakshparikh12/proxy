@@ -35,7 +35,11 @@ if [[ -z "$ID" || -z "$TASK_ID" || "$ID" == "$TASK_ID" ]]; then
 fi
 
 # ── Run done-check ──────────────────────────────────────────────────────────
-CHECK_OUT=$(./done-check.sh --task "$ID" "$TASK_ID" 2>&1) || true
+# NB: do NOT append `|| true` here — with a command substitution it makes the
+# following `$?` capture the exit of `true` (always 0), so the gate would see
+# every task as green and never block. errexit is not set, so a nonzero
+# done-check does not abort this script; we capture and branch on CHECK_RC.
+CHECK_OUT=$(./done-check.sh --task "$ID" "$TASK_ID" 2>&1)
 CHECK_RC=$?
 
 if [[ $CHECK_RC -eq 0 ]]; then
