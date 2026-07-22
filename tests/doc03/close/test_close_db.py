@@ -36,6 +36,7 @@ _DB_TIER_ENABLED = bool(
     os.environ.get("TEST_DATABASE_URL") and os.environ.get("DOC03_STORE_SPEC_DB")
 )
 pytestmark = [
+    pytest.mark.integration,
     pytest.mark.asyncio,
     pytest.mark.skipif(
         not _DB_TIER_ENABLED,

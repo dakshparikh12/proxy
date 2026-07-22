@@ -167,6 +167,7 @@ def _dump_yaml(path: pathlib.Path) -> str:
     return json.dumps(yaml.safe_load(path.read_text()))
 
 
+@pytest.mark.reality
 @pytest.mark.vcr
 def test_ac_close_01_golden_path_real_vendor() -> None:
     """AC-CLOSE-01 (reality): one real ``generateStructured`` reduce over the folded ledger
@@ -178,6 +179,7 @@ def test_ac_close_01_golden_path_real_vendor() -> None:
     assert final.action_items or final.decisions  # real content extracted
 
 
+@pytest.mark.reality
 @pytest.mark.vcr
 def test_ac_close_03_reality_model_id_is_sonnet_in_cassette() -> None:
     """AC-CLOSE-03 (reality): the transmitted request carries the resolved Sonnet-class
@@ -188,6 +190,7 @@ def test_ac_close_03_reality_model_id_is_sonnet_in_cassette() -> None:
     assert "haiku" not in req["model"].lower()
 
 
+@pytest.mark.reality
 @pytest.mark.vcr
 def test_ac_close_06_reality_generatestructured_surface() -> None:
     """AC-CLOSE-06 (reality): the call is a forced-tool ``generateStructured`` whose
@@ -202,6 +205,7 @@ def test_ac_close_06_reality_generatestructured_surface() -> None:
     assert isinstance(final, FinalNotes)  # re-validated through model_validate
 
 
+@pytest.mark.reality
 @pytest.mark.vcr
 def test_ac_close_11_reality_cost_gt_zero() -> None:
     """AC-CLOSE-11 (reality): ``total_cost_usd`` read off the result is > 0.0 for a real
@@ -210,6 +214,7 @@ def test_ac_close_11_reality_cost_gt_zero() -> None:
     assert cost is not None and cost > 0.0
 
 
+@pytest.mark.reality
 @pytest.mark.vcr
 def test_ac_close_12_reality_dedup_and_conflict_resolution() -> None:
     """AC-CLOSE-12 (reality/eval): the REAL close output over a ledger with a duplicate
@@ -267,6 +272,7 @@ def test_ac_close_12_reality_dedup_and_conflict_resolution() -> None:
 # ===========================================================================
 # INTEGRATION — a real object-versioned GCS bucket (gcs:objects).
 # ===========================================================================
+@pytest.mark.integration
 @requires_gcs
 def test_ac_close_08_real_gcs_create_only_generation() -> None:
     """AC-CLOSE-08 (integration): a real GCS write with ``if_generation_match=0`` creates
@@ -279,6 +285,7 @@ def test_ac_close_08_real_gcs_create_only_generation() -> None:
     assert read_notes_version(bucket, mid, gen).startswith("# Meeting notes")
 
 
+@pytest.mark.integration
 @requires_gcs
 def test_ac_close_14_real_gcs_recovery_precondition() -> None:
     """AC-CLOSE-14 (integration): a SECOND create-only attempt raises the precondition

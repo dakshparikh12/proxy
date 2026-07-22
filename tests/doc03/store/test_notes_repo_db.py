@@ -17,12 +17,12 @@ import uuid
 
 import asyncpg
 import pytest
-
 from db.repos import notes as notes_repo
 
 from .conftest import requires_pg
 
-pytestmark = pytest.mark.asyncio
+# Whole file is db:postgres integration tier — the ladder selects it with -m integration.
+pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 _UNROUTABLE_DSN = "postgresql://proxy@127.0.0.1:1/nonexistent"
 

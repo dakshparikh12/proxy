@@ -31,7 +31,7 @@ from typing import Any
 
 import asyncpg
 import pytest
-
+from db.repos import notes as notes_repo
 from scribe.corrections import (
     AttributionError,
     Correction,
@@ -40,11 +40,10 @@ from scribe.corrections import (
 )
 from scribe.notes_reader import Notes
 from scribe.schema import CloseOp, DecisionStatus, PatchOp, Reversibility
-from db.repos import notes as notes_repo
 
 from .conftest import FailingAcquirer, requires_pg
 
-pytestmark = [pytest.mark.asyncio, requires_pg]
+pytestmark = [pytest.mark.integration, pytest.mark.asyncio, requires_pg]
 
 _T = datetime(2026, 7, 21, 12, 0, tzinfo=timezone.utc)
 

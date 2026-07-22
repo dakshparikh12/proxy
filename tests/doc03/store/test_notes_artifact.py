@@ -14,10 +14,10 @@ from __future__ import annotations
 import ast
 import inspect
 import os
+import uuid
 from datetime import timedelta
 
 import pytest
-
 from scribe import notes_artifact
 from scribe.notes_artifact import (
     NOTES_OBJECT_TEMPLATE,
@@ -162,7 +162,27 @@ def _bucket() -> object:
     return client.get_bucket(os.environ["DOC03_STORE_GCS_BUCKET"])
 
 
+def _unversioned_bucket() -> object:
+    from google.cloud import storage  # lazy: SDK only needed for the live tier
+
+    client = storage.Client()
+    return client.get_bucket(os.environ["DOC03_STORE_GCS_BUCKET_UNVERSIONED"])
+
+
+# AC-STORE-09-NEG needs a bucket with Object Versioning explicitly OFF; the versioned
+# bucket cannot demonstrate history-collapse. Gate on its own env var so the test skips
+# cleanly when only the versioned bucket is provisioned.
+requires_unversioned_gcs = pytest.mark.skipif(
+    os.environ.get("DOC03_STORE_GCS_BUCKET_UNVERSIONED", "").strip() == "",
+    reason=(
+        "integration tier: a real GCS bucket with Object Versioning OFF is not "
+        "available this session; set DOC03_STORE_GCS_BUCKET_UNVERSIONED to run"
+    ),
+)
+
+
 # -- AC-STORE-09 / -NEG -- bucket-level Object Versioning ON --------------------
+@pytest.mark.integration
 @requires_gcs
 def test_store_09_bucket_versioning_enabled() -> None:
     """T-STORE-09: the finalized-notes bucket has native Object Versioning ON."""
@@ -170,12 +190,13 @@ def test_store_09_bucket_versioning_enabled() -> None:
     assert bucket.versioning_enabled is True  # type: ignore[attr-defined]
 
 
-@requires_gcs
+@pytest.mark.integration
+@requires_unversioned_gcs
 def test_store_09neg_versioning_off_loses_prior_generations() -> None:
     """T-STORE-09-NEG: on a no-versioning bucket, overwriting collapses history to
     one generation — the guard that versioning MUST be ON for list/read to work."""
-    bucket = _bucket()
-    mid = "m-store-09neg"
+    bucket = _unversioned_bucket()
+    mid = f"m-store-09neg-{uuid.uuid4().hex}"
     write_finalized_notes(bucket, mid, "first", if_generation_match=None)
     write_finalized_notes(bucket, mid, "second", if_generation_match=None)
     versions = notes_artifact.list_notes_versions(bucket, mid)
@@ -183,12 +204,13 @@ def test_store_09neg_versioning_off_loses_prior_generations() -> None:
 
 
 # -- AC-STORE-10 / -NEG -- create-only + unconditional overwrite ---------------
+@pytest.mark.integration
 @requires_gcs
 def test_store_10_create_only_then_conflict() -> None:
     """T-STORE-10: create-only write succeeds once; a second create-only raises
     NotesGenerationConflictError and the object still holds the first content."""
     bucket = _bucket()
-    mid = "m-store-10"
+    mid = f"m-store-10-{uuid.uuid4().hex}"
     gen1 = write_finalized_notes(bucket, mid, "first", if_generation_match=0)
     assert gen1 > 0
     with pytest.raises(NotesGenerationConflictError):
@@ -196,24 +218,26 @@ def test_store_10_create_only_then_conflict() -> None:
     assert read_notes_version(bucket, mid, gen1) == "first"
 
 
+@pytest.mark.integration
 @requires_gcs
 def test_store_10neg_unconditional_overwrite_does_not_raise() -> None:
     """T-STORE-10-NEG: if_generation_match=None overwrites without raising; a new
     generation is assigned."""
     bucket = _bucket()
-    mid = "m-store-10neg"
+    mid = f"m-store-10neg-{uuid.uuid4().hex}"
     g1 = write_finalized_notes(bucket, mid, "first", if_generation_match=None)
     g2 = write_finalized_notes(bucket, mid, "second", if_generation_match=None)
     assert g2 != g1
 
 
 # -- AC-STORE-11 (integration half) -- generation round-trips as int -----------
+@pytest.mark.integration
 @requires_gcs
 def test_store_11_generation_roundtrips_as_int_not_float() -> None:
     """T-STORE-11 integration: the generation GCS returns is int (never float) and
     round-trips as an exact if_generation_match precondition."""
     bucket = _bucket()
-    mid = "m-store-11"
+    mid = f"m-store-11-{uuid.uuid4().hex}"
     gen = write_finalized_notes(bucket, mid, "v1", if_generation_match=0)
     assert isinstance(gen, int) and not isinstance(gen, float)
     # Exact-match write with the stored generation is accepted (no 412).
@@ -222,12 +246,13 @@ def test_store_11_generation_roundtrips_as_int_not_float() -> None:
 
 
 # -- AC-STORE-12 / -NEG -- list all generations, read any by generation --------
+@pytest.mark.integration
 @requires_gcs
 def test_store_12_list_and_read_versions_by_generation() -> None:
     """T-STORE-12: three writes -> three generations; read G1 gives write1, G3 the
     latest."""
     bucket = _bucket()
-    mid = "m-store-12"
+    mid = f"m-store-12-{uuid.uuid4().hex}"
     g1 = write_finalized_notes(bucket, mid, "write1", if_generation_match=None)
     write_finalized_notes(bucket, mid, "write2", if_generation_match=None)
     g3 = write_finalized_notes(bucket, mid, "write3", if_generation_match=None)
@@ -237,6 +262,7 @@ def test_store_12_list_and_read_versions_by_generation() -> None:
     assert read_notes_version(bucket, mid, g3) == "write3"
 
 
+@pytest.mark.integration
 @requires_gcs
 def test_store_12neg_gcs_fault_degrades_honestly() -> None:
     """T-STORE-12-NEG: a real gcs fault at the seam surfaces (no silent proceed)."""

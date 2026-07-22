@@ -17,9 +17,7 @@ import os
 import uuid
 
 import pytest
-
 from db.repos import notes as notes_repo
-
 from scribe import notes_reader as nr
 
 from .conftest import seed_delta
@@ -41,6 +39,7 @@ _HAVE_TEST_DB = bool(os.environ.get("TEST_DATABASE_URL", "").strip())
 _SPEC_SCHEMA_AVAILABLE = bool(os.environ.get("DOC03_STORE_SPEC_DB", "").strip())
 
 pytestmark = [
+    pytest.mark.integration,
     pytest.mark.asyncio,
     pytest.mark.skipif(
         not (_HAVE_TEST_DB and _SPEC_SCHEMA_AVAILABLE),

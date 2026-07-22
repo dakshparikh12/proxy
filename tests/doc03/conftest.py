@@ -22,6 +22,20 @@ import pytest
 
 _CASSETTE_DIR = pathlib.Path(__file__).resolve().parent.parent / "cassettes"
 
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Register the ``integration`` marker locally.
+
+    The verification ladder selects the db:postgres / gcs:objects tier with
+    ``pytest -m integration``. ``reality``/``negative``/``e2e`` are registered in
+    the root ``pyproject.toml``; ``integration`` is registered here (this conftest
+    lives under ``tests/``) so a doc03 run stays free of unknown-marker warnings.
+    """
+    config.addinivalue_line(
+        "markers",
+        "integration: real db:postgres / gcs:objects tier (skips when its env is absent)",
+    )
+
 # Superset of every credential header the Anthropic SDK (and the other Proxy vendors)
 # may send, scrubbed to REDACTED before anything is persisted to a cassette.
 _SENSITIVE_HEADERS: list[str] = [

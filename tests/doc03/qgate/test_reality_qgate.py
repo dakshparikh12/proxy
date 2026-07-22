@@ -141,6 +141,7 @@ def _cassette_request_models(test_name: str) -> list[str]:
 # ===========================================================================
 # REALITY — always-check triggers fire a real Haiku entailment call at rate=0.0.
 # ===========================================================================
+@pytest.mark.reality
 @pytest.mark.vcr
 def test_qgate_02_reality_decision_final_entailment_over_real_seam() -> None:
     """AC-QGATE-02 (reality): a ``decision.status=final`` entry is ALWAYS gated even at
@@ -153,6 +154,7 @@ def test_qgate_02_reality_decision_final_entailment_over_real_seam() -> None:
     assert outcome.entailment is not None and isinstance(outcome.entailment.grounded, bool)
 
 
+@pytest.mark.reality
 @pytest.mark.vcr
 def test_qgate_03_reality_irreversible_entailment_over_real_seam() -> None:
     """AC-QGATE-03 (reality): an irreversible decision is always gated at rate=0.0 — one
@@ -165,6 +167,7 @@ def test_qgate_03_reality_irreversible_entailment_over_real_seam() -> None:
     assert gate.gate_calls == 1
 
 
+@pytest.mark.reality
 @pytest.mark.vcr
 def test_qgate_04_reality_contradicts_entailment_over_real_seam() -> None:
     """AC-QGATE-04 (reality): an entry carrying a ``contradicts`` link is always gated at
@@ -177,6 +180,7 @@ def test_qgate_04_reality_contradicts_entailment_over_real_seam() -> None:
     assert gate.gate_calls == 1
 
 
+@pytest.mark.reality
 @pytest.mark.vcr
 def test_qgate_09_reality_miss_escalates_to_real_sonnet_over_same_window() -> None:
     """AC-QGATE-09 (reality): a real Haiku MISS (grounded=false on a window/entry mismatch)
@@ -196,6 +200,7 @@ def test_qgate_09_reality_miss_escalates_to_real_sonnet_over_same_window() -> No
     assert reex_calls == [_ESCALATION_MODEL]  # the escalation ran on the Sonnet tier, at the real call
 
 
+@pytest.mark.reality
 @pytest.mark.vcr
 def test_qgate_10_reality_sonnet_correction_applied_as_attributed_patch() -> None:
     """AC-QGATE-10 (reality): the real Sonnet correction is applied through the normal
@@ -210,6 +215,7 @@ def test_qgate_10_reality_sonnet_correction_applied_as_attributed_patch() -> Non
         assert applier.attributions[0]  # attributed to the gate author, not anonymous
 
 
+@pytest.mark.reality
 @pytest.mark.vcr
 def test_qgate_11_reality_miss_record_written_to_transcript_plane() -> None:
     """AC-QGATE-11 (reality): a real miss writes exactly one quality-gate-miss record to
@@ -225,6 +231,7 @@ def test_qgate_11_reality_miss_record_written_to_transcript_plane() -> None:
 # ===========================================================================
 # NEGATIVE — resolved model, no-escalation-on-pass, empty/failed re-extraction.
 # ===========================================================================
+@pytest.mark.negative
 @pytest.mark.vcr
 def test_qgate_07neg_reality_call_uses_resolved_model_not_fallback() -> None:
     """AC-QGATE-07-NEG (reality): the entailment request actually transmitted carries the
@@ -236,6 +243,7 @@ def test_qgate_07neg_reality_call_uses_resolved_model_not_fallback() -> None:
     assert models and models[0] == _GATE_MODEL  # the real request used the resolved seat
 
 
+@pytest.mark.negative
 @pytest.mark.vcr
 def test_qgate_08neg_reality_grounded_true_no_escalation() -> None:
     """AC-QGATE-08-NEG (reality): when the real entailment returns grounded=true, the entry
@@ -247,6 +255,7 @@ def test_qgate_08neg_reality_grounded_true_no_escalation() -> None:
     assert outcome.escalated is False and outcome.correction_applied is False and outcome.miss_recorded is False
 
 
+@pytest.mark.negative
 @pytest.mark.vcr
 def test_qgate_09neg_reality_grounded_true_zero_sonnet_calls() -> None:
     """AC-QGATE-09-NEG (reality): a grounded pass makes ZERO Sonnet re-extraction calls."""
@@ -263,6 +272,7 @@ def test_qgate_09neg_reality_grounded_true_zero_sonnet_calls() -> None:
     assert reex_calls == []  # re-extractor never invoked on a clean pass
 
 
+@pytest.mark.negative
 @pytest.mark.vcr
 def test_qgate_10neg_reality_empty_sonnet_result_no_patch() -> None:
     """AC-QGATE-10-NEG (reality): a real miss whose Sonnet re-extraction yields no
@@ -279,6 +289,7 @@ def test_qgate_10neg_reality_empty_sonnet_result_no_patch() -> None:
     assert applier.patches == []  # nothing applied when Sonnet returns empty
 
 
+@pytest.mark.negative
 @pytest.mark.vcr
 def test_qgate_11neg_reality_double_failure_still_logs_miss() -> None:
     """AC-QGATE-11-NEG (reality): even when Sonnet produces no correction (double failure),

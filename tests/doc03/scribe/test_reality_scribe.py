@@ -55,6 +55,7 @@ _ATTACK_WINDOW = a_window(text=_INJECTION_TEXT, speaker="Mallory")
 # ===========================================================================
 # REALITY — real seam + real client, recorded vendor response.
 # ===========================================================================
+@pytest.mark.reality
 @pytest.mark.vcr
 def test_scribe_01_reality_one_call_structured_delta_out() -> None:
     """AC-SCRIBE-01 (reality): ONE real ``messages.create`` round-trip through the true
@@ -66,6 +67,7 @@ def test_scribe_01_reality_one_call_structured_delta_out() -> None:
         assert op.op in {"add", "patch", "close"}  # real response parsed into the schema
 
 
+@pytest.mark.reality
 @pytest.mark.vcr
 def test_scribe_02_reality_two_breakpoints_over_real_seam() -> None:
     """AC-SCRIBE-02 (reality): the request that actually round-trips carries EXACTLY two
@@ -81,6 +83,7 @@ def test_scribe_02_reality_two_breakpoints_over_real_seam() -> None:
     assert delta is not None
 
 
+@pytest.mark.reality
 @pytest.mark.vcr
 def test_scribe_13_reality_injection_recorded_as_claim_not_obeyed() -> None:
     """AC-SCRIBE-13 (reality): an injection in the transcript is confined to the fenced
@@ -98,6 +101,7 @@ def test_scribe_13_reality_injection_recorded_as_claim_not_obeyed() -> None:
         assert op.op in {"add", "patch", "close"}  # forced tool held; no free-text jailbreak
 
 
+@pytest.mark.reality
 @pytest.mark.vcr
 def test_scribe_15_reality_usage_and_cache_accounting_over_real_seam() -> None:
     """AC-SCRIBE-15 (reality): the real response surfaces full token + cache accounting
@@ -131,6 +135,7 @@ def _no_retry_client():
     return anthropic_client(max_retries=0)
 
 
+@pytest.mark.negative
 @pytest.mark.vcr
 def test_scribe_01neg_reality_5xx_degrades_honestly() -> None:
     """AC-SCRIBE-01-NEG: a real 500 from the vendor surfaces as a typed AnthropicError
@@ -139,6 +144,7 @@ def test_scribe_01neg_reality_5xx_degrades_honestly() -> None:
         _run(scribe_call(a_meeting(), _ROLLING, _WINDOW, call_external=call_external, client=_no_retry_client()))
 
 
+@pytest.mark.negative
 @pytest.mark.vcr
 def test_scribe_02neg_reality_error_no_partial_delta() -> None:
     """AC-SCRIBE-02-NEG: on a vendor error, ZERO deltas are emitted — the error raises
@@ -155,6 +161,7 @@ def test_scribe_02neg_reality_error_no_partial_delta() -> None:
     assert delta_holder == []  # nothing was returned before the error surfaced
 
 
+@pytest.mark.negative
 @pytest.mark.vcr
 def test_scribe_13neg_reality_injection_path_degrades_honestly() -> None:
     """AC-SCRIBE-13-NEG: the injection path is not special — a vendor error on an
@@ -163,6 +170,7 @@ def test_scribe_13neg_reality_injection_path_degrades_honestly() -> None:
         _run(scribe_call(a_meeting(), _ROLLING, _ATTACK_WINDOW, call_external=call_external, client=_no_retry_client()))
 
 
+@pytest.mark.negative
 @pytest.mark.vcr
 def test_scribe_15neg_reality_latency_path_degrades_honestly() -> None:
     """AC-SCRIBE-15-NEG: when the real seam errors, the direct usage/latency path

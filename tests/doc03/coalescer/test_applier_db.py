@@ -7,7 +7,9 @@ SKIP it — never fake a pass on a stubbed DB.
 
 The oracles below are written against the production ``scribe.apply_delta`` seam
 (``services/scribe/src/scribe/notes.py``: the note-delta append AND the
-``pending -> comprehended`` flip in ONE transaction) so they are integration-tier PLACEHOLDERS to be authored against the real Postgres seam (apply_note_delta(db, segment_id, delta)) once a database is available
+``pending -> comprehended`` flip in ONE transaction) so they are integration-tier
+PLACEHOLDERS to be authored against the real Postgres seam
+(apply_note_delta(db, segment_id, delta)) once
 a real Postgres is available. Two structural (static) checks that do NOT need a live
 DB run unconditionally: the single-writer-per-meeting invariant is enforced by the
 serial pipeline's shape, and the pipeline calls the applier exactly once per window.
@@ -69,6 +71,7 @@ def test_coal_15neg_single_writer_structural_no_concurrent_apply_path() -> None:
     assert fanout_hits == [], f"fan-out call on the apply path: {fanout_hits}"
 
 
+@pytest.mark.integration
 @_PG_SKIP
 def test_coal_15neg_concurrent_applier_writes_rejected_real_db() -> None:
     # Real-db fault-injection negative: attempt two concurrent applies on the same
@@ -79,6 +82,7 @@ def test_coal_15neg_concurrent_applier_writes_rejected_real_db() -> None:
 # ---------------------------------------------------------------------------
 # AC-COAL-14 — dropped window recorded as a comprehension gap (real db).
 # ---------------------------------------------------------------------------
+@pytest.mark.integration
 @_PG_SKIP
 def test_coal_14_dropped_span_recorded_as_comprehension_gap() -> None:
     # after drop: assert transcript_segments row for the span has
@@ -86,6 +90,7 @@ def test_coal_14_dropped_span_recorded_as_comprehension_gap() -> None:
     raise AssertionError("requires real Postgres")
 
 
+@pytest.mark.integration
 @_PG_SKIP
 def test_coal_14neg_no_gap_entry_when_window_succeeds() -> None:
     # after successful apply: status=='comprehended' and gap_entry_written==false.
@@ -95,6 +100,7 @@ def test_coal_14neg_no_gap_entry_when_window_succeeds() -> None:
 # ---------------------------------------------------------------------------
 # AC-COAL-15 — add mints new id; patch supersedes-not-erases prior value (real db).
 # ---------------------------------------------------------------------------
+@pytest.mark.integration
 @_PG_SKIP
 def test_coal_15_add_mints_new_id_patch_supersedes_prior_value() -> None:
     # after add: entry_count += 1 and new id unique; after patch: E1.value==new,
@@ -105,12 +111,14 @@ def test_coal_15_add_mints_new_id_patch_supersedes_prior_value() -> None:
 # ---------------------------------------------------------------------------
 # AC-COAL-16 — a fact stated N times is one entry patched, not N rows (real db).
 # ---------------------------------------------------------------------------
+@pytest.mark.integration
 @_PG_SKIP
 def test_coal_16_repeated_fact_folds_to_one_entry() -> None:
     # 50-repetition fixture: notes.entries_for_fact_X == 1, no duplicate rows.
     raise AssertionError("requires real Postgres")
 
 
+@pytest.mark.integration
 @_PG_SKIP
 def test_coal_16neg_two_distinct_facts_stay_two_entries() -> None:
     # F1 and F2 each once: total_entries == 2; patch-in-place doesn't collapse them.
@@ -120,6 +128,7 @@ def test_coal_16neg_two_distinct_facts_stay_two_entries() -> None:
 # ---------------------------------------------------------------------------
 # AC-COAL-17 — delta append AND pending->comprehended flip in ONE tx (real db).
 # ---------------------------------------------------------------------------
+@pytest.mark.integration
 @_PG_SKIP
 def test_coal_17_append_and_flip_in_one_transaction() -> None:
     # intercept the Postgres transaction boundary; assert exactly ONE commit
@@ -128,6 +137,7 @@ def test_coal_17_append_and_flip_in_one_transaction() -> None:
     raise AssertionError("requires real Postgres")
 
 
+@pytest.mark.integration
 @_PG_SKIP
 def test_coal_17neg_crash_mid_apply_rolls_back_both() -> None:
     # inject a crash after the delta INSERT, before the flip; after rollback:
@@ -139,6 +149,7 @@ def test_coal_17neg_crash_mid_apply_rolls_back_both() -> None:
 # ---------------------------------------------------------------------------
 # AC-COAL-18 — pending window reprocessed exactly once, no double-count (real db).
 # ---------------------------------------------------------------------------
+@pytest.mark.integration
 @_PG_SKIP
 def test_coal_18_pending_window_reprocessed_exactly_once() -> None:
     # after re-claim: status=='comprehended' AND notes_entry_count_delta==1;
@@ -146,6 +157,7 @@ def test_coal_18_pending_window_reprocessed_exactly_once() -> None:
     raise AssertionError("requires real Postgres")
 
 
+@pytest.mark.integration
 @_PG_SKIP
 def test_coal_18neg_comprehended_window_not_reprocessed() -> None:
     # re-claim scan predicate selects only status=='pending'; a comprehended
