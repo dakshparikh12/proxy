@@ -29,9 +29,6 @@ for a in "$@"; do [ "$a" = "--redteam" ] && REDTEAM=1; done
 if [ -z "$DOC" ] || [ "$DOC" = "--redteam" ]; then
   echo "usage: $0 <doc> [--redteam]   (e.g. $0 doc02)"; exit 2
 fi
-if [ "$DOC" = "doc03" ]; then
-  echo "refusing: doc03 is built live in a separate session; not registered here." >&2; exit 2
-fi
 
 PY="${PROXY_PY:-$ROOT/.venv/bin/python}"
 TOOLS_PY="$HERE/tools/.venv/bin/python"

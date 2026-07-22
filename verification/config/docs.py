@@ -66,6 +66,15 @@ REGISTRY: dict[str, Doc] = {
         customer_facing=True,
         summary="Join FSM, Recall hearing, Cartesia speech, chat, turn-taking, failure paths.",
     ),
+    "doc03": Doc(
+        key="doc03",
+        title="Meeting Understanding (the Notes)",
+        spec_path="product/v0-spec/03-MEETING-UNDERSTANDING.md",
+        packages=("scribe", "db"),
+        test_dir="tests/doc03",
+        customer_facing=True,
+        summary="Coalescer + serial pipeline, Scribe micro-call, note schema, sampled quality gate, dual storage plane, cross-session read, referent matcher, event emitter, live corrections, close pass.",
+    ),
 }
 
 ALL_KEYS = tuple(REGISTRY.keys())
