@@ -1,0 +1,380 @@
+# OPS.requirements.yaml — Doc 04 (Proxy Orchestrator) — §3.8 (Reconcile Sweep) + §3.9 (ManagedResource / Sandbox Lifecycle)
+# Atomic EARS requirements. Each carries source_location + verbatim source_quote + criticality.
+# ID scheme: R-doc04-OPS-NN
+# Authority document: DOC-04
+#
+# Dependency classes used in paired criteria (per AMBIGUITY RULE: when unsure set non-null):
+#   null         — pure in-process logic (try/except isolation, error collection, structural checks)
+#   db:postgres  — reconcile reads meeting end-status from Postgres
+#   vendor:e2b   — E2B sandbox provision / destroy / health / list calls
+
+# ── §3.8 · reconcile endpoint security ───────────────────────────────────────
+
+- requirement_id: R-doc04-OPS-01
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.8 paragraph 1"
+  source_quote: >
+    One idempotent runReconcileSweep() behind POST /internal/reconcile (mounted outside
+    the auth wall, RECONCILE_TOKEN bearer-gated)
+  normalized_statement: >
+    WHEN a request arrives at POST /internal/reconcile THE SYSTEM SHALL authenticate it
+    via RECONCILE_TOKEN bearer token only; the endpoint SHALL be mounted outside the
+    standard auth wall; any request lacking a valid RECONCILE_TOKEN SHALL be rejected with
+    a 401 response and no reconcile work SHALL be performed.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.8 · prod vs dev scheduling paths ──────────────────────────────────────
+
+- requirement_id: R-doc04-OPS-02
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.8 paragraph 1"
+  source_quote: >
+    prod: Cloud Scheduler hits it every 5min; dev: an in-process interval calls the same
+    function so the two paths can't drift.
+  normalized_statement: >
+    WHEN running in the production environment THE SYSTEM SHALL use Cloud Scheduler to
+    invoke POST /internal/reconcile every 5 minutes; WHEN running in the development
+    environment THE SYSTEM SHALL use an in-process interval that calls the same
+    run_reconcile_sweep() function; both paths SHALL call the identical function so that
+    they cannot drift from each other.
+  requirement_type: operability
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §3.8 · single reconcile function, no duplication ─────────────────────────
+
+- requirement_id: R-doc04-OPS-03
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.8 paragraph 1"
+  source_quote: >
+    dev: an in-process interval calls the same function so the two paths can't drift.
+  normalized_statement: >
+    THE SYSTEM SHALL define exactly one implementation of the reconcile sweep logic in
+    run_reconcile_sweep(); neither the Cloud Scheduler HTTP path nor the in-process dev
+    interval path SHALL contain a separate copy of the sweep steps; both paths SHALL
+    delegate to the shared function.
+  requirement_type: operability
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §3.8 · step isolation: try/except per step ───────────────────────────────
+
+- requirement_id: R-doc04-OPS-04
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.8 paragraph 1 + code block"
+  source_quote: >
+    Each step is isolated in its own try/except — one bad step never aborts the rest.
+  normalized_statement: >
+    WHEN run_reconcile_sweep() is executing THE SYSTEM SHALL wrap each individual step
+    in its own try/except block; an exception raised by any one step SHALL be caught,
+    appended to the errors list, and SHALL NOT abort subsequent steps; all three steps
+    SHALL be attempted regardless of earlier failures.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.8 · run_reconcile_sweep return value ───────────────────────────────────
+
+- requirement_id: R-doc04-OPS-05
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.8 code block"
+  source_quote: >
+    async def run_reconcile_sweep(deps) -> dict:
+        errors: list[str] = []
+        ...
+        return {"errors": errors}
+  normalized_statement: >
+    WHEN run_reconcile_sweep() completes THE SYSTEM SHALL return a dict with exactly
+    the key "errors" mapping to a list of strings; each string SHALL identify the step
+    name and the exception message for that step's failure; WHEN all steps succeed the
+    returned dict SHALL contain an empty list at "errors".
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §3.8 · three ordered steps ────────────────────────────────────────────────
+
+- requirement_id: R-doc04-OPS-06
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.8 code block"
+  source_quote: >
+    ("stale-harnesses", deps.mark_stale_operations_interrupted),   # §3.7 reaper
+    ("meeting-sandboxes", deps.sandbox_orchestrator.reconcile),    # §3.9 TTL/orphan reap
+    ("notes-retention", deps.notes_retention.reconcile),
+  normalized_statement: >
+    WHEN run_reconcile_sweep() executes THE SYSTEM SHALL invoke the three steps in the
+    fixed order: (1) stale-harnesses via deps.mark_stale_operations_interrupted,
+    (2) meeting-sandboxes via deps.sandbox_orchestrator.reconcile, (3) notes-retention
+    via deps.notes_retention.reconcile; no step SHALL be skipped, reordered, or invoked
+    more than once per sweep.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §3.8 · error label includes step name + exception ─────────────────────────
+
+- requirement_id: R-doc04-OPS-07
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.8 code block"
+  source_quote: >
+    errors.append(f"{name}: {e}")
+  normalized_statement: >
+    WHEN a reconcile step raises an exception THE SYSTEM SHALL append a string of the
+    form "{step_name}: {exception_message}" to the errors list; the step name SHALL be
+    the canonical label defined in the step tuple ("stale-harnesses", "meeting-sandboxes",
+    or "notes-retention").
+  requirement_type: observability
+  criticality: P2
+  testability: executable
+  status: qualified
+
+# ── §3.8 · cost-driven vs availability-critical split ────────────────────────
+
+- requirement_id: R-doc04-OPS-08
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.8 paragraph 2 (Split:)"
+  source_quote: >
+    Split: cost-driven reaping (stale harnesses, ended-meeting sandboxes) rides the
+    Scheduler sweep; availability-critical loops — keeping a live meeting's STT/Recall
+    credentials fresh — stay on an in-process interval where a warm instance provably
+    exists (min_instances≥1 for the meeting-serving service).
+  normalized_statement: >
+    THE SYSTEM SHALL place cost-driven reaping steps (stale harnesses, ended-meeting
+    sandboxes) exclusively in the Scheduler sweep; availability-critical loops such as
+    STT/Recall credential refresh SHALL run on an in-process interval on a service with
+    min_instances≥1 and SHALL NOT be placed in the Scheduler sweep.
+  requirement_type: operability
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §3.9 · ensure_running idempotency ────────────────────────────────────────
+
+- requirement_id: R-doc04-OPS-09
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.9 MeetingSandboxLifecycle.ensure_running docstring"
+  source_quote: >
+    Idempotent 'get me a healthy sandbox for this meeting NOW'. provision is idempotent
+    per meeting_id, so a redelivered join can't double-provision.
+  normalized_statement: >
+    WHEN ensure_running() is called for a meeting_id that already has a healthy sandbox
+    THE SYSTEM SHALL return the existing sandbox meta without calling provision(); a
+    second call for the same meeting_id SHALL NOT provision a new sandbox, and at most
+    one sandbox SHALL exist per meeting_id at any point.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.9 · ensure_running: gone/transient → fresh provision ──────────────────
+
+- requirement_id: R-doc04-OPS-10
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.9 MeetingSandboxLifecycle.ensure_running code block"
+  source_quote: >
+    if row is not None:
+        h = await self._provider.health(row.meta)
+        if h.ok:
+            return row.meta
+        # gone/transient → the old sandbox is dead; provision a fresh one (idempotent)
+    meta = await self._provider.provision(await provision_if_missing())
+    await self._repo.upsert(meeting_id, meta)
+    return meta
+  normalized_statement: >
+    WHEN ensure_running() checks an existing sandbox and health() returns gone or
+    transient THE SYSTEM SHALL provision a fresh sandbox (not attempt to restart the
+    dead one) and upsert the new meta to the repo; the fresh provision path SHALL be
+    taken for both gone and transient health states, not only for gone.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.9 · SandboxProvider.provision idempotency ─────────────────────────────
+
+- requirement_id: R-doc04-OPS-11
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.9 SandboxProvider Protocol + inline comment"
+  source_quote: >
+    async def provision(self, spec: "ProvisionSpec") -> "Meta": ...  # idempotent per meeting_id
+  normalized_statement: >
+    WHEN provision() is called with a ProvisionSpec for an already-provisioned meeting_id
+    THE SYSTEM SHALL return the existing sandbox Meta (not create a duplicate); the
+    provider's provision() implementation SHALL be idempotent: multiple calls with the
+    same meeting_id MUST return equivalent Meta objects.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.9 · SandboxProvider.destroy tolerates 404 ────────────────────────────
+
+- requirement_id: R-doc04-OPS-12
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.9 SandboxProvider Protocol + inline comment"
+  source_quote: >
+    async def destroy(self, meta: "Meta") -> None: ...               # tolerates 404 → 'gone'
+  normalized_statement: >
+    WHEN destroy() is called for a sandbox that no longer exists (E2B returns 404)
+    THE SYSTEM SHALL treat the 404 as a 'gone' confirmation and return normally (no
+    exception raised); destroy() SHALL NOT propagate a not-found error to its caller.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.9 · SandboxProvider.health read-only, three states ────────────────────
+
+- requirement_id: R-doc04-OPS-13
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.9 SandboxProvider Protocol + inline comment"
+  source_quote: >
+    async def health(self, meta: "Meta") -> "Health": ...            # ok | transient | gone
+  normalized_statement: >
+    THE SYSTEM SHALL implement health() as a read-only operation that returns one of
+    exactly three Health states: ok, transient, or gone; health() SHALL NOT modify any
+    sandbox state, provision or destroy any resource, or produce side effects beyond
+    reading the sandbox's current status.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §3.9 · reconcile: list, find orphans, destroy ─────────────────────────────
+
+- requirement_id: R-doc04-OPS-14
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.9 MeetingSandboxLifecycle.reconcile docstring + code block"
+  source_quote: >
+    The §3.8 cron: list live sandboxes, destroy any orphaned or past-TTL.
+    for meta in await self._provider.list_sandboxes():
+        if await self._is_orphan_or_past_ttl(meta):   # meeting ended, or age > TTL
+            await self._provider.destroy(meta)         # tolerates 404
+  normalized_statement: >
+    WHEN reconcile() is invoked THE SYSTEM SHALL list all live sandboxes via the provider,
+    evaluate each against the orphan and TTL criteria (meeting ended or age > TTL), and
+    call destroy() for every sandbox that matches; destroy() calls during reconcile SHALL
+    tolerate 404 without aborting the loop.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §3.9 · E2B-native timeout as crash backstop ──────────────────────────────
+
+- requirement_id: R-doc04-OPS-15
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.9 defense 1"
+  source_quote: >
+    E2B-native sandbox timeout = the crash backstop. Set the sandbox's own
+    timeout/maxRunDuration at provision. If the orchestrator dies and never calls
+    destroy, E2B self-reaps the sandbox — no reconcile tick required for correctness.
+  normalized_statement: >
+    WHEN provisioning an E2B sandbox THE SYSTEM SHALL set the E2B-native
+    timeout/maxRunDuration on the sandbox so that E2B will self-reap it if the
+    orchestrator dies without calling destroy; the correctness of sandbox cleanup SHALL
+    NOT depend on the reconcile tick firing; the reconcile cron is a cost optimization only.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.9 · explicit destroy on meeting-end ───────────────────────────────────
+
+- requirement_id: R-doc04-OPS-16
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.9 defense 2"
+  source_quote: >
+    Explicit destroy on meeting-end — the ordered close (§3.16) tears the sandbox down
+    deterministically in the happy path.
+  normalized_statement: >
+    WHEN a meeting ends via the ordered close sequence (§3.16) THE SYSTEM SHALL call
+    destroy() on the meeting's sandbox deterministically; sandbox teardown SHALL occur
+    within the ordered close sequence and SHALL NOT be deferred to the reconcile cron
+    in the happy path.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.9 · no state machine ───────────────────────────────────────────────────
+
+- requirement_id: R-doc04-OPS-17
+  authority_type: canonical_decision
+  authority_document: DOC-04
+  source_location: "§3.9 + CANONICAL-DECISIONS §6"
+  source_quote: >
+    The provisioning/running/stopped/failed state machine, the sliding-TTL under-lock
+    re-check, and the stuck-provision recovery are all CUT (CANONICAL-DECISIONS §6).
+    One meeting, one sandbox; no state machine needed.
+  normalized_statement: >
+    THE SYSTEM SHALL NOT implement a provisioning/running/stopped/failed state machine
+    for sandbox lifecycle management; no code in the sandbox lifecycle path SHALL
+    transition through or check named states of provisioning, running, stopped, or failed;
+    the only three behaviors are: ensure_running (idempotent get-or-provision), destroy
+    (tolerates 404), and reconcile (list → orphan check → destroy).
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §3.9 · reconcile is cost optimization, not correctness ───────────────────
+
+- requirement_id: R-doc04-OPS-18
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.9 paragraph after MeetingSandboxLifecycle code block"
+  source_quote: >
+    The E2B-native timeout means a dropped reconcile tick never leaks a sandbox forever;
+    the cron is a cost optimization (reap sooner), not a correctness requirement.
+  normalized_statement: >
+    THE SYSTEM SHALL be designed such that a dropped or delayed reconcile tick does not
+    result in a permanently leaked sandbox; correctness of sandbox cleanup SHALL be
+    guaranteed by the E2B-native timeout alone; the reconcile cron's sole purpose is
+    cost reduction by reaping sandboxes sooner than the E2B-native timeout would.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §3.9 · health 'gone' → fresh provision (not doomed restart) ──────────────
+
+- requirement_id: R-doc04-OPS-19
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.9 paragraph after MeetingSandboxLifecycle code block"
+  source_quote: >
+    Health that returns 'gone' → provision a fresh sandbox, not a doomed restart.
+  normalized_statement: >
+    WHEN health() returns gone for an existing sandbox THE SYSTEM SHALL provision a
+    fresh sandbox via provision(); THE SYSTEM SHALL NOT attempt to restart, resume, or
+    reconnect to the gone sandbox; a gone health result is terminal for that sandbox
+    instance.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified

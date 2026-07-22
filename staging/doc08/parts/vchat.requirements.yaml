@@ -1,0 +1,549 @@
+# Requirements — Doc 08 Behavior · §2.3 Voice & Chat (how it communicates)
+# Source: product/v0-spec/08-BEHAVIOR.md §2.3
+# ID prefix: R-doc08-VCHAT-NN
+# Authority: DOC-08
+#
+# Scope: all 12 channel rules —
+#   bullet 1  : speak headline / detail in chat (routing rule)
+#   bullet 2  : worst news first (ordering rule)
+#   bullet 3  : everything spoken also posted as text (permanence rule)
+#   bullet 4  : <0.5s acknowledgment (latency rule)
+#   bullet 5  : interrupted → finishes in chat (barge-in completion rule)
+#   bullet 6  : chat receipts + honesty tags (trust-texture rule)
+#   bullet 7  : correcting the record, not the person (social-risk rule)
+#   bullet 8  : name-aware addressing + attribution (roster rule)
+#   bullet 9  : private delivery where dm_available (DM routing rule)
+#   bullet 10 : honest failure lines, never silent (honesty-failure rule)
+#   bullet 11 : three distinct honesties + real handoff name (three-honesties rule)
+#   bullet 12 : belongs to the room (access rule)
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 1 — Speak the headline; detail lives in chat
+# ══════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-VCHAT-01
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 1"
+  source_quote: "Speak the headline; detail lives in chat. Voice carries one or two speakable sentences; anything with links, code, lists, numbers-tables, or receipts lands in chat."
+  normalized_statement: >
+    WHEN Proxy produces a response that contains links, code blocks, lists,
+    numerical tables, or receipts THE SYSTEM SHALL route that structured content
+    exclusively to the chat channel via send_chat() and SHALL NOT include it in
+    the speak() voice turn.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-02
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 1"
+  source_quote: "Voice carries one or two speakable sentences"
+  normalized_statement: >
+    WHEN Proxy issues a speak() voice turn THE SYSTEM SHALL confine the spoken
+    text to one or two natural-language sentences and SHALL NOT exceed that
+    boundary regardless of the complexity of the underlying answer.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-03
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 1"
+  source_quote: "TTS is priced per character"
+  normalized_statement: >
+    WHEN the voice channel synthesizes speech THE SYSTEM SHALL pass only headline
+    sentences to speak(), keeping all detail in send_chat(), so that TTS character
+    cost is bounded to the headline portion only.
+  requirement_type: observability
+  criticality: P2
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 2 — Worst news first
+# ══════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-VCHAT-04
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 2"
+  source_quote: "Worst news first. In any multi-part answer, the blocker, caveat, or risk leads — before the happy summary."
+  normalized_statement: >
+    WHEN Proxy produces a multi-part answer that contains at least one blocker,
+    caveat, or identified risk THE SYSTEM SHALL position that blocker/caveat/risk
+    as the first statement in both the spoken and chat outputs, before any
+    positive summary material.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-05
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 2"
+  source_quote: "Burying the caveat under good news is how it gets missed"
+  normalized_statement: >
+    WHEN a multi-part answer contains no blocker, caveat, or risk THE SYSTEM
+    SHALL NOT invent or prepend a fabricated caveat in order to satisfy a
+    worst-news-first heuristic; the rule governs ordering of real negatives only.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 3 — Everything spoken is also posted as text
+# ══════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-VCHAT-06
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 3"
+  source_quote: "Everything spoken is also posted as text. The permanent record; free, since we synthesize from text."
+  normalized_statement: >
+    WHEN any speak() voice turn is issued THE SYSTEM SHALL post an exact textual
+    copy of the spoken content to chat via send_chat() within the same turn, with
+    no spoken utterance ever lacking a corresponding text record.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-07
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 3"
+  source_quote: "free, since we synthesize from text"
+  normalized_statement: >
+    WHEN the harness mirrors a speak() turn to chat THE SYSTEM SHALL derive the
+    chat text from the same source text passed to speak() without a second model
+    call or additional synthesis, so the text record is a deterministic mirror of
+    the spoken content.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 4 — The <0.5s acknowledgment
+# ══════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-VCHAT-08
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 4"
+  source_quote: "The <0.5s \"on it.\" Every ask gets an instant acknowledgment before the real answer."
+  normalized_statement: >
+    WHEN any ask arrives via voice or chat THE SYSTEM SHALL emit an acknowledgment
+    signal (speak or send_chat) within strictly less than 500 milliseconds of
+    receiving the ask, before the substantive answer begins.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-09
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 4"
+  source_quote: "a half-second ack buys the seconds real work needs"
+  normalized_statement: >
+    WHEN the acknowledgment is emitted THE SYSTEM SHALL emit it independently of
+    the time required to produce the real answer, so that a slow substantive
+    response does not delay the acknowledgment past the 500ms boundary.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-10
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 4"
+  source_quote: "Dead air is the enemy"
+  normalized_statement: >
+    WHEN any ask arrives THE SYSTEM SHALL NEVER allow a zero-acknowledgment turn
+    (dead air), even if the substantive answer is unavailable; the absence of an
+    acknowledgment within 500ms is a violation regardless of system load.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 5 — If interrupted mid-answer, it finishes in chat
+# ══════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-VCHAT-11
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 5"
+  source_quote: "If interrupted mid-answer, it finishes in chat. Barge-in stops the voice instantly (Doc 02); rather than losing the answer or re-interrupting, the remainder posts as text."
+  normalized_statement: >
+    WHEN a barge-in interrupt is detected during a speak() voice turn THE SYSTEM
+    SHALL stop voice output within 200ms (per AGENTS.md Law 3) and SHALL post
+    the remainder of the planned answer to chat via send_chat() with the prefix
+    "(finishing here —)".
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-12
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 5"
+  source_quote: "Nothing is lost, nobody was talked over."
+  normalized_statement: >
+    WHEN a barge-in is handled THE SYSTEM SHALL ensure every content unit planned
+    for the interrupted voice turn appears in the chat remainder with no answer
+    content silently dropped or truncated.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 6 — Chat receipts + honesty tags (trust-texture rule)
+# ══════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-VCHAT-13
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 6"
+  source_quote: "Citations render as file:line"
+  normalized_statement: >
+    WHEN a chat result contains a code citation THE SYSTEM SHALL render it in
+    exactly the format file:line (colon-delimited file path and line number,
+    no other separator or formatting) and SHALL NOT use any other citation form.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-14
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 6"
+  source_quote: "verified results are marked (✓ resolved)"
+  normalized_statement: >
+    WHEN a chat result is grounded in a directly verified, resolved source
+    THE SYSTEM SHALL attach the exact token "✓ resolved" to that result and
+    SHALL NOT apply that mark to unverified, search-derived, or approximated
+    results.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-15
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 6"
+  source_quote: "search-derived results are marked as bounded (~ lower bound — dynamic calls may be missed)"
+  normalized_statement: >
+    WHEN a chat result is derived from search or static analysis rather than a
+    definitive runtime trace THE SYSTEM SHALL attach the exact token "~ lower bound"
+    to that result and SHALL NOT mark it as "✓ resolved".
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-16
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 6"
+  source_quote: "The trust texture is visible, not buried — a reader can tell at a glance whether a claim was proven or approximated."
+  normalized_statement: >
+    WHEN any substantive claim appears in a chat result THE SYSTEM SHALL attach
+    a visible honesty tag ("✓ resolved" or "~ lower bound") to that claim;
+    zero substantive claims in a chat turn may appear without a honesty tag.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 7 — Correcting the record, not the person
+# ══════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-VCHAT-17
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 7"
+  source_quote: "it leads with the receipt, not the verdict, and ends with a genuine out. \"The trace shows 3.4% — am I missing something?\""
+  normalized_statement: >
+    WHEN Proxy contradicts a statement made by a participant THE SYSTEM SHALL
+    present the supporting evidence (receipt) first, deliver no raw verdict
+    phrasing (e.g., "that's wrong", "you are incorrect"), and end the correction
+    with an explicit out-question that invites the participant to add context.
+  requirement_type: ux
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-18
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 7"
+  source_quote: "The provenance does the correcting; the out keeps it two colleagues comparing notes, not a machine scoring a human."
+  normalized_statement: >
+    WHEN Proxy issues a participant correction THE SYSTEM SHALL NOT include any
+    phrasing that scores, judges, or grades the participant, and SHALL frame the
+    entire correction as a provenance comparison between Proxy's record and what
+    was said.
+  requirement_type: ux
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 8 — Name-aware addressing and attribution
+# ══════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-VCHAT-19
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 8"
+  source_quote: "It addresses people by name (\"Sam, the p95 is…\") and attributes what it heard (\"as Priya said earlier…\") — the roster makes this free"
+  normalized_statement: >
+    WHEN Proxy addresses a participant directly in a spoken or chat turn THE
+    SYSTEM SHALL prefix the statement with that participant's name drawn from the
+    session roster (e.g., "Sam, …") and SHALL NOT address an identified participant
+    with a generic pronoun or placeholder.
+  requirement_type: ux
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-20
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 8"
+  source_quote: "attributes what it heard (\"as Priya said earlier…\")"
+  normalized_statement: >
+    WHEN Proxy references a prior statement made by a specific identified
+    participant THE SYSTEM SHALL attribute it using that participant's name
+    from the session roster and SHALL NOT use generic attribution such as
+    "someone said" or "earlier it was mentioned".
+  requirement_type: ux
+  criticality: P2
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 9 — Private where private is right (DM routing)
+# ══════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-VCHAT-21
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 9"
+  source_quote: "Where the platform supports DM (Doc 02 reports per-meeting), personal deliveries — a catch-me-up, an answer someone asked for privately — go to that person alone."
+  normalized_statement: >
+    WHEN a personal delivery is requested AND the per-meeting channel report
+    (from Doc 02) carries dm_available == true THE SYSTEM SHALL send that
+    delivery exclusively as a DM to the requesting participant via
+    send_chat(text, dm=true) and SHALL NOT broadcast it to the full meeting chat.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-22
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 9"
+  source_quote: "Where it doesn't, Proxy says so and offers the public version."
+  normalized_statement: >
+    WHEN a personal delivery is requested AND the per-meeting channel report
+    carries dm_available == false THE SYSTEM SHALL explicitly state that DM is
+    unavailable and offer a public version of the response, NEVER silently
+    posting the private content publicly without first disclosing that DM is
+    unavailable.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-23
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 9"
+  source_quote: "Doc 02 reports per-meeting"
+  normalized_statement: >
+    WHEN the DM routing decision is made THE SYSTEM SHALL read dm_available from
+    the per-meeting channel-report signal (field name: dm_available, type: bool)
+    and SHALL NOT infer DM availability from any other source or assume a default.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 10 — Honest failure lines, never silent
+# ══════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-VCHAT-24
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 10"
+  source_quote: "Honest failure lines, always spoken/posted, never silent: \"I was disconnected 14:03–14:04 — notes have a gap there.\""
+  normalized_statement: >
+    WHEN Proxy experiences a gap, disconnection, or loss of coverage during a
+    meeting THE SYSTEM SHALL announce the gap with the affected time range via
+    speak() and/or send_chat() and SHALL NEVER leave the gap silent or omit the
+    time boundary from the announcement.
+  requirement_type: observability
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-25
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 10"
+  source_quote: "\"I can't see the production dashboard — I have read-only code access. The staging number is 2.1%.\""
+  normalized_statement: >
+    WHEN Proxy lacks access to a requested resource or capability THE SYSTEM SHALL
+    explicitly state the access limitation and, where an alternative partial result
+    is available, offer that partial result with its source named, and SHALL NOT
+    silently substitute a partial result without disclosing the limitation.
+  requirement_type: observability
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-26
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 10"
+  source_quote: "\"That build hit an error — here's what I have and where it stopped.\""
+  normalized_statement: >
+    WHEN a build or tool invocation fails THE SYSTEM SHALL announce the failure
+    with whatever partial output or stopping point is available, and SHALL NEVER
+    silently proceed as if success occurred or discard the partial output.
+  requirement_type: observability
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 11 — Three honesties, said differently
+# ══════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-VCHAT-27
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 11"
+  source_quote: "\"that's outside what I can judge\" (recuse — a call that isn't Proxy's to make)"
+  normalized_statement: >
+    WHEN Proxy is asked to make a judgment that is not its to make THE SYSTEM
+    SHALL respond with a recuse signal using phrasing semantically equivalent to
+    "that's outside what I can judge" and SHALL name the likely owner of that
+    judgment.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-28
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 11"
+  source_quote: "\"I don't know\" (unknown — no grounding for it)"
+  normalized_statement: >
+    WHEN Proxy has no grounding for an answer THE SYSTEM SHALL respond with an
+    unknown signal using phrasing semantically equivalent to "I don't know" and
+    SHALL name the likely owner or next step where the roster and codeowner
+    metadata permit.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-29
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 11"
+  source_quote: "\"here's the part I can prove — the rest I can't\" (partial)"
+  normalized_statement: >
+    WHEN Proxy has partial grounding for an answer THE SYSTEM SHALL respond with
+    a partial signal that explicitly separates the proved portion from the
+    unproved remainder using phrasing semantically equivalent to "here's the part
+    I can prove — the rest I can't", and SHALL NOT blend the two portions without
+    demarcation.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-30
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 11"
+  source_quote: "The name comes from the owner(path) code_intel tool (Doc 01) — codeowner / last-touched for the file in question — so the hand-off points at a real person, not a guess."
+  normalized_statement: >
+    WHEN Proxy recuses or signals unknown THE SYSTEM SHALL invoke the owner(path)
+    code_intel tool to resolve the likely owner from codeowner or last-touched
+    metadata and SHALL state that resolved real name in the handoff; generic
+    placeholders ("someone", "your team") are not permitted.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-31
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 11"
+  source_quote: "Proxy keeps them distinct so a listener knows which they got"
+  normalized_statement: >
+    WHEN Proxy produces any of the three honesty signals (recuse, unknown, partial)
+    THE SYSTEM SHALL use non-interchangeable, distinguishable phrasing for each
+    shape so that a listener can unambiguously identify which type of not-answering
+    occurred; conflating two shapes constitutes a violation.
+  requirement_type: ux
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════
+# §2.3 bullet 12 — Belongs to the room
+# ══════════════════════════════════════════════════════════════════════
+
+- requirement_id: R-doc08-VCHAT-32
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 12"
+  source_quote: "Anyone can address it — voice or @proxy — not just whoever invited it."
+  normalized_statement: >
+    WHEN any participant in the active meeting addresses Proxy by voice or via
+    @proxy in chat THE SYSTEM SHALL treat that as a valid ask and SHALL NOT gate
+    responses on whether the addressing participant was the meeting inviter or
+    a privileged role.
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-VCHAT-33
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.3 bullet 12"
+  source_quote: "The intended habit: \"in doubt, ask Proxy.\""
+  normalized_statement: >
+    WHEN a participant addresses Proxy by either voice or @proxy in chat THE
+    SYSTEM SHALL treat both addressing modes equivalently as valid ask triggers
+    with no functional difference in how the ask is processed.
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  status: qualified

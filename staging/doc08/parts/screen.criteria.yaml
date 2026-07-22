@@ -1,0 +1,590 @@
+# Acceptance Criteria — Doc 08 Behavior · §2.5 The shared screen — show the work
+# ID prefix: AC-SCREEN-NNN / AC-SCREEN-NNN-NEG
+# Paired requirements: R-doc08-SCREEN-01 through R-doc08-SCREEN-13
+# Authority: DOC-08 §2.5; CANONICAL §12.3 (show_screen); CANONICAL §12.12 (V0 scope)
+#
+# Dependency classes in use:
+#   db:postgres  — staged_drafts (final artifact preview fetch)
+#   gcs:objects  — file content for pin-to-source mode
+#
+# Golden-path: 0 — screen is a supporting surface; core E2E golden paths live elsewhere.
+
+# ════════════════════════════════════════════════════════════════
+# ACTIVATION GATE
+# ════════════════════════════════════════════════════════════════
+
+# ── R-doc08-SCREEN-01 / -02: only human ask or human yes activates ────────────
+
+- criterion_id: AC-SCREEN-001
+  name: "Screenshare activates only on human ask or human yes-to-offer"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SCREEN-01, R-doc08-SCREEN-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A live session with screenshare inactive and no pending human trigger"
+    when: "An internal trigger fires (task completion, timer, progress event, or any non-human source)"
+    then:
+      - "Screenshare does NOT activate"
+      - "Activation gate returns rejected with reason=no-human-trigger"
+      - "screenshare.active remains false"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Assert screenshare.active == false for every non-human trigger path;
+      FSM activation edge guard asserts trigger_class in {human_ask, human_yes_to_offer};
+      static scan confirms every screenshare.activate() call site passes through the gate.
+  thresholds: {self_initiated_activations_allowed: 0}
+  fault_model_refs: [F-SCREEN-SELF-INITIATED]
+  test_ids: [T-SCREEN-001]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-SCREEN-002
+  name: "Screenshare activates when human explicitly asks"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SCREEN-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A live session with screenshare inactive"
+    when: "A human participant issues an explicit ask event (trigger_class=human_ask)"
+    then:
+      - "The activation gate accepts the trigger"
+      - "screenshare.active becomes true"
+      - "trigger_class is logged as human_ask"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Assert screenshare.active == true after human_ask event;
+      assert logged trigger_class == 'human_ask'.
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-SCREEN-002]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+
+- criterion_id: AC-SCREEN-003
+  name: "Screenshare activates when human says yes to Proxy's offer"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SCREEN-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A live session where Proxy has offered to share the screen (§2.4 #13) and screenshare is inactive"
+    when: "A human participant responds with an acceptance (trigger_class=human_yes_to_offer)"
+    then:
+      - "The activation gate accepts the trigger"
+      - "screenshare.active becomes true"
+      - "trigger_class is logged as human_yes_to_offer"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Assert screenshare.active == true after human_yes_to_offer event;
+      assert logged trigger_class == 'human_yes_to_offer'.
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-SCREEN-003]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+
+# ════════════════════════════════════════════════════════════════
+# STOP-SHARING — HUMAN CONTROL ABSOLUTE (P0)
+# ════════════════════════════════════════════════════════════════
+
+# ── R-doc08-SCREEN-03: "Stop sharing" wins immediately, no condition blocks it ─
+
+- criterion_id: AC-SCREEN-004
+  name: "Stop-sharing signal deactivates screenshare immediately — no condition can block it"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SCREEN-03]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "Screenshare is active and a task render is in progress on the canvas"
+    when: "Any participant (host or guest) issues a stop-sharing signal"
+    then:
+      - "screenshare.active becomes false within the same event loop tick"
+      - "No confirmation prompt, modal, or delay is interposed"
+      - "Camera (tile) view resumes as the active transport output"
+      - "In-progress canvas render is abandoned, not completed first"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      FSM invariant: stop_sharing event unconditionally transitions to screenshare_inactive
+      state regardless of current render_in_progress flag;
+      assert NOT (screenshare.active == true) one tick after stop event;
+      assert no confirmation_required gate exists on this transition in the FSM definition;
+      assert camera.active == true after deactivation.
+  thresholds: {stop_delay_ticks_allowed: 1, violations_allowed: 0}
+  fault_model_refs: [F-STOP-SHARING-BLOCKED]
+  test_ids: [T-SCREEN-004]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ════════════════════════════════════════════════════════════════
+# THREE V0 CONTENT MODES
+# ════════════════════════════════════════════════════════════════
+
+# ── R-doc08-SCREEN-04: structured-progress mode ───────────────────────────────
+
+- criterion_id: AC-SCREEN-005
+  name: "Structured-progress mode renders Doc 05 envelopes in plan→subtasks→checkpoints→verifier order"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SCREEN-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      Screenshare is active, structured_progress mode is selected, and a Doc 05
+      task is in flight with plan, subtasks, checkpoints, and a verifier result populated
+    when: "The screen canvas is rendered"
+    then:
+      - "Rendered output contains a plan section, subtasks section, checkpoints section, and verifier result section"
+      - "Sections appear in the order: plan → subtasks → checkpoints → verifier result"
+      - "No raw terminal output stream, no live browser mirror window, and no sandbox iframe is present in the render"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Render snapshot: assert section-header order matches [plan, subtasks, checkpoints, verifier];
+      assert no terminal-stream or browser-mirror element in the output tree.
+  thresholds: {violations_allowed: 0, order_inversions_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-SCREEN-005]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── R-doc08-SCREEN-05: pin-to-source mode ────────────────────────────────────
+
+- criterion_id: AC-SCREEN-006
+  name: "Pin-to-source mode renders the actual indexed file with exactly the cited lines highlighted"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SCREEN-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      Screenshare is active, pin_to_source mode is selected with
+      file_path='src/checkout.py' and line_range=[42, 44]
+    when: "The screen canvas is rendered"
+    then:
+      - "Rendered file content matches the actual file read from the codebase index at the given path"
+      - "Lines 42–44 are visually highlighted; no other line range is highlighted instead"
+      - "No paraphrased, summarized, or substitute representation replaces the actual file"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Render snapshot: assert file body matches codebase index read at file_path;
+      assert highlight spans cover exactly lines 42–44;
+      assert no substitute or summary text present.
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-SCREEN-006]
+  dependency_class: gcs:objects
+  mock_boundary: "Stub codebase index returning known file content at file_path; assert render uses that content verbatim"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-SCREEN-006-NEG
+  name: "Pin-to-source degrades honestly when gcs:objects (file fetch) errors"
+  authority_refs: [R-doc08-SCREEN-05]
+  dependency_class: gcs:objects
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Screenshare is active and pin_to_source mode is selected"
+    when: "gcs:objects errors or times out when fetching the file content"
+    then:
+      - "Honest failure is spoken or posted (e.g., 'could not load the file — storage unavailable')"
+      - "No silent placeholder or stale content is rendered as the live file"
+      - "render_attempted is not flagged as successful"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Assert honest failure message emitted on gcs error;
+      assert render_attempted == false or explicit error content in canvas patch;
+      assert no live-looking file content written when GCS unavailable.
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-SCREEN-006-NEG]
+
+# ── R-doc08-SCREEN-06: final-artifact-preview mode ───────────────────────────
+
+- criterion_id: AC-SCREEN-007
+  name: "Final-artifact-preview mode renders the actual finished artifact before it is forwarded"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SCREEN-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Screenshare is active, final_artifact_preview mode is selected, and a completed task artifact (diff) is staged"
+    when: "The screen canvas is rendered"
+    then:
+      - "Rendered output contains the actual finished artifact body (the diff/report/document), not a summary"
+      - "render_completed_at is recorded before forward_sent_at in the event log"
+      - "No placeholder label or abbreviated preview is substituted for the full artifact"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Render snapshot: assert artifact content matches staged_drafts artifact body for this task;
+      assert render_completed_at < forward_sent_at in event log;
+      assert no summary-pattern substitution.
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-SCREEN-007]
+  dependency_class: db:postgres
+  mock_boundary: "Stub staged_drafts row returning known artifact body; assert render uses that body verbatim"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+- criterion_id: AC-SCREEN-007-NEG
+  name: "Final-artifact-preview degrades honestly when db:postgres errors on artifact fetch"
+  authority_refs: [R-doc08-SCREEN-06]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette / real fault at call_external layer; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Screenshare is active and final_artifact_preview mode is selected"
+    when: "db:postgres errors or times out when fetching the staged artifact"
+    then:
+      - "Honest failure is spoken or posted (e.g., 'could not load the artifact — database unavailable')"
+      - "No silent proceed; screen does not render a placeholder or stale artifact as live"
+      - "forward action is not triggered"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Assert honest failure message emitted on db error;
+      assert render_attempted == false;
+      assert forward action not triggered.
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-SCREEN-007-NEG]
+
+# ════════════════════════════════════════════════════════════════
+# EXACTLY THREE V0 MODES — STRUCTURAL CONSTRAINT
+# ════════════════════════════════════════════════════════════════
+
+# ── R-doc08-SCREEN-07: screen_mode enum has exactly 3 members ────────────────
+
+- criterion_id: AC-SCREEN-008
+  name: "screen_mode enumeration contains exactly three members: structured_progress, pin_to_source, final_artifact_preview"
+  evidence_class: "[static]"
+  authority_refs: [R-doc08-SCREEN-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The screen module source"
+    when: "Static analysis inspects the screen_mode type definition and all dispatch arms"
+    then:
+      - "screen_mode (enum, union, or literal type) has exactly 3 members: structured_progress, pin_to_source, final_artifact_preview"
+      - "Every dispatch arm in the canvas renderer is accounted for by one of the three members"
+      - "No default or 'unknown' arm produces screen content; it produces nothing or raises a build-time error"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Static analysis / enum exhaustiveness: assert len(screen_mode.members) == 3;
+      assert members == {structured_progress, pin_to_source, final_artifact_preview};
+      assert no fourth literal or fallback render path in canvas dispatch.
+  thresholds: {violations_allowed: 0, extra_modes_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-SCREEN-008]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ════════════════════════════════════════════════════════════════
+# V0 HARD EXCLUSIONS — DEFERRED EXPANSION FEATURES (STRUCTURAL NEGATIVE)
+# ════════════════════════════════════════════════════════════════
+
+# ── R-doc08-SCREEN-08: live mirror, diagram, cursor ABSENT from V0 codebase ──
+
+- criterion_id: AC-SCREEN-009
+  name: "Live sandbox mirror, drawn architecture diagrams, and animated cursor are absent from V0 screen module"
+  evidence_class: "[static]"
+  authority_refs: [R-doc08-SCREEN-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The V0 screen renderer source and all modules it imports"
+    when: "Static analysis and symbol search run across the screen module tree"
+    then:
+      - "No code path that produces a live terminal stream or browser mirror is present"
+      - "No code path that renders a boxes-and-arrows or architecture diagram output is present"
+      - "No animated cursor element or cursor-animation code is present"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Static/grep: assert no symbol matching
+      (terminal_mirror|browser_mirror|sandbox_stream|sandbox_window|arch_diagram|architecture_diagram|animated_cursor|cursor_animation)
+      in the screen module tree; CI build rule enforces this gate.
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-DEFERRED-FEATURE-IN-V0]
+  test_ids: [T-SCREEN-009]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ════════════════════════════════════════════════════════════════
+# DETAIL ON SCREEN, AMBIENCE ON TILE
+# ════════════════════════════════════════════════════════════════
+
+# ── R-doc08-SCREEN-09: tile never carries readable text ───────────────────────
+
+- criterion_id: AC-SCREEN-010
+  name: "Tile render contains no multi-line readable text, code blocks, or structured data"
+  evidence_class: "[static]"
+  authority_refs: [R-doc08-SCREEN-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The tile renderer source"
+    when: "Static analysis inspects all tile render paths and the content router"
+    then:
+      - "The tile renderer contains no render path for multi-line text, code blocks, structured output, or highlighted source lines"
+      - "The content router's readable_content branch routes to screenshare, not tile"
+      - "No structured or human-readable text element is placed on the tile in any state"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Static analysis of tile renderer: assert no multi_line_text, code_block, or
+      structured_data render path present;
+      content router assertion: readable_content flag => route == screenshare.
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-SCREEN-010]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ════════════════════════════════════════════════════════════════
+# CAMERA ↔ SCREENSHARE MUTUAL EXCLUSIVITY
+# ════════════════════════════════════════════════════════════════
+
+# ── R-doc08-SCREEN-10: never both active ─────────────────────────────────────
+
+- criterion_id: AC-SCREEN-011
+  name: "camera_active and screenshare_active are never simultaneously true"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SCREEN-10]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Any point in a live session, including during the transition between camera and screenshare"
+    when: "The transport FSM state is sampled at every state transition"
+    then:
+      - "At every sampled state, at most one of camera_active and screenshare_active is true"
+      - "The joint state (camera_active=true AND screenshare_active=true) is never reached"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      FSM invariant assertion: assert NOT (camera_active AND screenshare_active) holds
+      at every transition in the FSM definition;
+      simulation trace over the full swap sequence (idle → announce → screenshare → return)
+      confirms the invariant is never violated.
+  thresholds: {simultaneous_active_occurrences_allowed: 0}
+  fault_model_refs: [F-DUAL-ACTIVE-TRANSPORT]
+  test_ids: [T-SCREEN-011]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-SCREEN-011-NEG
+  name: "Dual-active transport state is structurally unreachable — forced injection is rejected"
+  authority_refs: [R-doc08-SCREEN-10]
+  dependency_class: null
+  mock_boundary: "negative cassette: directly mutate transport state to camera_active=true while screenshare_active=true; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The transport FSM"
+    when: "An adversarial test forces camera_active=true while screenshare_active=true by direct state mutation"
+    then:
+      - "The FSM either rejects the mutation (raises InvalidStateError) or corrects to a valid exclusive state"
+      - "No path results in both flags remaining true simultaneously after the next guard evaluation"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Assert FSM raises InvalidStateError or immediately transitions out of dual-active;
+      assert post-condition NOT (camera_active AND screenshare_active).
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: [F-DUAL-ACTIVE-TRANSPORT]
+  test_ids: [T-SCREEN-011-NEG]
+
+# ════════════════════════════════════════════════════════════════
+# SWAP ANNOUNCEMENT
+# ════════════════════════════════════════════════════════════════
+
+# ── R-doc08-SCREEN-11: "sharing my screen —" emitted before swap ─────────────
+
+- criterion_id: AC-SCREEN-012
+  name: "Swap announcement is emitted at or before the transport swap event — no silent swaps"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SCREEN-11]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A screenshare activation is about to occur following a human trigger"
+    when: "The system executes the screenshare flow"
+    then:
+      - "The spoken announcement matching the swap_phrase constant is emitted"
+      - "announcement_spoken_at <= screenshare_activated_at in the event log"
+      - "No screenshare activation occurs without a prior announcement in the same flow"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Event log: assert announcement_spoken_at <= screenshare_activated_at;
+      assert announcement text matches swap_phrase constant (not an inline string literal);
+      assert silent_swaps_count == 0 over all test flow traces.
+  thresholds: {silent_swaps_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-SCREEN-012]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-SCREEN-012-NEG
+  name: "swap_phrase constant is defined; no inline string literal for announcement phrase"
+  authority_refs: [R-doc08-SCREEN-11]
+  dependency_class: null
+  mock_boundary: "negative cassette: replace swap_phrase constant with empty string; assert announcement gate catches it; MUST NOT replace the seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The screen module source"
+    when: "Static analysis searches for the announcement phrase usage"
+    then:
+      - "The phrase is referenced via a named constant (swap_phrase or equivalent), not an inline string"
+      - "No inline occurrence of the phrase 'sharing my screen' appears outside the constant definition"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Static analysis: assert exactly one definition of swap_phrase constant;
+      assert no other occurrence of the announcement string outside that definition;
+      negative run with empty constant: assert announcement guard fails fast.
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-SCREEN-012-NEG]
+
+# ════════════════════════════════════════════════════════════════
+# show_screen DELIVERY TOOL WIRING
+# ════════════════════════════════════════════════════════════════
+
+# ── R-doc08-SCREEN-12 / -13: show_screen is the sole screen mode authority ───
+
+- criterion_id: AC-SCREEN-013
+  name: "Screen content mode is driven exclusively by show_screen TOOL_USE events — no out-of-band mutation"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SCREEN-12, R-doc08-SCREEN-13]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The screen canvas is in any content mode"
+    when: "A show_screen(artifact) TOOL_USE event is received by the projector"
+    then:
+      - "The projector emits exactly one CanvasPatch with patch set to the artifact payload"
+      - "The canvas content mode transitions to the mode encoded in the artifact"
+      - "No code path outside the delivery-tool projection chain directly mutates the active screen content mode"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Unit: inject show_screen TOOL_USE chunk; assert one CanvasPatch yielded with
+      patch == artifact; assert canvas_mode updated from CanvasPatch only;
+      static scan: assert no direct canvas_mode assignment outside the projector's
+      CanvasPatch dispatch path.
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-SCREEN-013]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+- criterion_id: AC-SCREEN-014
+  name: "show_screen TOOL_RESULT with non-null structured payload produces CanvasPatch verbatim"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-SCREEN-13]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The projector receives a TOOL_RESULT chunk with chunk.metadata['structured'] = {mode: 'pin_to_source', file: 'src/x.py', lines: [10, 12]}"
+    when: "The projector processes the chunk"
+    then:
+      - "Exactly one CanvasPatch is yielded with patch equal to the structured payload verbatim"
+      - "No re-interpretation, content selection, or transformation of the payload occurs in the projector"
+  primary_oracle:
+    type: deterministic
+    artifact: >
+      Assert CanvasPatch.patch == chunk.metadata['structured'] verbatim (deepequal);
+      assert no additional fields injected or removed by the projector.
+  thresholds: {violations_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-SCREEN-014]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}

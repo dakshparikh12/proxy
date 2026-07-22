@@ -1,0 +1,737 @@
+# DURA.criteria.yaml — Doc 04 (Proxy Orchestrator) — §3.5 Two-Tier Session Durability
+# Acceptance criteria. Every criterion carries dependency_class, mock_boundary,
+# golden_path, and verification_ladder.
+# Law 2: "session restored" notice — transparent, never silent amnesia.
+# Law 3: abort-is-final — killed build CANNOT be resurrected.
+# Law 4: dynamic, never hard-coded — STALE_MARKERS in code, not inline literals.
+# Oracle preference: deterministic > fault-injection > simulation. Judge only where
+# no deterministic oracle exists.
+# Numeric thresholds explicit; zeros stated.
+# ID space: AC-DURA-NNN
+# NEG suffix on every non-null negative criterion.
+
+criteria:
+
+  # ── AC-DURA-001: session_id written to Postgres on INIT chunk ─────────────
+
+  - criterion_id: AC-DURA-001
+    name: "INIT chunk → metadata.session_id written to meeting Postgres row"
+    evidence_class: "[integration]"
+    authority_refs: [R-doc04-DURA-01]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "a new meeting session with an empty session_id column in the meetings Postgres row"
+      when: "the first turn's INIT chunk is yielded by the provider seam"
+      then:
+        - "metadata.session_id is extracted from the INIT chunk"
+        - "the extracted session_id is written to the meeting's Postgres row before the turn continues"
+        - "reading the meetings row after the INIT chunk yields the new session_id (not NULL)"
+    primary_oracle:
+      type: deterministic
+      artifact: "query the meetings row after INIT chunk; assert session_id IS NOT NULL and matches the chunk's metadata.session_id"
+    thresholds: {session_id_null_after_init_allowed: 0, violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-001]
+    dependency_class: db:postgres
+    mock_boundary: "may use a test Postgres instance; MUST NOT mock the asyncpg pool — real SQL must execute"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: integration}
+
+  # ── AC-DURA-001-NEG: session_id NOT written if INIT chunk never arrives ──
+
+  - criterion_id: AC-DURA-001-NEG
+    name: "session_id write does NOT fire if INIT chunk is absent (ordering guard)"
+    evidence_class: "[unit, negative]"
+    authority_refs: [R-doc04-DURA-01]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "a provider seam that yields only non-INIT chunks (e.g., TEXT before INIT)"
+      when: "the harness processes those chunks"
+      then:
+        - "no session_id write to Postgres is triggered by non-INIT chunks"
+        - "the meetings row session_id column remains unchanged"
+    primary_oracle:
+      type: deterministic
+      artifact: "inject TEXT chunk without prior INIT; assert no SQL UPDATE on sessions column fires; stub the write and assert call_count == 0"
+    thresholds: {spurious_session_id_writes_allowed: 0, violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-001-NEG]
+    dependency_class: db:postgres
+    mock_boundary: "stub the Postgres write call to assert it is never invoked; no real DB required for this negative path"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-DURA-002: every subsequent wake passes resume=<session_id> ─────────
+
+  - criterion_id: AC-DURA-002
+    name: "subsequent wake passes resume=<session_id> to provider query"
+    evidence_class: "[integration]"
+    authority_refs: [R-doc04-DURA-02]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "a meeting where Tier-1 session_id has been captured and written (AC-DURA-001 green)"
+      when: "the harness wakes the agent for any turn after the first"
+      then:
+        - "the provider query contains resume=<session_id> with the stored session_id value"
+        - "no wake after the first omits the resume parameter"
+    primary_oracle:
+      type: deterministic
+      artifact: "spy on runner.run calls; after the first INIT, assert every subsequent call receives a 'resume' kwarg equal to the stored session_id"
+    thresholds: {wakes_missing_resume_allowed: 0, violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-002]
+    dependency_class: db:postgres
+    mock_boundary: "may stub runner.run to capture call kwargs; Postgres read of session_id must execute against a real or test DB"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: integration}
+
+  # ── AC-DURA-002-NEG: first wake does NOT pass resume ─────────────────────
+
+  - criterion_id: AC-DURA-002-NEG
+    name: "first turn wake does NOT pass resume (no session_id yet stored)"
+    evidence_class: "[unit, negative]"
+    authority_refs: [R-doc04-DURA-02]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "a fresh meeting with no session_id in the meetings row (NULL)"
+      when: "the harness fires the first wake"
+      then:
+        - "the provider query does not contain resume=<non-null-value>"
+        - "passing a stale or fabricated session_id on the first turn is a violation"
+    primary_oracle:
+      type: deterministic
+      artifact: "spy on runner.run; assert first call has resume=None or resume absent; no non-null resume on turn 1"
+    thresholds: {spurious_resume_on_first_wake_allowed: 0, violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-002-NEG]
+    dependency_class: db:postgres
+    mock_boundary: "stub the DB read to return NULL session_id; assert runner.run receives resume=None"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-DURA-003: stale-session detection — BOTH markers matched ──────────
+
+  - criterion_id: AC-DURA-003
+    name: "is_stale_session_error matches BOTH STALE_MARKERS independently"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc04-DURA-03]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "the is_stale_session_error predicate from libs/agentkit/resume.py"
+      when: >
+        called with (a) a ProviderError whose message contains "no conversation found with
+        session id", (b) a ProviderError whose message contains "process exited", and
+        (c) a ProviderError whose message contains neither
+      then:
+        - "case (a) returns True"
+        - "case (b) returns True"
+        - "case (c) returns False"
+        - "the predicate is case-insensitive (lowercases the message before matching)"
+    primary_oracle:
+      type: deterministic
+      artifact: "parametrize with all three cases; assert True/True/False; assert lowercase conversion applied"
+    thresholds: {false_negatives_allowed: 0, false_positives_allowed: 0, violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-003]
+    dependency_class: null
+    mock_boundary: "pure in-process predicate; no external dependencies; no mocking required"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  # ── AC-DURA-003-NEG: non-stale ProviderError is not swallowed ────────────
+
+  - criterion_id: AC-DURA-003-NEG
+    name: "non-stale ProviderError is re-raised, not swallowed into replay"
+    evidence_class: "[unit, negative]"
+    authority_refs: [R-doc04-DURA-03]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "a ProviderError whose message does not match any STALE_MARKER (e.g., 'rate limit exceeded')"
+      when: "resume_with_fallback catches the ProviderError"
+      then:
+        - "the ProviderError is re-raised immediately"
+        - "no history read, no RESTORED_NOTICE emission, no fallback run is attempted"
+    primary_oracle:
+      type: deterministic
+      artifact: "inject ProviderError('rate limit exceeded'); assert raises ProviderError; assert history_fn never called; assert runner.run called exactly once"
+    thresholds: {non_stale_errors_swallowed_allowed: 0, violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-003-NEG]
+    dependency_class: null
+    mock_boundary: "pure in-process; stub history_fn to assert not called; stub runner.run to count calls"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-DURA-004: history read from Postgres transcript plane ─────────────
+
+  - criterion_id: AC-DURA-004
+    name: "stale-session replay reads history from Postgres transcript plane (Doc 03)"
+    evidence_class: "[integration]"
+    authority_refs: [R-doc04-DURA-04]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "a stale-session error is detected; the Postgres transcript plane has meeting history rows"
+      when: "the replay path calls history_fn()"
+      then:
+        - "history_fn reads from the Postgres transcript plane (Doc 03/VI.3 tables)"
+        - "the returned history is derived from real Postgres rows, not an in-memory cache"
+        - "no separate session_transcripts mirror table is queried"
+    primary_oracle:
+      type: deterministic
+      artifact: "inject stale-session error; spy on DB queries; assert query targets the Doc 03 transcript-plane table(s); assert no query against session_transcripts"
+    thresholds: {mirror_table_queries_allowed: 0, violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-004]
+    dependency_class: db:postgres
+    mock_boundary: "MUST NOT mock the asyncpg pool; history_fn must execute real SQL against test Postgres; assert on the query target table"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: integration}
+
+  # ── AC-DURA-005: RESTORED_NOTICE emitted before preamble + retry ──────────
+
+  - criterion_id: AC-DURA-005
+    name: "RESTORED_NOTICE is emitted as first AgentChunk before preamble and retry"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc04-DURA-05, R-doc04-DURA-06]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "a stale-session error has been detected and history_fn() has returned records"
+      when: "resume_with_fallback executes the replay sequence"
+      then:
+        - "the first yielded item is an AgentChunk with type='TEXT', text=RESTORED_NOTICE, metadata={'msg_id': 'restored'}"
+        - "RESTORED_NOTICE is yielded BEFORE build_history_preamble is called"
+        - "RESTORED_NOTICE is yielded BEFORE runner.run is called for the retry"
+        - "recovery does NOT proceed silently without emitting RESTORED_NOTICE"
+    primary_oracle:
+      type: deterministic
+      artifact: "collect all yielded items; assert items[0].text == RESTORED_NOTICE and items[0].metadata['msg_id'] == 'restored'; assert RESTORED_NOTICE emission precedes runner.run call via ordering spy"
+    thresholds: {silent_recoveries_allowed: 0, notice_after_retry_allowed: 0, violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-005]
+    dependency_class: null
+    mock_boundary: "stub runner.run for the retry call; stub history_fn to return fixture history; assert yield ordering"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  # ── AC-DURA-005-NEG: silent replay (no RESTORED_NOTICE) is a violation ───
+
+  - criterion_id: AC-DURA-005-NEG
+    name: "replay without RESTORED_NOTICE emission is detectable and blocked"
+    evidence_class: "[unit, negative]"
+    authority_refs: [R-doc04-DURA-05]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "a mutated version of resume_with_fallback that omits the RESTORED_NOTICE yield"
+      when: "the replay path is exercised"
+      then:
+        - "the missing RESTORED_NOTICE is detected by the test oracle"
+        - "no chunk with msg_id='restored' appears in the output stream"
+        - "the test that checks for RESTORED_NOTICE fails (mutation is caught)"
+    primary_oracle:
+      type: deterministic
+      artifact: "assert that the output stream contains exactly one AgentChunk with metadata.msg_id == 'restored'; absence of this chunk fails the assertion"
+    thresholds: {restored_notice_absent_allowed: 0, violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-005-NEG]
+    dependency_class: null
+    mock_boundary: "pure in-process stream inspection; no external deps"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-DURA-006: golden path — full instance-recycle + replay cycle ───────
+
+  - criterion_id: AC-DURA-006
+    name: "full instance-recycle + stale-session replay cycle end-to-end"
+    evidence_class: "[integration]"
+    authority_refs:
+      [R-doc04-DURA-01, R-doc04-DURA-02, R-doc04-DURA-03, R-doc04-DURA-04,
+       R-doc04-DURA-05, R-doc04-DURA-06, R-doc04-DURA-07]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: >
+        a meeting with session_id stored in Postgres (Tier-1 complete); the SDK instance
+        is recycled causing the stored session to become stale; the Postgres transcript
+        plane holds N meeting history rows
+      when: "the next wake fires and runner.run raises a stale-session ProviderError"
+      then:
+        - "the stale-session error is detected via is_stale_session_error"
+        - "history is read from the Postgres transcript plane (N rows returned)"
+        - "RESTORED_NOTICE is emitted as the first output chunk"
+        - "runner.run is called with resume=None and preamble set to the delimited history"
+        - "the new session's INIT chunk yields a new session_id"
+        - "the new session_id overwrites the stale pointer in the meetings Postgres row"
+        - "the caller receives a coherent stream: RESTORED_NOTICE chunk + subsequent model output chunks"
+    primary_oracle:
+      type: deterministic
+      artifact: "fault-inject a stale-session ProviderError; assert all seven then-conditions via DB state + collected chunk stream"
+    thresholds: {violations_allowed: 0, history_rows_dropped_allowed: 0, silent_recoveries_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-006]
+    dependency_class: db:postgres
+    mock_boundary: "MUST NOT mock the asyncpg pool; use a real or test Postgres instance; runner.run may be stubbed to inject the stale error on the first call and return fixture chunks on the second"
+    golden_path: true
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: integration}
+
+  # ── AC-DURA-007: retry without resume; new session_id overwrites stale ────
+
+  - criterion_id: AC-DURA-007
+    name: "replay retry uses resume=None; new session_id overwrites stale Postgres pointer"
+    evidence_class: "[integration]"
+    authority_refs: [R-doc04-DURA-07]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "a stale-session replay is executing (RESTORED_NOTICE emitted, preamble built)"
+      when: "runner.run is called for the retry"
+      then:
+        - "the retry call passes resume=None (not the stale session_id)"
+        - "when the retry's INIT chunk arrives, the new session_id is extracted"
+        - "the new session_id is written to the meeting's Postgres row, replacing the stale value"
+        - "a subsequent read of the meetings row returns the new session_id, not the stale one"
+    primary_oracle:
+      type: deterministic
+      artifact: "spy on retry runner.run call; assert resume=None; after INIT on retry, query meetings row; assert session_id == new_session_id != stale_session_id"
+    thresholds: {stale_pointer_persisting_allowed: 0, violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-007]
+    dependency_class: db:postgres
+    mock_boundary: "MUST NOT mock asyncpg pool; runner.run second call returns a fixture INIT chunk with a distinct session_id; assert DB write targets the meetings row"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: integration}
+
+  # ── AC-DURA-008: abort-is-final — stale-session path ─────────────────────
+
+  - criterion_id: AC-DURA-008
+    name: "abort-is-final: aborted caller → stale-session error is re-raised, not replayed"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc04-DURA-08]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "abort.aborted is True at the time a stale-session ProviderError is raised"
+      when: "resume_with_fallback catches the ProviderError"
+      then:
+        - "the ProviderError is re-raised immediately (not caught and replayed)"
+        - "history_fn is never called"
+        - "RESTORED_NOTICE is never emitted"
+        - "runner.run is not called a second time"
+    primary_oracle:
+      type: deterministic
+      artifact: "set abort.aborted=True; inject stale ProviderError; assert raises ProviderError; assert history_fn call_count==0; assert no RESTORED_NOTICE yielded; assert runner.run call_count==1"
+    thresholds: {aborted_recoveries_allowed: 0, violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-008]
+    dependency_class: null
+    mock_boundary: "pure in-process; stub abort object with aborted=True; stub history_fn and runner.run to assert non-invocation"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  # ── AC-DURA-008-NEG: non-aborted stale error DOES trigger replay ─────────
+
+  - criterion_id: AC-DURA-008-NEG
+    name: "abort-is-final boundary: non-aborted stale error proceeds to replay (not silently dropped)"
+    evidence_class: "[unit, negative]"
+    authority_refs: [R-doc04-DURA-08]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "abort.aborted is False and a stale-session ProviderError is raised"
+      when: "resume_with_fallback catches the ProviderError"
+      then:
+        - "the replay path is entered (history_fn is called)"
+        - "RESTORED_NOTICE is emitted"
+        - "runner.run is called a second time with resume=None"
+    primary_oracle:
+      type: deterministic
+      artifact: "set abort.aborted=False; inject stale ProviderError; assert history_fn called; assert RESTORED_NOTICE in output; assert runner.run called twice"
+    thresholds: {violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-008-NEG]
+    dependency_class: null
+    mock_boundary: "pure in-process; stub abort with aborted=False; stub history_fn; stub runner.run second call to return empty fixture stream"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-DURA-009: abort-is-final — JSON-truncation retry path ─────────────
+
+  - criterion_id: AC-DURA-009
+    name: "abort-is-final: aborted caller → JSON-truncation SyntaxError is not retried"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc04-DURA-09]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "abort.aborted is True at the time a SyntaxError ('unterminated string') is raised"
+      when: "the JSON-truncation error handler is reached"
+      then:
+        - "the SyntaxError is re-raised (or the abort is surfaced) without retrying"
+        - "runner.run is NOT called again for the JSON-truncation retry path"
+        - "the killed build is not resurrected"
+    primary_oracle:
+      type: deterministic
+      artifact: "set abort.aborted=True; inject SyntaxError('unterminated string in json'); assert no retry runner.run call; assert exception propagates"
+    thresholds: {aborted_json_retries_allowed: 0, violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-009]
+    dependency_class: null
+    mock_boundary: "pure in-process; stub abort with aborted=True; stub runner.run to raise SyntaxError; assert call_count remains 1"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  # ── AC-DURA-009-NEG: abort check before JSON retry is not bypassed ────────
+
+  - criterion_id: AC-DURA-009-NEG
+    name: "JSON-truncation retry does NOT fire when abort is set (no abort-bypass path)"
+    evidence_class: "[unit, negative]"
+    authority_refs: [R-doc04-DURA-09]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "a code path where abort check is absent from the JSON-truncation retry handler"
+      when: "abort.aborted=True and SyntaxError is raised"
+      then:
+        - "the missing abort check is caught by test — the retry fires when it should not"
+        - "this negative test documents the fault model; passing it requires the abort check to be present"
+    primary_oracle:
+      type: deterministic
+      artifact: "mutation: remove abort check from JSON retry handler; assert the negative test detects the retry that fires (confirms the guard is necessary)"
+    thresholds: {abort_bypass_allowed: 0, violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-009-NEG]
+    dependency_class: null
+    mock_boundary: "pure in-process mutation test; no external deps"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-DURA-010: JSON-truncation retry — same session, capped at 2 ────────
+
+  - criterion_id: AC-DURA-010
+    name: "JSON-truncation SyntaxError retries on same session, cap 2 — no third retry"
+    evidence_class: "[unit]"
+    authority_refs: [R-doc04-DURA-10]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "runner.run raises SyntaxError('unterminated string in json') on every call"
+      when: "resume_with_fallback processes the error with abort.aborted=False"
+      then:
+        - "runner.run is called at most 2 additional times (cap 2 retries)"
+        - "each retry uses the same session_id (resume parameter unchanged)"
+        - "after 2 retries the SyntaxError is re-raised without a third retry"
+    primary_oracle:
+      type: deterministic
+      artifact: "stub runner.run to always raise SyntaxError('unterminated string in json'); assert runner.run.call_count <= 3 (1 original + 2 retries); assert SyntaxError propagates after cap; assert resume kwarg unchanged across retries"
+    thresholds: {retries_over_cap_allowed: 0, session_id_changed_on_json_retry_allowed: 0, violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-010]
+    dependency_class: null
+    mock_boundary: "pure in-process; stub runner.run to raise SyntaxError on every call; count invocations"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  # ── AC-DURA-010-NEG: non-truncation SyntaxError is not retried ───────────
+
+  - criterion_id: AC-DURA-010-NEG
+    name: "SyntaxError not matching 'unterminated string' is NOT retried by JSON retry path"
+    evidence_class: "[unit, negative]"
+    authority_refs: [R-doc04-DURA-10]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "runner.run raises SyntaxError('invalid syntax') (not a truncation error)"
+      when: "resume_with_fallback catches the SyntaxError"
+      then:
+        - "the JSON-truncation retry path is NOT entered"
+        - "runner.run is not called again on this path"
+        - "the SyntaxError propagates to the caller"
+    primary_oracle:
+      type: deterministic
+      artifact: "stub runner.run to raise SyntaxError('invalid syntax'); assert runner.run.call_count==1; assert SyntaxError propagates"
+    thresholds: {spurious_json_retries_allowed: 0, violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-010-NEG]
+    dependency_class: null
+    mock_boundary: "pure in-process; stub runner.run"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-DURA-011: no session_transcripts mirror in schema ──────────────────
+
+  - criterion_id: AC-DURA-011
+    name: "session_transcripts mirror table is absent from all migrations and schema"
+    evidence_class: "[static]"
+    authority_refs: [R-doc04-DURA-11]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "the complete set of Alembic migration files and SQLAlchemy model definitions in the codebase"
+      when: "searched for 'session_transcripts', 'durable_meeting_sessions', and the session-mirror append-queue"
+      then:
+        - "no migration file contains a CREATE TABLE for session_transcripts"
+        - "no SQLAlchemy model defines a session_transcripts table"
+        - "no durable_meeting_sessions flag or column is defined in any migration or model"
+        - "no session-mirror append-queue or retention sweep code is present"
+    primary_oracle:
+      type: deterministic
+      artifact: "grep -r 'session_transcripts|durable_meeting_sessions' over alembic/ and src/; assert zero matches"
+    thresholds: {mirror_table_definitions_allowed: 0, durable_flag_definitions_allowed: 0, violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-011]
+    dependency_class: null
+    mock_boundary: "static analysis only; no runtime dependencies"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  # ── AC-DURA-012: resume_with_fallback defined exactly once in libs/agentkit
+
+  - criterion_id: AC-DURA-012
+    name: "resume_with_fallback defined exactly once, in libs/agentkit/resume.py"
+    evidence_class: "[static]"
+    authority_refs: [R-doc04-DURA-12]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "the entire codebase (all Python source files)"
+      when: "searched for 'def resume_with_fallback'"
+      then:
+        - "exactly one definition exists: libs/agentkit/src/agentkit/resume.py"
+        - "no orchestrator module or services/* module defines a function named resume_with_fallback"
+        - "all call sites import from libs.agentkit.resume or agentkit.resume"
+    primary_oracle:
+      type: deterministic
+      artifact: "grep -r 'def resume_with_fallback' over the repo; assert count==1 and path==libs/agentkit/src/agentkit/resume.py"
+    thresholds: {extra_definitions_allowed: 0, violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-012]
+    dependency_class: null
+    mock_boundary: "static analysis only; no runtime dependencies"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  # ── AC-DURA-012-NEG: redefinition in orchestrator is caught ──────────────
+
+  - criterion_id: AC-DURA-012-NEG
+    name: "a second definition of resume_with_fallback outside libs/agentkit is caught by lint"
+    evidence_class: "[unit, negative]"
+    authority_refs: [R-doc04-DURA-12]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "a mutation that adds 'def resume_with_fallback(...)' to any services/* or orchestrator module"
+      when: "the lint/static check (AC-DURA-012) is run"
+      then:
+        - "the check detects count > 1 definitions"
+        - "the check fails with a clear violation report"
+    primary_oracle:
+      type: deterministic
+      artifact: "inject a duplicate def in a services file; assert AC-DURA-012 grep returns count==2 and therefore fails"
+    thresholds: {violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-012-NEG]
+    dependency_class: null
+    mock_boundary: "static analysis; no runtime deps; mutation applied to a temp file"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-DURA-013: full 6-arg signature is pinned ───────────────────────────
+
+  - criterion_id: AC-DURA-013
+    name: "resume_with_fallback has exactly the pinned 6-arg signature"
+    evidence_class: "[static]"
+    authority_refs: [R-doc04-DURA-13]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "libs/agentkit/src/agentkit/resume.py"
+      when: "the signature of resume_with_fallback is inspected via AST or inspect.signature"
+      then:
+        - "the function has exactly 6 positional parameters in order: runner, behavior, inputs, resume_id, abort, history_fn"
+        - "no additional positional or keyword-only parameters are present"
+        - "the function is defined as async"
+    primary_oracle:
+      type: deterministic
+      artifact: "inspect.signature(resume_with_fallback); assert param names == ['runner','behavior','inputs','resume_id','abort','history_fn'] and len==6 and asyncio.iscoroutinefunction==True"
+    thresholds: {signature_deviation_allowed: 0, violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-013]
+    dependency_class: null
+    mock_boundary: "pure static / import-time inspection; no external deps"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  # ── AC-DURA-013-NEG: wrong arity is caught ───────────────────────────────
+
+  - criterion_id: AC-DURA-013-NEG
+    name: "a 5-arg or 7-arg resume_with_fallback signature is caught by the pinned-signature test"
+    evidence_class: "[unit, negative]"
+    authority_refs: [R-doc04-DURA-13]
+    criticality: P1
+    blocking: true
+    behavior:
+      given: "a mutated resume_with_fallback with 5 args (history_fn dropped) or 7 args (extra param added)"
+      when: "AC-DURA-013 signature inspection runs"
+      then:
+        - "the assertion len(params)==6 fails"
+        - "the test reports the actual vs expected signature"
+    primary_oracle:
+      type: deterministic
+      artifact: "mutation: drop history_fn; assert AC-DURA-013 fails with len mismatch; mutation: add extra_param; assert fail"
+    thresholds: {violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-013-NEG]
+    dependency_class: null
+    mock_boundary: "pure import-time inspection of a mutated stub; no external deps"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}
+
+  # ── AC-DURA-014: SDK upgrade re-audit of STALE_MARKERS ───────────────────
+
+  - criterion_id: AC-DURA-014
+    name: "STALE_MARKERS re-audit is documented on every SDK version bump"
+    evidence_class: "[review]"
+    authority_refs: [R-doc04-DURA-14]
+    criticality: P1
+    blocking: false
+    behavior:
+      given: "the SDK dependency (anthropic or claude-agent-sdk) version is incremented in pyproject.toml or uv.lock"
+      when: "the upgrade diff is reviewed"
+      then:
+        - "the PR or commit notes confirm that STALE_MARKERS ('no conversation found with session id', 'process exited') were re-audited against the new SDK's actual error messages"
+        - "the re-audit result (strings still match / strings updated) is recorded in a comment or upgrade checklist"
+    primary_oracle:
+      type: review
+      artifact: "code review checklist item: 'STALE_MARKERS re-audited on SDK bump — both strings verified against new version error output'"
+    thresholds: {violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-014]
+    dependency_class: null
+    mock_boundary: "process/review criterion; no mock boundary"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+
+  # ── AC-DURA-015: single-writer invariant — no concurrent resume for same meeting
+
+  - criterion_id: AC-DURA-015
+    name: "single-writer invariant: no concurrent resume_with_fallback for the same meeting_id"
+    evidence_class: "[integration]"
+    authority_refs: [R-doc04-DURA-15]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "two harness instances targeting the same meeting_id (adversarial scenario violating §3.6)"
+      when: "both attempt to call resume_with_fallback concurrently"
+      then:
+        - "at most one instance proceeds through the resume path at any time"
+        - "the §3.6 single-writer lock prevents the second instance from entering the resume path"
+        - "the session_id in the meetings row reflects the winner's session, not a torn write"
+    primary_oracle:
+      type: deterministic
+      artifact: "simulate concurrent resume via two coroutines with a shared meeting_id; assert the §3.6 lock serializes them; assert meetings.session_id is a single coherent value after both complete"
+    thresholds: {concurrent_resume_allowed: 0, torn_writes_allowed: 0, violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-015]
+    dependency_class: db:postgres
+    mock_boundary: "MUST NOT mock asyncpg pool; use test Postgres; §3.6 lock may be stubbed to simulate contention but underlying DB write must be real"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: integration}
+
+  # ── AC-DURA-015-NEG: two concurrent resumes without lock corrupts session_id
+
+  - criterion_id: AC-DURA-015-NEG
+    name: "without single-writer lock, concurrent resumes produce a torn session_id (fault model)"
+    evidence_class: "[unit, negative]"
+    authority_refs: [R-doc04-DURA-15]
+    criticality: P0
+    blocking: true
+    behavior:
+      given: "a mutated harness with the §3.6 single-writer lock removed"
+      when: "two coroutines concurrently execute resume_with_fallback for the same meeting_id"
+      then:
+        - "a torn or nondeterministic session_id write is observed (documents the fault model)"
+        - "the negative test confirms the lock is load-bearing — without it, invariant breaks"
+    primary_oracle:
+      type: deterministic
+      artifact: "remove the §3.6 lock; run two concurrent resume_with_fallback coroutines; assert that session_id in meetings row is nondeterministic or torn (race detected); confirms the lock necessity"
+    thresholds: {violations_allowed: 0}
+    fault_model_refs: []
+    test_ids: [T-DURA-015-NEG]
+    dependency_class: db:postgres
+    mock_boundary: "use test Postgres; remove the lock guard in the stub; run concurrent coroutines and assert nondeterminism"
+    golden_path: false
+    verification_ladder:
+      - {tier: lint}
+      - {tier: unit}
+      - {tier: negative}

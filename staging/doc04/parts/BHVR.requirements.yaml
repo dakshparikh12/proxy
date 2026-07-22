@@ -1,0 +1,387 @@
+# BHVR.requirements.yaml — Doc 04 (Proxy Orchestrator) — §3.4 Wake-Behaviors
+# Atomic EARS requirements. Each carries source_location + verbatim source_quote + criticality.
+# ID scheme: R-doc04-BHVR-NN
+# Authority document: DOC-04
+# Canonical overrides: §12.5, §10.5, §10.8, §10.9, AMENDMENT C2, AMENDMENT C3
+
+# ── Typed BehaviorConfig Constants (§12.5) ────────────────────────────────────
+
+- requirement_id: R-doc04-BHVR-01
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4 paragraph 1; CANONICAL §12.5"
+  source_quote: >
+    Proxy's wake-behaviors — catchup, answer-question, surface-risk, propose-action, plus the Workroom
+    dispositions — are not per-behavior code branches. Each is a typed Python BehaviorConfig module
+    constant describing the capability envelope: which role/rules prime the turn, which inputs it needs,
+    which model tier and turn budget it runs on, which tools it may touch.
+  normalized_statement: >
+    WHEN the system defines a wake-behavior THE SYSTEM SHALL represent it as a typed Python BehaviorConfig
+    module-level constant (not a parsed YAML file, not a per-behavior code branch), declaring role, rules,
+    inputs, model tier, turn budget, and tools as a structured capability envelope.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-BHVR-02
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4 paragraph 1; CANONICAL §12.5"
+  source_quote: >
+    the ~9 behaviors are declared as typed constants rather than parsed from YAML. A BehaviorConfig(tools=[...],
+    model=..., role="...") declares the identical envelope. A small JSON/TS capability manifest is generated
+    at build (from these constants) for UI labels. The YAML-registry pattern is kept as the documented
+    Expansion path.
+  normalized_statement: >
+    WHEN the build completes THE SYSTEM SHALL generate a JSON/TS capability manifest derived from the typed
+    BehaviorConfig constants (not hand-authored) for UI label consumption; the YAML-registry pattern SHALL
+    remain documented as the Expansion path only, not as the primary declaration mechanism.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-BHVR-03
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4 paragraph 1; CANONICAL §12.5"
+  source_quote: >
+    A BehaviorConfig(tools=[...], model=..., role="...") declares the identical envelope.
+  normalized_statement: >
+    WHEN a BehaviorConfig constant is defined THE SYSTEM SHALL encode at minimum: tools list, model tier,
+    and role string as typed fields; adding a new wake-behavior SHALL require only a new BehaviorConfig
+    constant plus one register() call and SHALL NOT require new wiring code.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── One Generic Runner (no per-behavior code branches) ───────────────────────
+
+- requirement_id: R-doc04-BHVR-04
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4 paragraph 2"
+  source_quote: >
+    One generic runner reads that constant, resolves the declared inputs, mounts exactly the declared tools,
+    computes the SDK-isolation params, and hands one context object to the provider seam.
+  normalized_statement: >
+    WHEN any wake-behavior or Workroom disposition is invoked THE SYSTEM SHALL execute it through a single
+    generic BehaviorRunner implementation that reads the BehaviorConfig constant, resolves declared inputs,
+    mounts exactly the declared tools, and computes SDK-isolation params — with no per-behavior code path.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-BHVR-05
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4 BehaviorRunner docstring"
+  source_quote: >
+    ONE runner for every wake-behavior and Workroom disposition. No per-behavior code path exists —
+    selecting a behavior by name IS the branch, and the model makes that selection.
+  normalized_statement: >
+    WHEN the model selects a wake-behavior by name THE SYSTEM SHALL treat that name lookup as the sole
+    branching mechanism; the codebase SHALL contain no conditional logic of the form
+    `if behavior_name == X: <specific handling>` anywhere in or below BehaviorRunner.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Registry and register() ───────────────────────────────────────────────────
+
+- requirement_id: R-doc04-BHVR-06
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4 registry code block"
+  source_quote: >
+    REGISTRY: dict[str, Behavior] = {}
+    def register(b: Behavior) -> None: REGISTRY[b.name] = b   # one line per behavior
+  normalized_statement: >
+    WHEN a behavior is registered THE SYSTEM SHALL use a plain dict (REGISTRY: dict[str, Behavior]) and
+    register() SHALL be a single-assignment function (REGISTRY[b.name] = b) with no side-effects beyond
+    the dict insertion; each behavior registration at call-site SHALL be exactly one register() call.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Tool Mount Enforcement (§10.5) ────────────────────────────────────────────
+
+- requirement_id: R-doc04-BHVR-07
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4 paragraph 4; CANONICAL §10.5"
+  source_quote: >
+    Each behavior's config.tools advertises a curated subset, never the union of all of Proxy's tools —
+    tool-selection accuracy degrades measurably with every extra advertised tool. BehaviorRunner enforces
+    this — allowed_tools=b.config.tools mounts exactly the declared subset and nothing else.
+  normalized_statement: >
+    WHEN BehaviorRunner executes a behavior THE SYSTEM SHALL set allowed_tools equal to b.config.tools
+    exactly, mounting no tools beyond that curated subset; the set of mounted tools SHALL NOT be the union
+    of all available Proxy tools.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-BHVR-08
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4 BehaviorRunner.run() code block"
+  source_quote: >
+    q = ProviderQuery(
+        ...
+        allowed_tools=b.config.tools,
+        strict_mcp_config=True, setting_sources=[],   # isolation triad
+        tools=compute_builtin_tools(b.config.tools),  # [] in sandbox mode
+        abort=abort,
+    )
+  normalized_statement: >
+    WHEN BehaviorRunner.run() constructs a ProviderQuery THE SYSTEM SHALL set strict_mcp_config=True and
+    setting_sources=[] (the SDK isolation triad), compute builtin tools via compute_builtin_tools(b.config.tools)
+    (yielding [] in sandbox mode), and pass the abort controller — all fields present on every invocation.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── ERROR Chunk Surfacing ─────────────────────────────────────────────────────
+
+- requirement_id: R-doc04-BHVR-09
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4 BehaviorRunner.run() code block"
+  source_quote: >
+    if chunk.type == "ERROR":     # surface the pass-through ERROR as the exception
+        raise ProviderError(chunk)  # §3.5 stale-session/retry recovery catches this
+  normalized_statement: >
+    WHEN BehaviorRunner receives an ERROR chunk from the provider stream THE SYSTEM SHALL raise ProviderError
+    wrapping that chunk at the BehaviorRunner boundary — never silently swallow or yield the ERROR chunk
+    downstream — so that §3.5 retry recovery can intercept it.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── answer-question Tool Mount (AMENDMENT C3 / §10.5) ────────────────────────
+
+- requirement_id: R-doc04-BHVR-10
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4 paragraph 5; AMENDMENT C3"
+  source_quote: >
+    The answer-question behavior mounts the code_intel tools (get_dependents/who_writes/list_entry_points/
+    grep/read/batch_read) + orchestration verbs (dispatch_workroom/speak/send_chat/show_screen/ack/cancel_task)
+    — so it can direct-answer, not only dispatch.
+  normalized_statement: >
+    WHEN the answer-question behavior is invoked THE SYSTEM SHALL mount exactly: the six code_intel MCP
+    tools (get_dependents, who_writes, list_entry_points, grep, read, batch_read) plus the six orchestration
+    verbs (dispatch_workroom, speak, send_chat, show_screen, ack, cancel_task), enabling direct-answer
+    without dispatch; no additional tools beyond this enumerated set SHALL be mounted.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-BHVR-11
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4 code_intel MCP server paragraph"
+  source_quote: >
+    Wake-behaviors that field grounded code questions mount the core code_intel MCP server
+    (factory-per-query, advertised-not-forced).
+  normalized_statement: >
+    WHEN a wake-behavior that fields grounded code questions is invoked THE SYSTEM SHALL mount the code_intel
+    MCP server using a factory-per-query pattern (a new server instance per query), advertising tools without
+    forcing their invocation; the server SHALL NOT be a singleton shared across queries.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── batch_read Specification ──────────────────────────────────────────────────
+
+- requirement_id: R-doc04-BHVR-12
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4 code_intel MCP server paragraph"
+  source_quote: >
+    batch_read (reads up to [N=10] related files in one round-trip, internally parallel,
+    partial-failure-tolerant).
+  normalized_statement: >
+    WHEN the batch_read tool is invoked THE SYSTEM SHALL read up to N=10 related files in one round-trip
+    using internally parallel fetches; individual file-fetch failures SHALL NOT abort the batch — the tool
+    SHALL return partial results for the files that succeeded.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Within-Session Tool-Result Reuse (§10.8) ─────────────────────────────────
+
+- requirement_id: R-doc04-BHVR-13
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4; CANONICAL §10.8"
+  source_quote: >
+    Within-session tool-result reuse (CANONICAL §10.8): per-meeting cache of identical
+    get_dependents/who_writes/grep/read/batch_read results — identical call (keyed by tool + args, scoped
+    to pinned SHA) returns cached result.
+  normalized_statement: >
+    WHEN a code_intel tool call (get_dependents, who_writes, grep, read, or batch_read) is made within a
+    meeting session THE SYSTEM SHALL return the cached result for any call with an identical (tool, args)
+    key scoped to the same pinned repository SHA, without re-executing the tool.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-BHVR-14
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4; CANONICAL §10.8"
+  source_quote: >
+    per-meeting cache of identical get_dependents/who_writes/grep/read/batch_read results — identical call
+    (keyed by tool + args, scoped to pinned SHA) returns cached result.
+  normalized_statement: >
+    WHEN the pinned repository SHA changes between two otherwise identical tool calls THE SYSTEM SHALL NOT
+    return the cached result from the prior SHA; the cache key SHALL include the SHA as a mandatory scope
+    component.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Prompt Discipline — with_proxy_guardrails (§10.9) ─────────────────────────
+
+- requirement_id: R-doc04-BHVR-15
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4; CANONICAL §10.9"
+  source_quote: >
+    Prompt discipline (CANONICAL §10.9): with_proxy_guardrails(...) appends one standing line to every
+    grounded wake turn: "prefer the compact artifact, cheapest tool first, one gather pass — pull the
+    map/notes summaries once, prefer them over re-exploring raw code, don't re-fetch."
+  normalized_statement: >
+    WHEN any grounded wake turn is rendered THE SYSTEM SHALL append via with_proxy_guardrails() the exact
+    standing line: "prefer the compact artifact, cheapest tool first, one gather pass — pull the map/notes
+    summaries once, prefer them over re-exploring raw code, don't re-fetch." — to every grounded wake turn
+    system prompt without exception.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Spoken Register (AMENDMENT C2) ────────────────────────────────────────────
+
+- requirement_id: R-doc04-BHVR-16
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4; AMENDMENT C2"
+  source_quote: >
+    Spoken register (AMENDMENT C2): Every speak() utterance is composed as speech — short sentences,
+    contractions, no enumeration, two sentences maximum. This constraint appears in at least two prompt
+    locations: (1) the wake-behavior role string and (2) the with_proxy_guardrails(...) system suffix.
+  normalized_statement: >
+    WHEN a wake-behavior role string is defined and WHEN with_proxy_guardrails() is applied THE SYSTEM SHALL
+    encode the spoken-register constraint (short sentences, contractions, no enumeration, ≤2 sentences) in
+    both locations independently; absence of the constraint from either location SHALL be a build-time
+    violation.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-BHVR-17
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4; AMENDMENT C2"
+  source_quote: >
+    Every speak() utterance is composed as speech — short sentences, contractions, no enumeration,
+    two sentences maximum.
+  normalized_statement: >
+    WHEN any speak() utterance is composed THE SYSTEM SHALL limit it to at most two sentences, use
+    contractions, avoid enumeration (bullet lists, numbered lists, lettered lists), and use short sentences;
+    utterances violating any of these constraints SHALL be treated as a test failure.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Config vs. Judgment Separation (Law 4) ────────────────────────────────────
+
+- requirement_id: R-doc04-BHVR-18
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4 discipline paragraph"
+  source_quote: >
+    The discipline: config configures the capability surface; model judgment makes the choices. The typed
+    BehaviorConfig says what tools/context/model a behavior may use — never what to do with a given utterance.
+    There is no rules entry of the form "if the speaker asks for a comparison, call compare_tool."
+  normalized_statement: >
+    WHEN a BehaviorConfig.rules list is defined THE SYSTEM SHALL frame rules as examples that prime model
+    judgment, never as situation-to-action conditionals; no rule entry SHALL take the form "if <utterance
+    pattern> then <tool call>" or any equivalent prescriptive branch in the rules list or role string.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-BHVR-19
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4 discipline paragraph"
+  source_quote: >
+    Rule lists are framed as "these are examples to prime your judgment, NOT a checklist that bounds it."
+  normalized_statement: >
+    WHEN a rules list is rendered into the prompt THE SYSTEM SHALL include explicit framing that identifies
+    the rules as judgment-priming examples rather than a bounded checklist; the framing text SHALL appear
+    in the rendered prompt, not only as a code comment.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Behavior Dataclass Shape ──────────────────────────────────────────────────
+
+- requirement_id: R-doc04-BHVR-20
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4 Behavior dataclass block"
+  source_quote: >
+    @dataclass
+    class Behavior:
+        name: str
+        role: str
+        rules: list[str]
+        inputs: list[str]
+        config: "BehaviorConfig"      # model, max_turns, tools (the capability envelope)
+  normalized_statement: >
+    WHEN the Behavior dataclass is defined THE SYSTEM SHALL declare exactly these typed fields: name (str),
+    role (str), rules (list[str]), inputs (list[str]), and config (BehaviorConfig); the config field SHALL
+    encode at minimum model tier, max_turns, and tools list as its envelope.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Cost Telemetry inside BehaviorRunner ─────────────────────────────────────
+
+- requirement_id: R-doc04-BHVR-21
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.4 BehaviorRunner.run() code block"
+  source_quote: >
+    self._cost.observe(chunk)     # RESULT.metadata["total_cost_usd"] → §3.13 gate
+  normalized_statement: >
+    WHEN BehaviorRunner yields each AgentChunk THE SYSTEM SHALL call self._cost.observe(chunk) to accumulate
+    cost telemetry; the accumulated cost SHALL be surfaced as RESULT.metadata["total_cost_usd"] for the
+    §3.13 cost gate, applied on every chunk without exception.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified

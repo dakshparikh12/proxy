@@ -1,0 +1,680 @@
+# DOC-09 §1 + §4 Acceptance Criteria
+# §1 — The End Goal (normative behaviors)
+# §4 — The Full Demo Arc (atomized per clause)
+
+# ── §1 criteria ───────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S4-001
+  name: "grounded answer latency ≤ 2 seconds"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "repo is connected and Proxy is in ready state during a live meeting"
+    when: "a participant asks a code question"
+    then:
+      - "Proxy returns an answer within 2 seconds wall-clock from question receipt"
+      - "the answer contains at least one file:line citation"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    p99_latency_s: 2.0
+    violations_allowed: 0
+    uncited_confident_answers: 0
+  fault_model_refs: [F-S4-001]
+  test_ids: [T-S4-001]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-001
+
+- criterion_id: AC-S4-002
+  name: "staged draft requires one human approval before apply"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy has produced a world-touching draft during a meeting"
+    when: "the draft is created"
+    then:
+      - "draft Envelope.status is needs_review"
+      - "the draft is NOT applied until POST /m/{meeting_id}/drafts/{draft_id}/accept is called"
+      - "exactly one human approval action transitions status from needs_review to done"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+    ungated_world_touching_acts: 0
+  fault_model_refs: [F-S4-002]
+  test_ids: [T-S4-002]
+  dependency_class: db:postgres
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-002
+
+- criterion_id: AC-S4-002-NEG
+  name: "staged draft is NOT applied without human approval (negative)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a needs_review draft exists in Postgres + GCS"
+    when: "no accept call is made (db:postgres is available)"
+    then:
+      - "draft status remains needs_review"
+      - "no world-touching effect is applied"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-S4-002]
+  test_ids: [T-S4-002-NEG]
+  dependency_class: db:postgres
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-002-NEG
+
+- criterion_id: AC-S4-003
+  name: "notes artifact contains no invented claims and flags gaps"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a meeting has ended and the close arc has completed"
+    when: "the notes artifact is retrieved via GET /internal/notes/{meeting_id}"
+    then:
+      - "every claim in the notes is traceable to transcript or cited source"
+      - "topics discussed but not resolved are flagged rather than silently omitted"
+      - "no fabricated facts appear in the notes"
+  primary_oracle: {type: simulation_trace, artifact: "notes_artifact.json"}
+  thresholds:
+    violations_allowed: 0
+    invented_claims_allowed: 0
+  fault_model_refs: [F-S4-003]
+  test_ids: [T-S4-003]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-003
+
+- criterion_id: AC-S4-004
+  name: "orchestrator restart does not break active meeting"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a meeting is active with accumulated cost and state in Postgres"
+    when: "the orchestrator process is terminated and restarted"
+    then:
+      - "meeting_cost is reloaded from Postgres (not reset to zero)"
+      - "meeting state is fully recovered from durable substrate"
+      - "meeting continues without participant-visible interruption"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+    cost_reset_on_reclaim: false
+  fault_model_refs: [F-S4-004]
+  test_ids: [T-S4-004]
+  dependency_class: db:postgres
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-004
+
+- criterion_id: AC-S4-004-NEG
+  name: "orchestrator restart with Postgres unavailable surfaces error (negative)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "the orchestrator has been restarted but Postgres is unavailable"
+    when: "the orchestrator attempts to reload meeting state"
+    then:
+      - "the system surfaces a recoverable error rather than silently resuming with stale/zero cost"
+      - "no corrupted state is written"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-S4-004]
+  test_ids: [T-S4-004-NEG]
+  dependency_class: db:postgres
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-004-NEG
+
+- criterion_id: AC-S4-005
+  name: "concurrent meetings maintain tenant isolation"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "two or more meetings are active concurrently for different tenants"
+    when: "any operation is performed in one meeting"
+    then:
+      - "no data, cost, state, or transcript from meeting A is readable in meeting B"
+      - "the runtime cross-tenant tripwire does not fire"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+    cross_tenant_leaks_allowed: 0
+  fault_model_refs: [F-S4-005]
+  test_ids: [T-S4-005]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-005
+
+- criterion_id: AC-S4-006
+  name: "cross-doc contracts closed with zero silent failures"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "the assembled product runs the connect→meet→close arc"
+    when: "message types and status enums cross service boundaries"
+    then:
+      - "every message type produced is present in the contracts registry"
+      - "every status enum value matches the canonical definition"
+      - "assert_registry_closed passes with zero violations"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+    registry_violations_allowed: 0
+  fault_model_refs: [F-S4-006]
+  test_ids: [T-S4-006]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-006
+
+# ── §4 criteria ───────────────────────────────────────────────────────────────
+
+- criterion_id: AC-S4-007
+  name: "readiness enum progresses to ready with coverage_pct and gaps"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a real repository URL is provided for connection"
+    when: "the connect flow is initiated"
+    then:
+      - "readiness enum transitions: connecting → cloning → indexing → ready"
+      - "readiness payload contains coverage_pct as a float"
+      - "readiness payload contains gaps as a list of strings"
+      - "ready state is reached before the meeting begins"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+    coverage_pct_present: true
+  fault_model_refs: [F-S4-007]
+  test_ids: [T-S4-007]
+  dependency_class: fs:git
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-007
+
+- criterion_id: AC-S4-007-NEG
+  name: "readiness emits not_ready when clone fails (negative)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "the git clone step fails (fs:git unavailable or invalid repo URL)"
+    when: "the connect flow is initiated"
+    then:
+      - "readiness enum transitions to not_ready"
+      - "the system does not proceed to indexing or emit a false coverage_pct"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-S4-007]
+  test_ids: [T-S4-007-NEG]
+  dependency_class: fs:git
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-007-NEG
+
+- criterion_id: AC-S4-008
+  name: "grep/read tool path returns cited answer"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "repo is ready and a code question resolves via grep or file read"
+    when: "Proxy is asked the question in the meeting"
+    then:
+      - "the grep or read tool is invoked"
+      - "the answer contains at least one file:line citation"
+      - "the answer is returned within the latency envelope"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+    uncited_confident_answers: 0
+  fault_model_refs: [F-S4-008]
+  test_ids: [T-S4-008]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-008
+
+- criterion_id: AC-S4-009
+  name: "get_dependents tool path returns cited answer"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "repo is ready and a code question requires dependency traversal"
+    when: "Proxy is asked the question in the meeting"
+    then:
+      - "the get_dependents tool is invoked"
+      - "the answer contains at least one file:line citation from the dependency graph"
+      - "the answer is returned within the latency envelope"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+    uncited_confident_answers: 0
+  fault_model_refs: [F-S4-009]
+  test_ids: [T-S4-009]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-009
+
+- criterion_id: AC-S4-010
+  name: "impact summary draft created with needs_review status in Workroom"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-10]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy has been asked to draft an impact summary in the meeting"
+    when: "Proxy executes the draft in the Workroom"
+    then:
+      - "the draft is self-verified before being surfaced"
+      - "draft Envelope.status is needs_review"
+      - "the draft is persisted to Postgres and GCS at propose_change creation"
+      - "the draft is NOT applied without explicit human approval"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+    ungated_world_touching_acts: 0
+  fault_model_refs: [F-S4-010]
+  test_ids: [T-S4-010]
+  dependency_class: db:postgres
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-010
+
+- criterion_id: AC-S4-010-NEG
+  name: "draft persistence fails gracefully when Postgres unavailable (negative)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-10]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy has drafted an impact summary but Postgres is unavailable"
+    when: "propose_change attempts to persist the staged draft"
+    then:
+      - "the operation returns an error rather than silently succeeding"
+      - "no partial state is written to GCS without a corresponding Postgres record"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-S4-010]
+  test_ids: [T-S4-010-NEG]
+  dependency_class: db:postgres
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-010-NEG
+
+- criterion_id: AC-S4-011
+  name: "orchestrator recycle reloads cost from Postgres and continues seamlessly"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-11]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "the orchestrator is killed once during the demo arc after accumulating cost"
+    when: "the orchestrator is restarted and reclaims the meeting"
+    then:
+      - "meeting_cost is reloaded from Postgres (not reset)"
+      - "operation_runs state is recovered from Postgres"
+      - "the meeting continues with no participant-visible interruption"
+      - "the chaos test completes and the arc proceeds to close"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+    cost_reset_on_reclaim: false
+  fault_model_refs: [F-S4-011]
+  test_ids: [T-S4-011]
+  dependency_class: db:postgres
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-011
+
+- criterion_id: AC-S4-011-NEG
+  name: "orchestrator reclaim with missing Postgres row surfaces error (negative)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-11]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "the orchestrator is restarted but Postgres has no operation_runs row for this meeting"
+    when: "the reclaim flow executes"
+    then:
+      - "the system surfaces a clear error rather than resuming with zeroed or corrupt state"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-S4-011]
+  test_ids: [T-S4-011-NEG]
+  dependency_class: db:postgres
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-011-NEG
+
+- criterion_id: AC-S4-012
+  name: "meeting_cost stays within configured budget envelope"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-12]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "the full demo arc has completed including the chaos recycle"
+    when: "total meeting_cost is evaluated"
+    then:
+      - "meeting_cost does not exceed the configured budget envelope"
+      - "cost telemetry is present for every external call via call_external seam"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+    budget_exceeded: false
+  fault_model_refs: [F-S4-012]
+  test_ids: [T-S4-012]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-012
+
+- criterion_id: AC-S4-013
+  name: "notes artifact and staged draft both persist past meeting teardown"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-13]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "the meeting has ended and teardown has completed"
+    when: "GET /internal/notes/{meeting_id} and the draft record are retrieved"
+    then:
+      - "notes artifact is accessible and keyed by meeting_id"
+      - "staged draft record is present in Postgres with status needs_review"
+      - "draft payload is retrievable from GCS"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-S4-013]
+  test_ids: [T-S4-013]
+  dependency_class: gcs:objects
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-013
+
+- criterion_id: AC-S4-013-NEG
+  name: "notes and draft not retrievable if GCS unavailable (negative)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-13]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "meeting has ended but GCS is unavailable"
+    when: "notes or draft retrieval is attempted"
+    then:
+      - "the system returns a clear error rather than empty or corrupt data"
+      - "no partial or inconsistent artifact is surfaced"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-S4-013]
+  test_ids: [T-S4-013-NEG]
+  dependency_class: gcs:objects
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-013-NEG
+
+- criterion_id: AC-S4-014
+  name: "post-teardown human accept applies the staged draft"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "meeting teardown has completed and a needs_review draft exists in Postgres + GCS"
+    when: "a human calls POST /m/{meeting_id}/drafts/{draft_id}/accept"
+    then:
+      - "the draft is applied (notes-edit or push per draft type)"
+      - "draft status transitions from needs_review to done"
+      - "the apply is recorded in Postgres"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-S4-014]
+  test_ids: [T-S4-014]
+  dependency_class: db:postgres
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-014
+
+- criterion_id: AC-S4-014-NEG
+  name: "post-teardown accept fails gracefully when draft record missing (negative)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "meeting teardown has completed but the draft_id does not exist in Postgres"
+    when: "a human calls POST /m/{meeting_id}/drafts/{draft_id}/accept"
+    then:
+      - "the endpoint returns a 404 or equivalent error"
+      - "no spurious world-touching effect is applied"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: [F-S4-014]
+  test_ids: [T-S4-014-NEG]
+  dependency_class: db:postgres
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-014-NEG
+
+- criterion_id: AC-S4-015
+  name: "all five AGENTS.md laws observed across full demo arc"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S4-15]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "the full demo arc runs from connect to post-teardown accept"
+    when: "the simulation trace is analyzed for law adherence"
+    then:
+      - "Law 1: every confident answer in the trace has at least one file:line citation (uncited_confident_answers = 0)"
+      - "Law 2: every result is tagged resolved or lower-bound; no overstatement present"
+      - "Law 3: every world-touching act passes through the staged-draft gate (ungated_world_touching_acts = 0)"
+      - "Law 4: no hard-coded situation-to-action mapping present in any response path"
+      - "Law 5: all interactions are operable by speech and glance without mid-meeting install"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+    uncited_confident_answers: 0
+    ungated_world_touching_acts: 0
+    overstatement_instances: 0
+  fault_model_refs: [F-S4-015]
+  test_ids: [T-S4-015]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-015
+
+# ── §4 golden path capstone ───────────────────────────────────────────────────
+
+- criterion_id: AC-S4-016
+  name: "full demo arc completes successfully end-to-end (golden path)"
+  evidence_class: "[unit-example]"
+  authority_refs:
+    - R-doc09-S4-07
+    - R-doc09-S4-08
+    - R-doc09-S4-09
+    - R-doc09-S4-10
+    - R-doc09-S4-11
+    - R-doc09-S4-12
+    - R-doc09-S4-13
+    - R-doc09-S4-14
+    - R-doc09-S4-15
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a real repo is connected, a meeting is started, all arc steps execute in order"
+    when: "the complete connect→meet→close arc runs including chaos recycle and post-teardown accept"
+    then:
+      - "repo reaches ready with coverage_pct and gaps"
+      - "two grounded questions answered (grep/read path and get_dependents path)"
+      - "impact summary drafted in Workroom as needs_review"
+      - "orchestrator recycled once and meeting continues seamlessly with cost reloaded"
+      - "cost stays within budget envelope"
+      - "notes artifact and staged draft persist past teardown"
+      - "human accept after teardown applies the draft and transitions status to done"
+      - "zero uncited confident answers across the arc"
+      - "zero ungated world-touching acts across the arc"
+      - "all five AGENTS.md laws observed throughout"
+  primary_oracle: {type: simulation_trace, artifact: "demo_arc_trace.jsonl"}
+  thresholds:
+    violations_allowed: 0
+    uncited_confident_answers: 0
+    ungated_world_touching_acts: 0
+    coverage_pct_present: true
+    cost_reset_on_reclaim: false
+    budget_exceeded: false
+  fault_model_refs: [F-S4-016]
+  test_ids: [T-S4-016]
+  dependency_class: db:postgres
+  mock_boundary: null
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: eval}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S4-016
+    - trace:demo_arc_trace.jsonl

@@ -1,0 +1,103 @@
+# Doc 09 — §2 Cross-doc contract checks: requirements
+# Proves the seams from CANONICAL-DECISIONS actually close.
+
+- requirement_id: R-doc09-S2-01
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§2 bullet 1"
+  source_quote: "assert_registry_closed() — set(MessageType) == set(CHANNEL_REGISTRY); a produced-but-unconsumed message fails the build (Doc 00 §12, Doc 08 §4.1). Runs in CI and at boot."
+  normalized_statement: >
+    WHEN the CI build executes
+    THE SYSTEM SHALL run assert_registry_closed() and fail the build if any
+    produced MessageType is absent from CHANNEL_REGISTRY.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S2-02
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§2 bullet 1"
+  source_quote: "assert_registry_closed() — set(MessageType) == set(CHANNEL_REGISTRY); a produced-but-unconsumed message fails the build. Runs in CI and at boot."
+  normalized_statement: >
+    WHEN the meeting_runtime process starts
+    THE SYSTEM SHALL call assert_registry_closed() at boot and abort startup
+    if the registry is not closed.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S2-03
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§2 bullet 2"
+  source_quote: "The contract types resolve to libs/contracts — every doc's wire shape (the bundle, envelope, signal surface, notes deltas, readiness, AgentChunk) imports the literal type; a grep proves no doc re-declares a shared type's shape locally."
+  normalized_statement: >
+    WHEN any service module uses a shared wire type (Bundle, Envelope, AgentChunk,
+    NotesDelta, Readiness, or signal surface types)
+    THE SYSTEM SHALL import that type from libs/contracts and SHALL NOT define
+    a structurally equivalent local copy of the type's shape.
+  requirement_type: contract
+  criticality: P1
+  testability: analyzable
+  status: qualified
+
+- requirement_id: R-doc09-S2-04
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§2 bullet 3"
+  source_quote: "One operation_runs — exactly one table definition across the repo (no meeting_harness); the reconcile sweep reaps it (CANONICAL §2)."
+  normalized_statement: >
+    WHEN the repository is scanned for SQL CREATE TABLE statements
+    THE SYSTEM SHALL contain exactly one CREATE TABLE operation_runs definition
+    and zero CREATE TABLE meeting_harness definitions.
+  requirement_type: contract
+  criticality: P1
+  testability: analyzable
+  status: qualified
+
+- requirement_id: R-doc09-S2-05
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§2 bullet 4"
+  source_quote: "AgentChunk consumers use stream_deltas — no consumer reads a raw TEXT chunk (the accumulation-vs-delta bug); field access is .type/.metadata[...] (CANONICAL §1.1)."
+  normalized_statement: >
+    WHEN any module consumes AgentChunk events
+    THE SYSTEM SHALL route the stream through stream_deltas before consuming
+    and SHALL NOT access .kind, .tool, or .structured as top-level AgentChunk
+    attributes; access is via .type and .metadata[key].
+  requirement_type: contract
+  criticality: P1
+  testability: analyzable
+  status: qualified
+
+- requirement_id: R-doc09-S2-06
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§2 bullet 5"
+  source_quote: "Cost + drafts persist — meeting_cost and staged_drafts rows exist and survive a simulated process kill (CANONICAL §3, §4)."
+  normalized_statement: >
+    WHEN meeting_cost and staged_drafts rows are written to Postgres and the
+    owning process is subsequently killed (SIGKILL)
+    THE SYSTEM SHALL retain those rows intact and readable by a replacement
+    process after recovery.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S2-07
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "CANONICAL §3"
+  source_quote: "A crashed orchestrator must not reset the meter to 0 (it would silently defeat the $1/hr SLA at exactly the recovery moment)."
+  normalized_statement: >
+    WHEN a replacement orchestrator re-claims a meeting after a process kill
+    THE SYSTEM SHALL reload meeting_cost columns from the existing Postgres row
+    and SHALL NOT reset any cost column to zero.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified

@@ -1,0 +1,246 @@
+# OWNR.requirements.yaml — Doc 04 (Proxy Orchestrator) — §3.6 Atomic-Claim Meeting Ownership
+# Atomic EARS requirements. Each carries source_location + verbatim source_quote + criticality.
+# ID scheme: R-doc04-OWNR-NN
+# Authority documents: DOC-04 (§3.6), CANONICAL-DECISIONS (§2, §11.2, §11.11, §12.10)
+#
+# Scope: the Postgres-arbitrated atomic INSERT ON CONFLICT claim; the one-harness-per-meeting
+#   invariant; the partial-unique index as the cluster-wide lock; winner/loser semantics;
+#   instance affinity (created_by); re-claim after stale heartbeat; the pg_advisory_xact_lock
+#   critical section; the two-layer mutex + claim architecture; the deleted meeting_harness
+#   table (CANONICAL §12.10 / §2).
+# NOT in scope here: §3.8 heartbeat reaper mechanics beyond the re-claim trigger; close-pass
+#   details; workroom dispatch.
+
+# ── §3.6 · The double-harness race and the Postgres arbitration invariant ────
+
+- requirement_id: R-doc04-OWNR-01
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.6 paragraph 1"
+  source_quote: >
+    Recall's join webhook is at-least-once, and with ≥2 orchestrator instances two of them
+    can both receive it and both pass a naive "is there already a harness for this meeting?"
+    check-then-act — spawning two harnesses, two SDK sessions, two mouths. Postgres arbitrates
+    the race; read RETURNING / rowcount to know who won. No broker, no Redis — the row is the lock.
+  normalized_statement: >
+    WHEN two or more orchestrator instances concurrently receive the same Recall join webhook
+    THE SYSTEM SHALL allow at most one of them to open a meeting harness and SDK session;
+    Postgres SHALL arbitrate the race via an atomic INSERT ON CONFLICT; the row returned by
+    RETURNING is the only authoritative signal of ownership; no in-process check-then-act,
+    no Redis, and no external broker SHALL be used in place of the Postgres row as the lock.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.6 · claim_meeting inserts into operation_runs, not meeting_harness ────
+
+- requirement_id: R-doc04-OWNR-02
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§3.6 paragraph 2; CANONICAL-DECISIONS §2; CANONICAL-DECISIONS §12.10"
+  source_quote: >
+    There is exactly ONE durable-ops table — the canonical operation_runs (CANONICAL-DECISIONS
+    §2 / Doc 00 §5.1); Doc 04's old separate meeting_harness table is deleted. The atomic
+    claim inserts a meeting-harness row directly into operation_runs, keyed on scope_id (which
+    holds the meeting_id); the partial-unique index operation_runs_active (scope_id,
+    operation_type) WHERE status='running' is the lock.
+  normalized_statement: >
+    THE SYSTEM SHALL insert meeting-ownership claims directly into the operation_runs table
+    (not into a meeting_harness table or any other table); the system SHALL NOT define or
+    reference a meeting_harness table anywhere in the codebase; operation_runs is the sole
+    durable-ops table.
+  requirement_type: constraint
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.6 · INSERT ON CONFLICT … DO NOTHING RETURNING semantics ───────────────
+
+- requirement_id: R-doc04-OWNR-03
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.6 claim_meeting code block"
+  source_quote: >
+    INSERT INTO operation_runs (scope_id, operation_type, status,
+                                 created_by, last_heartbeat_at, started_at)
+    VALUES ($1, 'meeting-harness', 'running', $2, NOW(), NOW())
+    ON CONFLICT (scope_id, operation_type) WHERE status = 'running'
+    DO NOTHING
+    RETURNING id
+  normalized_statement: >
+    WHEN claim_meeting is called THE SYSTEM SHALL execute an INSERT into operation_runs with
+    operation_type='meeting-harness', status='running', and scope_id equal to the meeting_id;
+    the INSERT SHALL include ON CONFLICT (scope_id, operation_type) WHERE status='running'
+    DO NOTHING RETURNING id; a winner SHALL receive the non-NULL id; a loser (conflicting
+    insert) SHALL receive NULL (no row inserted, no RETURNING row).
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.6 · Winner vs loser decision branching ────────────────────────────────
+
+- requirement_id: R-doc04-OWNR-04
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.6, sentence after claim_meeting code block"
+  source_quote: >
+    The winner opens the harness on the returned run_id; the loser backs off.
+  normalized_statement: >
+    WHEN claim_meeting returns a non-NULL id THE SYSTEM SHALL open the meeting harness using
+    that run_id as its operation_runs anchor; WHEN claim_meeting returns NULL THE SYSTEM SHALL
+    back off and SHALL NOT open a second harness, a second SDK session, or any meeting-level
+    state for the same meeting.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.6 · meeting_id cast to text at the call site (one documented cast) ────
+
+- requirement_id: R-doc04-OWNR-05
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§3.6 Type note; CANONICAL-DECISIONS §11.2"
+  source_quote: >
+    Type note (CANONICAL §11.2): meeting_id is a UUID everywhere in the app tables
+    (meetings.id, meeting_cost, staged_drafts, …); only operation_runs.scope_id stays text
+    (it also holds workroom task_ids), so the claim below casts meeting_id::text at the call
+    site — the one documented cast.
+  normalized_statement: >
+    WHEN claim_meeting is invoked with a meeting_id THE SYSTEM SHALL convert the UUID to text
+    at the call site before passing it as the scope_id parameter; no other module SHALL perform
+    this UUID-to-text cast; meeting_id SHALL remain a UUID type in all other app tables
+    (meetings, meeting_cost, staged_drafts) and SHALL NOT be stored as text there.
+  requirement_type: constraint
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §3.6 · Instance affinity: created_by records the owner instance-id ───────
+
+- requirement_id: R-doc04-OWNR-06
+  authority_type: canonical_decision
+  authority_document: CANONICAL-DECISIONS
+  source_location: "§3.6 Instance affinity paragraph; CANONICAL-DECISIONS §11.11"
+  source_quote: >
+    Instance affinity (CANONICAL §11.11): the claim writes the owner instance-id onto the
+    operation_runs claim row (created_by), so a reconnecting tile WS or a retried Recall
+    webhook routes to the owner instance — the instance actually holding this meeting's
+    harness — a non-owner instance proxies to it or hands off, rather than being scattered
+    by random Cloud Run load-balancing.
+  normalized_statement: >
+    WHEN an instance wins the ownership claim THE SYSTEM SHALL write that instance's
+    identifier into the created_by field of the operation_runs row; the created_by value
+    SHALL be used by routing logic so that reconnecting tile WebSocket sessions and retried
+    Recall webhooks are directed to the owner instance; a non-owner instance SHALL proxy
+    or hand off to the owner instance rather than independently processing the request.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §3.6 · Non-owner never opens a parallel harness ─────────────────────────
+
+- requirement_id: R-doc04-OWNR-07
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.6 Instance affinity paragraph; CANONICAL-DECISIONS §11.11"
+  source_quote: >
+    a non-owner instance proxies to it or hands off, rather than being scattered by random
+    Cloud Run load-balancing.
+  normalized_statement: >
+    WHEN a non-owner instance receives a request for a meeting it does not own (as determined
+    by comparing its instance_id against the operation_runs created_by field) THE SYSTEM SHALL
+    proxy the request to the owner instance or hand off the request; THE SYSTEM SHALL NOT open
+    an independent parallel harness or a second SDK session for that meeting on the non-owner
+    instance.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.6 · Stale heartbeat frees the partial index for re-claim ──────────────
+
+- requirement_id: R-doc04-OWNR-08
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.6 Instance affinity paragraph, re-claim sentence"
+  source_quote: >
+    When a harness dies and its heartbeat goes stale (§3.8's reaper flips this row's status
+    off running), the partial index frees, and a replacement instance can re-claim the same
+    meeting to resume it (and becomes the new affinity owner).
+  normalized_statement: >
+    WHEN the §3.8 reaper transitions an operation_runs row's status away from 'running' due
+    to a stale heartbeat THE SYSTEM SHALL unblock the partial-unique index
+    (scope_id, operation_type) WHERE status='running', allowing a replacement instance to
+    execute a new claim_meeting INSERT for the same meeting; the replacement winner SHALL
+    become the new affinity owner recorded in created_by.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §3.6 · pg_advisory_xact_lock for per-meeting cluster-wide critical sections
+
+- requirement_id: R-doc04-OWNR-09
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.6, pg_advisory_xact_lock paragraph"
+  source_quote: >
+    For per-meeting critical sections that must be cluster-wide serial (notes finalization
+    at close), use pg_advisory_xact_lock(hashtext(meeting_id), 0) — auto-released on COMMIT,
+    and run all work on the locked connection (checking out a second pooled connection while
+    holding it deadlocks). Keep the two layers: an in-process mutex for single-process
+    ordering PLUS the atomic claim for cross-instance.
+  normalized_statement: >
+    WHEN a per-meeting critical section (such as notes finalization at close) must be
+    cluster-wide serial THE SYSTEM SHALL acquire pg_advisory_xact_lock(hashtext(meeting_id), 0)
+    within a transaction; all critical-section work SHALL execute on the same pooled connection
+    that holds the advisory lock; the lock SHALL be auto-released on COMMIT; the system SHALL
+    NOT check out a second pooled connection while holding the advisory lock.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §3.6 · Two-layer mutex architecture ─────────────────────────────────────
+
+- requirement_id: R-doc04-OWNR-10
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.6, pg_advisory_xact_lock paragraph, final sentence"
+  source_quote: >
+    Keep the two layers: an in-process mutex for single-process ordering PLUS the atomic
+    claim for cross-instance.
+  normalized_statement: >
+    THE SYSTEM SHALL implement two distinct ordering layers for meeting-critical sections:
+    (1) an in-process asyncio mutex (or equivalent) for single-process serialization, and
+    (2) the Postgres-level atomic claim or pg_advisory_xact_lock for cross-instance
+    serialization; neither layer SHALL be used in isolation as a substitute for the other.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §3.6 · The old meeting_harness bug: un-reclaimable crashed meetings ───────
+
+- requirement_id: R-doc04-OWNR-11
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§3.6 final paragraph"
+  source_quote: >
+    The old duplicate meeting_harness table bug: it was never reaped, so a crashed meeting
+    was permanently un-reclaimable — collapsing to the single reaped operation_runs table
+    fixes it.
+  normalized_statement: >
+    THE SYSTEM SHALL NOT maintain any table separate from operation_runs that tracks meeting
+    harness ownership; a meeting whose harness has crashed and whose operation_runs row has
+    been reaped (status no longer 'running') SHALL be reclaimable by a new instance via
+    claim_meeting without any manual intervention or schema change; permanent un-reclaimability
+    caused by an unreapable separate table SHALL NOT be possible.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified

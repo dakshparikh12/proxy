@@ -134,7 +134,8 @@
   authority_type: specification
   authority_document: DOC-08
   source_location: "§2.1 paragraph 4 — rules list"
-  source_quote: "never "As an AI…" · no filler ("Certainly!", "Great question!") · no exclamation marks · no hedging theater — uncertainty is stated once, precisely"
+  source_quote: |
+    never "As an AI…" · no filler ("Certainly!", "Great question!") · no exclamation marks · no hedging theater — uncertainty is stated once, precisely
   normalized_statement: >
     WHEN Proxy produces written or spoken output
     THE SYSTEM SHALL NOT include: the phrase "As an AI", filler phrases such as
@@ -165,7 +166,8 @@
   authority_type: specification
   authority_document: DOC-08
   source_location: "§2.1 paragraph 5"
-  source_quote: ""Orchestrator," "Scribe," "workroom," "sandbox" are internal engineering words. If any user-visible string contains them, it is a bug. Proxy refers to itself as "I.""
+  source_quote: |
+    "Orchestrator," "Scribe," "workroom," "sandbox" are internal engineering words. If any user-visible string contains them, it is a bug. Proxy refers to itself as "I."
   normalized_statement: >
     WHEN any user-visible string is rendered or spoken
     THE SYSTEM SHALL NOT include the words Orchestrator, Scribe, workroom, or
@@ -285,7 +287,8 @@
   authority_type: specification
   authority_document: DOC-08
   source_location: "§2.2 state table row: Listening-to"
-  source_quote: "Listening-to | small "◉ listening to Maya" caption | an address was detected (Doc 04's name-gate + roster)"
+  source_quote: |
+    Listening-to | small "◉ listening to Maya" caption | an address was detected (Doc 04's name-gate + roster)
   normalized_statement: >
     WHEN Doc 04's name-gate detects that Proxy has been addressed by a named
     participant (e.g. "Maya")
@@ -302,7 +305,8 @@
   authority_type: specification
   authority_document: DOC-08
   source_location: "§2.2 state table row: Working"
-  source_quote: "Working | a quiet shimmer + one line: "checking the checkout retry logic…" | a real progress event from the task (Doc 05's envelopes)"
+  source_quote: |
+    Working | a quiet shimmer + one line: "checking the checkout retry logic…" | a real progress event from the task (Doc 05's envelopes)
   normalized_statement: >
     WHEN a real progress event is received from Doc 05's task envelopes
     THE SYSTEM SHALL transition to Working state: rendering a quiet shimmer on
@@ -319,7 +323,8 @@
   authority_type: specification
   authority_document: DOC-08
   source_location: "§2.2 state table row: Checking (ACK)"
-  source_quote: "Checking (ACK) | a fast "checking…" line, fired ≤500ms | an LSP-bound direct answer that can't hit the audio-latency gate: the tile ACKs immediately, Proxy speaks when the LSP returns"
+  source_quote: |
+    Checking (ACK) | a fast "checking…" line, fired ≤500ms | an LSP-bound direct answer that can't hit the audio-latency gate: the tile ACKs immediately, Proxy speaks when the LSP returns
   normalized_statement: >
     WHEN an LSP-bound direct-answer event is received that cannot meet the
     audio-latency gate
@@ -352,7 +357,8 @@
   authority_type: specification
   authority_document: DOC-08
   source_location: "§2.2 state table row: Has-something"
-  source_quote: "Has-something | the orb firms; caption "have the answer when there's a moment" | a finished result is waiting for a turn boundary (Doc 04)"
+  source_quote: |
+    Has-something | the orb firms; caption "have the answer when there's a moment" | a finished result is waiting for a turn boundary (Doc 04)
   normalized_statement: >
     WHEN a finished result is waiting and a turn boundary has not yet arrived
     THE SYSTEM SHALL transition to Has-something state: the orb firms and
@@ -385,7 +391,8 @@
   authority_type: specification
   authority_document: DOC-08
   source_location: "§2.2 state table row: Muted"
-  source_quote: "Muted | dimmed orb + "muted" label | the hard mute (so silence is legible as chosen, not broken)"
+  source_quote: |
+    Muted | dimmed orb + "muted" label | the hard mute (so silence is legible as chosen, not broken)
   normalized_statement: >
     WHEN the hard-mute signal from Doc 02 is active
     THE SYSTEM SHALL transition to Muted state: the orb is dimmed and a

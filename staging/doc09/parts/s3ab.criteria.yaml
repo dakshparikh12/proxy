@@ -1,0 +1,859 @@
+# Doc 09 (End-to-End Integration Scenarios) — S1–S4 acceptance criteria slice
+# Every criterion has a deterministic-preferred oracle; authority_refs point at real
+# requirement_ids in s3ab.requirements.yaml. Numeric thresholds explicit; zeros stated.
+# Negative criteria (NEG) paired for every non-null dependency_class.
+# S1 end-to-end golden path marked golden_path: true with e2e tier.
+
+# ══════════════════════════════════════════════════════════════════════════════
+# S1 — THE HAPPY ARC
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-001
+  name: "S1 golden path: grounded answer + notes file posts end-to-end"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-01, R-doc09-S3-05, R-doc09-S3-06, R-doc09-S3-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A repo is connected, Proxy is admitted to a meeting, and a grounded question is asked aloud"
+    when: "The full meeting arc runs: question → answer → meeting ends"
+    then:
+      - "The answer cites at least one file:line drawn from the live repository clone"
+      - "A voice headline is spoken and a chat-detail answer is posted in the meeting chat"
+      - "After meeting end a notes file is posted containing decisions, actions, questions, and receipts"
+      - "The notes bundle envelope contains notes_ref equal to the meeting_id"
+  primary_oracle: {type: deterministic_simulation, artifact: "End-to-end trace asserting file:line citation present, voice + chat outputs emitted, notes file posted with required sections, notes_ref == meeting_id"}
+  thresholds: {file_line_citations_min: 1, missing_notes_sections_allowed: 0, notes_ref_mismatch_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-001]
+  test_ids: [T-S3-001]
+  dependency_class: vendor:recall
+  mock_boundary: "Recall.ai bot join and audio stream replaced by a pre-recorded fixture; STT/TTS mocked at their respective seams"
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: reality}
+    - {tier: e2e}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-001
+
+- criterion_id: AC-S3-001-NEG
+  name: "S1 Recall outage: honest partial failure propagated, no phantom answer"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy is mid-meeting when the Recall.ai bot connection errors or times out"
+    when: "The Recall dependency returns an error or non-recoverable timeout"
+    then:
+      - "No grounded answer is fabricated from the unavailable audio stream"
+      - "The envelope status is set to failed or partial with an honest error reason"
+      - "The notes file is not silently omitted without an error signal to the caller"
+  primary_oracle: {type: deterministic_simulation, artifact: "Recall mock forced to error; assert no phantom answer produced, envelope status in {failed, partial}, error reason populated"}
+  thresholds: {phantom_answers_allowed: 0, silent_failures_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-001-NEG]
+  test_ids: [T-S3-001-NEG]
+  dependency_class: vendor:recall
+  mock_boundary: "Recall.ai mock forced to return connection-error / timeout at the bot-join seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-001-NEG
+
+- criterion_id: AC-S3-002
+  name: "S1 answer cites file:line from live clone (grounded, not hallucinated)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A live repository clone is indexed and a grounded question is posed"
+    when: "Proxy computes the answer"
+    then:
+      - "Every file:line citation in the answer resolves to a real line in the live clone"
+      - "No citation points to a path or line number that does not exist in the clone"
+  primary_oracle: {type: deterministic_simulation, artifact: "Post-answer assertion: every file:line citation verified against the fixture clone; count of unresolvable citations == 0"}
+  thresholds: {unresolvable_citations_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-002]
+  test_ids: [T-S3-002]
+  dependency_class: fs:git
+  mock_boundary: "git clone replaced by a fixture repo with known file/line contents"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-002
+
+- criterion_id: AC-S3-002-NEG
+  name: "S1 clone missing/stale: answer withheld with honest 'not found' signal"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The git clone is absent, corrupted, or flagged stale"
+    when: "A grounded question is posed"
+    then:
+      - "Proxy does not fabricate a file:line citation from memory"
+      - "The response signals 'not found by this method' (Law 1: grounded or silent)"
+  primary_oracle: {type: deterministic_simulation, artifact: "Fixture clone absent; assert response contains no invented file:line; assert not-found signal present"}
+  thresholds: {fabricated_citations_allowed: 0, silent_failures_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-002-NEG]
+  test_ids: [T-S3-002-NEG]
+  dependency_class: fs:git
+  mock_boundary: "fs:git fixture replaced with empty or missing clone directory"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-002-NEG
+
+- criterion_id: AC-S3-003
+  name: "S1 ack-audible latency: p95 ≤ 500 ms"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc09-S3-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A grounded question is asked aloud during a meeting"
+    when: "The system processes the question"
+    then:
+      - "An audible acknowledgement is delivered at p95 ≤ 500 ms from question onset"
+  primary_oracle: {type: latency_percentile, artifact: "Latency histogram over ≥ 100 sampled questions; assert p95 ≤ 500 ms"}
+  thresholds: {latency_p95_ms: 500, violations_allowed: 0}
+  fault_model_refs: [F-S3-003]
+  test_ids: [T-S3-003]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-003
+
+- criterion_id: AC-S3-004
+  name: "S1 first-grounded-text latency: p50 ≤ 2 000 ms, p95 ≤ 4 000 ms"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc09-S3-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A grounded question is asked aloud during a meeting"
+    when: "The direct-answer path produces the first grounded text token"
+    then:
+      - "First grounded text token arrives at p50 ≤ 2 000 ms from question onset"
+      - "First grounded text token arrives at p95 ≤ 4 000 ms from question onset"
+  primary_oracle: {type: latency_percentile, artifact: "Latency histogram over ≥ 100 sampled questions; assert p50 ≤ 2000 ms and p95 ≤ 4000 ms"}
+  thresholds: {latency_p50_ms: 2000, latency_p95_ms: 4000, violations_allowed: 0}
+  fault_model_refs: [F-S3-004]
+  test_ids: [T-S3-004]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-004
+
+- criterion_id: AC-S3-005
+  name: "S1 first-grounded-audio latency: p50 ≤ 2 500 ms, p95 ≤ 5 000 ms"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc09-S3-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A grounded question is asked aloud during a meeting with voice output active"
+    when: "The TTS pipeline produces the first grounded audio chunk"
+    then:
+      - "First grounded audio chunk is delivered at p50 ≤ 2 500 ms from question onset"
+      - "First grounded audio chunk is delivered at p95 ≤ 5 000 ms from question onset"
+  primary_oracle: {type: latency_percentile, artifact: "Latency histogram over ≥ 100 sampled questions; assert p50 ≤ 2500 ms and p95 ≤ 5000 ms"}
+  thresholds: {latency_p50_ms: 2500, latency_p95_ms: 5000, violations_allowed: 0}
+  fault_model_refs: [F-S3-005]
+  test_ids: [T-S3-005]
+  dependency_class: vendor:cartesia
+  mock_boundary: "Cartesia TTS replaced by zero-latency stub that emits silence chunks; timestamps recorded at emission"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-005
+
+- criterion_id: AC-S3-005-NEG
+  name: "S1 Cartesia TTS failure: voice headline omitted gracefully, chat-detail still posted"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-04, R-doc09-S3-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Cartesia TTS is unavailable or returns an error"
+    when: "A grounded answer is ready to deliver"
+    then:
+      - "The chat-detail answer is still posted in the meeting chat"
+      - "No silent failure occurs; the voice-unavailable state is surfaced honestly"
+      - "No fabricated audio is produced"
+  primary_oracle: {type: deterministic_simulation, artifact: "Cartesia mock forced to error; assert chat-detail posted, no fabricated audio, error state surfaced"}
+  thresholds: {silent_failures_allowed: 0, fabricated_audio_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-005-NEG]
+  test_ids: [T-S3-005-NEG]
+  dependency_class: vendor:cartesia
+  mock_boundary: "Cartesia TTS mock returns HTTP 503 at the TTS-request seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-005-NEG
+
+- criterion_id: AC-S3-006
+  name: "S1 voice-headline and chat-detail are distinct outputs"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A grounded answer is produced by the direct-answer path"
+    when: "The answer is delivered"
+    then:
+      - "A concise voice headline is emitted as TTS speech output"
+      - "A fuller chat-detail answer is posted in the meeting chat channel"
+      - "The two outputs are distinguishable as separate artifacts (not the same string routed to both channels)"
+  primary_oracle: {type: deterministic_simulation, artifact: "Trace asserting two distinct answer artifacts emitted: one TTS-bound (voice headline) and one chat-bound (detail); assert they differ in length or content"}
+  thresholds: {missing_voice_headline_allowed: 0, missing_chat_detail_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-006]
+  test_ids: [T-S3-006]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-006
+
+- criterion_id: AC-S3-007
+  name: "S1 notes file contains all required sections: decisions, actions, questions, receipts"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting has concluded with at least one decision, one action item, one question, and one receipt"
+    when: "The notes file is posted after meeting end"
+    then:
+      - "The notes file contains a decisions section"
+      - "The notes file contains an actions section"
+      - "The notes file contains a questions section"
+      - "The notes file contains a receipts section"
+      - "None of these sections is empty when corresponding content was captured during the meeting"
+  primary_oracle: {type: deterministic_simulation, artifact: "Notes file parsed; assert presence and non-emptiness of decisions, actions, questions, receipts sections"}
+  thresholds: {missing_sections_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-007]
+  test_ids: [T-S3-007]
+  dependency_class: gcs:objects
+  mock_boundary: "GCS write replaced by in-memory store; notes file retrieved from store for assertion"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-007
+
+- criterion_id: AC-S3-007-NEG
+  name: "S1 GCS unavailable at meeting end: notes write retried, honest failure if exhausted"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "GCS is unavailable when the post-meeting notes write is attempted"
+    when: "The meeting ends and notes posting is triggered"
+    then:
+      - "The system retries the GCS write with the retry+cost-telemetry seam (no raw GCS client)"
+      - "If retries are exhausted the failure is surfaced honestly, not swallowed silently"
+      - "A partial notes file is not posted without surfacing the incompleteness"
+  primary_oracle: {type: deterministic_simulation, artifact: "GCS mock forced to error; assert retry seam invoked, honest failure surfaced after exhaustion, no silent discard"}
+  thresholds: {silent_failures_allowed: 0, raw_client_bypasses_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-007-NEG]
+  test_ids: [T-S3-007-NEG]
+  dependency_class: gcs:objects
+  mock_boundary: "GCS mock returns 503 for all write attempts; retry seam call-count asserted"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-007-NEG
+
+- criterion_id: AC-S3-008
+  name: "S1 notes bundle envelope carries notes_ref == meeting_id"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A meeting has ended and the notes bundle is assembled"
+    when: "The bundle envelope is inspected"
+    then:
+      - "The notes_ref field in the envelope equals the meeting_id for that session"
+      - "A bundle with a missing or mismatched notes_ref is rejected before posting"
+  primary_oracle: {type: deterministic_simulation, artifact: "Bundle envelope deserialized; assert notes_ref == fixture meeting_id; assert validator rejects envelopes with missing notes_ref"}
+  thresholds: {notes_ref_mismatches_allowed: 0, missing_notes_ref_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-008]
+  test_ids: [T-S3-008]
+  dependency_class: db:postgres
+  mock_boundary: "Postgres meeting record stubbed with known meeting_id; bundle assembled against stub"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-008
+
+- criterion_id: AC-S3-008-NEG
+  name: "S1 Postgres unavailable at notes-bundle assembly: honest failure, no phantom meeting_id"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-07]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Postgres is unavailable when the notes bundle is being assembled"
+    when: "notes_ref is looked up from the meeting record"
+    then:
+      - "The system does not fabricate a notes_ref value"
+      - "The bundle assembly fails with an honest error rather than posting a bundle with a null or invented notes_ref"
+  primary_oracle: {type: deterministic_simulation, artifact: "Postgres mock forced to connection error; assert no bundle posted with null/invented notes_ref; assert error surfaced"}
+  thresholds: {phantom_notes_ref_allowed: 0, silent_failures_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-008-NEG]
+  test_ids: [T-S3-008-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "Postgres mock returns connection error at meeting-record lookup seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-008-NEG
+
+# ══════════════════════════════════════════════════════════════════════════════
+# S2 — DEP-GRAPH MOMENT
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-020
+  name: "S2 dep-graph answer sourced from get_dependents/who_writes, not raw LLM recall"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A question asks which callers or writers depend on a named schema element and the dep-graph index is available"
+    when: "Proxy computes the answer"
+    then:
+      - "The answer is backed by a call to get_dependents or who_writes against the dependency graph index"
+      - "No answer is produced by direct LLM recall without a tool-call to the dep-graph index"
+  primary_oracle: {type: deterministic_simulation, artifact: "Trace asserting at least one get_dependents or who_writes tool-call issued before the answer is returned; assert LLM-only path not taken"}
+  thresholds: {dep_graph_tool_calls_min: 1, raw_llm_recall_bypasses_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-020]
+  test_ids: [T-S3-020]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-020
+
+- criterion_id: AC-S3-021
+  name: "S2 dep-graph resolved in approximately one tool-call round-trip"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A dep-graph question is posed and the index is available"
+    when: "Proxy resolves the answer"
+    then:
+      - "The answer is produced within one tool-call round-trip to the dependency index"
+      - "Multi-step iterative tool-call chains (≥ 3 sequential dep-graph calls for a single question) are a violation"
+  primary_oracle: {type: deterministic_simulation, artifact: "Tool-call trace for the dep-graph question; assert sequential dep-graph tool calls ≤ 2 (allowing one optional follow-up)"}
+  thresholds: {dep_graph_sequential_calls_max: 2, violations_allowed: 0}
+  fault_model_refs: [F-S3-021]
+  test_ids: [T-S3-021]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-021
+
+- criterion_id: AC-S3-022
+  name: "S2 coverage honesty: incomplete dep-graph result labeled lower-bound"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-10]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A dep-graph query returns results that may be incomplete (e.g. dynamic ORM patterns not statically traceable)"
+    when: "The answer is delivered to the user"
+    then:
+      - "The answer explicitly labels the result as a lower-bound when completeness cannot be guaranteed"
+      - "The answer does not claim the result is exhaustive when it is not"
+  primary_oracle: {type: deterministic_simulation, artifact: "Fixture with a known dynamic-ORM caller not in the dep-graph index; assert answer includes lower-bound qualifier; assert no exhaustive claim"}
+  thresholds: {missing_lower_bound_labels_allowed: 0, false_exhaustive_claims_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-022]
+  test_ids: [T-S3-022]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-022
+
+# ══════════════════════════════════════════════════════════════════════════════
+# S3 — STAGED DRAFT
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-030
+  name: "S3 draft persists to staged_drafts Postgres table at creation"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-11]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "propose_change is called with a valid change payload"
+    when: "The call returns"
+    then:
+      - "A row exists in the staged_drafts Postgres table with the draft content"
+      - "The row is durable — a Postgres read after the call returns the same draft"
+      - "The draft is not held only in process memory"
+  primary_oracle: {type: deterministic_simulation, artifact: "Postgres fixture read after propose_change; assert staged_drafts row exists with matching draft_id and content"}
+  thresholds: {missing_db_rows_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-030]
+  test_ids: [T-S3-030]
+  dependency_class: db:postgres
+  mock_boundary: "Postgres replaced by in-process test DB (e.g. asyncpg against a local Postgres fixture); staged_drafts table seeded by migration"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-030
+
+- criterion_id: AC-S3-030-NEG
+  name: "S3 Postgres unavailable at propose_change: draft not silently dropped"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-11]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Postgres is unavailable when propose_change is called"
+    when: "The write to staged_drafts is attempted"
+    then:
+      - "The call does not return success to the caller"
+      - "The draft is not silently lost — an honest error is surfaced"
+      - "No in-memory-only draft is silently treated as persisted"
+  primary_oracle: {type: deterministic_simulation, artifact: "Postgres mock forced to connection error; assert propose_change returns error status; assert no success-false-positive"}
+  thresholds: {silent_losses_allowed: 0, false_success_responses_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-030-NEG]
+  test_ids: [T-S3-030-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "Postgres mock returns connection error at staged_drafts INSERT seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-030-NEG
+
+- criterion_id: AC-S3-031
+  name: "S3 draft persists to GCS at creation (artifact_ref written before response)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-11]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "propose_change is called with a valid change payload"
+    when: "The call returns"
+    then:
+      - "The draft artifact has been written to GCS before the response is returned"
+      - "The staged_drafts row contains a populated artifact_ref pointing to the GCS object"
+  primary_oracle: {type: deterministic_simulation, artifact: "GCS mock call-count asserted ≥ 1 before propose_change returns; staged_drafts artifact_ref field non-null"}
+  thresholds: {missing_gcs_writes_allowed: 0, null_artifact_refs_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-031]
+  test_ids: [T-S3-031]
+  dependency_class: gcs:objects
+  mock_boundary: "GCS write replaced by in-memory object store; artifact_ref asserted against store keys"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-031
+
+- criterion_id: AC-S3-031-NEG
+  name: "S3 GCS write failure at propose_change: draft creation rolls back, honest error returned"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-11]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "GCS is unavailable when the artifact write is attempted during propose_change"
+    when: "The GCS write fails"
+    then:
+      - "The staged_drafts row is not committed without a valid artifact_ref"
+      - "An honest error is returned to the caller — no partial success"
+  primary_oracle: {type: deterministic_simulation, artifact: "GCS mock forced to error; assert staged_drafts row not present or artifact_ref null; assert error returned"}
+  thresholds: {partial_success_responses_allowed: 0, orphaned_db_rows_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-031-NEG]
+  test_ids: [T-S3-031-NEG]
+  dependency_class: gcs:objects
+  mock_boundary: "GCS mock returns 503 at object-write seam; Postgres fixture inspected post-call"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-031-NEG
+
+- criterion_id: AC-S3-032
+  name: "S3 verified flag requires critic + evidence gate; never auto-set at creation"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-12]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A draft has been created via propose_change"
+    when: "The draft is inspected immediately after creation (before critic/evidence gate runs)"
+    then:
+      - "The verified field is false (not set)"
+      - "After the critic agent passes AND the deterministic evidence gate passes the verified field may be set to true"
+      - "Verified is never set to true if either the critic or the evidence gate has not passed"
+  primary_oracle: {type: deterministic_simulation, artifact: "State machine assertions: verified == false immediately post-creation; verified == true only after both critic-pass and evidence-gate-pass events in the trace; assert no shortcut path sets verified = true"}
+  thresholds: {premature_verified_sets_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-032]
+  test_ids: [T-S3-032]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-032
+
+- criterion_id: AC-S3-033
+  name: "S3 draft envelope status is needs_review at creation, not done"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A draft is created via propose_change"
+    when: "The envelope status is read immediately after creation"
+    then:
+      - "Envelope status is needs_review"
+      - "Envelope status is never done at creation time"
+      - "Status transitions to done only after a human explicit accept"
+  primary_oracle: {type: deterministic_simulation, artifact: "Envelope deserialized immediately post-create; assert status == needs_review; assert no code path sets status = done without human accept event in trace"}
+  thresholds: {premature_done_status_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-033]
+  test_ids: [T-S3-033]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-033
+
+- criterion_id: AC-S3-034
+  name: "S3 human accept after teardown reads from Postgres (crash-safe, not in-memory)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-13]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A draft exists in staged_drafts Postgres and the meeting has been torn down (in-memory state cleared)"
+    when: "A human accept command arrives"
+    then:
+      - "The accept handler reads the draft from Postgres, not from an in-memory cache"
+      - "The change is applied correctly even when no in-memory state remains from the original session"
+  primary_oracle: {type: deterministic_simulation, artifact: "In-memory session state cleared before accept handler fires; assert Postgres read issued by accept handler; assert change applied matches Postgres row content"}
+  thresholds: {in_memory_cache_reads_after_teardown_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-034]
+  test_ids: [T-S3-034]
+  dependency_class: db:postgres
+  mock_boundary: "Postgres fixture with pre-seeded staged_drafts row; in-memory session object deleted before accept; fixture read-count asserted ≥ 1"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-034
+
+- criterion_id: AC-S3-034-NEG
+  name: "S3 Postgres unavailable at accept-after-teardown: honest error, no phantom apply"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-13]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The meeting has been torn down and Postgres is unavailable when the human accept arrives"
+    when: "The accept handler attempts to read the draft from Postgres"
+    then:
+      - "The change is not applied from a stale in-memory cache"
+      - "An honest error is returned — the user is informed that the accept cannot be completed"
+  primary_oracle: {type: deterministic_simulation, artifact: "Postgres mock forced to error after teardown; assert change not applied; assert honest error returned"}
+  thresholds: {phantom_applies_allowed: 0, silent_failures_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-034-NEG]
+  test_ids: [T-S3-034-NEG]
+  dependency_class: db:postgres
+  mock_boundary: "Postgres mock returns connection error at staged_drafts SELECT seam post-teardown"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-034-NEG
+
+- criterion_id: AC-S3-035
+  name: "S3 accepted draft applies as local code-change draft, not a PR push"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-15]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A staged draft is accepted by a human and Expansion tier is not active"
+    when: "The accept handler applies the change"
+    then:
+      - "The change is written as a local code-change draft"
+      - "No git push or pull request is opened"
+      - "A PR/push operation is a violation when Expansion tier is not active"
+  primary_oracle: {type: deterministic_simulation, artifact: "Accept handler trace; assert no git-push or PR-creation call issued; assert local file write or patch artifact produced"}
+  thresholds: {unauthorized_pr_pushes_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-035]
+  test_ids: [T-S3-035]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-035
+
+# ══════════════════════════════════════════════════════════════════════════════
+# S4 — BARGE-IN + HUMAN CONTROL
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-040
+  name: "S4 barge-in stops speech output within 200 ms"
+  evidence_class: "[latency]"
+  authority_refs: [R-doc09-S3-16]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy is speaking (TTS active) during a meeting"
+    when: "A barge-in event is detected (human speech onset via VAD)"
+    then:
+      - "All TTS speech output stops within 200 ms of the barge-in trigger"
+      - "No audio frame is emitted more than 200 ms after the barge-in event"
+  primary_oracle: {type: latency_percentile, artifact: "Barge-in timestamp vs last-audio-frame timestamp measured across ≥ 50 simulated barge-in events; assert max(stop_latency) ≤ 200 ms"}
+  thresholds: {barge_in_stop_latency_max_ms: 200, violations_allowed: 0}
+  fault_model_refs: [F-S3-040]
+  test_ids: [T-S3-040]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-040
+
+- criterion_id: AC-S3-041
+  name: "S4 abort-is-final: aborted wake/build does not resume"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-17]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An in-flight wake or build operation is running"
+    when: "An abort event is fired (barge-in or stop command)"
+    then:
+      - "The operation is cancelled via AbortController"
+      - "The operation does not resume after the abort under any internal condition"
+      - "No partial result from the aborted operation is surfaced to the user"
+  primary_oracle: {type: deterministic_simulation, artifact: "State machine assertion: once abort event fires, operation state transitions to aborted and never transitions back to running; assert AbortController.abort() called; assert no output emitted post-abort"}
+  thresholds: {illegal_resumes_after_abort_allowed: 0, post_abort_outputs_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-041]
+  test_ids: [T-S3-041]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-041
+
+- criterion_id: AC-S3-042
+  name: "S4 'Proxy, quiet' silences ALL output (voice and chat)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-18]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy is producing voice and/or chat output"
+    when: "The command 'Proxy, quiet' is received"
+    then:
+      - "All TTS voice output ceases immediately"
+      - "All chat output ceases immediately"
+      - "No new output (voice or chat) is produced until a new user request is received"
+  primary_oracle: {type: deterministic_simulation, artifact: "Trace after quiet command; assert zero voice frames emitted; assert zero chat messages posted; assert this holds until next user request event in trace"}
+  thresholds: {post_quiet_voice_frames_allowed: 0, post_quiet_chat_messages_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-042]
+  test_ids: [T-S3-042]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-042
+
+- criterion_id: AC-S3-043
+  name: "S4 human ask preempts a running build"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-19]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A build operation is running in the background"
+    when: "A human ask (spoken question or command) arrives"
+    then:
+      - "The build is suspended or cancelled before the human ask is processed"
+      - "The human ask response is produced without waiting for the build to complete"
+      - "The build does not block the human interaction loop"
+  primary_oracle: {type: deterministic_simulation, artifact: "Trace with concurrent build + human ask; assert human-ask processing starts before build-completion event; assert build suspended/cancelled event precedes or is concurrent with human-ask processing"}
+  thresholds: {human_ask_blocked_by_build_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-043]
+  test_ids: [T-S3-043]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-043
+
+# ══════════════════════════════════════════════════════════════════════════════
+# S1 STT dependency (AssemblyAI) — negative criterion
+# ══════════════════════════════════════════════════════════════════════════════
+
+- criterion_id: AC-S3-009
+  name: "S1 STT pipeline passes question text to direct-answer path"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A human speaks a grounded question and AssemblyAI STT is operational"
+    when: "The STT stream produces the final transcript"
+    then:
+      - "The transcript is passed to the direct-answer path as the question text"
+      - "The end_of_turn boundary signal gates the hand-off (question not passed mid-utterance)"
+  primary_oracle: {type: deterministic_simulation, artifact: "STT stub emitting fixture transcript with end_of_turn; assert direct-answer path receives transcript after end_of_turn; assert no mid-utterance dispatch"}
+  thresholds: {premature_dispatches_allowed: 0, missed_dispatches_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-009]
+  test_ids: [T-S3-009]
+  dependency_class: vendor:assemblyai
+  mock_boundary: "AssemblyAI Universal-Streaming replaced by a fixture event emitter; end_of_turn controllable in fixture"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-009
+
+- criterion_id: AC-S3-009-NEG
+  name: "S1 AssemblyAI STT failure: question dropped cleanly, no phantom transcript dispatched"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc09-S3-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "AssemblyAI STT stream errors or drops before end_of_turn is emitted"
+    when: "The STT failure is detected"
+    then:
+      - "No phantom transcript is dispatched to the direct-answer path"
+      - "The failure is surfaced honestly (not swallowed)"
+      - "No hallucinated question text is answered"
+  primary_oracle: {type: deterministic_simulation, artifact: "AssemblyAI fixture forced to connection error mid-stream; assert zero direct-answer dispatches; assert error event surfaced"}
+  thresholds: {phantom_transcripts_dispatched_allowed: 0, silent_failures_allowed: 0, violations_allowed: 0}
+  fault_model_refs: [F-S3-009-NEG]
+  test_ids: [T-S3-009-NEG]
+  dependency_class: vendor:assemblyai
+  mock_boundary: "AssemblyAI fixture forced to drop connection before end_of_turn"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-S3-009-NEG

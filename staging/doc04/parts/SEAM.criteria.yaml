@@ -1,0 +1,454 @@
+# SEAM.criteria.yaml — Doc 04 (Proxy Orchestrator) — §3.3 Provider Seam + AgentChunk + stream_deltas
+# Acceptance criteria paired to SEAM.requirements.yaml.
+# ID scheme: AC-SEAM-NNN (positive), AC-SEAM-NNN-NEG (negative/off-state)
+# Test IDs: T-SEAM-NNN
+#
+# dependency_class legend:
+#   null       — pure in-process logic; ladder: [lint, unit]
+#   db:postgres — cost meter persistence; ladder: [lint, unit, integration]
+# Every non-null dependency_class gets a paired NEG criterion: ladder [lint, unit, negative]
+
+# ── AC-SEAM-001: SDK import absent from harness business logic (structural) ────
+
+- criterion_id: AC-SEAM-001
+  name: "SDK client never imported or instantiated in harness business-logic modules"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-SEAM-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The complete source tree of harness business-logic modules (excluding provider seam impl and Scribe module)"
+    when: "A static grep/AST scan for SDK client instantiation patterns runs across all harness modules"
+    then:
+      - "Zero matches found outside the provider seam implementation and the Scribe micro-call module"
+      - "The provider seam implementation is the sole owner of SDK client construction in harness code"
+  primary_oracle:
+    type: deterministic
+    artifact: "grep/AST scan of harness modules; assert zero SDK instantiation sites outside seam + scribe"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-001]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+
+# ── AC-SEAM-002: Scribe is the one and only bare SDK call site ───────────────
+
+- criterion_id: AC-SEAM-002
+  name: "Exactly one bare SDK messages.create call site exists, located in Scribe"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-SEAM-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The full source tree of services/ and libs/ (excluding __pycache__ and test files)"
+    when: "A static scan for anthropic.AsyncAnthropic().messages.create or bare messages.create invocations is performed"
+    then:
+      - "Exactly one call site is found"
+      - "That call site is located inside the Scribe module (Doc 03)"
+      - "No second bare messages.create call site exists elsewhere in the codebase"
+  primary_oracle:
+    type: deterministic
+    artifact: "AST/grep scan; assert call_site_count == 1 and call_site_module matches scribe pattern"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-002]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-SEAM-002-NEG: second bare SDK call site fails the structural check ─────
+
+- criterion_id: AC-SEAM-002-NEG
+  name: "Structural check rejects a second bare SDK call site outside Scribe"
+  evidence_class: "[negative]"
+  authority_refs: [R-doc04-SEAM-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A harness module other than Scribe that contains a bare anthropic.AsyncAnthropic().messages.create call"
+    when: "The static scan runs"
+    then:
+      - "The scan reports a violation with the offending file path and line number"
+      - "The build gate fails"
+  primary_oracle:
+    type: deterministic
+    artifact: "Static scan; assert exit_code != 0 and violation reported for non-scribe module"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-002-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+
+# ── AC-SEAM-003: ChunkType Literal has exactly six members ────────────────────
+
+- criterion_id: AC-SEAM-003
+  name: "ChunkType Literal carries exactly six canonical members"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-SEAM-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "libs/contracts/src/contracts/chunks.py is imported"
+    when: "typing.get_args(ChunkType) is evaluated"
+    then:
+      - "The result set is exactly {'INIT', 'TEXT', 'TOOL_USE', 'TOOL_RESULT', 'RESULT', 'ERROR'}"
+      - "No additional or missing members are present"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: assert set(get_args(ChunkType)) == {'INIT','TEXT','TOOL_USE','TOOL_RESULT','RESULT','ERROR'}"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-003]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-SEAM-004: discriminator is .type; .kind/.tool/.structured absent ────────
+
+- criterion_id: AC-SEAM-004
+  name: "AgentChunk discriminator is .type; .kind, .tool, .structured absent as top-level attrs"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-SEAM-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An AgentChunk instance created with type='TEXT'"
+    when: "Field introspection is performed on the instance"
+    then:
+      - "chunk.type == 'TEXT'"
+      - "hasattr(chunk, 'kind') is False"
+      - "hasattr(chunk, 'tool') is False"
+      - "hasattr(chunk, 'structured') is False"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test asserting field presence/absence via hasattr and model_fields inspection"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-004]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-SEAM-004-NEG: .kind access raises AttributeError ───────────────────────
+
+- criterion_id: AC-SEAM-004-NEG
+  name: "Accessing .kind on AgentChunk raises AttributeError"
+  evidence_class: "[negative]"
+  authority_refs: [R-doc04-SEAM-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An AgentChunk instance"
+    when: "chunk.kind is accessed"
+    then:
+      - "AttributeError (or pydantic ValidationError) is raised"
+      - "No value is returned"
+  primary_oracle:
+    type: deterministic
+    artifact: "pytest.raises(AttributeError) around chunk.kind access"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-004-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+
+# ── AC-SEAM-005: stream_deltas yields AgentChunk not str ──────────────────────
+
+- criterion_id: AC-SEAM-005
+  name: "stream_deltas yields AgentChunk objects, never raw strings"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-SEAM-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "An async iterator of AgentChunk objects (mix of TEXT, INIT, RESULT types)"
+    when: "stream_deltas is applied and all yielded items are collected"
+    then:
+      - "Every yielded item is an instance of AgentChunk"
+      - "No yielded item is a str or any other type"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: collect all items from stream_deltas; assert all(isinstance(x, AgentChunk) for x in items)"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-005]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-SEAM-006: TEXT delta — suffix per msg_id, reset on new msg_id (GOLDEN PATH) ──
+
+- criterion_id: AC-SEAM-006
+  name: "stream_deltas emits correct suffix deltas for TEXT and resets accumulator on new msg_id"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-SEAM-08, R-doc04-SEAM-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      Synthetic provider stream: TEXT(msg_id=A, text='Hello'), TEXT(msg_id=A, text='Hello world'),
+      TEXT(msg_id=B, text='Bye'), TEXT(msg_id=B, text='Bye now'), RESULT(metadata={total_cost_usd: 0.01})
+    when: "stream_deltas is applied and all yielded chunks are collected"
+    then:
+      - "Chunk 1: type=TEXT, msg_id=A, text='Hello' (first chunk for A — full text is the delta)"
+      - "Chunk 2: type=TEXT, msg_id=A, text=' world' (suffix only)"
+      - "Chunk 3: type=TEXT, msg_id=B, text='Bye' (accumulator reset; full text is the delta for B)"
+      - "Chunk 4: type=TEXT, msg_id=B, text=' now' (suffix only)"
+      - "Chunk 5: type=RESULT — passed through unchanged"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test with synthetic fixture; assert exact .text values on each yielded AgentChunk in order"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-006]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-SEAM-007: non-TEXT chunks pass through unchanged ───────────────────────
+
+- criterion_id: AC-SEAM-007
+  name: "stream_deltas passes INIT, TOOL_USE, TOOL_RESULT, RESULT, ERROR through without modification"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-SEAM-10]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A stream containing one chunk of each non-TEXT type with distinct metadata values"
+    when: "stream_deltas is applied"
+    then:
+      - "Each non-TEXT chunk is yielded with identical type, text, and metadata as the input chunk"
+      - "No metadata key is added, removed, or modified on any non-TEXT chunk"
+      - "Total number of yielded chunks equals the number of non-TEXT input chunks"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: compare yielded chunks against input chunks using pydantic model_dump equality for each non-TEXT type"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-007]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+
+# ── AC-SEAM-008: stream_deltas called exactly once (static structural) ────────
+
+- criterion_id: AC-SEAM-008
+  name: "stream_deltas has exactly one call site in the codebase, inside BehaviorRunner.run()"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-SEAM-11]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "The full source tree of services/ and libs/ (excluding tests and __pycache__)"
+    when: "A static AST/grep scan for stream_deltas( call sites is run"
+    then:
+      - "Exactly one call site is found"
+      - "That call site is located in BehaviorRunner.run() (or its direct implementation module)"
+      - "No second stream_deltas call site exists in any consumer, projector, cost meter, or logger"
+  primary_oracle:
+    type: deterministic
+    artifact: "AST/grep scan; assert call_site_count == 1 and module path matches BehaviorRunner pattern"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-008]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-SEAM-008-NEG: second stream_deltas call in consumer fails the scan ─────
+
+- criterion_id: AC-SEAM-008-NEG
+  name: "Static scan rejects a second stream_deltas call in any downstream consumer"
+  evidence_class: "[negative]"
+  authority_refs: [R-doc04-SEAM-11, R-doc04-SEAM-12]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A cost meter or transcript logger module that contains its own stream_deltas() call"
+    when: "The static call-site scan runs"
+    then:
+      - "The scan reports call_site_count > 1"
+      - "The build gate fails with the offending file and line number identified"
+  primary_oracle:
+    type: deterministic
+    artifact: "Static scan; assert exit_code != 0 and violation message names the extra call site"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-008-NEG]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+
+# ── AC-SEAM-009: stream_deltas never raises ───────────────────────────────────
+
+- criterion_id: AC-SEAM-009
+  name: "stream_deltas does not raise exceptions during normal TEXT and pass-through processing"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-SEAM-13]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A stream containing all six ChunkType variants in valid sequence"
+    when: "stream_deltas is fully consumed without error in the underlying async iterator"
+    then:
+      - "stream_deltas completes without raising any exception"
+      - "All chunks are yielded as expected"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test: consume stream_deltas over a full mixed fixture; assert no exception raised and len(results) > 0"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-009]
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+
+# ── AC-SEAM-010: cost meter reads RESULT.metadata["total_cost_usd"] ───────────
+
+- criterion_id: AC-SEAM-010
+  name: "Cost meter extracts cost from RESULT.metadata['total_cost_usd'], not any other field"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-SEAM-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A delta'd stream containing a RESULT chunk with
+      metadata={"total_cost_usd": 0.042, "num_turns": 3, "session_id": "s1"}
+    when: "The cost meter processes the stream"
+    then:
+      - "The recorded cost value is 0.042 (read from metadata['total_cost_usd'])"
+      - "The cost meter does not compute token-count arithmetic"
+      - "The cost meter does not read from any chunk type other than RESULT"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test with mock cost store; assert recorded_cost == 0.042 and key accessed is 'total_cost_usd'"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-010]
+  dependency_class: null
+  mock_boundary: "cost store mocked in-process"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
+# ── AC-SEAM-010-INT: cost meter writes total_cost_usd to Postgres (integration) ──
+
+- criterion_id: AC-SEAM-010-INT
+  name: "Cost meter writes total_cost_usd to meeting_cost table via RESULT chunk (integration)"
+  evidence_class: "[integration]"
+  authority_refs: [R-doc04-SEAM-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "A real Postgres instance with the meeting_cost table migrated"
+    when: "A full BehaviorRunner run completes with a RESULT chunk carrying total_cost_usd=0.042"
+    then:
+      - "The meeting_cost row for the run's meeting_id has total_cost_usd == 0.042"
+      - "No duplicate cost rows are inserted for the same run"
+  primary_oracle:
+    type: deterministic
+    artifact: "Integration test: query meeting_cost after run; assert cost value matches RESULT chunk"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-010-INT]
+  dependency_class: db:postgres
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+
+# ── AC-SEAM-011: INIT.metadata["session_id"] captured by durability layer ─────
+
+- criterion_id: AC-SEAM-011
+  name: "Durability layer captures session_id from INIT.metadata['session_id']"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc04-SEAM-15]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A delta'd stream whose first chunk is INIT with
+      metadata={'session_id': 'sess-abc', 'tools': [], 'mcp_servers': [], 'model': 'claude-3-5-sonnet-latest'}
+    when: "The durability layer processes the stream"
+    then:
+      - "The captured session_id value is 'sess-abc'"
+      - "The durability layer does not derive session_id from TEXT, TOOL_USE, RESULT, or ERROR chunks"
+  primary_oracle:
+    type: deterministic
+    artifact: "Unit test with mock persistence; assert captured_session_id == 'sess-abc'"
+  thresholds:
+    violations_allowed: 0
+  fault_model_refs: []
+  test_ids: [T-SEAM-011]
+  dependency_class: null
+  mock_boundary: "persistence store mocked in-process"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+
