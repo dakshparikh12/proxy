@@ -26,17 +26,21 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from criteria_coverage_gate import parse_requirements  # noqa: E402
+from coverage_gate import parse_requirements  # noqa: E402  (salvaged sibling)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-ORCH = pathlib.Path(__file__).resolve().parent
+SCRIPTS = pathlib.Path(__file__).resolve().parent
 DEFAULT_THRESHOLD = 0.10
 
-try:
-    from model_routing import model_for  # type: ignore  # noqa: E402
-except Exception:  # pragma: no cover - lands in Task 7
-    def model_for(task_type: str) -> str:
-        return "claude-opus-4-6"
+
+def _spec_path_for(doc: str) -> pathlib.Path:
+    """doc00 -> product/v0-spec/00-*.md (first match)."""
+    import glob
+    n = doc.replace("doc", "")
+    hits = sorted(glob.glob(str(ROOT / "product/v0-spec" / f"{n}-*.md")))
+    if not hits:
+        raise FileNotFoundError(f"no spec for {doc} under product/v0-spec/{n}-*.md")
+    return pathlib.Path(hits[0])
 
 
 def bundle_requirement_count(doc: str, base: pathlib.Path | None = None) -> int:
@@ -54,24 +58,33 @@ def _parse_count(stdout: str) -> int | None:
 
 
 def _real_spawn(doc: str) -> tuple[int | None, str]:
-    """Run the fresh-context extraction-count agent; return (independent_count, full_output)."""
-    from orchestrate import DOCS, run_agent
-    spec = DOCS.get(doc, {}).get("spec", f"{doc}.md")
-    res = run_agent("extraction_count.md", {"<DOC>": doc, "<SPEC>": spec},
-                    timeout=60 * 20, max_turns=120, model=model_for("extraction-count-audit"),
-                    phase=f"{doc} extraction-count audit")
-    if getattr(res, "timed_out", False):
+    """Fresh-context independent recount from the RAW spec only (no bundle access), via the
+    headless `claude` CLI + the salvaged extraction_count prompt. Opus per the No-Haiku build
+    directive. Returns (independent_count, full_output)."""
+    import subprocess
+    spec = _spec_path_for(doc)
+    prompt_tmpl = (SCRIPTS / "prompts" / "extraction_count.md").read_text()
+    prompt = prompt_tmpl.replace("<DOC>", doc).replace("<SPEC>", str(spec))
+    try:
+        res = subprocess.run(
+            ["claude", "-p", prompt, "--model", "opus", "--allowedTools", "Read,Grep,Glob"],
+            capture_output=True, text=True, timeout=60 * 20, cwd=str(ROOT))
+    except FileNotFoundError:
+        return None, "claude CLI not available for extraction-count recount"
+    except subprocess.TimeoutExpired:
         return None, "extraction-count agent timed out"
-    out = getattr(res, "stdout", "")
+    out = (res.stdout or "") + (res.stderr or "")
     return _parse_count(out), out
 
 
 def run_extraction_gate(doc: str, *, spawn=None, threshold: float = DEFAULT_THRESHOLD,
-                        base: pathlib.Path | None = None) -> dict:
+                        base: pathlib.Path | None = None,
+                        evidence_dir: pathlib.Path | None = None) -> dict:
     """Compare an independent spec recount against the bundle's requirement count.
 
-    `spawn(doc) -> (independent_count, full_output)` is injectable for testing. Returns a verdict dict
-    and writes evidence/<doc>-extraction-count.md for founder review."""
+    `spawn(doc) -> (independent_count, full_output)` is injectable for testing. `evidence_dir`
+    (default ROOT/evidence) is injectable so tests don't dirty committed evidence. Returns a
+    verdict dict and writes <evidence_dir>/<doc>-extraction-count.md for founder review."""
     spawn = spawn or _real_spawn
     bundle = bundle_requirement_count(doc, base)
     independent, out = spawn(doc)
@@ -100,8 +113,8 @@ def run_extraction_gate(doc: str, *, spawn=None, threshold: float = DEFAULT_THRE
                                  f"within {threshold:.0%} threshold")
 
     # Persist the full independent enumeration + verdict for the founder to inspect on a HALT.
-    ev = ROOT / "evidence"
-    ev.mkdir(exist_ok=True)
+    ev = evidence_dir or (ROOT / "evidence")
+    ev.mkdir(parents=True, exist_ok=True)
     (ev / f"{doc}-extraction-count.md").write_text(
         f"# Extraction-count audit — {doc}\n\n"
         f"- bundle requirement count: {bundle}\n"
