@@ -58,14 +58,26 @@ def spent_usd(id: str) -> float:  # noqa: A002
 
 
 def main() -> None:
-    """CLI entry point: cost_log.py <id> <phase> <tokens> <cost_usd> <wall_s>."""
-    if len(sys.argv) != 6:  # noqa: PLR2004
+    """CLI entry point.
+
+    Append mode: cost_log.py <id> <phase> <tokens> <cost_usd> <wall_s>
+    Query mode:  cost_log.py --query-spent <id>   (prints the total USD spent)
+    """
+    args = sys.argv[1:]
+    if args and args[0] == "--query-spent":
+        if len(args) < 2:  # noqa: PLR2004
+            print("Usage: python3 scripts/cost_log.py --query-spent <id>", file=sys.stderr)
+            sys.exit(1)
+        print(f"{spent_usd(args[1]):.6f}")
+        return
+
+    if len(args) != 5:  # noqa: PLR2004
         print(
             "Usage: python3 scripts/cost_log.py <id> <phase> <tokens> <cost_usd> <wall_s>",
             file=sys.stderr,
         )
         sys.exit(1)
-    _, doc_id, phase, tokens_str, cost_str, wall_str = sys.argv
+    doc_id, phase, tokens_str, cost_str, wall_str = args
     append(doc_id, phase, int(tokens_str), float(cost_str), float(wall_str))
 
 
