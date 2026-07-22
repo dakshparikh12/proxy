@@ -1,0 +1,219 @@
+# DOC-09 §1 + §4 Requirements
+# §1 — The End Goal (framing + normative behaviors)
+# §4 — The Full Demo Arc (atomized per clause)
+
+# ── §1 normative requirements ─────────────────────────────────────────────────
+
+- requirement_id: R-doc09-S4-01
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§1 end goal"
+  source_quote: "answers grounded in their actual code within a second or two"
+  normalized_statement: >
+    WHEN Proxy answers a code question during a live meeting THE SYSTEM SHALL
+    return a grounded answer with at least one file:line citation in ≤ 2 seconds
+    of wall-clock time from question receipt.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-02
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§1 end goal"
+  source_quote: "verified draft they approve with one click"
+  normalized_statement: >
+    WHEN Proxy produces a world-touching draft THE SYSTEM SHALL gate it as a
+    staged draft with Envelope.status=needs_review and require exactly one human
+    approval action before the draft is applied.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-03
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§1 end goal"
+  source_quote: "clean, honest notes"
+  normalized_statement: >
+    WHEN a meeting ends THE SYSTEM SHALL persist a notes artifact that contains
+    no invented claims and covers every major topic discussed; gaps MUST be
+    flagged rather than silently omitted.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-04
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§1 end goal"
+  source_quote: "none of that should break when a server restarts mid-call"
+  normalized_statement: >
+    WHEN the orchestrator process is terminated and restarted during an active
+    meeting THE SYSTEM SHALL resume the meeting without data loss, correctly
+    reloading accumulated cost and state from the durable substrate.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-05
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§1 end goal"
+  source_quote: "several meetings run at once"
+  normalized_statement: >
+    WHEN multiple meetings are active concurrently THE SYSTEM SHALL maintain
+    complete tenant isolation such that no data, cost, or state from one meeting
+    leaks into another.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-06
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§1 end goal"
+  source_quote: "no seam between the documents silently fails"
+  normalized_statement: >
+    WHEN the assembled product runs the connect→meet→close arc THE SYSTEM SHALL
+    verify that every cross-doc contract (message types, status enums, artifact
+    refs) satisfies the contracts registry with zero silent failures at any seam.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §4 full demo arc requirements ─────────────────────────────────────────────
+
+- requirement_id: R-doc09-S4-07
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§4 full demo arc"
+  source_quote: "connect a real repo → Proxy reaches `ready` with a coverage %"
+  normalized_statement: >
+    WHEN a real repository is connected THE SYSTEM SHALL transition through the
+    readiness enum (connecting → cloning → indexing → ready) and emit a
+    readiness payload containing coverage_pct as a float and gaps as a list of
+    strings before the meeting begins.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-08
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§4 full demo arc"
+  source_quote: "answers two grounded questions (one via grep/read, one via `get_dependents`)"
+  normalized_statement: >
+    WHEN Proxy is asked a code question that resolves via grep or file read THE
+    SYSTEM SHALL invoke the grep/read tool path and return an answer with a
+    file:line citation.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-09
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§4 full demo arc"
+  source_quote: "answers two grounded questions (one via grep/read, one via `get_dependents`)"
+  normalized_statement: >
+    WHEN Proxy is asked a question requiring dependency traversal THE SYSTEM
+    SHALL invoke the get_dependents tool path and return an answer with a
+    file:line citation derived from the dependency graph.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-10
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§4 full demo arc"
+  source_quote: "asked to draft an impact summary → does it in the Workroom, verifies it, leaves it as a `needs_review` draft card"
+  normalized_statement: >
+    WHEN Proxy is asked to draft an impact summary THE SYSTEM SHALL execute the
+    draft in the Workroom, self-verify the draft, and persist it with
+    Envelope.status=needs_review as a staged draft card without applying it.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-11
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§4 full demo arc"
+  source_quote: "the meeting recycles the orchestrator once (chaos test) and continues seamlessly"
+  normalized_statement: >
+    WHEN the orchestrator is recycled (process kill + restart) once during the
+    demo arc THE SYSTEM SHALL reload meeting_cost from the durable substrate
+    (not reset it) and continue the meeting without any participant-visible
+    interruption or data loss.
+  requirement_type: resilience
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-12
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§4 full demo arc"
+  source_quote: "cost stays in-envelope"
+  normalized_statement: >
+    WHEN the full demo arc completes THE SYSTEM SHALL report a total meeting_cost
+    that does not exceed the configured budget envelope, with cost telemetry
+    present for every external call.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-13
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§4 full demo arc"
+  source_quote: "notes file + the staged draft persist"
+  normalized_statement: >
+    WHEN the meeting ends THE SYSTEM SHALL persist both the notes artifact (keyed
+    by meeting_id, readable via GET /internal/notes/{meeting_id}) and the staged
+    draft (in Postgres + GCS) such that both survive past meeting teardown.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-14
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§4 full demo arc"
+  source_quote: "a human accepts the draft after the call and it applies"
+  normalized_statement: >
+    WHEN a human calls POST /m/{meeting_id}/drafts/{draft_id}/accept after
+    meeting teardown THE SYSTEM SHALL apply the staged draft (notes-edit or
+    push as appropriate) and transition its status from needs_review to done.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc09-S4-15
+  authority_type: specification
+  authority_document: DOC-09
+  source_location: "§4 full demo arc"
+  source_quote: "Every law observed; every claim cited; every world-touching act gated"
+  normalized_statement: >
+    WHEN the full demo arc runs THE SYSTEM SHALL produce zero uncited confident
+    answers (Law 1), zero ungated world-touching acts (Law 3), and adhere to all
+    five AGENTS.md laws throughout the arc as verified by simulation trace.
+  requirement_type: law_adherence
+  criticality: P1
+  testability: executable
+  status: qualified

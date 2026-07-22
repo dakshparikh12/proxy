@@ -1,0 +1,503 @@
+# FLOW.requirements.yaml — Doc 04 (Proxy Orchestrator) — §1 (End Goal) + §2 (Design) + The Reactive Flow
+# Atomic EARS requirements. Each carries source_location + verbatim source_quote + criticality.
+# ID scheme: R-doc04-FLOW-NN
+# Authority document: DOC-04
+
+# ── §1: Identity & Role ───────────────────────────────────────────────────────
+
+- requirement_id: R-doc04-FLOW-01
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§1 paragraph 1"
+  source_quote: >
+    Proxy is a thin, dynamic orchestrator-agent that routes anything to anywhere it needs to go —
+    asks to the workroom, events to the judge, results back to the room — deciding each case in
+    the moment, with zero hard-coded situation handling, while doing none of the thinking itself.
+  normalized_statement: >
+    WHEN any event arrives (ask, result, judge contribution, anomaly, control command, or meeting end)
+    THE SYSTEM SHALL route it dynamically via model judgment — with zero hard-coded situation-to-action
+    mappings in code — and SHALL NOT perform any domain thinking-work itself.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-FLOW-02
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§1 paragraph 1 + The dynamism guarantee"
+  source_quote: >
+    The dynamism guarantee: there is no if event_type → action anywhere in the harness. New capability
+    = new tool + new BehaviorConfig constant, never new wiring.
+  normalized_statement: >
+    THE SYSTEM SHALL contain no if/elif/switch constructs that branch on event_type to select an action
+    in the orchestrator harness; all routing logic SHALL reside in model judgment via tool selection,
+    not in harness code paths.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-FLOW-03
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§1 paragraph 2, item 1"
+  source_quote: >
+    Someone says "Proxy, can you check X?" — within half a second Proxy acks ("on it").
+  normalized_statement: >
+    WHEN a confirmed ask is addressed to Proxy THE SYSTEM SHALL emit a canned acknowledgement ("on it")
+    within 0.5 seconds of the confirmed address; this reflex SHALL fire before the agent wake turn completes.
+  requirement_type: performance
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-FLOW-04
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§1 paragraph 2, item 1"
+  source_quote: >
+    If it's a simple grounded lookup, Proxy answers it directly in its own wake turn (~1–2s, via the
+    mounted code_intel tools that hit the host-side code_intel internal API — no E2B and no Workroom
+    session on the direct path).
+  normalized_statement: >
+    WHEN a simple grounded lookup ask is confirmed THE SYSTEM SHALL answer it in the agent wake turn
+    within approximately 1–2 seconds using only mounted code_intel tools against the host-side
+    code_intel internal API; the direct answer path SHALL NOT invoke E2B and SHALL NOT open a
+    Workroom session.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-FLOW-05
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§1 paragraph 2, item 1"
+  source_quote: >
+    if it's real work, Proxy bundles the ask with a notes_ref and dispatches it to the workroom.
+  normalized_statement: >
+    WHEN an ask requires non-trivial work (not a simple grounded lookup) THE SYSTEM SHALL bundle
+    the ask with a notes_ref and dispatch it to the workroom via dispatch_workroom(bundle);
+    the workroom dispatch path is mutually exclusive with the direct answer path for any single ask.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-FLOW-06
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§1 paragraph 2, item 2"
+  source_quote: >
+    A claim lands in the notes → the event flows to the proactive judge on a standing pipe; if the
+    judge clears a contribution, Proxy surfaces it — at a boundary, never over a human, human answers
+    always first.
+  normalized_statement: >
+    WHEN the proactive judge clears a contribution THE SYSTEM SHALL surface it at a turn boundary;
+    the system SHALL NOT deliver a judge-cleared contribution while a human is speaking, and SHALL
+    defer to human speech always.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-FLOW-07
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§1 paragraph 2, item 3"
+  source_quote: >
+    Three things run in parallel — a long build, a quick question, the Scribe ticking — and nothing collides.
+  normalized_statement: >
+    WHEN multiple concurrent tasks are active (e.g., a workroom dispatch, a direct-answer wake turn,
+    and Scribe processing) THE SYSTEM SHALL execute them in parallel without any task blocking,
+    corrupting, or losing another task's output.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-FLOW-08
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§1 paragraph 2, item 4"
+  source_quote: >
+    Something breaks — Proxy handles it: restart, degrade, re-join, or tell the room honestly.
+  normalized_statement: >
+    WHEN a component failure or anomaly is detected THE SYSTEM SHALL respond via one of the following
+    actions — restart_component, degraded operation, re-join, or an honest spoken disclosure to the
+    room — and SHALL NOT silently drop the failure or take no action.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-FLOW-09
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§1, final sentence"
+  source_quote: >
+    What this layer is NOT: Proxy does no thinking-work. To the room there is only Proxy (never
+    "Orchestrator").
+  normalized_statement: >
+    THE SYSTEM SHALL never surface the internal name "Orchestrator" (or "Scribe" or "workroom") in
+    any user-visible string; the only agent identity presented to the room is "Proxy".
+  requirement_type: ux
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §2: Standing Pipes ────────────────────────────────────────────────────────
+
+- requirement_id: R-doc04-FLOW-10
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§2, Standing pipes paragraph"
+  source_quote: >
+    Standing pipes (wired once at join, run continuously, no agent involved): audio→STT→transcript
+    feed · transcript→Scribe · Scribe→material-change events→proactive judge · component heartbeats.
+    These never need a decision.
+  normalized_statement: >
+    WHEN the meeting session is joined THE SYSTEM SHALL wire the following pipes exactly once:
+    audio→STT→transcript feed, transcript→Scribe, Scribe→material-change events→proactive judge,
+    and component heartbeats; these pipes SHALL run continuously without invoking the agent for
+    routing decisions.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-FLOW-11
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§2, Judgment moments paragraph"
+  source_quote: >
+    Judgment moments (Proxy wakes): a confirmed ask · a result returning · a judge-cleared
+    contribution · an anomaly · a control command · meeting end. Each needs a call by Proxy the
+    agent, dynamically, per case.
+  normalized_statement: >
+    THE SYSTEM SHALL wake the Proxy agent exactly for the following six event classes — confirmed ask,
+    result returning, judge-cleared contribution, anomaly, control command, and meeting end —
+    and SHALL NOT wake the agent for standing-pipe events that require no decision.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-FLOW-12
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§2, Proxy the agent paragraph"
+  source_quote: >
+    A wake = the harness sends one message: the event + current state go in; tool calls come out.
+    Tools are: dispatch_workroom(bundle) · speak(text) · send_chat(text, dm?) · show_screen(artifact)
+    · ack() · cancel_task(id) · patch_notes(correction) · restart_component(name) · run_close().
+    Nothing is branched per situation in code.
+  normalized_statement: >
+    WHEN the agent is woken THE SYSTEM SHALL send exactly one message containing the event and current
+    state; the agent SHALL respond only via the defined tool set: dispatch_workroom, speak, send_chat,
+    show_screen, ack, cancel_task, patch_notes, restart_component, run_close; no additional tool-call
+    mechanisms SHALL be wired per situation in harness code.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-FLOW-13
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§2, Reflexes paragraph"
+  source_quote: >
+    Reflexes (the only code-not-agent behaviors): barge-in must kill speech in <200ms · voice may
+    start only on a turn boundary · the canned "on it" ack fires within 0.5s of a confirmed address
+    · task bookkeeping (semaphore, duplicate-attach) ticks mechanically.
+  normalized_statement: >
+    THE SYSTEM SHALL implement the following reflexes in code (not via the agent): barge-in kills
+    speech within 200ms, voice output starts only at a turn boundary, the canned ack fires within
+    0.5s of a confirmed address, and task bookkeeping (semaphore, duplicate-attach) executes
+    mechanically; these SHALL be the ONLY code-not-agent behaviors.
+  requirement_type: performance
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Reactive Flow: T+0 ask lands ─────────────────────────────────────────────
+
+- requirement_id: R-doc04-FLOW-14
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "THE REACTIVE FLOW, T+0 through one wake turn"
+  source_quote: >
+    T+0: the ask lands. T+0.5s at most: the reflex "on it" (canned, instant). One wake turn —
+    Proxy picks the path (CANONICAL §11.6): DIRECT ANSWER (the ~1–2s path) via mounted code_intel
+    tools (host-side code_intel internal API, no E2B and no Workroom session on direct path);
+    OR WORKROOM DISPATCH (minutes-scale).
+  normalized_statement: >
+    WHEN an ask lands the complete reactive flow SHALL be: (1) within 0.5s a canned "on it" reflex
+    fires; (2) in the subsequent single wake turn Proxy selects exactly one path — either DIRECT
+    ANSWER via mounted code_intel tools (no E2B, no Workroom) OR WORKROOM DISPATCH; the two paths
+    are mutually exclusive per ask.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Ask Types ─────────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc04-FLOW-15
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "THE REACTIVE FLOW, Ask types"
+  source_quote: >
+    Ask types: Spoken ("Proxy, …") · Typed (@proxy … in chat) · Follow-up ("run it again at 2×")
+    · Correction ("that's wrong — routed as a notes patch").
+  normalized_statement: >
+    THE SYSTEM SHALL recognize and route four ask types: spoken asks addressed to Proxy, typed asks
+    via @proxy in chat, follow-up asks referencing a prior task, and correction asks that SHALL be
+    routed as a notes patch (patch_notes tool call) rather than a workroom dispatch.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Manners / Human Control ───────────────────────────────────────────────────
+
+- requirement_id: R-doc04-FLOW-16
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "THE REACTIVE FLOW, The manners"
+  source_quote: >
+    a human starting to speak stops Proxy mid-word
+  normalized_statement: >
+    WHEN a human begins speaking THE SYSTEM SHALL halt Proxy's voice output within 200ms (barge-in
+    reflex); this halt SHALL occur even if Proxy is in mid-word.
+  requirement_type: performance
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-FLOW-17
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "THE REACTIVE FLOW, The manners"
+  source_quote: >
+    "Proxy, quiet" silences the voice
+  normalized_statement: >
+    WHEN the spoken control command "Proxy, quiet" is recognized THE SYSTEM SHALL immediately silence
+    voice output and SHALL NOT resume voice until a new wake turn authorizes it.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-FLOW-18
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "THE REACTIVE FLOW, The manners"
+  source_quote: >
+    a human ask preempts everything else
+  normalized_statement: >
+    WHEN a human ask arrives while Proxy is performing any other action THE SYSTEM SHALL preempt the
+    current action and prioritize the human ask; no in-progress operation SHALL block processing of
+    an incoming human ask.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-FLOW-19
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "THE REACTIVE FLOW, The manners"
+  source_quote: >
+    it never claims more than it verified (✓ resolved vs ~ lower-bound)
+  normalized_statement: >
+    WHEN delivering a result THE SYSTEM SHALL tag exact verified results as resolved and
+    search-derived or uncertain results as lower-bound; the system SHALL NOT present a lower-bound
+    result with resolved confidence.
+  requirement_type: observability
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-FLOW-20
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "THE REACTIVE FLOW, The manners"
+  source_quote: >
+    every failure is spoken plainly, never silent
+  normalized_statement: >
+    WHEN any failure or error occurs THE SYSTEM SHALL produce a plain spoken disclosure to the room;
+    silent failure (no output on error) SHALL NOT occur.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Delivery Rules ────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc04-FLOW-21
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "THE REACTIVE FLOW, Delivery rules"
+  source_quote: >
+    voice only into a boundary
+  normalized_statement: >
+    WHEN Proxy initiates voice output THE SYSTEM SHALL only begin speaking at a turn boundary;
+    voice SHALL NOT begin while a human is mid-utterance.
+  requirement_type: ux
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-FLOW-22
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "THE REACTIVE FLOW, Delivery rules"
+  source_quote: >
+    channel from the result's own structure — headline→voice (+ text copy), detail→chat (DM where
+    supported), artifact→screenshare
+  normalized_statement: >
+    WHEN a result is delivered THE SYSTEM SHALL route delivery by the result's structural type:
+    headline content goes to voice with a simultaneous text copy, detail content goes to chat
+    (DM where supported), and artifact content goes to screenshare via show_screen; the channel
+    selection SHALL be determined from the result structure, not hard-coded per event type.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-FLOW-23
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "THE REACTIVE FLOW, Delivery rules"
+  source_quote: >
+    late results re-checked for relevance (room moved on → chat instead of voice)
+  normalized_statement: >
+    WHEN a workroom result arrives late (after the room's conversational context has moved on)
+    THE SYSTEM SHALL re-evaluate relevance and deliver via chat instead of voice if the result
+    is no longer contextually timely.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-FLOW-24
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "THE REACTIVE FLOW, Delivery rules"
+  source_quote: >
+    async etiquette ("that'll take ~20 minutes")
+  normalized_statement: >
+    WHEN a task is dispatched to the workroom and will take significant time THE SYSTEM SHALL
+    communicate the expected duration to the room (e.g., "that'll take ~20 minutes") before
+    the wait begins.
+  requirement_type: ux
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc04-FLOW-25
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "THE REACTIVE FLOW, final line"
+  source_quote: >
+    Result lands on the notes — which makes the next follow-up compose.
+  normalized_statement: >
+    WHEN a workroom result is delivered THE SYSTEM SHALL persist it to the notes (via the notes
+    substrate) such that a subsequent follow-up ask can reference it by notes_ref without
+    re-fetching from the workroom.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── SDK Isolation ─────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc04-FLOW-26
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "THE REACTIVE FLOW, SDK isolation paragraph"
+  source_quote: >
+    SDK isolation on every call (mandatory): strict_mcp_config=True, setting_sources=[],
+    computed built-in tools list.
+  normalized_statement: >
+    WHEN the agent SDK is invoked for any wake turn THE SYSTEM SHALL pass strict_mcp_config=True
+    and setting_sources=[] on every call and SHALL use only the computed built-in tools list;
+    no call SHALL omit these isolation parameters.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Naming / Identity ─────────────────────────────────────────────────────────
+
+- requirement_id: R-doc04-FLOW-27
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "THE REACTIVE FLOW, User-visible identity"
+  source_quote: >
+    User-visible identity: to the room there is only "Proxy" — internal component names
+    (Orchestrator/Scribe/workroom) never appear in user-visible strings.
+  normalized_statement: >
+    THE SYSTEM SHALL ensure that the strings "Orchestrator", "Scribe", and "workroom" (and their
+    case variants) never appear in any user-visible output — voice text, chat messages, screen
+    artifacts, or DMs; the sole user-facing identity is "Proxy".
+  requirement_type: ux
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §10.3 Lethal Trifecta (canonical override) ────────────────────────────────
+
+- requirement_id: R-doc04-FLOW-28
+  authority_type: canonical_decision
+  authority_document: DOC-04
+  source_location: "CANONICAL §10.3 — lethal trifecta"
+  source_quote: >
+    no transcript-triggered path reaches an outward side-effect without a human click;
+    transcript is delimited as untrusted input
+  normalized_statement: >
+    WHEN transcript content triggers any action path THE SYSTEM SHALL NOT allow that path to
+    produce an outward side-effect (speak, send_chat, show_screen, dispatch_workroom, or any
+    external call) without a human-initiated confirmation click; transcript SHALL be treated
+    as untrusted input throughout.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §12.3: Wake-turn tools as sole delivery authority ─────────────────────────
+
+- requirement_id: R-doc04-FLOW-29
+  authority_type: canonical_decision
+  authority_document: DOC-04
+  source_location: "CANONICAL §12.3"
+  source_quote: >
+    wake-turn tools (speak/send_chat/show_screen) are the SOLE delivery authority;
+    projector is pure rendering, never auto-speaks
+  normalized_statement: >
+    THE SYSTEM SHALL use speak, send_chat, and show_screen as the sole delivery channels for
+    user-facing output; the projector/screen-sharing component SHALL perform only rendering
+    and SHALL NOT autonomously emit speech or chat messages.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Task Bookkeeping / Semaphore ──────────────────────────────────────────────
+
+- requirement_id: R-doc04-FLOW-30
+  authority_type: specification
+  authority_document: DOC-04
+  source_location: "§2, Reflexes paragraph"
+  source_quote: >
+    task bookkeeping (semaphore, duplicate-attach) ticks mechanically.
+  normalized_statement: >
+    THE SYSTEM SHALL maintain a mechanical task semaphore that prevents duplicate attachment
+    of the same task and tracks in-flight task count; these bookkeeping operations SHALL execute
+    in code, not via agent judgment.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified

@@ -1,0 +1,462 @@
+# Requirements — Doc 08 Experience, UI & Surfaces · §2.1 Identity + §2.2 Tile state machine
+# Source: product/v0-spec/08-BEHAVIOR.md §2.1, §2.2, §3 (build rule for tile)
+# ID prefix: R-doc08-IDTILE-NN
+# Authority: DOC-08
+# Status: qualified
+#
+# CANONICAL overrides applied:
+#   §12.9  — tile is OUTBOUND-ONLY; it receives render frames, never originates a WS message
+#   TileState is driven by tile.state ProxyMessage frames from the backend (never self-driven)
+#   No TileAddress inbound message type exists
+#   Orb expressive range: breath rate, firmness, shimmer, dim, pulse — ONLY
+#
+# Criticality key:
+#   P0 — invariant; violation is a build failure
+#   P1 — shipping requirement; violation blocks release
+#   P2 — refinement; expected in V0 but not gating
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.1 — IDENTITY
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Presence orb: visual form ─────────────────────────────────────────────────
+
+- requirement_id: R-doc08-IDTILE-01
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.1 paragraph 1"
+  source_quote: "Proxy has no face, no avatar, no mascot. It is a single presence orb — a soft geometric bloom that breathes — in deep teal-ink (seed #35c2b8) on a near-black tile."
+  normalized_statement: >
+    WHEN the tile is rendered
+    THE SYSTEM SHALL display exactly one presence orb — a soft geometric bloom —
+    in deep teal-ink (seed #35c2b8) on a near-black background, with no face,
+    no avatar, and no mascot present.
+  requirement_type: ux
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-IDTILE-02
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.1 paragraph 1"
+  source_quote: "a soft geometric bloom that breathes"
+  normalized_statement: >
+    WHEN the tile is rendered
+    THE SYSTEM SHALL animate the presence orb with a continuous breathing motion
+    as its base idle behaviour.
+  requirement_type: ux
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── The hard ceiling: no forbidden expressive forms ──────────────────────────
+
+- requirement_id: R-doc08-IDTILE-03
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.1 paragraph 2"
+  source_quote: "The tile renderer must contain no code path for facial features, character animation, or theatrical effects."
+  normalized_statement: >
+    AT ALL TIMES the tile renderer
+    THE SYSTEM SHALL contain no code path for facial features, character animation,
+    or theatrical effects; the absence is structural (the code paths must not exist),
+    not a runtime gate.
+  requirement_type: ux
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-IDTILE-04
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.1 paragraph 2"
+  source_quote: "The orb's entire expressive range is: breath rate, firmness, shimmer, dim, and pulse."
+  normalized_statement: >
+    AT ALL TIMES the tile renderer
+    THE SYSTEM SHALL limit the orb's expressive range to exactly five axes:
+    breath rate, firmness, shimmer, dim, and pulse — and SHALL NOT introduce
+    additional expressive axes.
+  requirement_type: ux
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Single Cartesia TTS voice ─────────────────────────────────────────────────
+
+- requirement_id: R-doc08-IDTILE-05
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.1 paragraph 3"
+  source_quote: "A single calm TTS voice (Cartesia), used for everything. No character voices, no per-mode voices."
+  normalized_statement: >
+    WHEN Proxy produces spoken audio output
+    THE SYSTEM SHALL use exactly one Cartesia TTS voice configuration for all
+    speech and SHALL NOT switch voice, character, or voice profile between modes
+    or question types in V0.
+  requirement_type: ux
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-IDTILE-06
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.1 paragraph 3"
+  source_quote: "No character voices, no per-mode voices."
+  normalized_statement: >
+    WHEN Proxy produces spoken audio output
+    THE SYSTEM SHALL NOT select different voice characters or per-mode voice
+    profiles; a code path that selects a voice based on mode is prohibited.
+  requirement_type: ux
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Copy-voice rules ──────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-IDTILE-07
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.1 paragraph 4"
+  source_quote: "Plain, specific, warm, and confident. It says what it did, shows the receipt, and states uncertainty as information rather than apology."
+  normalized_statement: >
+    WHEN Proxy produces written or spoken output
+    THE SYSTEM SHALL use a plain, specific, warm, and confident register; it SHALL
+    state what was done and show evidence, and SHALL state uncertainty as
+    information (e.g. a quantified caveat), never as apology.
+  requirement_type: ux
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-IDTILE-08
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.1 paragraph 4 — rules list"
+  source_quote: "never "As an AI…" · no filler ("Certainly!", "Great question!") · no exclamation marks · no hedging theater — uncertainty is stated once, precisely"
+  normalized_statement: >
+    WHEN Proxy produces written or spoken output
+    THE SYSTEM SHALL NOT include: the phrase "As an AI", filler phrases such as
+    "Certainly!" or "Great question!", exclamation marks, or hedging theater;
+    uncertainty SHALL be stated once and precisely.
+  requirement_type: ux
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-IDTILE-09
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.1 paragraph 4 — rules list"
+  source_quote: "numbers and names over adjectives · one thought per spoken sentence (it's being heard, not read)"
+  normalized_statement: >
+    WHEN Proxy produces spoken output
+    THE SYSTEM SHALL express quantities and proper names rather than vague
+    adjectives, and SHALL limit each spoken sentence to one thought.
+  requirement_type: ux
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Naming: the product is Proxy everywhere ───────────────────────────────────
+
+- requirement_id: R-doc08-IDTILE-10
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.1 paragraph 5"
+  source_quote: ""Orchestrator," "Scribe," "workroom," "sandbox" are internal engineering words. If any user-visible string contains them, it is a bug. Proxy refers to itself as "I.""
+  normalized_statement: >
+    WHEN any user-visible string is rendered or spoken
+    THE SYSTEM SHALL NOT include the words Orchestrator, Scribe, workroom, or
+    sandbox; Proxy SHALL refer to itself as "I".
+  requirement_type: ux
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §2.2 — THE TILE STATE MACHINE
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Platform-agnostic rendering ───────────────────────────────────────────────
+
+- requirement_id: R-doc08-IDTILE-11
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.2 paragraph 1"
+  source_quote: "the tile behaves identically on Meet, Zoom, and Teams, and no signal depends on native platform buttons"
+  normalized_statement: >
+    WHEN the tile is rendered on any supported meeting platform (Meet, Zoom, Teams)
+    THE SYSTEM SHALL produce identical tile behaviour across all three platforms,
+    deriving no state or signal from native platform buttons.
+  requirement_type: ux
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Outbound-only render transport (CANONICAL §12.9) ─────────────────────────
+
+- requirement_id: R-doc08-IDTILE-12
+  authority_type: canonical_decision
+  authority_document: DOC-08
+  source_location: "§3 build rule + CANONICAL §12.9"
+  source_quote: "The tile is outbound-only (CANONICAL §12.9): it authenticates its render WS via a meeting-scoped bearer token in the URL handed to Recall — it receives frames, it never originates a message."
+  normalized_statement: >
+    WHEN the tile render WebSocket is live
+    THE SYSTEM SHALL authenticate via a meeting-scoped bearer token in the URL
+    and SHALL only receive frames; the tile SHALL NEVER originate a WebSocket
+    message.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── TileState driven by backend ProxyMessage frames only ─────────────────────
+
+- requirement_id: R-doc08-IDTILE-13
+  authority_type: canonical_decision
+  authority_document: DOC-08
+  source_location: "§3 build rule + CANONICAL override"
+  source_quote: "TileState is driven by tile.state ProxyMessage frames from the backend (never self-driven)"
+  normalized_statement: >
+    WHEN the tile transitions between states
+    THE SYSTEM SHALL transition state only in response to a received
+    tile.state ProxyMessage frame from the backend; the tile SHALL NOT
+    self-drive any state transition.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── No state without a real source (build rule) ───────────────────────────────
+
+- requirement_id: R-doc08-IDTILE-14
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§3 build rule"
+  source_quote: "no state without a real source — if a state can't name its driving event, it doesn't exist"
+  normalized_statement: >
+    WHEN the tile state machine is defined
+    THE SYSTEM SHALL bind every state to a named real system event (Doc 04
+    session state, Doc 05 progress envelopes, Doc 02 mute/speaking signals);
+    no state SHALL exist without a named driving event.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Exactly the §2.2 state set — no more, no fewer ───────────────────────────
+
+- requirement_id: R-doc08-IDTILE-15
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.2 state table"
+  source_quote: "The V0 state set — deliberately few, each legible from across the room and each driven by a real system event, never decorative"
+  normalized_statement: >
+    WHEN the tile state machine is defined
+    THE SYSTEM SHALL implement exactly the eight states named in §2.2
+    (Listening, Listening-to, Working, Checking-ACK, Has-something, Speaking,
+    Muted, Reaction) and no additional states.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── State: Listening ─────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-IDTILE-16
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.2 state table row: Listening"
+  source_quote: "Listening | the orb breathes slowly | default; the session is live"
+  normalized_statement: >
+    WHEN the session is live and no other state driver is active
+    THE SYSTEM SHALL render the tile in Listening state: the orb breathes slowly,
+    driven by the session-live event from Doc 04.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── State: Listening-to ──────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-IDTILE-17
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.2 state table row: Listening-to"
+  source_quote: "Listening-to | small "◉ listening to Maya" caption | an address was detected (Doc 04's name-gate + roster)"
+  normalized_statement: >
+    WHEN Doc 04's name-gate detects that Proxy has been addressed by a named
+    participant (e.g. "Maya")
+    THE SYSTEM SHALL transition to Listening-to state and SHALL render a small
+    caption of the form "◉ listening to <name>".
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── State: Working ───────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-IDTILE-18
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.2 state table row: Working"
+  source_quote: "Working | a quiet shimmer + one line: "checking the checkout retry logic…" | a real progress event from the task (Doc 05's envelopes)"
+  normalized_statement: >
+    WHEN a real progress event is received from Doc 05's task envelopes
+    THE SYSTEM SHALL transition to Working state: rendering a quiet shimmer on
+    the orb and displaying one line of task-progress text derived from the
+    progress event.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── State: Checking (ACK) — including ≤500ms timing ─────────────────────────
+
+- requirement_id: R-doc08-IDTILE-19
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.2 state table row: Checking (ACK)"
+  source_quote: "Checking (ACK) | a fast "checking…" line, fired ≤500ms | an LSP-bound direct answer that can't hit the audio-latency gate: the tile ACKs immediately, Proxy speaks when the LSP returns"
+  normalized_statement: >
+    WHEN an LSP-bound direct-answer event is received that cannot meet the
+    audio-latency gate
+    THE SYSTEM SHALL transition to Checking (ACK) state and SHALL render a
+    "checking…" line within 500 ms of receiving the event; Proxy SHALL
+    withhold speech until the LSP response returns.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc08-IDTILE-20
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.2 state table row: Checking (ACK)"
+  source_quote: "fired ≤500ms"
+  normalized_statement: >
+    WHEN the Checking (ACK) transition is triggered
+    THE SYSTEM SHALL render the "checking…" acknowledgement line in at most
+    500 ms from the triggering event; transitions at exactly 500 ms are
+    compliant; transitions above 500 ms are violations.
+  requirement_type: performance
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── State: Has-something ─────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-IDTILE-21
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.2 state table row: Has-something"
+  source_quote: "Has-something | the orb firms; caption "have the answer when there's a moment" | a finished result is waiting for a turn boundary (Doc 04)"
+  normalized_statement: >
+    WHEN a finished result is waiting and a turn boundary has not yet arrived
+    THE SYSTEM SHALL transition to Has-something state: the orb firms and
+    displays the caption "have the answer when there's a moment", driven by
+    the finished-result signal from Doc 04.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── State: Speaking ──────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-IDTILE-22
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.2 state table row: Speaking"
+  source_quote: "Speaking | gentle pulse synced to its own audio | Doc 02's speaking signal"
+  normalized_statement: >
+    WHEN Doc 02's speaking signal indicates Proxy is producing audio output
+    THE SYSTEM SHALL transition to Speaking state: the orb pulses gently in
+    synchrony with the audio signal.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── State: Muted ─────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-IDTILE-23
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.2 state table row: Muted"
+  source_quote: "Muted | dimmed orb + "muted" label | the hard mute (so silence is legible as chosen, not broken)"
+  normalized_statement: >
+    WHEN the hard-mute signal from Doc 02 is active
+    THE SYSTEM SHALL transition to Muted state: the orb is dimmed and a
+    "muted" label is displayed, making the muted state visually distinct from
+    a broken-audio condition.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── State: Reaction ──────────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-IDTILE-24
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.2 state table row: Reaction"
+  source_quote: "Reaction | a brief drawn ✓ / small acknowledgment | e.g. a task completed and delivered; sparing by design"
+  normalized_statement: >
+    WHEN a task-completed-and-delivered event is received
+    THE SYSTEM SHALL enter Reaction state briefly, rendering a small drawn
+    checkmark or acknowledgement; the state SHALL be transient and sparingly used.
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  status: qualified
+
+# ── Accessibility law (cross-cutting) ────────────────────────────────────────
+
+- requirement_id: R-doc08-IDTILE-25
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.2 accessibility law"
+  source_quote: "The accessibility law: motion is an enhancement, never the only channel. Every state the tile expresses is also carried in speech or chat — a dial-in participant or screen-reader user loses the ambience, never the substance. This is a hard rule reviewed per feature."
+  normalized_statement: >
+    WHEN the tile expresses any state change
+    THE SYSTEM SHALL also carry that same state information in speech or chat
+    output, so that a participant receiving audio only or using a screen reader
+    loses no informational substance.
+  requirement_type: ux
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Has-something = polite availability, not interruption ────────────────────
+
+- requirement_id: R-doc08-IDTILE-26
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.2 paragraph after state table"
+  source_quote: "Proxy never interrupts, but the room can see it has something and invite it."
+  normalized_statement: >
+    WHEN the tile is in Has-something state
+    THE SYSTEM SHALL NOT cause Proxy to interrupt the current speaker;
+    Proxy SHALL wait until invited (turn boundary) before delivering its result.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Legibility at distance ────────────────────────────────────────────────────
+
+- requirement_id: R-doc08-IDTILE-27
+  authority_type: specification
+  authority_document: DOC-08
+  source_location: "§2.2 state table preamble"
+  source_quote: "each legible from across the room"
+  normalized_statement: >
+    WHEN any tile state is rendered
+    THE SYSTEM SHALL render all state indicators (orb animations, captions,
+    labels) at a visual scale and contrast legible without close-up inspection.
+  requirement_type: ux
+  criticality: P1
+  testability: executable
+  status: qualified
