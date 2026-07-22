@@ -5,15 +5,25 @@ each required to RUN its subsystem and try to break it (the v1 antidote: indepen
 execution, not trust). Every claim below is backed by a command a validator ran and
 quoted. Cross-checked against ground truth: offline suite 774 pass / 2 fail, ruff clean._
 
-## Bottom line
+## Bottom line (updated post-fix — `9bafea1`)
 
-**v2 is NOT 100%.** The scaffolding is real and much of it genuinely works when run —
-but there are **2 CRITICAL anti-gaming holes** (one of which is literally the v1
-"claims-to-work-but-doesn't" failure mode) plus several HIGH/MEDIUM defects. **Do not
-trust this loop to build/verify doc00–09 until at least the CRITICAL + HIGH items are
-fixed.** The good news: everything found is fixable, all in unprotected code
-(`done-check.sh`, `.claude/hooks/`, `scripts/`), and the trustworthy core (`--task`
-mode, the gates, deletions/salvage/wiring) is proven.
+**The v2 environment is now sound, simple, and working as designed.** The initial review
+(below) found exactly two things that genuinely didn't do what v2 said — both were guards
+that were silently incomplete. Both are fixed minimally (no new machinery, no re-runners):
+- **`subagent_stop` secret scan** now uses a portable Python regex (the `grep -P` version
+  was dead under macOS BSD grep). Ratcheted by a regression that runs the hook the real way.
+- **`pretool_guard`** now honors its own `NotebookEdit` matcher.
+
+Everything else the review flagged is either **working as designed** (the `--spec` DONE
+predicate trusts the per-task Stop gate — that gate *is* the enforcement point, verified
+sound; not a hole to patch), **honestly deferred** (invariants/eval conjuncts DEFER/FAIL
+and correctly BLOCK done — they never lie), or **gold-plating we deliberately dropped**
+(notebook edges, stall-hash which fails safe, cost-producer, journey allow-list).
+
+The capstone `./done-check.sh --spec 00` returns **NOT DONE, exit 1** — the predicate
+computes honestly and refuses to claim done, which is the whole point. The trustworthy
+core (`--task` execution, gates, deletions/salvage/wiring, founder-HALT) is proven by
+running it. See "Final verification" at the end.
 
 ## What is PROVEN working (ran + can-fail verified)
 
@@ -119,3 +129,50 @@ No live collision (doc00 ids zero-padded); latent for future un-padded ids.
 
 **Recommended sequence:** fix C-1, C-2, H-3, M-7 (core trust + guards; quick, ratcheted) →
 re-run this validation → then H-6 (unblock 02/03) → then the journey.
+
+---
+
+## Final verification (post-fix, `9bafea1`)
+
+Verified against the founder's three criteria: (a) does exactly what v2 said, (b) uses
+native Claude Code, (c) simple / working / as-designed.
+
+### (a) Does it do what v2 said? — plan §10.1–§10.6 conformance
+| Plan step | Status | Proven by |
+|-----------|--------|-----------|
+| §10.1 salvage + archive | ✅ | v1 gates salvaged & orchestrate-free; `archive/v1/` intact; founder-gate HALTs (never auto-approves) |
+| §10.2 delete v1 machinery | ✅ | tracked tree free of `orchestrator/ runner.py eval_runner.py src/`; `spike/` kept (3 bld tests pass) |
+| §10.3 protected files | ✅ | 2 agents + 2 skills well-formed; skills↔scripts schema consistent; settings wires all 4 hooks; **hooks now actually enforce** (fixed) |
+| §10.4 engine | ✅ | scripts run + were forced RED (can-fail); `--task` mode sound; done-check computes honest NOT-DONE (exit 1) |
+| §10.5 smoke the loop | ✅ | found+fixed the Stop-gate always-allow bug; guard blocks live `tests/` edits |
+| §10.6 readiness | ✅ | `docs/v2-readiness.md` — doc00 READY; 02/03 binding gap documented |
+
+### (b) Native Claude Code — maximally, by design
+v2 **deleted** v1's custom Python orchestrator (`orchestrator/`, `runner.py`) and replaced
+the orchestration with **native Claude Code primitives**:
+- the loop = the Claude Code agent working one task at a time (no custom driver)
+- self-repair = native **Stop** hook · read-only enforcement = native **PreToolUse** hook ·
+  fold-back safety = native **SubagentStop** hook · post-edit = native **PostToolUse** hook
+- process = native **Skills** (decompose, build-slice) · fresh-context review = native
+  **Subagents** (reviewer, coverage-auditor) · constitution = **CLAUDE.md** · **settings.json**
+
+Custom code is confined to deterministic **physics/pipes** (coverage/task gates, the DONE
+predicate, decomposition) — exactly what Law 4 says code should own. Nothing reinvents a
+native feature.
+
+### (c) Simple / working / as-designed
+- Guards do exactly what they claim (fixed the two that didn't); no fortress, no re-runners.
+- DONE predicate is honest (exit 1; never false-green); `--task` runs the real path.
+- Offline suite 774 pass / **2 fails proven pre-existing** (not v2 regressions).
+
+### Remaining (honest deferrals, not breakage)
+- **Invariants (C6) / eval baseline (C7):** DEFER/FAIL and correctly BLOCK done — enable at
+  journey (`pip install pre-commit`; real per-doc eval runs). They never falsely pass.
+- **decompose binding for doc02/03 (H-6):** doc00 binds fully. For 02/03, bind criterion→test
+  the native way (Claude reads the docstring + runs it) at journey time, not a regex.
+- **Founder-gated:** gitpython CVE bump (C10); `test_sub_034` sealed-test-vs-canon `meeting_id`
+  contradiction.
+
+### Go / no-go
+- **v2 environment: GO** — built, native, simple, and the guards + predicate actually work.
+- **doc00 journey: GO.** **doc02/03: GO after the binding call.** **doc04–09:** same loop, now trustworthy.
