@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional, Protocol
 from uuid import UUID
 
-from scribe.schema import Entry  # noqa: F401 — the folded entries ARE scribe.schema Entry payloads
+from .schema import Entry  # noqa: F401 — the folded entries ARE scribe.schema Entry payloads
 
 # ── Route-mount facts (AC-CSREAD-04). The endpoint lives in the /internal/*
 # route group, alongside /internal/reconcile, OUTSIDE the user-auth wall. These
@@ -64,7 +64,7 @@ M_SURFACE_PATH = "/m/{meeting_id}"
 # environment; the default is the MVP/test token. A constant-time compare avoids
 # a timing oracle. This is the ONLY credential the internal reader accepts — a
 # user session cookie is structurally never consulted here (AC-CSREAD-05).
-_INTERNAL_TOKEN_ENV = "PROXY_INTERNAL_TOKEN"
+_INTERNAL_TOKEN_ENV = "PROXY_INTERNAL_TOKEN"  # nosec B105 - env var NAME, not a secret
 _DEFAULT_INTERNAL_TOKEN = "internal-token-good"  # nosec B105 - dev/test default, overridden by env
 
 
@@ -98,9 +98,9 @@ DeltaLoader = Callable[[Any, Any], Awaitable[list[dict[str, Any]]]]
 def _default_loader() -> DeltaLoader:
     # Imported lazily so this module imports on a host without libs.db wired; the
     # db tier and every real call resolve the committed ``db.repos.notes`` seam.
-    from db.repos.notes import load_deltas  # the append-only ledger, id order (§3.3)
+    from db.repos.notes import load_deltas  # type: ignore[import-not-found]  # workspace seam; resolved at runtime (§3.3)
 
-    return load_deltas
+    return load_deltas  # type: ignore[no-any-return]  # the workspace seam is untyped to mypy
 
 
 # ── The notes object + the canonical fold ────────────────────────────────────

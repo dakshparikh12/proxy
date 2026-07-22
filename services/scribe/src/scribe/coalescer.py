@@ -43,7 +43,7 @@ class BoundaryType(str, Enum):
     SPEAKER_TURN = "speaker_turn"
     PAUSE_WITHIN_TURN = "pause_within_turn"
     TIME_CAP = "time_cap_60s"  # spec's cap label; the enforced value is WINDOW_TIME_CAP_S
-    TOKEN_CAP = "token_cap"
+    TOKEN_CAP = "token_cap"  # nosec B105 - a boundary-type enum label, not a secret
     STREAM_END = "stream_end"
 
 

@@ -31,8 +31,8 @@ def upgrade() -> None:
         """
         CREATE TABLE note_deltas (
             id             bigserial PRIMARY KEY,
-            meeting_id     uuid NOT NULL,                        -- §3.3 exact: no FK (deltas are append-only, standalone)
-            tenant_id      uuid REFERENCES tenants(id),          -- nullable declared FK: isolation invariant (AC-TEN-001), not in §3.3 inserts
+            meeting_id     uuid NOT NULL,   -- §3.3: no FK (append-only, standalone)
+            tenant_id      uuid REFERENCES tenants(id),  -- nullable declared FK (AC-TEN-001)
             entry_id       text NOT NULL,
             op             text NOT NULL CHECK (op IN ('add', 'patch', 'close')),
             payload        jsonb NOT NULL,
