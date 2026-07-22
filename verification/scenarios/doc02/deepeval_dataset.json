@@ -1,0 +1,80 @@
+{
+  "doc": "doc02",
+  "spec_path": "product/v0-spec/02-VOICE-TRANSPORT.md",
+  "generator_model": "deterministic-fallback",
+  "llm_used": false,
+  "llm_error": "BadRequestError: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go",
+  "note": "Versioned dataset \u2014 generated from the ACTUAL spec sections; committed so runs are stable. If llm_used is false the questions/answers are deterministic spec-derived text (LLM was unavailable); the retrieval_context is real spec.",
+  "cases": [
+    {
+      "id": "doc02-grounded-0",
+      "input": "According to the section 'Doc 02 \u00b7 Voice & Transport \u2014 Build Spec', what does the spec require?",
+      "actual_output": "*Build order: 3rd. Reads from Doc 00 (runtime, hosting). Consumed by Doc 03 (transcript in), Doc 04 (speak/deliver + turn/floor decisions), Doc 08 (renders the canvas this doc streams). This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately.*\n\n---",
+      "retrieval_context": [
+        "*Build order: 3rd. Reads from Doc 00 (runtime, hosting). Consumed by Doc 03 (transcript in), Doc 04 (speak/deliver + turn/floor decisions), Doc 08 (renders the canvas this doc streams). This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately.*\n\n---"
+      ],
+      "kind": "grounded",
+      "citation_should_pass": true
+    },
+    {
+      "id": "doc02-grounded-1",
+      "input": "According to the section '3 \u00b7 The build', what does the spec require?",
+      "actual_output": "Data flow:\n```\nmeeting link/calendar \u2192 Recall bot joins \u2192 consent notice posted\n  IN:  per-speaker audio \u2192 AssemblyAI (via Recall passthrough) \u2192 transcript websocket \u2192 Doc 03/04\n       meeting chat (@proxy, messages) \u2192 Doc 04\n       Silero VAD on the audio \u2192 speaking + barge-in signals; AAI `end_of_turn` (from the STT stream) \u2192 boundary signal \u2192 Doc 04\n  OUT: Doc 04 says speak \u2192 TTS (Cartesia) \u2192 O",
+      "retrieval_context": [
+        "Data flow:\n```\nmeeting link/calendar \u2192 Recall bot joins \u2192 consent notice posted\n  IN:  per-speaker audio \u2192 AssemblyAI (via Recall passthrough) \u2192 transcript websocket \u2192 Doc 03/04\n       meeting chat (@proxy, messages) \u2192 Doc 04\n       Silero VAD on the audio \u2192 speaking + barge-in signals; AAI `end_of_turn` (from the STT stream) \u2192 boundary signal \u2192 Doc 04\n  OUT: Doc 04 says speak \u2192 TTS (Cartesia) \u2192 Output Media audio (+ text copy to chat)\n       Doc 04 says send \u2192 chat broadcast or DM\n       Doc 04/08 render \u2192 the canvas webpage \u2192 Output Media camera (tile) or screenshare (promoted)\n  CONTROL: barge-in \u2192 stop TTS + flush \u00b7 \"Proxy, quiet\" \u2192 silent mode \u00b7 bot-status webhook \u2192 rejoin + honest gap\n```"
+      ],
+      "kind": "grounded",
+      "citation_should_pass": true
+    },
+    {
+      "id": "doc02-grounded-2",
+      "input": "According to the section '3.3 \u00b7 Speaking (text in \u2192 voice out)', what does the spec require?",
+      "actual_output": "Upstream hands this layer text \u2192 **Cartesia Sonic 3** synthesizes (~40ms time-to-first-audio \u2014 voice starts effectively instantly) \u2192 **Recall Output Media** streams it into the call as Proxy's voice. One voice, one calm register (brand: the teal \"deep feel\"). Rules enforced here: **headlines only** (~2\u20134k chars/hr \u2248 $0.10\u20130.20 \u2014 the speak-short/detail-in-chat design); **every spoken line also post",
+      "retrieval_context": [
+        "Upstream hands this layer text \u2192 **Cartesia Sonic 3** synthesizes (~40ms time-to-first-audio \u2014 voice starts effectively instantly) \u2192 **Recall Output Media** streams it into the call as Proxy's voice. One voice, one calm register (brand: the teal \"deep feel\"). Rules enforced here: **headlines only** (~2\u20134k chars/hr \u2248 $0.10\u20130.20 \u2014 the speak-short/detail-in-chat design); **every spoken line also posts as text** (accessibility + record \u2014 free since we synthesize from text); speaking only begins on a **boundary signal** (3.6) and **aborts instantly on barge-in**. **Small-chunk Output-Media buffer:** TTS is streamed to Output Media in **small chunks**, deliberately, so barge-in isn't defeated by a large already-buffered stretch of audio \u2014 a flush drops at most one small in-flight chunk, keeping the mid-word cut-off honest.\n\n**Ack-audible reflex.** A direct answer can fire a \u2264500ms canned \"on it\" spoken line the instant it's picked up, while the real answer resolves \u2014 the audible counterpart to the tile \"checking\u2026\" ACK (\u00a73.5). The two are separate signals: this one is voice, the tile ACK is a drawn state."
+      ],
+      "kind": "grounded",
+      "citation_should_pass": true
+    },
+    {
+      "id": "doc02-grounded-3",
+      "input": "According to the section '3.6 \u00b7 Turn-taking, barge-in, mute (the manners)', what does the spec require?",
+      "actual_output": "- **Silero VAD** runs on the incoming audio: *is anyone speaking right now?* (<1ms/chunk, CPU) \u2014 this is the **barge-in** trigger, and it must stay: a human speech onset has to stop TTS in `[<200ms]`, and the AAI transcript (~300ms) is too slow to do that. Not redundant with the boundary signal.\n- **End-of-turn boundary = AssemblyAI Universal-Streaming's `end_of_turn`**, already on the STT stream ",
+      "retrieval_context": [
+        "- **Silero VAD** runs on the incoming audio: *is anyone speaking right now?* (<1ms/chunk, CPU) \u2014 this is the **barge-in** trigger, and it must stay: a human speech onset has to stop TTS in `[<200ms]`, and the AAI transcript (~300ms) is too slow to do that. Not redundant with the boundary signal.\n- **End-of-turn boundary = AssemblyAI Universal-Streaming's `end_of_turn`**, already on the STT stream we pay for (\u00a73.2): *is this a real end-of-turn or a mid-thought breath?* No Smart Turn v3 model \u2014 one fewer thing to run and maintain. (Confirm-at-build that Recall passthrough forwards this field; \u00a73.9 step 7.)\n- Both signals stream to the Orchestrator continuously. The contract this layer enforces: **voice output may only start on a clear boundary; any human speech onset during Proxy's speech = stop TTS mid-word + flush the queue** (upstream decides whether to re-queue, bank, or drop \u2014 Doc 04).\n- **Hard mute:** \"Proxy, quiet / mute\" \u2192 this layer kills any in-flight TTS and enters silent mode (tile + chat remain; voice off) until re-invited. Recognition of the phrase is Doc 04's; the kill-switch is here."
+      ],
+      "kind": "grounded",
+      "citation_should_pass": true
+    },
+    {
+      "id": "doc02-grounded-4",
+      "input": "According to the section '3.9 \u00b7 Build steps (in this order \u2014 each step ends in something provable)', what does the spec require?",
+      "actual_output": "1. **Join.** Recall bot joins from a meeting link; consent line posts on join. *Provable: bot appears in a real Meet and the line is pinned/posted.*\n2. **Events.** Roster (join/leave, names), meeting-end, and bot-status webhooks flow to the harness; late-join consent re-post wired. *Provable: a late joiner triggers the re-post; ending the meeting emits the close signal.*\n3. **Hearing.** AssemblyAI",
+      "retrieval_context": [
+        "1. **Join.** Recall bot joins from a meeting link; consent line posts on join. *Provable: bot appears in a real Meet and the line is pinned/posted.*\n2. **Events.** Roster (join/leave, names), meeting-end, and bot-status webhooks flow to the harness; late-join consent re-post wired. *Provable: a late joiner triggers the re-post; ending the meeting emits the close signal.*\n3. **Hearing.** AssemblyAI-via-Recall passthrough configured (our key in the Recall dashboard); the transcript websocket delivers words + speaker + timestamps; Proxy's own speech marked as Proxy. *Provable: a two-speaker test call yields a correctly attributed live transcript; Proxy never reacts to its own lines.*\n4. **Speaking.** Cartesia TTS \u2192 Output Media audio; the text copy posts to chat with every spoken line. *Provable: a test \"say this\" is audible in-call within the latency budget and appears in chat.*\n5. **Chat.** Inbound (@proxy + messages) \u2192 the harness; outbound broadcast + DM-where-supported; per-meeting channel report. *Provable: @proxy in chat reaches the orchestrator; a DM lands privately on a supporting platform.*\n6. **The canvas.** The tile webpage streams as the bot's camera; screenshare promotion + camera\u2194screen sequencing + announced swaps. *Provable: the tile renders in-call; a promote/demote cycle works without dropping either stream.*\n7. **Turn-taking + control.** Silero VAD \u2192 speaking + barge-in (kills TTS mid-word + flushes in `[<200ms]`, small-chunk buffer so barge-in isn't defeated by buffered audio); AAI `end_of_turn` (from the STT stream) \u2192 boundary signal; the hard-mute kill-switch. **Confirm-at-build: verify Recall passthrough forwards AAI's `end_of_turn` field; if it does not, re-add Smart Turn v3 as the boundary model.** *Provable: speech onset during Proxy's speech sto"
+      ],
+      "kind": "grounded",
+      "citation_should_pass": true
+    },
+    {
+      "id": "doc02-negctl-0",
+      "input": "According to the section 'Doc 02 \u00b7 Voice & Transport \u2014 Build Spec', what does the spec require?",
+      "actual_output": "*Build order: 3rd. Reads from Doc 00 (runtime, hosting). Consumed by Doc 03 (transcript in), Doc 04 (speak/deliver + turn/floor decisions), Doc 08 (renders the canvas this doc streams). This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately.*\n\n--- Additionally, the system stores all state in a MongoDB cluster with a 7-day auto-delete TTL and calls the OpenAI GPT-4 API for every request.",
+      "retrieval_context": [
+        "*Build order: 3rd. Reads from Doc 00 (runtime, hosting). Consumed by Doc 03 (transcript in), Doc 04 (speak/deliver + turn/floor decisions), Doc 08 (renders the canvas this doc streams). This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately.*\n\n---"
+      ],
+      "kind": "negative_control",
+      "citation_should_pass": false
+    },
+    {
+      "id": "doc02-negctl-1",
+      "input": "According to the section '3 \u00b7 The build', what does the spec require?",
+      "actual_output": "Data flow:\n```\nmeeting link/calendar \u2192 Recall bot joins \u2192 consent notice posted\n  IN:  per-speaker audio \u2192 AssemblyAI (via Recall passthrough) \u2192 transcript websocket \u2192 Doc 03/04\n       meeting chat (@proxy, messages) \u2192 Doc 04\n       Silero VAD on the audio \u2192 speaking + barge-in signals; AAI `end_of_turn` (from the STT stream) \u2192 boundary signal \u2192 Doc 04\n  OUT: Doc 04 says speak \u2192 TTS (Cartesia) \u2192 O Additionally, the system stores all state in a MongoDB cluster with a 7-day auto-delete TTL and calls the OpenAI GPT-4 API for every request.",
+      "retrieval_context": [
+        "Data flow:\n```\nmeeting link/calendar \u2192 Recall bot joins \u2192 consent notice posted\n  IN:  per-speaker audio \u2192 AssemblyAI (via Recall passthrough) \u2192 transcript websocket \u2192 Doc 03/04\n       meeting chat (@proxy, messages) \u2192 Doc 04\n       Silero VAD on the audio \u2192 speaking + barge-in signals; AAI `end_of_turn` (from the STT stream) \u2192 boundary signal \u2192 Doc 04\n  OUT: Doc 04 says speak \u2192 TTS (Cartesia) \u2192 Output Media audio (+ text copy to chat)\n       Doc 04 says send \u2192 chat broadcast or DM\n       Doc 04/08 render \u2192 the canvas webpage \u2192 Output Media camera (tile) or screenshare (promoted)\n  CONTROL: barge-in \u2192 stop TTS + flush \u00b7 \"Proxy, quiet\" \u2192 silent mode \u00b7 bot-status webhook \u2192 rejoin + honest gap\n```"
+      ],
+      "kind": "negative_control",
+      "citation_should_pass": false
+    }
+  ]
+}

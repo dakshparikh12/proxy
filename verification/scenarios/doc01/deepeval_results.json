@@ -1,0 +1,10 @@
+{
+  "doc": "doc01",
+  "judge_model": "claude-haiku-4-5-20251001",
+  "passed": null,
+  "blocked": true,
+  "blocked_reason": "BadRequestError: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purcha",
+  "n_cases": 7,
+  "note": "Layer 2 scoring is BUILT and smoke-verified; the full run is blocked by an external LLM-provider limit. Re-run when credit is restored.",
+  "results": []
+}

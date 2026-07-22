@@ -5,3 +5,7 @@ __pycache__/
 # Ephemeral local tool venvs (Layer 2/3 isolated envs) are never committed.
 .venv-*/
 node_modules/
+
+# Isolated tool venvs and caches
+**/.venv/
+.deepeval*
