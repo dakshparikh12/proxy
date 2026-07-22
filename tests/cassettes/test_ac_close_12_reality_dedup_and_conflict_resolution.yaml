@@ -1,0 +1,257 @@
+interactions:
+- request:
+    body: "{\"max_tokens\":8192,\"messages\":[{\"role\":\"user\",\"content\":\"<folded_ledger>\\nSUMMARY:
+      The team discussed the checkout refactor and the retry logic.\\nDECISIONS:\\n-
+      We will ship the retry logic today (final).\\nACTION ITEMS:\\n- Ana to update
+      the retry backoff logic.\\n- Ana to update the retry backoff logic (this is
+      a duplicate of the item above).\\n- Zed to review the PR by Friday.\\nCLAIMS:\\n-
+      The build is green. [contradicts c1: earlier Ana said the build was red]\\nOPEN
+      QUESTIONS:\\n- Should we put the retry logic behind a feature flag?\\n\\n</folded_ledger>\\n\\n<gap_pending_backfill>\\n[gap
+      s9] Mel: before shipping we also agreed to add a rollback switch.\\n</gap_pending_backfill>\"}],\"model\":\"claude-sonnet-4-6\",\"tool_choice\":{\"type\":\"tool\",\"name\":\"emit_final_notes\"},\"tools\":[{\"name\":\"emit_final_notes\",\"description\":\"Emit
+      the finalized meeting notes as ONE structured object.\",\"input_schema\":{\"$defs\":{\"FinalActionItem\":{\"properties\":{\"text\":{\"maxLength\":1000,\"title\":\"Text\",\"type\":\"string\"},\"owner\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Owner\"},\"due\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Due\"}},\"required\":[\"text\"],\"title\":\"FinalActionItem\",\"type\":\"object\"},\"FinalDecision\":{\"properties\":{\"text\":{\"maxLength\":1000,\"title\":\"Text\",\"type\":\"string\"}},\"required\":[\"text\"],\"title\":\"FinalDecision\",\"type\":\"object\"},\"FinalOpenQuestion\":{\"properties\":{\"text\":{\"maxLength\":1000,\"title\":\"Text\",\"type\":\"string\"}},\"required\":[\"text\"],\"title\":\"FinalOpenQuestion\",\"type\":\"object\"}},\"description\":\"The
+      close pass's structured output \u2014 deduped, conflicts resolved,\\nconfidence-weighted,
+      human-polished, in publishable form (\xA73.7).\\n\\nThis is the Pydantic model
+      the ``generateStructured`` result is re-validated\\nagainst (``outputFormat:{type:'json_schema'}``
+      \u2192 ``model_validate``,\\nAC-CLOSE-06). It carries NO ``contradicts`` links
+      (AC-CLOSE-12): the final\\nrecord is definitive by construction.\",\"properties\":{\"summary\":{\"maxLength\":20000,\"title\":\"Summary\",\"type\":\"string\"},\"decisions\":{\"items\":{\"$ref\":\"#/$defs/FinalDecision\"},\"title\":\"Decisions\",\"type\":\"array\"},\"action_items\":{\"items\":{\"$ref\":\"#/$defs/FinalActionItem\"},\"title\":\"Action
+      Items\",\"type\":\"array\"},\"open_questions\":{\"items\":{\"$ref\":\"#/$defs/FinalOpenQuestion\"},\"title\":\"Open
+      Questions\",\"type\":\"array\"}},\"required\":[\"summary\"],\"title\":\"FinalNotes\",\"type\":\"object\"}}]}"
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      anthropic-version:
+      - '2023-06-01'
+      connection:
+      - keep-alive
+      content-length:
+      - '2383'
+      content-type:
+      - application/json
+      host:
+      - api.anthropic.com
+      user-agent:
+      - AsyncAnthropic/Python 0.117.1
+      x-api-key:
+      - REDACTED
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - async:asyncio
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 0.117.1
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.12.13
+      x-stainless-timeout:
+      - '600'
+    method: POST
+    uri: https://api.anthropic.com/v1/messages
+  response:
+    body:
+      string: "{\"model\":\"claude-sonnet-4-6\",\"id\":\"msg_011CdGeJF3cv4Mxm7CBuxAmQ\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_014SxT9m5uBFhosBEdADayY2\",\"name\":\"emit_final_notes\",\"input\":{\"summary\":\"The
+        team discussed the checkout refactor and the retry logic. They agreed to ship
+        the retry logic today and also agreed to add a rollback switch before shipping.
+        There is an unresolved contradiction regarding the build status: Ana previously
+        reported the build was red, but a later claim states the build is green \u2014
+        the current build status should be verified before proceeding.\",\"decisions\":[{\"text\":\"The
+        retry logic will be shipped today.\"},{\"text\":\"A rollback switch will be
+        added before shipping.\"}],\"action_items\":[{\"text\":\"Ana to update the
+        retry backoff logic.\",\"owner\":\"Ana\"},{\"text\":\"Zed to review the PR
+        by Friday.\",\"owner\":\"Zed\",\"due\":\"Friday\"},{\"text\":\"Verify current
+        build status \u2014 contradictory reports exist (Ana reported red; a later
+        claim states green).\",\"owner\":null}],\"open_questions\":[{\"text\":\"Should
+        the retry logic be put behind a feature flag?\"},{\"text\":\"Is the build
+        currently green or red? (Conflicting reports need resolution before shipping.)\"}]},\"caller\":{\"type\":\"direct\"}}],\"stop_reason\":\"tool_use\",\"stop_sequence\":null,\"stop_details\":null,\"usage\":{\"input_tokens\":1338,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":0},\"output_tokens\":310,\"service_tier\":\"standard\",\"inference_geo\":\"global\"}}"
+    headers:
+      anthropic-organization-id:
+      - 9e6b134b-4365-4579-ad69-aac1a114888f
+      anthropic-ratelimit-input-tokens-limit:
+      - '10000000'
+      anthropic-ratelimit-input-tokens-remaining:
+      - '9999000'
+      anthropic-ratelimit-input-tokens-reset:
+      - '2026-07-22T06:44:32Z'
+      anthropic-ratelimit-output-tokens-limit:
+      - '2000000'
+      anthropic-ratelimit-output-tokens-remaining:
+      - '2000000'
+      anthropic-ratelimit-output-tokens-reset:
+      - '2026-07-22T06:44:37Z'
+      anthropic-ratelimit-requests-limit:
+      - '10000'
+      anthropic-ratelimit-requests-remaining:
+      - '9999'
+      anthropic-ratelimit-requests-reset:
+      - '2026-07-22T06:44:31Z'
+      anthropic-ratelimit-tokens-limit:
+      - '12000000'
+      anthropic-ratelimit-tokens-remaining:
+      - '11999000'
+      anthropic-ratelimit-tokens-reset:
+      - '2026-07-22T06:44:32Z'
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a1f07a2d1e1380fd-SJC
+      connection:
+      - keep-alive
+      content-length:
+      - '1528'
+      content-security-policy:
+      - default-src 'none'; frame-ancestors 'none'
+      content-type:
+      - application/json
+      date:
+      - Wed, 22 Jul 2026 06:44:37 GMT
+      request-id:
+      - req_011CdGeJEEkRkx56DZWRbfmv
+      server:
+      - cloudflare
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
+      traceresponse:
+      - 00-5055c8423b25e5af8bc95dd1bce70917-96362c356666b740-01
+      transfer-encoding:
+      - chunked
+      vary:
+      - Accept-Encoding
+      x-robots-tag:
+      - none
+    status:
+      code: 200
+      message: OK
+- request:
+    body: "{\"max_tokens\":100,\"messages\":[{\"role\":\"user\",\"content\":\"You
+      grade a meeting-notes close pass. Given GOLDEN notes (expected content) and
+      CANDIDATE notes (produced content), return the fraction (0.0-1.0) of GOLDEN
+      items semantically covered by some CANDIDATE item \u2014 ALLOW paraphrase and
+      rewording. Return ONLY JSON: {\\\"score\\\": <float 0..1>}.\\n\\nGOLDEN:\\n-
+      Ship the retry logic today.\\n- Add a rollback switch before shipping.\\n- Ana
+      to update the retry backoff logic.\\n- Zed to review the PR by Friday.\\n- Should
+      the retry logic be put behind a feature flag?\\n- Is the build green or red?
+      It must be confirmed before shipping.\\n\\nCANDIDATE:\\n- The retry logic will
+      be shipped today.\\n- A rollback switch will be added before shipping.\\n- Ana
+      to update the retry backoff logic. (owner Ana)\\n- Zed to review the PR by Friday.
+      (owner Zed, due Friday)\\n- Verify current build status \u2014 contradictory
+      reports exist (Ana reported red; a later claim states green).\\n- Should the
+      retry logic be put behind a feature flag?\\n- Is the build currently green or
+      red? (Conflicting reports need resolution before shipping.)\"}],\"model\":\"claude-haiku-4-5\"}"
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate
+      anthropic-version:
+      - '2023-06-01'
+      connection:
+      - keep-alive
+      content-length:
+      - '1141'
+      content-type:
+      - application/json
+      host:
+      - api.anthropic.com
+      user-agent:
+      - AsyncAnthropic/Python 0.117.1
+      x-api-key:
+      - REDACTED
+      x-stainless-arch:
+      - arm64
+      x-stainless-async:
+      - async:asyncio
+      x-stainless-lang:
+      - python
+      x-stainless-os:
+      - MacOS
+      x-stainless-package-version:
+      - 0.117.1
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+      x-stainless-runtime:
+      - CPython
+      x-stainless-runtime-version:
+      - 3.12.13
+      x-stainless-timeout:
+      - '600'
+    method: POST
+    uri: https://api.anthropic.com/v1/messages
+  response:
+    body:
+      string: "{\"model\":\"claude-haiku-4-5-20251001\",\"id\":\"msg_011CdGeJkYeA62r62VUTzQYk\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"```json\\n{\\\"score\\\":
+        1.0}\\n```\\n\\nThe CANDIDATE notes cover all GOLDEN items:\\n1. \u2713 \\\"Ship
+        the retry logic today\\\" \u2192 \\\"The retry logic will be shipped today\\\"\\n2.
+        \u2713 \\\"Add a rollback switch before shipping\\\" \u2192 \\\"A rollback
+        switch will be added before shipping\\\"\\n3. \u2713 \\\"Ana to update the
+        retry backoff logic\\\" \u2192 Exact match with owner annotation\"}],\"stop_reason\":\"max_tokens\",\"stop_sequence\":null,\"stop_details\":null,\"usage\":{\"input_tokens\":275,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":0},\"output_tokens\":100,\"service_tier\":\"standard\",\"inference_geo\":\"not_available\"}}"
+    headers:
+      anthropic-organization-id:
+      - 9e6b134b-4365-4579-ad69-aac1a114888f
+      anthropic-ratelimit-input-tokens-limit:
+      - '10000000'
+      anthropic-ratelimit-input-tokens-remaining:
+      - '10000000'
+      anthropic-ratelimit-input-tokens-reset:
+      - '2026-07-22T06:44:38Z'
+      anthropic-ratelimit-output-tokens-limit:
+      - '2000000'
+      anthropic-ratelimit-output-tokens-remaining:
+      - '2000000'
+      anthropic-ratelimit-output-tokens-reset:
+      - '2026-07-22T06:44:39Z'
+      anthropic-ratelimit-requests-limit:
+      - '10000'
+      anthropic-ratelimit-requests-remaining:
+      - '9999'
+      anthropic-ratelimit-requests-reset:
+      - '2026-07-22T06:44:37Z'
+      anthropic-ratelimit-tokens-limit:
+      - '12000000'
+      anthropic-ratelimit-tokens-remaining:
+      - '12000000'
+      anthropic-ratelimit-tokens-reset:
+      - '2026-07-22T06:44:38Z'
+      cf-cache-status:
+      - DYNAMIC
+      cf-ray:
+      - a1f07a56eeb7e865-SJC
+      connection:
+      - keep-alive
+      content-length:
+      - '817'
+      content-security-policy:
+      - default-src 'none'; frame-ancestors 'none'
+      content-type:
+      - application/json
+      date:
+      - Wed, 22 Jul 2026 06:44:39 GMT
+      request-id:
+      - req_011CdGeJjcqJu7LJYc5wJ3r2
+      server:
+      - cloudflare
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
+      traceresponse:
+      - 00-22abaf57bbe1c90098485f658ea8beac-3240767f00114f4b-01
+      transfer-encoding:
+      - chunked
+      vary:
+      - Accept-Encoding
+      x-robots-tag:
+      - none
+    status:
+      code: 200
+      message: OK
+version: 1

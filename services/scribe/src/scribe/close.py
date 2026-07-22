@@ -30,18 +30,19 @@ subtypes are pinned from the **TypeScript** ``~/platform`` Agent SDK
 (``AgentService.ts:772-777``). The close pass runs on the **Python**
 ``claude_agent_sdk``, whose structured-output surface MUST be confirmed against
 the live ``claude_agent_sdk`` docs at build — a design doc cannot pin a
-third-party wire shape. **Build evidence, this session:** neither
-``claude_agent_sdk`` nor ``anthropic`` is installed in this environment, so the
-Python surface CANNOT be confirmed against a live/installed SDK this session; the
-vendor (reality) tier therefore stays skipped (no cassette, no SDK) and is NOT
-faked. This module is written against an INJECTED structured-output caller
-(:class:`StructuredCaller`) driven through the real
-``libs.http.call_external`` seam — never a ``Mock()`` replacing the seam — so the
-confirmed names drop in verbatim the moment the Python SDK is pinned. The pinned
+third-party wire shape. **Build realization:** the ``claude_agent_sdk`` Python
+wrapper was deferred (a design doc cannot pin its surface), so the concrete
+:func:`anthropic_structured_caller` realizes ``generateStructured`` NATIVELY on the
+installed ``anthropic`` Messages API — a forced-tool call whose ``input_schema`` IS
+the FinalNotes JSON Schema, so the ``tool_use`` input is the structured payload
+(exactly ``outputFormat:{type:'json_schema'}`` semantics). It is driven through the
+real ``libs.http.call_external`` seam — never a ``Mock()`` — and the vendor (reality)
+tier now runs for real against a recorded cassette (``tests/doc03/close``). The pinned
 TS names recorded here for parity: method ``generateStructured``, parameter
 ``outputFormat={"type": "json_schema", "schema": <JSONSchema>}``, terminal
 subtypes ``error_max_turns`` / ``error_max_structured_output_retries``, result
-field ``total_cost_usd``.
+field ``total_cost_usd``. Swapping in ``claude_agent_sdk`` later means only
+supplying a different :class:`StructuredCaller` — the close logic is unchanged.
 
 Import discipline: this module NEVER imports the vendor SDK (``anthropic`` /
 ``claude_agent_sdk``) or ``libs.http.external`` (which imports ``anthropic`` at
@@ -551,6 +552,71 @@ class CallExternal(Protocol):
 
 # ── The structured close call (generateStructured → Pydantic re-validate) ────
 
+# Approximate Sonnet-class per-token USD prices, applied at the SDK-adapter boundary.
+# The raw Messages API returns token usage, not a dollar figure (the Agent SDK computes
+# it internally); this adapter fills StructuredResult.total_cost_usd from REAL usage so
+# the close layer READS cost off the result and never does token arithmetic (AC-CLOSE-11).
+_CLOSE_MAX_TOKENS = 8192
+_USD_PER_INPUT_TOKEN = 3.0 / 1_000_000
+_USD_PER_OUTPUT_TOKEN = 15.0 / 1_000_000
+
+
+def _lazy_anthropic_client(**kwargs: Any) -> Any:
+    """Construct the raw Anthropic client via the single libs.http construction site.
+
+    Deferred import so the pure ordering/composition logic stays importable on a host
+    without the vendor SDK; the reality tier drives real construction through this path.
+    """
+    from libs.http.src.http.external import anthropic_client  # deferred: vendor SDK only here
+
+    return anthropic_client(**kwargs)
+
+
+def anthropic_structured_caller(client: Any | None = None) -> StructuredCaller:
+    """The concrete ``generateStructured`` surface, realized NATIVELY on the Anthropic
+    Messages API: a forced-tool call whose ``input_schema`` IS the ``output_schema``, so
+    the returned ``tool_use`` input is the structured payload — exactly the
+    ``outputFormat:{type:'json_schema'}`` semantics (AC-CLOSE-06). The ``claude_agent_sdk``
+    wrapper named in §3.9 was deferred ("a design doc cannot pin its surface"); this is the
+    dependency-light, vcr-recordable realization the close pass actually uses. It makes ONE
+    round-trip and returns a :class:`StructuredResult` (data + real cost) — the retry + cost
+    seam is applied ONE level up in :func:`generate_structured_close`.
+    """
+
+    async def _call(*, model: str, prompt: str, output_schema: dict[str, Any]) -> StructuredResult:
+        c = client if client is not None else _lazy_anthropic_client()
+        tool = {
+            "name": "emit_final_notes",
+            "description": "Emit the finalized meeting notes as ONE structured object.",
+            "input_schema": output_schema,
+        }
+        resp = await c.messages.create(
+            model=model,
+            max_tokens=_CLOSE_MAX_TOKENS,
+            messages=[{"role": "user", "content": prompt}],
+            tools=[tool],
+            tool_choice={"type": "tool", "name": "emit_final_notes"},  # force json_schema output
+        )
+        block = next(
+            (
+                b for b in resp.content
+                if getattr(b, "type", None) == "tool_use" and getattr(b, "name", None) == "emit_final_notes"
+            ),
+            None,
+        )
+        if block is None:  # generate_structured_close wraps this as CloseVendorError
+            raise ValueError("close generateStructured returned no emit_final_notes tool_use block")
+        usage = getattr(resp, "usage", None)
+        cost: float | None = None
+        if usage is not None:
+            cost = (getattr(usage, "input_tokens", 0) or 0) * _USD_PER_INPUT_TOKEN + (
+                getattr(usage, "output_tokens", 0) or 0
+            ) * _USD_PER_OUTPUT_TOKEN
+        return StructuredResult(data=dict(block.input), total_cost_usd=cost)
+
+    return _call
+
+
 async def generate_structured_close(
     close_input: CloseInput,
     *,
@@ -891,6 +957,7 @@ __all__ = [
     "OperationRunSink",
     "InMemoryOperationRunSink",
     "CallExternal",
+    "anthropic_structured_caller",
     "generate_structured_close",
     "CloseResult",
     "run_close_pass",
