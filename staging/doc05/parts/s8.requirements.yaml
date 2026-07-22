@@ -1,0 +1,349 @@
+# Doc 05 (Workroom) — §3.8 propose_change staged-drafts law requirements
+# Extracted from §3.8: "The propose_change staged-drafts law (our world-touching acts)"
+# Three axes: (A) the staged-drafts law itself — what propose_change IS and IS NOT;
+#             (B) host-side in-process architecture (security-load-bearing);
+#             (C) durable persistence model (load-bearing for human-approval lifecycle).
+# Almost every requirement is P0 — the spec explicitly calls this a law, not etiquette.
+
+# ── Core law: propose_change is the ONLY write-to-world mechanism ─────────────
+
+- requirement_id: R-doc05-S8-01
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 1"
+  source_quote: "The agent's only 'write to the world' is a propose_change MCP tool that persists the proposed change durably at creation and returns a draft_id — it never lands the change itself."
+  normalized_statement: >
+    WHEN the Workroom agent performs any world-touching act
+    THE SYSTEM SHALL route that act exclusively through propose_change, which persists the proposed change durably at creation and returns a draft_id, and SHALL NOT land the change itself through any path.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S8-02
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 1"
+  source_quote: "Our staged-drafts floor (§2.5.1) is not prompt etiquette — it's structural."
+  normalized_statement: >
+    WHEN the staged-drafts constraint is implemented
+    THE SYSTEM SHALL enforce it structurally through code and deployment invariants, not through prompt instructions alone.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S8-03
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 5"
+  source_quote: "PR-push is Expansion, behind contents:write, §5"
+  normalized_statement: >
+    WHEN a code-change draft is accepted by a human
+    THE SYSTEM SHALL expose the diff/branch bundle for download only, and SHALL NEVER push to any git remote (push is Expansion scope, not core).
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Host-side in-process architecture (security-load-bearing, CANONICAL §11.7) ─
+
+- requirement_id: R-doc05-S8-04
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 2"
+  source_quote: "propose_change is a HOST-side in-process SDK MCP tool, NOT a sandbox code tool (CANONICAL §11.7 — security-load-bearing)."
+  normalized_statement: >
+    WHEN propose_change is registered
+    THE SYSTEM SHALL register it as a host-side in-process SDK MCP server executing on the trusted orchestrator host, and SHALL NOT register it as a sandbox code tool.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S8-05
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 2"
+  source_quote: "It writes GCS + staged_drafts (Postgres), which is impossible from the egress-denied, credential-less E2B sandbox — no network egress, no GCS/Postgres creds."
+  normalized_statement: >
+    WHEN the E2B sandbox executes code
+    THE SYSTEM SHALL ensure the sandbox has no GCS credentials and no Postgres credentials, and SHALL NOT provide any network egress path that would allow the sandbox to invoke propose_change's persistence operations independently.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S8-06
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 2"
+  source_quote: "it is registered as a host-side in-process SDK MCP server (make_propose_change_server(), factory-per-query)"
+  normalized_statement: >
+    WHEN a worker query session starts
+    THE SYSTEM SHALL instantiate propose_change via the make_propose_change_server() factory, creating one server instance per query (factory-per-query) to prevent singleton sharing across concurrent workers.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S8-07
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 2"
+  source_quote: "it is the one write tool the sandbox code toolset never carries"
+  normalized_statement: >
+    WHEN the sandbox code toolset is assembled
+    THE SYSTEM SHALL exclude propose_change from the sandbox code toolset; propose_change SHALL NOT appear in the sandbox's tool list.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S8-08
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 2"
+  source_quote: "invoked by the Workroom agent but executed on the trusted orchestrator host where the GCS/DB creds live"
+  normalized_statement: >
+    WHEN the Workroom agent invokes propose_change
+    THE SYSTEM SHALL execute the tool body on the trusted orchestrator host (not in the sandbox), using GCS and database credentials available only to the host process.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Disposition-scoped mounting ──────────────────────────────────────────────
+
+- requirement_id: R-doc05-S8-09
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 2"
+  source_quote: "mounted only for the worker disposition (not quick/plan/critic)"
+  normalized_statement: >
+    WHEN the MCP server list is assembled for a query
+    THE SYSTEM SHALL mount make_propose_change_server() only for the worker disposition, and SHALL NOT mount it for quick, plan, or critic dispositions.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Multi-file signature and call semantics ──────────────────────────────────
+
+- requirement_id: R-doc05-S8-10
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 3"
+  source_quote: "propose_change is MULTI-FILE (CANONICAL §12.9): one call stages a whole code-change draft."
+  normalized_statement: >
+    WHEN an agent calls propose_change
+    THE SYSTEM SHALL accept a whole code-change draft (potentially spanning multiple files) in a single call.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S8-11
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 3"
+  source_quote: "Signature: propose_change(kind, summary, files:[{path, old_sha?, new_content}] | unified_diff)"
+  normalized_statement: >
+    WHEN propose_change is called
+    THE SYSTEM SHALL accept the arguments: kind (string), summary (string), and either files (list of {path, old_sha?, new_content} objects) or unified_diff (string), and SHALL treat these two forms as mutually usable alternatives.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S8-12
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 3"
+  source_quote: "The original for each file's diff comes from the agent (old_sha) or, absent that, from the pinned clone at meeting.pinned_sha."
+  normalized_statement: >
+    WHEN propose_change resolves the original content for a file
+    THE SYSTEM SHALL use the agent-supplied old_sha when present, and SHALL fall back to reading from the pinned clone at meeting.pinned_sha when old_sha is absent.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Durable persistence at creation (load-bearing, CANONICAL §4) ─────────────
+
+- requirement_id: R-doc05-S8-13
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 3"
+  source_quote: "Persisting at creation is load-bearing (CANONICAL §4): the sandbox's in-memory state dies at teardown, so a human accepting after the call needs durable storage."
+  normalized_statement: >
+    WHEN propose_change is called
+    THE SYSTEM SHALL persist the full draft bundle durably before returning to the caller; persistence SHALL NOT be deferred to accept time or any later lifecycle event.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S8-14
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 3"
+  source_quote: "On call it writes the full bundle (all files / the unified diff) to GCS (Object-Versioned)"
+  normalized_statement: >
+    WHEN propose_change persists a draft
+    THE SYSTEM SHALL write the complete bundle (all files and/or the unified diff) to GCS using Object-Versioned storage (not plain GCS).
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S8-15
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 3"
+  source_quote: "staged/{meeting_id}/{uuid4()}.bundle"
+  normalized_statement: >
+    WHEN propose_change writes a bundle to GCS
+    THE SYSTEM SHALL use the GCS path format staged/{meeting_id}/{uuid4()}.bundle, where meeting_id is the UUID of the current meeting.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S8-16
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 3"
+  source_quote: "a staged_drafts Postgres row (schema in CANONICAL §4; meeting_id is a UUID, CANONICAL §11.2)"
+  normalized_statement: >
+    WHEN propose_change persists a draft
+    THE SYSTEM SHALL insert one row into the staged_drafts Postgres table containing meeting_id (UUID), kind, summary, artifact_ref (the GCS bundle reference), and status='proposed'.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S8-17
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 3"
+  source_quote: "meeting_id is a UUID, CANONICAL §11.2"
+  normalized_statement: >
+    WHEN meeting_id is stored in staged_drafts
+    THE SYSTEM SHALL store meeting_id as a UUID type conforming to CANONICAL §11.2.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Return schema ────────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S8-18
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 3"
+  source_quote: "returns the draft_id with status=needs_review"
+  normalized_statement: >
+    WHEN propose_change succeeds
+    THE SYSTEM SHALL return a response containing draft_id (string), status='needs_review', files (list of staged file paths), and a note string confirming the change is staged for human review.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Acceptance flow and post-approval behavior ───────────────────────────────
+
+- requirement_id: R-doc05-S8-19
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 4"
+  source_quote: "Doc 08's accept action (the human click) posts draft_id → the accept handler (Doc 04) reads the persisted bundle"
+  normalized_statement: >
+    WHEN a human approves a draft via the Doc 08 accept action
+    THE SYSTEM SHALL have the accept handler (Doc 04) read the previously-persisted GCS bundle using the draft_id, and SHALL NOT require the agent's in-memory state to be available at accept time.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S8-20
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 4"
+  source_quote: "for a code-change draft it records approval and exposes the diff/branch bundle for download — it NEVER pushes"
+  normalized_statement: >
+    WHEN a code-change draft is accepted
+    THE SYSTEM SHALL record approval in the staged_drafts row and SHALL expose the diff/branch bundle for download; it SHALL NEVER push to any git remote.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S8-21
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 4"
+  source_quote: "Relocated host-side; the dead review_session is deleted."
+  normalized_statement: >
+    WHEN a draft is accepted
+    THE SYSTEM SHALL delete the (dead) review_session; the review_session SHALL NOT persist after acceptance.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── Three enforcement layers ──────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S8-22
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 5"
+  source_quote: "tool-list partitioning — sandbox write tools live in a different, conditionally-included sandbox server, and propose_change lives in its own host-side server mounted only for the worker disposition"
+  normalized_statement: >
+    WHEN the agent toolset is assembled
+    THE SYSTEM SHALL partition write tools so that propose_change lives exclusively in the host-side server and sandbox write tools live in a separate, conditionally-included sandbox server.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S8-23
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 5"
+  source_quote: "allowed_tools does NOT filter MCP tools, so any raw-write MCP tool that must be blocked (e.g. a real git push, a connector send) goes through disallowed_tools"
+  normalized_statement: >
+    WHEN raw-write MCP tools must be blocked from the agent
+    THE SYSTEM SHALL block them via the disallowed_tools list, not via allowed_tools, because allowed_tools does NOT filter MCP tools.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S8-24
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 5"
+  source_quote: "propose-not-apply — the tool itself never lands the change (it only persists the proposed draft)"
+  normalized_statement: >
+    WHEN propose_change tool body executes
+    THE SYSTEM SHALL only persist the proposed draft and SHALL NOT apply, land, push, or deploy any change; the apply step is the exclusive responsibility of a subsequent human-triggered accept action.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── Demo-scenario constraint (observable end-to-end) ─────────────────────────
+
+- requirement_id: R-doc05-S8-25
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.8 paragraph 5"
+  source_quote: "The demo: 'push this change' yields a complete staged code-change draft and no push; the human clicks approve and downloads the branch bundle."
+  normalized_statement: >
+    WHEN the Workroom agent receives an instruction to push a code change
+    THE SYSTEM SHALL produce a complete staged code-change draft accessible as a branch bundle download, and SHALL NOT perform any git push at any point in the flow.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified

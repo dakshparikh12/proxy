@@ -1,0 +1,430 @@
+# Doc 05 (Workroom) — S7 requirements slice
+# Coverage: §3.7 (The verify-loop — the builder NEVER grades itself)
+# Key invariants:
+#   ① Separate fresh-context critic, stronger model, success log withheld (anti-anchoring)
+#   ② Deterministic evidence gate reads host-observed receipts, never model prose
+#   ③ Hard gate: verification="verified" only when ALL checks green
+#   ④ Expansion (multi-lens panel, fan-out) = NOT V0 core
+
+# ── §3.7 ①: Separate fresh-context critic worker ─────────────────────────────
+
+- requirement_id: R-doc05-S7-01
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ①"
+  source_quote: "A SEPARATE critic worker in FRESH context."
+  normalized_statement: >
+    WHEN verification is triggered after a build pass
+    THE SYSTEM SHALL invoke the critic as a separate query() in a fresh context that shares
+    no session state, tool history, or memory with the builder that produced the artifact.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-02
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ①"
+  source_quote: "stronger model than the worker"
+  normalized_statement: >
+    WHEN the critic worker is instantiated
+    THE SYSTEM SHALL configure the critic query() to use a model that is stronger (higher
+    capability tier) than the builder worker model, never the same or weaker model.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-03
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ①"
+  source_quote: "Withhold the builder's own success log from the critic (anti-anchoring — small, powerful; they deliberately strip the build's self-narration so it can't anchor the verdict toward 'passed')"
+  normalized_statement: >
+    WHEN the critic worker is invoked
+    THE SYSTEM SHALL withhold the builder's success log and self-narration from the critic's
+    context, such that the critic's prompt and tool history contain no record of the builder
+    declaring its own work correct.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-04
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ①"
+  source_quote: "that judges, in order: (i) each AC-tag met; (ii) the artifact actually runs / parses / typechecks — evidence, not claim (it re-runs pytest / the typecheck / the parse itself via run_command); (iii) load-bearing claims grounded in cited file:line (our EVIDENCE-ledger discipline); (iv) stayed in scope"
+  normalized_statement: >
+    WHEN the critic evaluates an artifact
+    THE SYSTEM SHALL judge in the prescribed order: (i) each AC-tag met, (ii) the artifact
+    actually runs/parses/typechecks by re-running pytest/typecheck/parse via run_command
+    (evidence not claim), (iii) load-bearing claims are grounded at cited file:line, and
+    (iv) the artifact stayed in scope.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-05
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ①"
+  source_quote: "it re-runs pytest / the typecheck / the parse itself via run_command"
+  normalized_statement: >
+    WHEN the critic checks whether an artifact runs, parses, or typechecks
+    THE SYSTEM SHALL re-execute the relevant command (pytest, mypy, or parser) via
+    run_command and read the actual exit code; it SHALL NOT accept the builder's claim of
+    success as a substitute for running the command itself.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-06
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ①"
+  source_quote: "Emits a schema-constrained verdict (json_schema output → re-validate; belt + suspenders)"
+  normalized_statement: >
+    WHEN the critic produces a verdict
+    THE SYSTEM SHALL emit the verdict using a schema-constrained json_schema output format
+    and SHALL re-validate the emitted verdict object against that schema after emission.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-07
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ①"
+  source_quote: "The Python claude_agent_sdk structured-output API (the generateStructured/outputFormat equivalent used here) MUST be confirmed against live SDK docs at build (CANONICAL §11.10) — do not assume the call shape"
+  normalized_statement: >
+    WHEN the critic worker is implemented
+    THE SYSTEM SHALL confirm the structured-output call shape against live claude_agent_sdk
+    documentation at build time and SHALL NOT assume the API signature from memory or
+    prior usage.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-08
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ①"
+  source_quote: "Fail closed: an unparseable/uncertain verdict → verification='unverified' (staged for review, envelope status='needs_review'), never 'verified'"
+  normalized_statement: >
+    WHEN the critic's verdict is unparseable or expresses uncertainty
+    THE SYSTEM SHALL set verification="unverified" and envelope status="needs_review" and
+    SHALL NOT set verification="verified" in any such case.
+  requirement_type: state_consistency
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-09
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ①"
+  source_quote: "On total parse failure, every criterion defaults to FAILED."
+  normalized_statement: >
+    WHEN the critic's verdict cannot be parsed at all (total parse failure)
+    THE SYSTEM SHALL set every individual criterion to FAILED; no criterion SHALL remain
+    in a partial-pass or unknown state.
+  requirement_type: state_consistency
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-10
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ①"
+  source_quote: "Critic has run_command access (must re-run tests itself)"
+  normalized_statement: >
+    WHEN the critic worker is configured
+    THE SYSTEM SHALL provide the critic with run_command tool access so it can independently
+    execute verification commands.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-11
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ①"
+  source_quote: "Where output is checkable by a fixed tool (compiles, query runs, schema validates), prefer the fixed tool as judge and forbid the builder from writing its own checker (their anti-gaming rule: fix the artifact, never the harness or the verdict)"
+  normalized_statement: >
+    WHEN an artifact's output can be verified by a fixed deterministic tool (compiler,
+    query runner, schema validator)
+    THE SYSTEM SHALL use that fixed tool as the judge and SHALL forbid the builder from
+    authoring or modifying the checker, the harness, or the verdict.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.7 ②: Deterministic evidence gate ─────────────────────────────────────
+
+- requirement_id: R-doc05-S7-12
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ②"
+  source_quote: "The deterministic evidence gate (~30 lines, non-LLM) — reads host-observed receipts, NOT a regex over model prose (CANONICAL §12.4)"
+  normalized_statement: >
+    WHEN evidence_backed() evaluates a claimed pass
+    THE SYSTEM SHALL read structured receipts emitted by the sandbox tool transport on
+    the host and SHALL NOT apply any regex, substring match, or pattern match over
+    model-generated prose to determine pass/fail.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-13
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ②"
+  source_quote: "The old regex-over-notes gate is deleted"
+  normalized_statement: >
+    WHEN the verification pipeline is assembled
+    THE SYSTEM SHALL contain no code path that gates a pass verdict by matching text
+    patterns against the builder's or critic's notes or narration; all such prior
+    regex-over-notes gates SHALL be absent.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-14
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ②"
+  source_quote: "the gate reads the structured receipts the sandbox tool transport emits on the host (§3.5) — {command_id, argv, exit_code, stdout_ref, artifact_hashes}"
+  normalized_statement: >
+    WHEN a receipt is consumed by the evidence gate
+    THE SYSTEM SHALL expect and read receipts in the format {command_id, argv, exit_code,
+    stdout_ref, artifact_hashes} as emitted by the §3.5 sandbox tool transport.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-15
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ②"
+  source_quote: "A claimed 'pass' is only real if a receipt shows the named verify command actually ran with exit_code == 0 and the artifact hashes match what the plan's verify line requires."
+  normalized_statement: >
+    WHEN a build pass is claimed as passing a verify command
+    THE SYSTEM SHALL confirm that a host-observed receipt exists showing that named verify
+    command ran with exit_code == 0; a claimed pass with no such receipt SHALL be treated
+    as a failure.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-16
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ②"
+  source_quote: "if required_hashes: produced = {h['path']: h['sha256'] for rr in receipts for h in rr.get('artifact_hashes', [])} if any(produced.get(p) != want for p, want in required_hashes.items()): return False"
+  normalized_statement: >
+    WHEN the plan's verify line specifies required artifact hashes
+    THE SYSTEM SHALL compare each required (path, sha256) pair against the artifact_hashes
+    field in host-observed receipts and SHALL return False (FAIL) if any hash is absent or
+    mismatched.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-17
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ②"
+  source_quote: "No matching receipt → force-downgrade to FAIL with an explicit reason."
+  normalized_statement: >
+    WHEN parse_verdict() encounters a claimed 'passed' result with no matching host-observed
+    receipt at exit_code == 0
+    THE SYSTEM SHALL force-downgrade the status to 'failed' and SHALL append to notes the
+    message '[verify gate] Downgraded to FAILED: no host-observed receipt (named verify
+    command at exit_code 0 / matching artifact hash) backs this pass. Model prose is not
+    a verdict.'
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-18
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ②"
+  source_quote: "if not verify_cmds: return False"
+  normalized_statement: >
+    WHEN evidence_backed() is called with an empty verify_cmds list
+    THE SYSTEM SHALL return False; the absence of named verify commands SHALL never be
+    treated as evidence of a backed pass.
+  requirement_type: data_integrity
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-19
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ②"
+  source_quote: "This is the deterministic offline half of our offline-and-live-for-every-change law."
+  normalized_statement: >
+    WHEN any change is verified
+    THE SYSTEM SHALL run the deterministic evidence gate (offline/host-side) as one half
+    of verification in addition to the live critic check, satisfying the offline-and-live-
+    for-every-change requirement.
+  requirement_type: functional
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.7 ③: Hard gate ────────────────────────────────────────────────────────
+
+- requirement_id: R-doc05-S7-20
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ③"
+  source_quote: "Stamp verification='verified' only if all checks green (envelope status='done'); else verification='unverified' and stage as a draft → envelope status='needs_review'"
+  normalized_statement: >
+    WHEN the hard gate evaluates a completed verification run
+    THE SYSTEM SHALL set verification="verified" and envelope status="done" only when all
+    individual checks are green; in all other cases it SHALL set verification="unverified"
+    and envelope status="needs_review".
+  requirement_type: state_consistency
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-21
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ③"
+  source_quote: "CANONICAL §1.2 — verified/draft are not status values; the build's proof state rides the optional verification field"
+  normalized_statement: >
+    WHEN an envelope status is assigned by the verify-loop
+    THE SYSTEM SHALL use only the permitted status values (done, partial, failed,
+    needs_clarification, needs_review) and SHALL NOT use 'verified' or 'draft' as
+    envelope status values; proof state SHALL ride the separate optional verification
+    field.
+  requirement_type: contract
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-22
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ③"
+  source_quote: "Mirrors their completeSession (cannot mark delivered while any criterion fails)."
+  normalized_statement: >
+    WHEN any individual criterion in the verification run has failed
+    THE SYSTEM SHALL NOT mark the artifact as delivered or set verification="verified";
+    delivery requires all criteria to have passed.
+  requirement_type: state_consistency
+  criticality: P0
+  testability: executable
+  status: qualified
+
+# ── §3.7 ④: Expansion exclusions (NOT V0 core) ───────────────────────────────
+
+- requirement_id: R-doc05-S7-23
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ④"
+  source_quote: "V0 core stops at ①–③: ONE fresh-context verifier + the deterministic receipt gate + the hard gate. The following ride an Expansion capability, gated on a measured need — not built for V0"
+  normalized_statement: >
+    WHEN the V0 Workroom is built
+    THE SYSTEM SHALL implement only the single fresh-context critic, the deterministic
+    evidence gate, and the hard gate; multi-lens panel, red-team turn, agreement-merge,
+    run_with_concurrency, race_with_timeout, and plan-artifact-as-MCP-tool-server
+    SHALL NOT be present in V0.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-24
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ④"
+  source_quote: "a parallel critic panel (correctness / scope-drift / groundedness) run through the fan-out primitive below + a red-team turn … NOT V0 core"
+  normalized_statement: >
+    WHEN the V0 Workroom is built
+    THE SYSTEM SHALL contain no implementation of a parallel critic panel, no red-team
+    turn, and no agreement-boosts-confidence merge; these are Expansion capabilities
+    gated on a measured future need.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-25
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ④"
+  source_quote: "the self-scaling fan-out primitive run_with_concurrency + race_with_timeout (asyncio, ~40 lines) … NOT V0 core"
+  normalized_statement: >
+    WHEN the V0 Workroom is built
+    THE SYSTEM SHALL contain no implementation of run_with_concurrency or race_with_timeout;
+    V0 subtasks run sequentially in one session.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-26
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ④"
+  source_quote: "the plan-artifact-as-MCP-tool-server (list_tasks / get_task / mark_done) for 400-item plans … NOT V0 core"
+  normalized_statement: >
+    WHEN the V0 Workroom is built
+    THE SYSTEM SHALL contain no plan-artifact-as-MCP-tool-server exposing list_tasks,
+    get_task, or mark_done endpoints; this is an Expansion capability for large plans.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+# ── §3.7: Critic tool permissions (no write access) ──────────────────────────
+
+- requirement_id: R-doc05-S7-27
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ① (anti-gaming rule)"
+  source_quote: "forbid the builder from writing its own checker (their anti-gaming rule: fix the artifact, never the harness or the verdict)"
+  normalized_statement: >
+    WHEN the critic worker's tool set is configured
+    THE SYSTEM SHALL NOT grant the critic write_file or edit_file tool access; the verifier
+    SHALL only read and run, never modify the artifact or harness it is grading.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc05-S7-28
+  authority_type: specification
+  authority_document: DOC-05
+  source_location: "§3.7 ② (offline-and-live)"
+  source_quote: "re-validate the emitted verdict regardless"
+  normalized_statement: >
+    WHEN the critic emits a structured verdict
+    THE SYSTEM SHALL re-validate the emitted JSON object against the declared json_schema
+    as a second independent check (belt-and-suspenders), separate from the SDK's own
+    schema enforcement.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
