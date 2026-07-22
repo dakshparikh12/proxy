@@ -1,0 +1,16 @@
+{
+  "doc": "doc03",
+  "judge_model": "claude-haiku-4-5-20251001",
+  "n_cases": 7,
+  "grounded_pass": 5,
+  "grounded_total": 5,
+  "negative_controls_caught": 2,
+  "negative_controls_total": 2,
+  "metric_accuracy": 1.0,
+  "passed": true,
+  "citation_grounded_pass": 5,
+  "citation_negctl_caught": 2,
+  "citation_verdict_passed": true,
+  "provenance": "Verbatim summary emitted by score() during the --generate pass (real HallucinationMetric + CitationGrounding G-Eval judge calls on 5 grounded + 2 negative-control cases). A confirmatory score-only re-run BLOCKED on Anthropic credit exhaustion (the generate pass spent the balance); the per-case results[] array was not in captured stdout, so it is omitted here rather than reconstructed. Re-run score() when credit is restored to regenerate the full per-case artifact.",
+  "results": []
+}

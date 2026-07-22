@@ -1,0 +1,85 @@
+{
+  "doc": "doc03",
+  "spec_path": "product/v0-spec/03-MEETING-UNDERSTANDING.md",
+  "generator_model": "claude-haiku-4-5-20251001",
+  "llm_used": true,
+  "llm_error": "",
+  "note": "Versioned dataset \u2014 generated from the ACTUAL spec sections; committed so runs are stable. If llm_used is false the questions/answers are deterministic spec-derived text (LLM was unavailable); the retrieval_context is real spec.",
+  "cases": [
+    {
+      "id": "doc03-grounded-0",
+      "input": "What is the build order position of Doc 03 (Meeting Understanding), and what documents does it read from?",
+      "actual_output": "Doc 03 is the 4th build order. It reads from Doc 02 (transcript + roster in) and Doc 01 (referent resolution).",
+      "retrieval_context": [
+        "*Build order: 4th. Reads from Doc 02 (transcript + roster in) and Doc 01 (referent resolution). Produces the live notes object read by Doc 04 (Orchestrator) and Doc 05 (Workroom), the material-change event stream (consumed by Doc 04; a Proactive judge is a deferred consumer, \u00a73.5), and the close-enriched object written in place by the close pass (\u00a73.7 \u2014 markdown to GCS; the ordered close is Doc 04 \u00a73.16). This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately.*\n\n---"
+      ],
+      "kind": "grounded",
+      "citation_should_pass": true,
+      "gen_citation_score": 1.0
+    },
+    {
+      "id": "doc03-grounded-1",
+      "input": "What are the three types of operations that can be processed in the apply_delta function, and what database action does each one perform?",
+      "actual_output": "The three types of operations are AddOp, PatchOp, and CloseOp. AddOp appends a delta row to the database with action type \"add\" and the entry's model dump. PatchOp appends a delta row with action type \"patch\" containing the changes and supersede_reason. CloseOp appends a delta row with action type \"close\" containing the resolution. All three operation types call tx.append_delta to append an append-only Postgres row with ON CONFLICT DO NOTHING behavior.",
+      "retrieval_context": [
+        "async def apply_delta(meeting_id: UUID, delta: NoteDelta, window: Window):\n    async with notes_repo.transaction() as tx:              # ONE tx: appends + segment flip, atomic\n        for op in delta.ops:\n            if isinstance(op, AddOp):\n                entry_id = new_entry_id(op.entry.kind)          # e.g. \"c14\", \"d3\", \"a5\"\n                await tx.append_delta(meeting_id, entry_id, \"add\", op.entry.model_dump(),\n                                      window_start_s=window.start_s)   # append-only Postgres row (\u00a73.3), ON CONFLICT DO NOTHING\n            elif isinstance(op, PatchOp):\n                await tx.append_delta(meeting_id, op.target_id, \"patch\",\n                                      {\"changes\": op.changes, \"supersede_reason\": op.supersede_reason},\n                                      window_start_s=window.start_s)\n            else:  # CloseOp \u2014 resolve/close an existing entry (an OpenQuestion answered, a decision finalized)\n                await tx.append_delta(meeting_id, op.target_id, \"close\",\n                                      {\"resolution\": op.resolution},\n                                      window_start_s=window.start_s)\n        await tx.mark_comprehended(meeting_id, window.start_s, window.end_s)  # 'pending'\u2192'comprehended', SAME tx (\u00a712.10)\n    notes = NOTES_CACHE[meeting_id]      # the live in-memory object every downstream consumer reads\n    notes.fold(delta)                    # add \u2192 new entry; patch \u2192 update-by-id (old value kept superseded); close \u2192 mark entry resolved\n    if delta.current_goal:\n        notes.current_goal = delta.current_goal\n    emit_material_events(notes, delta)   # \u00a73.5 \u2014 add/patch \u2192 events; context lines emit nothing"
+      ],
+      "kind": "grounded",
+      "citation_should_pass": true,
+      "gen_citation_score": 0.9
+    },
+    {
+      "id": "doc03-grounded-2",
+      "input": "What are the two layers of schema enforcement applied to the Scribe's output according to section 3.2.1?",
+      "actual_output": "According to section 3.2.1, the Scribe's output is enforced through two layers: (1) schema-shaped at generation via tool-forcing, and (2) schema-validated on receipt via Pydantic revalidation. The section describes this as a 'belt-and-suspenders' approach, where the real schema is Pydantic, which serves as the source of truth for both the tool's JSON Schema and the runtime validator.",
+      "retrieval_context": [
+        "The Scribe's output is never free text we parse hopefully out of a reply \u2014 it is **schema-shaped at generation** and **schema-validated on receipt** (belt-and-suspenders, exactly their `outputFormat` \u2192 `schema.parse()` discipline, one layer lower via tool-forcing). The real schema (Pydantic, the source of truth for both the tool's JSON Schema and the runtime validator):\n```python"
+      ],
+      "kind": "grounded",
+      "citation_should_pass": true,
+      "gen_citation_score": 0.9
+    },
+    {
+      "id": "doc03-grounded-3",
+      "input": "What exception is raised by write_finalized_notes when a PreconditionFailed error occurs, and what information does it include?",
+      "actual_output": "NotesGenerationConflictError is raised when a PreconditionFailed error occurs. The exception includes the meeting_id and the expected_generation value, and its message states: 'notes for {meeting_id} changed since generation {expected_generation} was read'.",
+      "retrieval_context": [
+        "from google.cloud import storage\nfrom google.api_core.exceptions import PreconditionFailed\nfrom datetime import timedelta\n\nclass NotesGenerationConflictError(Exception):\n    def __init__(self, meeting_id, expected_generation):\n        super().__init__(f\"notes for {meeting_id} changed since generation {expected_generation} was read\")\n        self.name = \"NotesGenerationConflictError\"\n\ndef write_finalized_notes(bucket, meeting_id: str, markdown: str, *, if_generation_match=None) -> int:\n    blob = bucket.blob(f\"meetings/{meeting_id}/notes.md\")\n    try:\n        # if_generation_match: None = unconditional; 0 = create-only; <gen> = require exact prior version.\n        # Generations are uint64 \u2014 keep them as-read (str/int), never a rounded float (their exact caveat).\n        blob.upload_from_string(markdown, content_type=\"text/markdown\",\n                                if_generation_match=if_generation_match)\n    except PreconditionFailed:                                   # HTTP 412 \u2014 someone else wrote since we read\n        raise NotesGenerationConflictError(meeting_id, if_generation_match)\n    blob.reload()\n    return blob.generation                                       # the new version pointer\n\ndef list_notes_versions(bucket, meeting_id: str):               # history \u2014 GCS keeps every prior generation\n    return sorted(bucket.list_blobs(prefix=f\"meetings/{meeting_id}/notes.md\", versions=True),\n                  key=lambda b: b.updated, reverse=True)\n\ndef read_notes_version(bucket, meeting_id: str, generation) -> str:   # restore/read any prior version by generation\n    return bucket.blob(f\"meetings/{meeting_id}/notes.md\", generation=int(generation)).download_as_text()\n```\nThe **raw transcript persists on the Postgres plane as the append-only archive/backstore** (Granola"
+      ],
+      "kind": "grounded",
+      "citation_should_pass": true,
+      "gen_citation_score": 0.9
+    },
+    {
+      "id": "doc03-grounded-4",
+      "input": "What does the close pass reduce over, and what transcript spans does it pull from the raw transcript?",
+      "actual_output": "The close pass reduces over the FOLDED note-delta ledger and the gap/pending transcript backfill, not the full raw transcript. It pulls raw transcript only for spans with `status='gap'` or `status='pending'` that were never comprehended by a live window.",
+      "retrieval_context": [
+        "On Doc 02's meeting-end signal: one **strong-model pass** (Sonnet-class, `PROXY_MODEL_SCRIBE_CLOSE`) **reduces over the FOLDED note-delta ledger + the gap/pending transcript backfill** \u2014 **not** the full raw transcript as a map-reduce (CANONICAL \u00a712.10): the folded ledger is already the comprehension, so the pass reduces over it and pulls raw transcript **only** for the `status='gap'` / `status='pending'` spans no live window ever comprehended. It **chunk-reduces ONLY when the folded ledger exceeds a token threshold** \u2014 a normal meeting folds in one pass. Output: the final notes object \u2014 deduped, conflicts resolved, confidence-weighted, human-polished, with the summary/action-items/decisions in publishable form. Unlike the hot Scribe loop, the close pass is **not latency-bound**, so it runs as the Agent SDK's `generateStructured` (`outputFormat:{type:'json_schema'}` \u2192 Pydantic re-validate) and inherits their real terminal subtypes as typed errors \u2014 `error_max_turns`, `error_max_structured_output_retries` (`AgentService.ts:772-777`) \u2014 plus `total_cost_usd` for free (\u00a73.9). **Build-time pin (CANONICAL \u00a711.10):** `generateStructured` and its `outputFormat`/`json_schema` shape are the `~/platform` TypeScript Agent SDK's; the close pass runs on the **Python `claude_agent_sdk`**, whose structured-output surface (the `generateStructured`/`outputFormat` equivalent, the terminal-error subtypes, and `total_cost_usd`/`session_id`/`msg_id` on the result) **MUST be confirmed against the live `claude_agent_sdk` docs at build** \u2014 a design doc cannot pin a third-party wire shape; do not assume the TS names carry over verbatim. It corrects any live-tagging misses and backfills every `status='gap'` **and `status='pending'`** span from the preserved transcript (the Scribe's entries were c"
+      ],
+      "kind": "grounded",
+      "citation_should_pass": true,
+      "gen_citation_score": 0.9
+    },
+    {
+      "id": "doc03-negctl-0",
+      "input": "What is the build order position of Doc 03 (Meeting Understanding), and what documents does it read from?",
+      "actual_output": "Doc 03 is the 4th build order. It reads from Doc 02 (transcript + roster in) and Doc 01 (referent resolution). Additionally, the system stores all state in a MongoDB cluster with a 7-day auto-delete TTL and calls the OpenAI GPT-4 API for every request.",
+      "retrieval_context": [
+        "*Build order: 4th. Reads from Doc 02 (transcript + roster in) and Doc 01 (referent resolution). Produces the live notes object read by Doc 04 (Orchestrator) and Doc 05 (Workroom), the material-change event stream (consumed by Doc 04; a Proactive judge is a deferred consumer, \u00a73.5), and the close-enriched object written in place by the close pass (\u00a73.7 \u2014 markdown to GCS; the ordered close is Doc 04 \u00a73.16). This document is the complete description of what to build and exactly how it must work; acceptance criteria and tests are generated from it separately.*\n\n---"
+      ],
+      "kind": "negative_control",
+      "citation_should_pass": false
+    },
+    {
+      "id": "doc03-negctl-1",
+      "input": "What are the three types of operations that can be processed in the apply_delta function, and what database action does each one perform?",
+      "actual_output": "The three types of operations are AddOp, PatchOp, and CloseOp. AddOp appends a delta row to the database with action type \"add\" and the entry's model dump. PatchOp appends a delta row with action type \"patch\" containing the changes and supersede_reason. CloseOp appends a delta row with action type \"close\" containing the resolution. All three operation types call tx.append_delta to append an append-only Postgres row with ON CONFLICT DO NOTHING behavior. Additionally, the system stores all state in a MongoDB cluster with a 7-day auto-delete TTL and calls the OpenAI GPT-4 API for every request.",
+      "retrieval_context": [
+        "async def apply_delta(meeting_id: UUID, delta: NoteDelta, window: Window):\n    async with notes_repo.transaction() as tx:              # ONE tx: appends + segment flip, atomic\n        for op in delta.ops:\n            if isinstance(op, AddOp):\n                entry_id = new_entry_id(op.entry.kind)          # e.g. \"c14\", \"d3\", \"a5\"\n                await tx.append_delta(meeting_id, entry_id, \"add\", op.entry.model_dump(),\n                                      window_start_s=window.start_s)   # append-only Postgres row (\u00a73.3), ON CONFLICT DO NOTHING\n            elif isinstance(op, PatchOp):\n                await tx.append_delta(meeting_id, op.target_id, \"patch\",\n                                      {\"changes\": op.changes, \"supersede_reason\": op.supersede_reason},\n                                      window_start_s=window.start_s)\n            else:  # CloseOp \u2014 resolve/close an existing entry (an OpenQuestion answered, a decision finalized)\n                await tx.append_delta(meeting_id, op.target_id, \"close\",\n                                      {\"resolution\": op.resolution},\n                                      window_start_s=window.start_s)\n        await tx.mark_comprehended(meeting_id, window.start_s, window.end_s)  # 'pending'\u2192'comprehended', SAME tx (\u00a712.10)\n    notes = NOTES_CACHE[meeting_id]      # the live in-memory object every downstream consumer reads\n    notes.fold(delta)                    # add \u2192 new entry; patch \u2192 update-by-id (old value kept superseded); close \u2192 mark entry resolved\n    if delta.current_goal:\n        notes.current_goal = delta.current_goal\n    emit_material_events(notes, delta)   # \u00a73.5 \u2014 add/patch \u2192 events; context lines emit nothing"
+      ],
+      "kind": "negative_control",
+      "citation_should_pass": false
+    }
+  ]
+}

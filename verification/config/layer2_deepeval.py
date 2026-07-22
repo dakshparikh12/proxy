@@ -177,6 +177,17 @@ def score(doc_key: str) -> dict:
         except Exception as exc:
             # The judge LLM is unavailable (e.g. Anthropic credit exhausted). Record
             # an honest BLOCKED result — never fabricate a score.
+            out = SCENARIOS / doc_key / "deepeval_results.json"
+            # A blocked re-run must NEVER destroy a genuine prior PASS on disk. Credit can
+            # lapse between the generate-pass score() (which writes a real passing result)
+            # and a confirmatory score-only re-run. If a passing result already exists, keep
+            # it and drop the block into a sidecar instead of clobbering the evidence.
+            prior = None
+            if out.exists():
+                try:
+                    prior = json.loads(out.read_text())
+                except Exception:
+                    prior = None
             blocked = {
                 "doc": doc_key, "judge_model": JUDGE_MODEL_ID, "passed": None,
                 "blocked": True, "blocked_reason": f"{type(exc).__name__}: {str(exc)[:200]}",
@@ -185,7 +196,15 @@ def score(doc_key: str) -> dict:
                         "by an external LLM-provider limit. Re-run when credit is restored.",
                 "results": [],
             }
-            out = SCENARIOS / doc_key / "deepeval_results.json"
+            if isinstance(prior, dict) and prior.get("passed") is True:
+                (SCENARIOS / doc_key / "deepeval_results.blocked.json").write_text(
+                    json.dumps(blocked, indent=2)
+                )
+                print(json.dumps(
+                    {"preserved_prior_pass": True, "blocked_reason": blocked["blocked_reason"]},
+                    indent=2,
+                ))
+                return prior
             out.write_text(json.dumps(blocked, indent=2))
             print(json.dumps({k: v for k, v in blocked.items() if k != "results"}, indent=2))
             return blocked
