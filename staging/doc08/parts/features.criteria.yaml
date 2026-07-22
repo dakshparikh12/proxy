@@ -1,0 +1,1324 @@
+# Criteria: §2.4 The small features that make it feel finished (items 1–14)
+# ID prefix: AC-FEAT-NNN / AC-FEAT-NNN-NEG
+# Authority: DOC-08 §2.4
+# Status: qualified
+
+# ─────────────────────────────────────────────
+# FEATURE 1 · Catch-me-up (R-doc08-FEAT-01 … 03)
+# ─────────────────────────────────────────────
+
+- criterion_id: AC-FEAT-001
+  name: "catch-me-up trigger produces a ~20-second notes-grounded spoken recap"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-01, R-doc08-FEAT-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a meeting with committed notes containing discussed topics, decisions, and open questions"
+    when: "a participant says 'Proxy, catch me up'"
+    then:
+      - "a spoken recap is produced"
+      - "the recap covers what has been discussed, decided, and remains open"
+      - "the recap text corresponds to content from the committed notes object"
+      - "the recap word count is consistent with approximately 20 seconds at normal cadence (roughly ≤ 80 words)"
+  primary_oracle: {type: deterministic, artifact: "assert recap content subset of committed notes; assert word count ≤ 80"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-001]
+
+- criterion_id: AC-FEAT-002
+  name: "catch-me-up delivers recap privately via DM when DM channel is available"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a late joiner with an available DM channel in the meeting platform"
+    when: "catch-me-up is triggered by or for that participant"
+    then:
+      - "the recap is routed to the participant's DM channel"
+      - "the recap is NOT broadcast to the full meeting chat"
+  primary_oracle: {type: deterministic, artifact: "assert delivery channel == dm_channel_id for participant; assert no broadcast event emitted"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: vendor:recall
+  mock_boundary: "stub DM availability flag; cassette for presence of DM channel; MUST NOT replace the call_external seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  fault_model_refs: []
+  test_ids: [T-FEAT-002]
+
+- criterion_id: AC-FEAT-002-NEG
+  name: "catch-me-up degrades honestly when DM channel is unavailable"
+  authority_refs: [R-doc08-FEAT-02]
+  dependency_class: vendor:recall
+  mock_boundary: "negative cassette: DM channel returns unavailable; MUST NOT replace the call_external seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a late joiner where the DM channel is not available"
+    when: "catch-me-up is triggered"
+    then:
+      - "honest failure or fallback (e.g. deliver to meeting chat) posted or spoken"
+      - "no silent proceed with a fabricated private delivery claim"
+  primary_oracle: {type: deterministic, artifact: "assert honest failure or explicit fallback; assert no fabrication of DM delivery"}
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-FEAT-002-NEG]
+
+# ─────────────────────────────────────────────
+# FEATURE 2 · Where-are-we (R-doc08-FEAT-04 … 05)
+# ─────────────────────────────────────────────
+
+- criterion_id: AC-FEAT-003
+  name: "where-are-we returns decisions and open questions only, spoken briefly"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a meeting with committed notes containing decisions and open questions"
+    when: "a participant asks 'where did we land?'"
+    then:
+      - "a spoken response is produced"
+      - "the response lists committed decisions and open questions"
+      - "the response does NOT include full narrative recap or discussion content"
+      - "the response is brief (shorter than a catch-me-up)"
+  primary_oracle: {type: deterministic, artifact: "assert response length < catch-me-up length; assert fields sourced from decisions+open_questions slice of notes"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-003]
+
+- criterion_id: AC-FEAT-004
+  name: "where-are-we uses the same notes-object machinery as catch-me-up"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-05]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "the where-are-we handler source code"
+    when: "statically analyzed"
+    then:
+      - "the handler calls the same notes-retrieval function path used by catch-me-up"
+      - "no separate or duplicate notes-pipeline exists for where-are-we"
+  primary_oracle: {type: deterministic, artifact: "static import/call-graph check: both handlers share one notes accessor function"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-004]
+
+# ─────────────────────────────────────────────
+# FEATURE 3 · Decision + action-item acknowledgments (R-doc08-FEAT-06 … 10)
+# ─────────────────────────────────────────────
+
+- criterion_id: AC-FEAT-005
+  name: "decision note-delta commit triggers exactly one chat line in correct format"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-06, R-doc08-FEAT-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a Scribe that commits a decision note-delta with text and agreeing participants"
+    when: "the note-delta is committed"
+    then:
+      - "exactly one chat line is posted"
+      - "the line matches pattern '— noted: decision — <text> (<names agreed>)'"
+  primary_oracle: {type: deterministic, artifact: "assert chat_line_count == 1; assert regex match on line format"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: db:postgres
+  mock_boundary: "stub committed note_delta row; MUST NOT replace the db:postgres seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  fault_model_refs: []
+  test_ids: [T-FEAT-005]
+
+- criterion_id: AC-FEAT-005-NEG
+  name: "decision chat line degrades honestly when note_delta commit errors"
+  authority_refs: [R-doc08-FEAT-06]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette: note_delta write returns DB error; MUST NOT replace the db:postgres seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "the Scribe attempting to commit a decision note-delta"
+    when: "the database write errors or times out"
+    then:
+      - "honest failure posted or logged"
+      - "no chat line posted claiming a decision was noted"
+      - "no silent proceed"
+  primary_oracle: {type: deterministic, artifact: "assert no chat line emitted; assert error logged or surfaced"}
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-FEAT-005-NEG]
+
+- criterion_id: AC-FEAT-006
+  name: "action-item note-delta commit triggers exactly one chat line in correct format"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-06, R-doc08-FEAT-08]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a Scribe that commits an action-item note-delta with assignee, task, and deadline"
+    when: "the note-delta is committed"
+    then:
+      - "exactly one chat line is posted"
+      - "the line matches pattern '— action: <assignee> → <task> (by <deadline>)'"
+  primary_oracle: {type: deterministic, artifact: "assert chat_line_count == 1; assert regex match on line format"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: db:postgres
+  mock_boundary: "stub committed note_delta row; MUST NOT replace the db:postgres seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  fault_model_refs: []
+  test_ids: [T-FEAT-006]
+
+- criterion_id: AC-FEAT-007
+  name: "decision/action chat line is produced by deterministic harness formatter, never model inference"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-07]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "the formatter source code for decision/action chat lines"
+    when: "statically analyzed"
+    then:
+      - "the formatter contains no call to any model inference API or non-deterministic generator"
+      - "the line content is derived by string interpolation from note_delta fields only"
+  primary_oracle: {type: deterministic, artifact: "static grep/AST check: no LLM call site inside formatter; formatter is pure function of note_delta"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-007]
+
+- criterion_id: AC-FEAT-008
+  name: "session disable 'stop posting decision notes' suppresses all chat lines for feature 3"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a session where the preference 'stop posting decision notes' has been set"
+    when: "a decision or action-item note-delta is committed"
+    then:
+      - "no chat line is posted"
+      - "the note-delta itself is still committed"
+  primary_oracle: {type: deterministic, artifact: "assert chat_line_count == 0 after disable; assert note_delta committed in db"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-008]
+
+- criterion_id: AC-FEAT-009
+  name: "decision/action chat line is never spoken and never interrupts speech"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-10]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a note-delta commit that triggers a chat line"
+    when: "the chat line is emitted"
+    then:
+      - "no TTS or voice event is generated for this line"
+      - "no barge-in or speech-interrupt event is generated"
+      - "only a chat-channel post event is emitted"
+  primary_oracle: {type: deterministic, artifact: "assert event stream contains only chat_post event; assert no tts event; assert no barge_in event"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-009]
+
+# ─────────────────────────────────────────────
+# FEATURE 4 · Live corrections, acknowledged (R-doc08-FEAT-11 … 12)
+# ─────────────────────────────────────────────
+
+- criterion_id: AC-FEAT-010
+  name: "spoken correction patches notes and emits one-line confirmation"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-11, R-doc08-FEAT-12]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a notes object containing the value 'Monday' as the ship date"
+    when: "a participant says 'Proxy, it's Friday, not Monday'"
+    then:
+      - "a notes patch is applied via Doc 03 §3.6 changing the value to 'Friday'"
+      - "exactly one confirmation line is emitted matching '— corrected: <new value>'"
+      - "the confirmation line reflects the new value, not the old one"
+  primary_oracle: {type: deterministic, artifact: "assert notes[ship_date] == 'Friday'; assert confirmation line matches regex '— corrected: .*Friday.*'"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-010]
+
+# ─────────────────────────────────────────────
+# FEATURE 5 · Dry-run (R-doc08-FEAT-13 … 14)
+# ─────────────────────────────────────────────
+
+- criterion_id: AC-FEAT-011
+  name: "dry-run returns plan artifact without executing any actions"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-13, R-doc08-FEAT-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a workroom that has produced a plan artifact for a requested task"
+    when: "a participant asks 'what would you do?'"
+    then:
+      - "the workroom's plan artifact is returned as the response"
+      - "no tool with external side effects is called"
+      - "no file write, API call, or code execution occurs"
+  primary_oracle: {type: deterministic, artifact: "assert response == plan artifact; assert side-effect tool call count == 0"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-011]
+
+- criterion_id: AC-FEAT-012
+  name: "dry-run uses Plan Mode exclusively — no side-effect tools invoked"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-14]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "the dry-run handler source code"
+    when: "statically analyzed"
+    then:
+      - "the handler operates in Plan Mode"
+      - "no call site invokes a tool that has external side effects"
+  primary_oracle: {type: deterministic, artifact: "static analysis: dry-run handler uses plan_mode flag; no side-effect tool registrations callable from dry-run path"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-012]
+
+# ─────────────────────────────────────────────
+# FEATURE 6 · Show-your-work (R-doc08-FEAT-15 … 16)
+# ─────────────────────────────────────────────
+
+- criterion_id: AC-FEAT-013
+  name: "show-your-work returns task telemetry receipt with tools, files, and cited lines"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-15, R-doc08-FEAT-16]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a completed task with persisted telemetry including tool calls, file reads, and citations"
+    when: "a participant asks 'how did you get that?'"
+    then:
+      - "the task telemetry receipt is returned"
+      - "the receipt includes: tools run, files/sources read, specific cited lines"
+      - "the content is read from the persisted telemetry artifact, not reconstructed"
+  primary_oracle: {type: deterministic, artifact: "assert response fields match persisted telemetry artifact fields: tools_run, files_read, cited_lines"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: fs:git
+  mock_boundary: "stub task telemetry artifact on fs; MUST NOT replace the fs:git seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  fault_model_refs: []
+  test_ids: [T-FEAT-013]
+
+- criterion_id: AC-FEAT-013-NEG
+  name: "show-your-work degrades honestly when telemetry artifact is unavailable"
+  authority_refs: [R-doc08-FEAT-16]
+  dependency_class: fs:git
+  mock_boundary: "negative cassette: telemetry file missing or unreadable; MUST NOT replace the fs:git seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a show-your-work request referencing a task whose telemetry is missing or corrupt"
+    when: "the handler attempts to read the telemetry artifact"
+    then:
+      - "honest failure spoken or posted (e.g. 'receipt not available for this task')"
+      - "no fabricated receipt generated from model memory"
+      - "no silent proceed"
+  primary_oracle: {type: deterministic, artifact: "assert honest_failure event emitted; assert response does not contain fabricated citation"}
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-FEAT-013-NEG]
+
+# ─────────────────────────────────────────────
+# FEATURE 7 · Progress transparency (R-doc08-FEAT-17 … 19)
+# ─────────────────────────────────────────────
+
+- criterion_id: AC-FEAT-014
+  name: "long-task progress updates are posted to chat on state-change events"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-17]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a long-running task emitting Doc 05 progress envelope events"
+    when: "a state-change progress event is received"
+    then:
+      - "exactly one one-line chat update is posted reflecting the current state"
+      - "the update text matches the state described in the progress envelope"
+  primary_oracle: {type: deterministic, artifact: "assert chat_update_count == progress_event_count; assert each update text corresponds to envelope state"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-014]
+
+- criterion_id: AC-FEAT-015
+  name: "progress updates are emitted only on real state-change events, never on a timer"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-18]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "the progress-update renderer source code"
+    when: "statically analyzed"
+    then:
+      - "no timer, sleep, polling loop, or scheduled callback triggers a progress update"
+      - "every update emission is guarded by a progress-envelope state-change event"
+  primary_oracle: {type: deterministic, artifact: "static grep/AST check: no time.sleep / asyncio.sleep / threading.Timer / schedule call in update render path; all render calls gated on envelope event"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-015]
+
+- criterion_id: AC-FEAT-016
+  name: "tile working line reflects current task state within one render cycle of each envelope event"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-19]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a long-running task emitting progress envelopes"
+    when: "a new progress envelope is received"
+    then:
+      - "the tile's working line is updated within one render cycle"
+      - "the tile working line text matches the envelope's current state description"
+  primary_oracle: {type: deterministic, artifact: "assert tile.working_line updated synchronously within render cycle of each envelope; assert text == envelope.state_description"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-016]
+
+# ─────────────────────────────────────────────
+# FEATURE 8 · Draft cards (R-doc08-FEAT-20 … 26)
+# ─────────────────────────────────────────────
+
+- criterion_id: AC-FEAT-017
+  name: "staged draft posts a chat card with four required fields in order"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-20]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a staged draft produced by Doc 05 at propose_change time"
+    when: "the draft card is rendered and posted to chat"
+    then:
+      - "the card contains: (1) what the draft is, (2) one-line summary of changes, (3) review link, (4) text 'approve = your click'"
+      - "the four fields appear in that order"
+  primary_oracle: {type: deterministic, artifact: "assert card schema has fields [what_is, change_summary, link, approve_text]; assert order preserved; assert approve_text == 'approve = your click'"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: db:postgres
+  mock_boundary: "stub staged_drafts row; MUST NOT replace the db:postgres seam"
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: e2e}
+    - {tier: negative}
+  fault_model_refs: []
+  test_ids: [T-FEAT-017]
+
+- criterion_id: AC-FEAT-017-NEG
+  name: "draft card degrades honestly when staged_drafts DB row is unavailable"
+  authority_refs: [R-doc08-FEAT-20, R-doc08-FEAT-22]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette: staged_drafts read returns DB error or missing row; MUST NOT replace the db:postgres seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a draft card render request"
+    when: "the staged_drafts row read fails"
+    then:
+      - "honest failure posted or spoken"
+      - "no card posted with a fabricated draft_id or link"
+      - "no silent proceed"
+  primary_oracle: {type: deterministic, artifact: "assert no card event emitted; assert honest_failure event; assert no fabricated draft_id"}
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-FEAT-017-NEG]
+
+- criterion_id: AC-FEAT-018
+  name: "draft card review link is /m/{meeting_id} — never a raw GCS URI"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-21]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "any staged draft card being rendered"
+    when: "the link field is set"
+    then:
+      - "the link matches the pattern '/m/{meeting_id}' or the authenticated absolute URL equivalent"
+      - "the link does NOT contain 'storage.googleapis.com', 'gs://', or any other GCS URI pattern"
+  primary_oracle: {type: deterministic, artifact: "assert link matches regex '^/m/[^/]+$' or absolute URL equivalent; assert link not matching gs:// or storage.googleapis.com"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: e2e}
+  fault_model_refs: []
+  test_ids: [T-FEAT-018]
+
+- criterion_id: AC-FEAT-019
+  name: "draft card carries draft_id from persisted staged_drafts row, not an invented identifier"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-22, R-doc08-FEAT-26]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a staged draft row written by Doc 05 at propose_change time with a known draft_id"
+    when: "the draft card is rendered"
+    then:
+      - "the card's draft_id field equals the draft_id from the staged_drafts row"
+      - "the draft_id is read from the typed Envelope.draft_id field in libs/contracts"
+  primary_oracle: {type: deterministic, artifact: "assert card.draft_id == staged_drafts_row.draft_id; assert field sourced from Envelope pydantic model"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: db:postgres
+  mock_boundary: "stub staged_drafts row with known draft_id; MUST NOT replace the db:postgres seam"
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: e2e}
+    - {tier: negative}
+  fault_model_refs: []
+  test_ids: [T-FEAT-019]
+
+- criterion_id: AC-FEAT-020
+  name: "accept click server-side re-checks meeting+draft tenant before applying"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-23]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "a draft_id belonging to tenant A posted to the accept endpoint in a meeting_id belonging to tenant B"
+    when: "POST /m/{meeting_id}/drafts/{draft_id}/accept is called"
+    then:
+      - "the server rejects the request with an authorization error"
+      - "Doc 04's accept handler is NOT called"
+      - "no apply action is performed"
+  primary_oracle: {type: deterministic, artifact: "assert HTTP 403 or 404 returned; assert accept_handler.call_count == 0"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: db:postgres
+  mock_boundary: "stub staged_drafts and meetings rows with mismatched tenant_ids; MUST NOT replace the db:postgres seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  fault_model_refs: []
+  test_ids: [T-FEAT-020]
+
+- criterion_id: AC-FEAT-020-NEG
+  name: "accept endpoint degrades honestly when staged_drafts row is missing or DB errors"
+  authority_refs: [R-doc08-FEAT-23, R-doc08-FEAT-24]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette: staged_drafts read returns missing or DB error; MUST NOT replace the db:postgres seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a POST /m/{meeting_id}/drafts/{draft_id}/accept request"
+    when: "the staged_drafts DB row cannot be read"
+    then:
+      - "honest failure HTTP error returned (404 or 500)"
+      - "Doc 04 accept handler is NOT called"
+      - "no silent proceed"
+  primary_oracle: {type: deterministic, artifact: "assert HTTP 4xx/5xx returned; assert accept_handler.call_count == 0"}
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-FEAT-020-NEG]
+
+- criterion_id: AC-FEAT-021
+  name: "accept handler reads from persisted staged_drafts row, never in-memory review_session"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-24]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "the accept route handler source code"
+    when: "statically analyzed"
+    then:
+      - "draft data is read from the staged_drafts database row"
+      - "no reference to an in-memory 'review_session' object exists in the accept path"
+  primary_oracle: {type: deterministic, artifact: "static grep: no 'review_session' object dereferenced in accept handler; db read present for staged_drafts"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-021]
+
+- criterion_id: AC-FEAT-022
+  name: "accept/reject is idempotent — duplicate invocations succeed without re-applying"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-25]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a draft that has already been accepted (first invocation succeeded)"
+    when: "POST /m/{meeting_id}/drafts/{draft_id}/accept is called a second time"
+    then:
+      - "HTTP 200 is returned (or equivalent idempotent success)"
+      - "Doc 04's accept handler is called at most once across all invocations for this draft_id"
+      - "no duplicate apply action is performed"
+  primary_oracle: {type: deterministic, artifact: "assert accept_handler.call_count == 1 after N duplicate accept calls; assert HTTP 200 on duplicate"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: db:postgres
+  mock_boundary: "stub staged_drafts row with already-accepted state; MUST NOT replace the db:postgres seam"
+  golden_path: true
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: e2e}
+    - {tier: negative}
+  fault_model_refs: []
+  test_ids: [T-FEAT-022]
+
+- criterion_id: AC-FEAT-023
+  name: "draft_id in card and accept route both sourced from Envelope/Bundle in libs/contracts"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-26]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "the draft-card renderer and the accept route source code"
+    when: "statically analyzed"
+    then:
+      - "both files import the Envelope or Bundle Pydantic model from libs/contracts"
+      - "neither file defines an ad-hoc draft_id string field independently"
+  primary_oracle: {type: deterministic, artifact: "static import check: both modules import Envelope/Bundle from libs.contracts; no local draft_id string literal definition"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-023]
+
+# ─────────────────────────────────────────────
+# FEATURE 9 · Session preferences, spoken (R-doc08-FEAT-27 … 29)
+# ─────────────────────────────────────────────
+
+- criterion_id: AC-FEAT-024
+  name: "spoken session preference is acknowledged and applied for the remainder of the session"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-27, R-doc08-FEAT-28]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "an active meeting session"
+    when: "a participant says 'Proxy, keep answers shorter'"
+    then:
+      - "a confirmation line is posted or spoken acknowledging the preference"
+      - "subsequent responses in the session are shorter than baseline"
+  primary_oracle: {type: deterministic, artifact: "assert confirmation event emitted; assert session_digest contains preference; assert subsequent response length reduced"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: db:postgres
+  mock_boundary: "stub session-state digest write; MUST NOT replace the db:postgres seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  fault_model_refs: []
+  test_ids: [T-FEAT-024]
+
+- criterion_id: AC-FEAT-024-NEG
+  name: "session preference degrades honestly when session-state digest write errors"
+  authority_refs: [R-doc08-FEAT-28]
+  dependency_class: db:postgres
+  mock_boundary: "negative cassette: session-state digest write returns DB error; MUST NOT replace the db:postgres seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a participant expressing a session preference"
+    when: "the session-state digest write fails"
+    then:
+      - "honest failure posted (e.g. 'could not save your preference')"
+      - "preference is NOT silently lost without notification"
+  primary_oracle: {type: deterministic, artifact: "assert honest_failure event emitted; assert no silent preference loss"}
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-FEAT-024-NEG]
+
+- criterion_id: AC-FEAT-025
+  name: "'stop posting decision notes' preference disables feature 3 chat lines for the session"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-28, R-doc08-FEAT-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a session in which 'stop posting decision notes' preference has been acknowledged and persisted"
+    when: "a decision or action-item note-delta is committed after the preference is set"
+    then:
+      - "no decision/action-item chat line is posted"
+  primary_oracle: {type: deterministic, artifact: "assert chat_line_count == 0 for note-delta events after preference set"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-025]
+
+- criterion_id: AC-FEAT-026
+  name: "session preferences are discarded at session close and do not carry to the next session"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-29]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a session where 'keep answers shorter' was set, followed by a new meeting session starting"
+    when: "the new session begins"
+    then:
+      - "the new session has no inherited preference from the previous session"
+      - "answers in the new session are at baseline length"
+  primary_oracle: {type: deterministic, artifact: "assert new session_digest has no preference entries from prior session; assert response length == baseline"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-026]
+
+# ─────────────────────────────────────────────
+# FEATURE 10 · Capability answer (R-doc08-FEAT-30 … 31)
+# ─────────────────────────────────────────────
+
+- criterion_id: AC-FEAT-027
+  name: "capability answer is produced as both spoken and chat summary of actual abilities"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-30]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a meeting session with a known active toolbelt"
+    when: "a participant asks 'Proxy, what can you do?'"
+    then:
+      - "a spoken summary is produced"
+      - "a chat summary is posted"
+      - "both summaries reference actual capabilities from the active session context"
+  primary_oracle: {type: deterministic, artifact: "assert tts_event emitted; assert chat_post event emitted; assert content references capabilities catalog"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: fs:git
+  mock_boundary: "stub CAPABILITIES catalog file on fs; MUST NOT replace the fs:git seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: integration}
+    - {tier: negative}
+  fault_model_refs: []
+  test_ids: [T-FEAT-027]
+
+- criterion_id: AC-FEAT-027-NEG
+  name: "capability answer degrades honestly when capabilities catalog is unavailable"
+  authority_refs: [R-doc08-FEAT-31]
+  dependency_class: fs:git
+  mock_boundary: "negative cassette: CAPABILITIES catalog file missing or unreadable; MUST NOT replace the fs:git seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a 'what can you do?' request"
+    when: "the capabilities catalog cannot be read"
+    then:
+      - "honest failure spoken or posted (e.g. 'capabilities not available in this context')"
+      - "no fabricated static capability list returned"
+  primary_oracle: {type: deterministic, artifact: "assert honest_failure event; assert no static hard-coded list in response"}
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-FEAT-027-NEG]
+
+- criterion_id: AC-FEAT-028
+  name: "capability answer derived from active system prompt capabilities catalog, not hard-coded list"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-31]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "the capability-answer handler source code"
+    when: "statically analyzed"
+    then:
+      - "no hard-coded static capability list exists in the handler"
+      - "the handler reads capabilities from the active system prompt or capabilities catalog"
+  primary_oracle: {type: deterministic, artifact: "static grep: no literal hard-coded capability string list in handler; catalog read call present"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-028]
+
+# ─────────────────────────────────────────────
+# FEATURE 11 · Readiness in the consent line (R-doc08-FEAT-32 … 33)
+# ─────────────────────────────────────────────
+
+- criterion_id: AC-FEAT-029
+  name: "join line includes repo name and human-readable index freshness timestamp"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-32]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a meeting starting with repository 'acme/checkout' indexed 20 minutes ago"
+    when: "Proxy posts its join line"
+    then:
+      - "the join line contains the repository name 'acme/checkout'"
+      - "the join line contains the elapsed time since indexing in human-readable form (e.g. 'indexed 20 minutes ago')"
+  primary_oracle: {type: deterministic, artifact: "assert join_line contains repo_name; assert join_line matches regex 'indexed \\d+ (second|minute|hour)s? ago'"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: vendor:recall
+  mock_boundary: "stub Doc 01 readiness signal with known index_timestamp; MUST NOT replace the call_external seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  fault_model_refs: []
+  test_ids: [T-FEAT-029]
+
+- criterion_id: AC-FEAT-029-NEG
+  name: "join line degrades honestly when Doc 01 readiness signal is unavailable"
+  authority_refs: [R-doc08-FEAT-33]
+  dependency_class: vendor:recall
+  mock_boundary: "negative cassette: Doc 01 readiness signal unavailable or timed out; MUST NOT replace the call_external seam"
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+    - {tier: negative}
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a meeting join where the Doc 01 readiness/freshness signal cannot be read"
+    when: "Proxy posts its join line"
+    then:
+      - "join line is still posted (Proxy joins) with an honest indication that freshness is unknown"
+      - "no fabricated or stale timestamp is presented as current"
+  primary_oracle: {type: deterministic, artifact: "assert join_line posted; assert freshness field reads 'unknown' or equivalent; assert no fabricated timestamp"}
+  thresholds: {silent_failures_allowed: 0}
+  fault_model_refs: []
+  test_ids: [T-FEAT-029-NEG]
+
+- criterion_id: AC-FEAT-030
+  name: "join line freshness sourced from Doc 01 readiness signal, not computed independently"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-33]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "the join-line renderer source code"
+    when: "statically analyzed"
+    then:
+      - "freshness value is read from Doc 01's readiness/freshness signal"
+      - "no independent timestamp calculation exists in the join-line render path"
+  primary_oracle: {type: deterministic, artifact: "static call-graph check: join_line renderer calls doc01.get_readiness() or equivalent; no independent datetime.now() call for freshness"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-030]
+
+# ─────────────────────────────────────────────
+# FEATURE 12 · Verbal walkthrough (R-doc08-FEAT-34 … 42)
+# ─────────────────────────────────────────────
+
+- criterion_id: AC-FEAT-031
+  name: "walkthrough is OFF at session start — no narration without explicit activation"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-34]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a new meeting session just started"
+    when: "Proxy begins executing a substantial task without any walkthrough request"
+    then:
+      - "no narration events are emitted"
+      - "walkthrough state is OFF in session-state"
+  primary_oracle: {type: deterministic, artifact: "assert walkthrough_state == OFF at session init; assert narration_event_count == 0 during default task execution"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-031]
+
+- criterion_id: AC-FEAT-032
+  name: "walkthrough activates only on explicit human request or affirmative response to offer"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-35]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "walkthrough is OFF"
+    when: "a participant says 'walk us through how you're doing it'"
+    then:
+      - "walkthrough state transitions to ON"
+      - "narration events begin on subsequent actions"
+  primary_oracle: {type: deterministic, artifact: "assert walkthrough_state == ON after explicit request; assert narration_event emitted on next action"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-032]
+
+- criterion_id: AC-FEAT-033
+  name: "silence or 'no' to walkthrough offer leaves walkthrough OFF and suppresses re-offer for the task"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-36]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Proxy has offered walkthrough once for a substantial task"
+    when: "the human responds with silence or 'no'"
+    then:
+      - "walkthrough state remains OFF"
+      - "Proxy does NOT offer walkthrough again for that task"
+  primary_oracle: {type: deterministic, artifact: "assert walkthrough_state == OFF; assert offer_count_for_task == 1 (no second offer)"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-033]
+
+- criterion_id: AC-FEAT-034
+  name: "walkthrough offer is made at most once per task instance"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-37]
+  criticality: P2
+  blocking: false
+  behavior:
+    given: "a substantial task starting with walkthrough OFF"
+    when: "the task begins and Proxy decides to offer walkthrough"
+    then:
+      - "the offer is made exactly once"
+      - "no second offer for the same task instance occurs regardless of interim state"
+  primary_oracle: {type: deterministic, artifact: "assert walkthrough_offer_event_count == 1 per task_id"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-034]
+
+- criterion_id: AC-FEAT-035
+  name: "'quiet narration' or 'quiet' deactivates walkthrough immediately with no further narration"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-38]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "walkthrough is ON and narration is in progress"
+    when: "a participant says 'quiet narration' or 'quiet'"
+    then:
+      - "walkthrough state transitions to OFF immediately"
+      - "no further narration events are emitted after this command"
+  primary_oracle: {type: deterministic, artifact: "assert walkthrough_state == OFF after quiet command; assert narration_event_count == 0 after command timestamp"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-035]
+
+- criterion_id: AC-FEAT-036
+  name: "walkthrough narrates current action only — stale backlog lines are dropped, not queued"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-39]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "walkthrough is ON and the task progresses through N actions faster than narration can be delivered"
+    when: "the narration queue is inspected"
+    then:
+      - "only the most-recent action state is narrated"
+      - "stale intermediate lines are dropped (not queued)"
+      - "no log-replay of skipped actions occurs"
+  primary_oracle: {type: deterministic, artifact: "assert narration_queue_depth <= 1 at any time; assert skipped action states do not appear in narration stream"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-036]
+
+- criterion_id: AC-FEAT-037
+  name: "walkthrough narration yields mid-word when another participant begins speaking"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-40]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "walkthrough is ON and Proxy is actively narrating"
+    when: "another participant begins speaking (barge-in event received)"
+    then:
+      - "narration speech is interrupted immediately (mid-word if necessary)"
+      - "Proxy does not continue narrating over the other participant"
+  primary_oracle: {type: deterministic, artifact: "assert speech_interrupt event emitted within one audio frame of barge_in event; assert no narration output after interrupt until floor regained"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-037]
+
+- criterion_id: AC-FEAT-038
+  name: "narration drops to tile/chat via delivery judgment when room conversation resumes"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-41]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "walkthrough is ON and Proxy's delivery judgment determines the room's conversation has genuinely resumed"
+    when: "further task actions are completed"
+    then:
+      - "remaining narration is routed to tile and chat channel"
+      - "the final task result is delivered at task completion via chat"
+      - "no spoken interruption of the resumed conversation occurs"
+  primary_oracle: {type: deterministic, artifact: "assert narration_destination switches to tile+chat on delivery_judgment==floor_busy; assert result posted to chat at task_complete"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-038]
+
+- criterion_id: AC-FEAT-039
+  name: "each narration event includes a one-line rationale (why) when walkthrough is ON"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-42]
+  criticality: P2
+  blocking: false
+  behavior:
+    given: "walkthrough is ON and the worker emits an action event"
+    when: "the narration event is constructed"
+    then:
+      - "the narration event includes a non-empty 'why' field explaining the rationale for the action"
+  primary_oracle: {type: deterministic, artifact: "assert narration_event.why is not None and len > 0 for every action event when walkthrough==ON"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-039]
+
+# ─────────────────────────────────────────────
+# FEATURE 13 · Screen sharing — human-activated only (R-doc08-FEAT-43 … 45)
+# ─────────────────────────────────────────────
+
+- criterion_id: AC-FEAT-040
+  name: "screen sharing activates only on explicit human command or affirmative response to offer"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-43]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "screen sharing is OFF"
+    when: "a participant says 'share your screen' or 'show us'"
+    then:
+      - "screen sharing is activated"
+      - "Proxy's view is promoted to the shared screen"
+  primary_oracle: {type: deterministic, artifact: "assert screen_share_state == ON after human command; assert canvas_promotion event emitted"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-040]
+
+- criterion_id: AC-FEAT-041
+  name: "Proxy never self-initiates screen sharing — screen sharing only ever activates on human input"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-44]
+  criticality: P0
+  blocking: true
+  behavior:
+    given: "any task or state in which no human has requested screen sharing or responded affirmatively to an offer"
+    when: "any autonomous task, narration, or state change occurs"
+    then:
+      - "screen sharing state remains OFF"
+      - "no canvas_promotion or screen_share_activate event is emitted autonomously"
+  primary_oracle: {type: deterministic, artifact: "assert screen_share_state == OFF when no human_screen_share_request in session; assert no autonomous screen_share_activate event in event log"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-041]
+
+- criterion_id: AC-FEAT-042
+  name: "'stop sharing' immediately terminates screen sharing regardless of in-flight state"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-45]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "screen sharing is ON and a long-running task is in progress on screen"
+    when: "a participant says 'stop sharing'"
+    then:
+      - "screen sharing state transitions to OFF immediately"
+      - "the view returns to the tile"
+      - "any in-flight task continues off-screen but the shared view is not restored until next human request"
+  primary_oracle: {type: deterministic, artifact: "assert screen_share_state == OFF within one event cycle of stop_sharing command; assert canvas_demotion event emitted; assert no auto-restore"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-042]
+
+# ─────────────────────────────────────────────
+# FEATURE 14 · Reconciliation card (R-doc08-FEAT-46 … 49)
+# ─────────────────────────────────────────────
+
+- criterion_id: AC-FEAT-043
+  name: "contradiction-across-time detection triggers reconciliation card, not spoken correction"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-46]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "Doc 03's contradiction-across-time detection fires for a figure asserted two different ways"
+    when: "the event is handled"
+    then:
+      - "a reconciliation card is posted to chat"
+      - "no spoken line asserting that any participant is wrong is produced"
+      - "no tts_event with a correction assertion is emitted"
+  primary_oracle: {type: deterministic, artifact: "assert reconciliation_card event emitted; assert no tts_event with 'wrong' or 'incorrect' assertion; assert spoken_correction_event_count == 0"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-043]
+
+- criterion_id: AC-FEAT-044
+  name: "reconciliation card displays both values side by side, each with source and date"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-47, R-doc08-FEAT-48]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "two conflicting assertions: '$2.4M from deck' (recorded at T1) and '$2.19M from Q3 filing' (recorded at T2)"
+    when: "a reconciliation card is rendered"
+    then:
+      - "the card shows both values side by side"
+      - "each value is annotated with its source reference"
+      - "each value is annotated with its as-of date or time context"
+      - "the card does not assert which value is correct"
+      - "the format matches '<source A>: <value A> · <source B>: <value B>, as of <date/context>'"
+  primary_oracle: {type: deterministic, artifact: "assert card.value_a and card.value_b present; assert card.source_a and card.source_b present; assert card.date_a and card.date_b present; assert no correctness_assertion field"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-044]
+
+- criterion_id: AC-FEAT-045
+  name: "reconciliation card uses the same card renderer as draft cards and pin-to-source cards"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-doc08-FEAT-49]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "the reconciliation card renderer source code"
+    when: "statically analyzed"
+    then:
+      - "the renderer calls the shared card renderer used by draft cards and pin-to-source cards"
+      - "no separate card rendering pipeline exists for reconciliation cards"
+      - "the contested-figure layout is a variant parameter of the shared renderer"
+  primary_oracle: {type: deterministic, artifact: "static call-graph check: reconciliation_card render calls shared_card_renderer(layout='contested_figure'); no standalone render function for reconciliation"}
+  thresholds: {violations_allowed: 0}
+  dependency_class: null
+  mock_boundary: null
+  golden_path: false
+  verification_ladder:
+    - {tier: lint}
+    - {tier: unit}
+  fault_model_refs: []
+  test_ids: [T-FEAT-045]
