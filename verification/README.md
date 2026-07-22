@@ -48,11 +48,14 @@ verification/
 | 5 | **Promptfoo** | Transcript prompt-injection red team — can a participant manipulate what Proxy says out loud. **Gated behind `--redteam`**, relevant once a doc handles live meeting input (doc03+). | LLM | **off** |
 | 6 | **Confident AI** | Optional cloud dashboard for DeepEval. Needs an account/API key → documented as an optional follow-up, not wired. | cloud | note |
 
-\* **External limits in the session that built this:** the `ANTHROPIC_API_KEY` in
-`.env` had its Anthropic **credit exhausted**, and the local **Docker daemon was
-down**. So Layers 2 and 3 are fully *built and wired* (Layer 2's end-to-end path was
-smoke-verified with one real Claude call) but their full runs are recorded **BLOCKED**,
-never faked. Re-run with a funded key / running Docker and they execute unchanged.
+\* **External-limit history:** these layers were first built while the `.env`
+`ANTHROPIC_API_KEY` had **exhausted credit** and Docker was **down**, so early runs were
+recorded **BLOCKED** (never faked). After the key was funded and Docker started, all
+three ran for real: **Layer 2** — grounded 5/5 (doc00, doc02) / 4-of-5 (doc01, one
+self-contradictory *generated* golden the citation metric correctly rejects), negative
+controls **2/2 caught on all docs**; **Layer 3** — self-hosted PR-Agent posted a real
+Claude review to PR #1 (no security concerns); **Layer 5** — 5/5 transcript-injection
+scenarios resisted (doc02). See the timestamped + curated reports in `reports/`.
 
 ## What "cheap/local first" buys you
 

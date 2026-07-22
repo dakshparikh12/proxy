@@ -1,10 +1,83 @@
 {
   "doc": "doc01",
   "judge_model": "claude-haiku-4-5-20251001",
-  "passed": null,
-  "blocked": true,
-  "blocked_reason": "BadRequestError: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purcha",
   "n_cases": 7,
-  "note": "Layer 2 scoring is BUILT and smoke-verified; the full run is blocked by an external LLM-provider limit. Re-run when credit is restored.",
-  "results": []
+  "grounded_pass": 4,
+  "grounded_total": 5,
+  "negative_controls_caught": 2,
+  "negative_controls_total": 2,
+  "metric_accuracy": 0.857,
+  "passed": false,
+  "results": [
+    {
+      "id": "doc01-grounded-0",
+      "kind": "grounded",
+      "citation_score": 1.0,
+      "hallucination_score": 0.0,
+      "grounded_ok": true,
+      "citation_should_pass": true,
+      "metric_correct": true,
+      "citation_reason": "All factual claims in the actual output are explicitly present in the retrieval context and correspond exactly. The build order (2nd after Doc 00 scaffold), the reads-from relationship (Doc 00: runtime, tenancy, hosting), and all consumed-b"
+    },
+    {
+      "id": "doc01-grounded-1",
+      "kind": "grounded",
+      "citation_score": 0.6,
+      "hallucination_score": 0.0,
+      "grounded_ok": false,
+      "citation_should_pass": true,
+      "metric_correct": false,
+      "citation_reason": "The actual output correctly identifies five types of edges (`calls`, `imports`, `reads`, `writes`, `extends`, `implements`) and accurately states they connect nodes (symbols including functions, methods, classes, routes, tables, and modules"
+    },
+    {
+      "id": "doc01-grounded-2",
+      "kind": "grounded",
+      "citation_score": 1.0,
+      "hallucination_score": 0.0,
+      "grounded_ok": true,
+      "citation_should_pass": true,
+      "metric_correct": true,
+      "citation_reason": "All factual claims in the actual output are explicitly supported by the retrieval context. The output correctly states that the GitHub App requests exactly `contents:read` + `metadata:read` (verbatim match), that these are read-only scopes,"
+    },
+    {
+      "id": "doc01-grounded-3",
+      "kind": "grounded",
+      "citation_score": 0.9,
+      "hallucination_score": 0.0,
+      "grounded_ok": true,
+      "citation_should_pass": true,
+      "metric_correct": true,
+      "citation_reason": "The actual output accurately extracts and represents all major factual claims from the retrieval context with high fidelity. Specific details are correctly preserved: the location of clone/substrate in `code_intel` service, the enumeration "
+    },
+    {
+      "id": "doc01-grounded-4",
+      "kind": "grounded",
+      "citation_score": 0.9,
+      "hallucination_score": 0.0,
+      "grounded_ok": true,
+      "citation_should_pass": true,
+      "metric_correct": true,
+      "citation_reason": "The actual output accurately extracts and explains the orphan_exported definition from the retrieval context. All key factual claims are directly supported: (1) the condition 'n.exported == True AND n.id not in resolved_targets' is explicit"
+    },
+    {
+      "id": "doc01-negctl-0",
+      "kind": "negative_control",
+      "citation_score": 0.3,
+      "hallucination_score": 1.0,
+      "grounded_ok": false,
+      "citation_should_pass": false,
+      "metric_correct": true,
+      "citation_reason": "The response contains several claims that are either unsupported or directly contradicted by the retrieval context. Supported claims: Doc 01 build order (2nd), reads from Doc 00, and consumed by Docs 03-06 are all explicitly stated in the c"
+    },
+    {
+      "id": "doc01-negctl-1",
+      "kind": "negative_control",
+      "citation_score": 0.3,
+      "hallucination_score": 1.0,
+      "grounded_ok": false,
+      "citation_should_pass": false,
+      "metric_correct": true,
+      "citation_reason": "The response contains multiple unsupported claims that violate the grounded-or-silent rule. While the claim about five types of edges (`calls`, `imports`, `reads`, `writes`, `extends`, `implements`) is explicitly supported by the retrieval "
+    }
+  ]
 }

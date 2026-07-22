@@ -109,8 +109,13 @@ else row "4 Chaos" "— none" "no chaos/$DOC.py"; fi
 # ── Layer 5 — Promptfoo (gated) ──────────────────────────────────────────────
 if [ $REDTEAM -eq 1 ] && [ "$CUSTOMER_FACING" = "1" ]; then
   if command -v npx >/dev/null 2>&1; then
-    L5_OUT="$(cd "$HERE" && npx --yes promptfoo@latest redteam run -c redteam/promptfooconfig.yaml --no-progress-bar 2>&1)"
-    if echo "$L5_OUT" | grep -qiE "fail|error"; then row "5 Promptfoo" "❌ see log" "redteam ran; review output"; else row "5 Promptfoo" "✅ ran" "no failing assertions"; fi
+    # Ungated hand-authored injection tests (auto-gen variants are email-gated —
+    # see redteam/promptfoo-autogen.yaml).
+    L5_OUT="$(cd "$HERE" && PROMPTFOO_DISABLE_TELEMETRY=1 npx --yes promptfoo@latest eval \
+      -c redteam/promptfooconfig.yaml --no-cache -o "reports/${DOC}-${TS}-promptfoo.json" 2>&1)"
+    L5_PF="$(printf '%s' "$L5_OUT" | sed -E 's/\x1b\[[0-9;]*m//g' | grep -oE '[0-9]+ passed \([0-9]+%\)' | tail -1)"
+    if printf '%s' "$L5_OUT" | grep -q '0 failed'; then row "5 Promptfoo" "✅ PASS" "${L5_PF:-passed}, results reports/${DOC}-${TS}-promptfoo.json";
+    else row "5 Promptfoo" "❌ see log" "${L5_PF:-review output}"; FAILED=1; fi
   else row "5 Promptfoo" "⚠️ SKIP" "npx not available"; fi
 elif [ $REDTEAM -eq 1 ]; then
   row "5 Promptfoo" "— n/a" "$DOC is not customer_facing; red team not applicable yet"
