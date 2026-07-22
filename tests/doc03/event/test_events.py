@@ -273,9 +273,27 @@ def _final_decision_event(rev: int = 7) -> MaterialChangeEvent:
     )
 
 
+def _assert_events_no_model_or_wake_seam() -> None:
+    """Structural teeth for AC-EVENT-06/07 ("never a wake, never a model call"): the emitter
+    source must reach NO LLM / external-call / wake-turn / room-delivery seam. Replaces the inert
+    Mock() call_count assertions (they checked objects never injected)."""
+    import ast
+    import pathlib as _pl
+
+    tree = ast.parse(_pl.Path("services/scribe/src/scribe/events.py").read_text())
+    for node in ast.walk(tree):  # strip docstrings so guarantee-prose can't trip the check
+        if isinstance(node, ast.Expr) and isinstance(getattr(node, "value", None), ast.Constant) \
+                and isinstance(node.value.value, str):
+            node.value.value = ""
+    body = ast.unparse(tree)
+    forbidden = ("anthropic", "call_external", "model_for", "messages.create",
+                 "generate_structured", "AsyncAnthropic", "libs.http", "libs.llm",
+                 "speak", "send_chat", "show_screen")
+    hits = [t for t in forbidden if t in body]
+    assert not hits, f"emitter must not reach a model/wake/delivery seam: {hits}"
+
+
 def test_event_06_chat_line_is_deterministic_never_wake_never_model() -> None:
-    wake = Mock()
-    llm = Mock()
     poster = Mock()
 
     ev = _final_decision_event()
@@ -293,9 +311,8 @@ def test_event_06_chat_line_is_deterministic_never_wake_never_model() -> None:
     assert line == out1
     poster.assert_called_once_with(out1)
 
-    # No wake-turn path, no LLM/model call on the chat-line path.
-    assert wake.call_count == 0
-    assert llm.call_count == 0
+    # AC-EVENT-06: structural teeth — the emitter reaches no model/wake/delivery seam.
+    _assert_events_no_model_or_wake_seam()
 
 
 def test_event_06_formatter_output_carries_no_internal_component_name() -> None:
@@ -321,8 +338,6 @@ def _action_event(rev: int = 3) -> MaterialChangeEvent:
 
 
 def test_event_07_action_item_chat_line_matches_template_no_wake_no_model() -> None:
-    wake = Mock()
-    llm = Mock()
     poster = Mock()
 
     ev = _action_event()
@@ -331,8 +346,7 @@ def test_event_07_action_item_chat_line_matches_template_no_wake_no_model() -> N
 
     assert line == "☐ Action: Sam — fix the retry test"
     poster.assert_called_once_with(line)
-    assert wake.call_count == 0
-    assert llm.call_count == 0
+    _assert_events_no_model_or_wake_seam()
     # Deterministic: same committed delta → identical bytes.
     assert format_chat_line(ev) == format_chat_line(ev)
 
