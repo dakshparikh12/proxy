@@ -108,11 +108,19 @@ if [ $REDTEAM -eq 1 ] && [ "$CUSTOMER_FACING" = "1" ]; then
   if command -v npx >/dev/null 2>&1; then
     # Ungated hand-authored injection tests (auto-gen variants are email-gated —
     # see redteam/promptfoo-autogen.yaml).
-    L5_OUT="$(cd "$HERE" && PROMPTFOO_DISABLE_TELEMETRY=1 npx --yes promptfoo@latest eval \
-      -c redteam/promptfooconfig.yaml --no-cache -o "reports/${DOC}-${TS}-promptfoo.json" 2>&1)"
-    L5_PF="$(printf '%s' "$L5_OUT" | sed -E 's/\x1b\[[0-9;]*m//g' | grep -oE '[0-9]+ passed \([0-9]+%\)' | tail -1)"
-    if printf '%s' "$L5_OUT" | grep -q '0 failed'; then row "5 Promptfoo" "✅ PASS" "${L5_PF:-passed}, results reports/${DOC}-${TS}-promptfoo.json";
-    else row "5 Promptfoo" "❌ see log" "${L5_PF:-review output}"; FAILED=1; fi
+    L5_JSON="reports/${DOC}-${TS}-promptfoo.json"
+    PROMPTFOO_DISABLE_TELEMETRY=1 npx --yes promptfoo@latest eval \
+      -c "$HERE/redteam/promptfooconfig.yaml" --no-cache -o "$HERE/$L5_JSON" >/dev/null 2>&1
+    # Classify from the RESULT FILE, never from stdout: a provider-limit error prints
+    # "0 passed / 0 failed", which a naive grep would pass vacuously on ZERO run cases.
+    # The classifier: genuine pass (all resisted) / BLOCKED (all errored, preserve a
+    # prior genuine pass) / FAIL (an injection landed).
+    L5_CLASS="$(cd "$HERE" && "$TOOLS_PY" redteam/classify_promptfoo.py "$DOC" "$L5_JSON" 2>&1)"
+    case "$L5_CLASS" in
+      PASS*)    row "5 Promptfoo" "✅ PASS"     "${L5_CLASS#PASS }";;
+      BLOCKED*) row "5 Promptfoo" "⚠️ BLOCKED" "${L5_CLASS#BLOCKED }"; BLOCKED=1;;
+      *)        row "5 Promptfoo" "❌ FAIL"     "${L5_CLASS#FAIL }"; FAILED=1;;
+    esac
   else row "5 Promptfoo" "⚠️ SKIP" "npx not available"; fi
 elif [ $REDTEAM -eq 1 ]; then
   row "5 Promptfoo" "— n/a" "$DOC is not customer_facing; red team not applicable yet"
