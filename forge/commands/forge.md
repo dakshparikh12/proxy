@@ -7,10 +7,29 @@ argument-hint: <doc-id or spec-path>
 
 You are driving the **forge** build loop for the target: **$ARGUMENTS**.
 
-Read `${CLAUDE_PLUGIN_ROOT}/README.md` and the skill `forge:forge-loop` first. Then run the
-five phases in order. **You provide the judgment; the gates provide the boolean; the hooks
-provide the physics.** Never fake DONE; never edit tests/bundle/goldens; flip `passes:true`
-only after the real path RAN on real data with evidence shown.
+Read `${CLAUDE_PLUGIN_ROOT}/README.md` and the skill `forge:forge-loop` first. **You provide the
+judgment; the gates provide the boolean; the hooks provide the physics.** Never fake DONE; never
+edit tests/bundle/goldens; flip `passes:true` only after the real path RAN on real data with
+evidence shown.
+
+## FIRST — determine the mode (this decides which phases run)
+Check whether `acceptance/doc<NN>/` already exists and is **sealed**:
+
+- **VERIFY mode** (docs already built — e.g. 00–03): the bundle is sealed and code exists. **Do NOT
+  regenerate criteria.** Skip phases ① and ② except to *confirm* coverage
+  (`gates/coverage.py <id>` must pass). Then go straight to phase ④ in **verify** posture: for each
+  task run its real acceptance test — if green, confirm + flip `passes:true`; if red, fix the
+  **product code, never the test** (a test that contradicts the sealed spec is a founder-gated
+  repair → surface it, don't guess). End at ⑤. This is "verify + fix what's already there."
+  *(Only regenerate a sealed bundle if the founder explicitly asks — e.g. the proving-ground
+  comparison of forge's criteria vs. the existing bundle.)*
+
+- **BUILD mode** (no bundle yet — e.g. docs 04–09): run all five phases; phase ② generates the
+  criteria + tasks from the spec and the founder seals the bundle before any code.
+
+State which mode you detected before proceeding.
+
+## The phases
 
 ## The phases (each names the skill / agent / gate that does it)
 
