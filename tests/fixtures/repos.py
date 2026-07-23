@@ -20,6 +20,7 @@ that couples a fixture to the (absent) product FAILS red.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -53,6 +54,25 @@ def _run_git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
+def _cache_is_healthy(repo: Path) -> bool:
+    """True if the cached repo has a valid HEAD.
+
+    A corrupt/partial cache (e.g. an interrupted prior build that left ``.git``
+    without a commit) is REMOVED and ``False`` returned, so the caller rebuilds
+    from scratch instead of cascading a ``CalledProcessError`` across every
+    dependent test. This is what makes the on-disk fixture cache self-healing.
+    """
+    probe = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo,
+        env={**os.environ, **_FIXED_ENV},
+        capture_output=True, text=True, check=False,
+    )
+    if probe.returncode == 0:
+        return True
+    shutil.rmtree(repo, ignore_errors=True)
+    return False
+
+
 def build_git_repo(name: str, files: dict) -> tuple:
     """Build (once) a real local git repo named ``name`` from ``files``.
 
@@ -60,7 +80,7 @@ def build_git_repo(name: str, files: dict) -> tuple:
     repo already exists, so the HEAD sha is stable for the whole session.
     """
     repo = _CACHE_DIR / name
-    if (repo / ".git").is_dir():
+    if (repo / ".git").is_dir() and _cache_is_healthy(repo):
         sha = _run_git(repo, "rev-parse", "HEAD").stdout.strip()
         return repo, sha
 
@@ -641,7 +661,7 @@ def _build_two_commit_repo(name: str, first_files: dict, second_files: dict) -> 
     the second commit (existing files are overwritten).
     """
     repo = _CACHE_DIR / name
-    if (repo / ".git").is_dir():
+    if (repo / ".git").is_dir() and _cache_is_healthy(repo):
         log_out = _run_git(repo, "log", "--format=%H", "--reverse").stdout.strip()
         shas = [s.strip() for s in log_out.split("\n") if s.strip()]
         return repo, shas[0], shas[-1]
@@ -828,7 +848,7 @@ class PRMeetingFixture:
 def _build_pr_repo() -> tuple:
     """Return (repo_path, default_branch_sha, pr_head_sha).  Idempotent."""
     repo = _CACHE_DIR / "pr-meeting"
-    if (repo / ".git").is_dir():
+    if (repo / ".git").is_dir() and _cache_is_healthy(repo):
         main_sha = _run_git(repo, "rev-parse", "main").stdout.strip()
         pr_sha = _run_git(repo, "rev-parse", "feature/pr-42").stdout.strip()
         return repo, main_sha, pr_sha

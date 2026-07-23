@@ -39,17 +39,20 @@ def _test_id_to_k_fragment(test_id: str) -> str:
     return frag.lower().replace("-", "_")
 
 
-def _build_acceptance(test_ids: list[str]) -> dict:  # type: ignore[type-arg]
+def _build_acceptance(criterion_id: str) -> dict:  # type: ignore[type-arg]
     """Build the acceptance dict for a criterion.
 
-    If test_ids is non-empty, produce a real pytest -k selector.
-    If empty, produce a legible BLOCKED note.
+    The -k selector is derived from the CRITERION id, because the acceptance
+    tests are named after the criterion they verify (``test_ac_m1_004`` ==
+    ``AC-M1-004``) — NOT after the bundle's ``test_ids`` field, which can drift
+    (e.g. AC-M1-004 carries ``test_ids: [T-M1-006]`` while its test is
+    ``test_ac_m1_004``). This is a no-op wherever test_ids already align with the
+    criterion number (all of doc00), and repairs the cases where they don't.
+    A criterion with no matching test collects nothing (pytest exit 5), which is
+    the honest "no acceptance test exists yet" signal — not a silent pass.
     """
-    if not test_ids:
-        return {"cmd": None, "note": "no test_ids in bundle — needs mapping"}
-    fragments = [_test_id_to_k_fragment(tid) for tid in test_ids]
-    joined = " or ".join(fragments)
-    return {"cmd": f'pytest -q -k "{joined}"'}
+    frag = _test_id_to_k_fragment(criterion_id)
+    return {"cmd": f'pytest -q -k "{frag}"'}
 
 
 def decompose(doc_id: str) -> None:
@@ -73,7 +76,7 @@ def decompose(doc_id: str) -> None:
         crit_id: str = c["id"]
         # requirement_ids: the criterion's authority_refs that are real requirements
         req_ids = [ref for ref in c["refs"] if ref in reqs]
-        acceptance = _build_acceptance(c["test_ids"])
+        acceptance = _build_acceptance(crit_id)
         task = {
             "task_id": f"T-{crit_id}",
             "title": crit_id,
