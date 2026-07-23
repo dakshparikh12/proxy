@@ -83,9 +83,12 @@ class Pipeline:
                 del self.graph_retention_index[sha]
 
     # -- freshness -------------------------------------------------------- #
-    def rebuild_graph(self) -> Graph:
+    def rebuild_graph(self, built_at_sha: str = "") -> Graph:
+        # Prefer an explicit sha (the push's new HEAD); else re-resolve HEAD from
+        # the clone so a rebuilt graph still stamps the commit it was built at.
+        sha = built_at_sha or _resolve_head(self.clone_path) or self.current_sha
         builder = GraphBuilder()
-        result = builder.build(self.clone_path, is_excluded=self._is_excluded)
+        result = builder.build(self.clone_path, is_excluded=self._is_excluded, built_at_sha=sha)
         graph = result.graph
         self._table_map = result.table_map
         if self._store is not None:
@@ -96,7 +99,7 @@ class Pipeline:
         if self._cloner is not None and self.clone_path and self.clone_path.exists():
             self._cloner.pull_delta(self.clone_path)
         if self.clone_path and self.clone_path.exists():
-            self.graph = self.rebuild_graph()
+            self.graph = self.rebuild_graph(built_at_sha=new_sha)
         self.current_sha = new_sha
         self.graph_retention_index[new_sha] = GraphVersion(new_sha, self.graph)
         self._num_commits_last = num_commits
@@ -169,9 +172,13 @@ def run_full_pipeline(
 
     pipeline.exclusion_set = exclusions.get_excluded_paths(clone_path)
 
+    # Resolve HEAD BEFORE the build so every node is stamped with the commit it
+    # was extracted at (§3.4 built_at_sha, the freshness-deference anchor).
+    pinned_sha = _resolve_head(clone_path) or (sha or "")
+
     _emit(readiness_listener, "indexing")
     builder = GraphBuilder(git_interceptor=git_interceptor)
-    build = builder.build(clone_path, is_excluded=pipeline._is_excluded)
+    build = builder.build(clone_path, is_excluded=pipeline._is_excluded, built_at_sha=pinned_sha)
     pipeline.graph = build.graph
     pipeline._table_map = build.table_map
 
@@ -183,7 +190,6 @@ def run_full_pipeline(
     pipeline._store = store
     _touch_coverage_db(pipeline.coverage_db_path, db_tracer)
 
-    pinned_sha = _resolve_head(clone_path) or (sha or "")
     pipeline.current_sha = pinned_sha
     if pinned_sha:
         pipeline.graph_retention_index[pinned_sha] = GraphVersion(pinned_sha, build.graph)

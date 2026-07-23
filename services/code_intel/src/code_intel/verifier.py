@@ -142,9 +142,29 @@ class StaticAnalysisVerifier:
                 continue
             for s in _string_constants(tree):
                 low = s.lower()
-                if "create table" in low and ("_sha" in low or "sha_" in low or "versioned" in low):
+                if "create table" in low and _table_name_is_sha_versioned(low):
                     found.append(Violation(str(path), f"SHA-versioned table schema {s!r}"))
         return found
+
+
+def _table_name_is_sha_versioned(low: str) -> bool:
+    """True iff the TABLE NAME (not a column) is SHA-versioned (AC-CANON-003).
+
+    The forbidden pattern is a per-SHA table name like ``nodes_<sha>`` / a
+    ``versioned`` table. The §3.4 canonical schema legitimately carries a
+    ``built_at_sha`` COLUMN (freshness stamp), so we inspect only the identifier
+    immediately after ``create table [if not exists]`` — never the column list.
+    """
+    after = low.split("create table", 1)[1].lstrip()
+    if after.startswith("if not exists"):
+        after = after[len("if not exists"):].lstrip()
+    # the table name is the token up to the first whitespace or '('
+    name = ""
+    for ch in after:
+        if ch.isspace() or ch == "(":
+            break
+        name += ch
+    return "_sha" in name or "sha_" in name or "versioned" in name
 
 
 def _subprocess_argv0(node: ast.Call) -> str | None:

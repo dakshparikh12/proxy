@@ -38,24 +38,55 @@ class GraphStore:
             if drop_first:
                 if self._ops is not None:
                     self._ops.record("DROP", "graph rebuild")
+                # Drop the canonical §3.4 tables AND the pre-schema `nodes`/`edges`
+                # tables so a rebuilt DB is clean (no stale rows survive a rebuild).
+                cur.execute("DROP TABLE IF EXISTS graph_nodes")
+                cur.execute("DROP TABLE IF EXISTS graph_edges")
                 cur.execute("DROP TABLE IF EXISTS nodes")
                 cur.execute("DROP TABLE IF EXISTS edges")
+            # §3.4 canonical tables (per-repo SQLite; NOT the deferred Postgres map_*).
             cur.execute(
-                "CREATE TABLE IF NOT EXISTS nodes "
-                "(id TEXT PRIMARY KEY, path TEXT, line INTEGER, kind TEXT, pagerank REAL)"
+                "CREATE TABLE IF NOT EXISTS graph_nodes ("
+                "id TEXT PRIMARY KEY, "        # canonical symbol id; table nodes = table::<name>
+                "kind TEXT NOT NULL, "         # function|method|class|route|table|module
+                "file_path TEXT NOT NULL, "
+                "line INTEGER NOT NULL, "
+                "exported INTEGER NOT NULL DEFAULT 0, "  # 1 = route/public symbol/table
+                "built_at_sha TEXT NOT NULL)"            # commit this node was extracted at
             )
             cur.execute(
-                "CREATE TABLE IF NOT EXISTS edges (source TEXT, target TEXT, kind TEXT)"
+                "CREATE TABLE IF NOT EXISTS graph_edges ("
+                "source TEXT NOT NULL, "
+                "target TEXT NOT NULL, "
+                "kind TEXT NOT NULL, "         # calls|imports|reads|writes|extends|implements
+                "file_path TEXT NOT NULL, "    # the site of the edge (file:line lead)
+                "line INTEGER NOT NULL)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS graph_edges_target_idx "
+                "ON graph_edges (target, kind)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS graph_edges_source_idx ON graph_edges (source)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS graph_nodes_file_idx ON graph_nodes (file_path)"
             )
             if self._ops is not None:
                 self._ops.record("INSERT", f"{len(graph.nodes)} nodes")
             cur.executemany(
-                "INSERT OR REPLACE INTO nodes VALUES (?,?,?,?,?)",
-                [(n.id, n.path, n.line, n.kind, n.pagerank) for n in graph.nodes],
+                "INSERT OR REPLACE INTO graph_nodes "
+                "(id, kind, file_path, line, exported, built_at_sha) "
+                "VALUES (?,?,?,?,?,?)",
+                [
+                    (n.id, n.kind, n.path, n.line, n.exported, n.built_at_sha)
+                    for n in graph.nodes
+                ],
             )
             cur.executemany(
-                "INSERT INTO edges VALUES (?,?,?)",
-                [(e.source, e.target, e.kind) for e in graph.edges],
+                "INSERT INTO graph_edges (source, target, kind, file_path, line) "
+                "VALUES (?,?,?,?,?)",
+                [(e.source, e.target, e.kind, e.file_path, e.line) for e in graph.edges],
             )
             conn.commit()
         finally:

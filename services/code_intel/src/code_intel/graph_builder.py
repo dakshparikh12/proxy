@@ -53,7 +53,12 @@ class _DeclVisitor(ast.NodeVisitor):
 
     def _visit_func(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         node_id = f"{self.rel}::{node.name}"
-        self.nodes.append(Node(id=node_id, path=self.rel, line=node.lineno, kind="function"))
+        # A module-level def whose name does not start with '_' is public surface
+        # (route/public symbol) → exported=1 (§3.4). Nested defs are not top-level.
+        exported = 1 if (not self._func_stack and not node.name.startswith("_")) else 0
+        self.nodes.append(
+            Node(id=node_id, path=self.rel, line=node.lineno, kind="function", exported=exported)
+        )
         self._func_stack.append(node_id)
         self.generic_visit(node)
         self._func_stack.pop()
@@ -68,15 +73,28 @@ class _DeclVisitor(ast.NodeVisitor):
         if _is_model(node):
             table = _db_table(node)
             self.tables[table] = node.name
+            # A table node is ALWAYS exported (part of the public surface, §3.4).
             self.nodes.append(
-                Node(id=f"table::{node.name}", path=self.rel, line=node.lineno, kind="table")
+                Node(
+                    id=f"table::{node.name}", path=self.rel, line=node.lineno,
+                    kind="table", exported=1,
+                )
             )
+        # A module-level class whose name does not start with '_' is public surface.
+        exported = 1 if (not self._func_stack and not node.name.startswith("_")) else 0
+        self.nodes.append(
+            Node(id=f"{self.rel}::{node.name}", path=self.rel, line=node.lineno,
+                 kind="class", exported=exported)
+        )
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
         if self._func_stack and isinstance(node.func, ast.Name):
             src = self._func_stack[-1]
-            self.edges.append(Edge(source=src, target=node.func.id, kind="calls"))
+            self.edges.append(
+                Edge(source=src, target=node.func.id, kind="calls",
+                     file_path=self.rel, line=node.lineno)
+            )
         self.generic_visit(node)
 
     # -- import edges (spec §2.2/§3.4: `imports` edges + `module` nodes) ------- #
@@ -87,7 +105,10 @@ class _DeclVisitor(ast.NodeVisitor):
     def visit_Import(self, node: ast.Import) -> None:  # noqa: N802
         if self.module:
             for a in node.names:
-                self.edges.append(Edge(source=self.module, target=a.name, kind="imports"))
+                self.edges.append(
+                    Edge(source=self.module, target=a.name, kind="imports",
+                         file_path=self.rel, line=node.lineno)
+                )
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802
@@ -100,9 +121,15 @@ class _DeclVisitor(ast.NodeVisitor):
             keep = len(this_pkg) - node.level + (1 if self.is_init else 0)
             anchor = this_pkg[: max(keep, 0)]
             target = ".".join([*anchor, node.module])
-            self.edges.append(Edge(source=self.module, target=target, kind="imports"))
+            self.edges.append(
+                Edge(source=self.module, target=target, kind="imports",
+                     file_path=self.rel, line=node.lineno)
+            )
         elif node.module and not node.level:
-            self.edges.append(Edge(source=self.module, target=node.module, kind="imports"))
+            self.edges.append(
+                Edge(source=self.module, target=node.module, kind="imports",
+                     file_path=self.rel, line=node.lineno)
+            )
         self.generic_visit(node)
 
 
@@ -139,6 +166,7 @@ class GraphBuilder:
         self,
         clone_path: Path,
         is_excluded: Callable[[str], bool] | None = None,
+        built_at_sha: str = "",
     ) -> BuildResult:
         clone_path = Path(clone_path)
         nodes: list[Node] = []
@@ -182,6 +210,9 @@ class GraphBuilder:
                 # Grammarless languages: flagged but ripgrep-searchable (§3.4).
                 rows.append(CoverageRow(rel, "flagged", "unsupported-language"))
 
+        # Stamp every node with the commit it was extracted at (§3.4 freshness).
+        for n in nodes:
+            n.built_at_sha = built_at_sha
         graph = _assemble(nodes, raw_edges)
         return BuildResult(graph=graph, coverage_rows=rows, table_map=table_map)
 
@@ -246,7 +277,10 @@ def _assemble(nodes: list[Node], raw_edges: list[Edge]) -> Graph:
         if target_id is None and candidates:
             target_id = candidates[0]
         if target_id and target_id != e.source:
-            resolved.append(Edge(source=e.source, target=target_id, kind=e.kind))
+            resolved.append(
+                Edge(source=e.source, target=target_id, kind=e.kind,
+                     file_path=e.file_path, line=e.line)
+            )
     graph = Graph(nodes=nodes, edges=resolved)
     graph.index()
     graph.compute_pagerank()

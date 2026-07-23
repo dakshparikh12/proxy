@@ -190,10 +190,16 @@ def extract(rel: str, source: bytes, lang: str) -> tuple[list[Node], list[Edge]]
             continue
         for cap_nodes in QueryCursor(query).captures(tree.root_node).values():
             for n in cap_nodes:
-                node_id = f"{rel}::{_text(n)}"
+                name = _text(n)
+                node_id = f"{rel}::{name}"
                 if node_id not in seen_defs:
                     seen_defs.add(node_id)
-                    nodes.append(Node(id=node_id, path=rel, line=n.start_point[0] + 1, kind=node_kind))
+                    # A public symbol (name not starting with '_') is exported surface (§3.4).
+                    exported = 0 if name.startswith("_") else 1
+                    nodes.append(
+                        Node(id=node_id, path=rel, line=n.start_point[0] + 1,
+                             kind=node_kind, exported=exported)
+                    )
                 def_spans.append((n.start_byte, n.parent.end_byte if n.parent else n.end_byte, node_id))
 
     def _enclosing(byte: int) -> str:
@@ -207,11 +213,17 @@ def extract(rel: str, source: bytes, lang: str) -> tuple[list[Node], list[Edge]]
         if kind == "call":
             for cap_nodes in QueryCursor(query).captures(tree.root_node).values():
                 for n in cap_nodes:
-                    edges.append(Edge(source=_enclosing(n.start_byte), target=_text(n), kind="calls"))
+                    edges.append(
+                        Edge(source=_enclosing(n.start_byte), target=_text(n), kind="calls",
+                             file_path=rel, line=n.start_point[0] + 1)
+                    )
         elif kind == "imp":
             for cap_nodes in QueryCursor(query).captures(tree.root_node).values():
                 for n in cap_nodes:
                     target = _text(n).strip("\"'`<>").replace("/", ".").lstrip(".")
                     if target:
-                        edges.append(Edge(source=module_id, target=target, kind="imports"))
+                        edges.append(
+                            Edge(source=module_id, target=target, kind="imports",
+                                 file_path=rel, line=n.start_point[0] + 1)
+                        )
     return nodes, edges

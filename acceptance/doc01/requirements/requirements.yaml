@@ -891,3 +891,22 @@
   criticality: P1
   testability: executable
   status: qualified
+
+- requirement_id: R-DOC01-3.4-09
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§3.4 the graph_nodes/graph_edges DDL block"
+  source_quote: "CREATE TABLE graph_nodes (id ... kind ... file_path ... line ... exported ... built_at_sha ...); CREATE TABLE graph_edges (source ... target ... kind ... file_path ... line ...); CREATE INDEX graph_edges_target_idx ... graph_edges_source_idx ... graph_nodes_file_idx ..."
+  normalized_statement: >
+    WHEN the pipeline persists the dependency graph to the per-repo SQLite DB
+    THE SYSTEM SHALL write the canonical §3.4 tables graph_nodes
+    (id, kind, file_path, line, exported, built_at_sha) and graph_edges
+    (source, target, kind, file_path, line) with the three indexes
+    graph_edges_target_idx(target,kind), graph_edges_source_idx(source),
+    graph_nodes_file_idx(file_path); every node row SHALL carry the resolved
+    HEAD sha in built_at_sha; a table / public symbol node SHALL have exported=1;
+    and every edge row SHALL carry the edge site file_path + line>0.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified

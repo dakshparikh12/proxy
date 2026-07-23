@@ -23,6 +23,8 @@ class Node:
     line: int
     kind: str = "function"
     pagerank: float = 0.0
+    exported: int = 0
+    built_at_sha: str = ""
 
 
 @dataclass
@@ -30,6 +32,8 @@ class Edge:
     source: str
     target: str
     kind: str
+    file_path: str = ""
+    line: int = 0
 
 
 @dataclass

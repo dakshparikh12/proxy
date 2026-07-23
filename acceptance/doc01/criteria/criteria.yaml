@@ -2961,3 +2961,37 @@
     type: multilang_find_references
     artifact: "tests/test_m9_langs.py::test_ac_lang_012"
   test_ids: [T-LANG-012]
+
+- criterion_id: AC-M4-014
+  name: "Persisted graph carries the §3.4 canonical schema (columns + 3 indexes + built_at_sha + exported + edge file:line) on REAL flask"
+  evidence_class: "[eval-realrepo]"
+  authority_refs: [R-DOC01-3.4-09]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      The pinned real flask clone (github.com/pallets/flask @ 36e4a824) built
+      THROUGH the product path via run_full_pipeline.
+    when: >
+      pipeline.graph_db_path is opened with sqlite3 and inspected.
+    then:
+      - graph_nodes has exactly columns (id, kind, file_path, line, exported, built_at_sha).
+      - graph_edges has exactly columns (source, target, kind, file_path, line).
+      - PRAGMA index_list shows graph_edges_target_idx, graph_edges_source_idx, graph_nodes_file_idx.
+      - SELECT DISTINCT built_at_sha == git rev-parse HEAD on the clone and is non-empty for all rows.
+      - a known exported flask symbol row (src/flask/app.py::Flask) has exported=1; not every node is exported.
+      - every graph_edges row has a non-empty file_path and line>0.
+  applicability:
+    fixtures: []
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "The persisted schema substrate is proven on a real repo through run_full_pipeline."
+  primary_oracle:
+    type: real_repo_persisted_schema
+    artifact: "tests/code_intel/test_schema_fields_doc01.py::test_ac_m4_014_schema_fields_on_real_flask"
+  thresholds:
+    missing_columns_allowed: 0
+    missing_indexes_allowed: 0
+    unstamped_node_rows_allowed: 0
+    edges_missing_site_allowed: 0
+  test_ids: [T-M4-014]
