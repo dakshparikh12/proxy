@@ -26,9 +26,25 @@ class BuildResult:
     table_map: dict[str, str] = field(default_factory=dict)  # table_name -> ClassName
 
 
+def _module_name(rel: str) -> str:
+    """Dotted module name for a source path relative to the build root.
+
+    Mirrors ``tools/derive_goldens.py``: ``__init__.py`` collapses to its package
+    (``flask/__init__.py`` → ``flask``; ``flask/app.py`` → ``flask.app``). The
+    build root should be the source root (e.g. a ``src/`` dir) so names are the
+    importable dotted paths, matching how imports reference them.
+    """
+    parts = list(Path(rel).with_suffix("").parts)
+    if parts and parts[-1] == "__init__":
+        parts = parts[:-1]
+    return ".".join(parts)
+
+
 class _DeclVisitor(ast.NodeVisitor):
     def __init__(self, rel: str) -> None:
         self.rel = rel
+        self.module = _module_name(rel)
+        self.is_init = Path(rel).name == "__init__.py"
         self.nodes: list[Node] = []
         self.edges: list[Edge] = []
         self.tables: dict[str, str] = {}
@@ -60,6 +76,32 @@ class _DeclVisitor(ast.NodeVisitor):
         if self._func_stack and isinstance(node.func, ast.Name):
             src = self._func_stack[-1]
             self.edges.append(Edge(source=src, target=node.func.id, kind="calls"))
+        self.generic_visit(node)
+
+    # -- import edges (spec §2.2/§3.4: `imports` edges + `module` nodes) ------- #
+    # Emit an `imports` edge from this module to every imported module name;
+    # _assemble keeps only the edges whose target is an in-repo module node
+    # (external stdlib/third-party imports have no node and drop out) — the same
+    # in-repo-only set tools/derive_goldens.py computes for the eval golden.
+    def visit_Import(self, node: ast.Import) -> None:  # noqa: N802
+        if self.module:
+            for a in node.names:
+                self.edges.append(Edge(source=self.module, target=a.name, kind="imports"))
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802
+        if not self.module:
+            self.generic_visit(node)
+            return
+        if node.level and node.module is not None:
+            # relative import: anchor on this module's package (derive_goldens semantics)
+            this_pkg = self.module.split(".")
+            keep = len(this_pkg) - node.level + (1 if self.is_init else 0)
+            anchor = this_pkg[: max(keep, 0)]
+            target = ".".join([*anchor, node.module])
+            self.edges.append(Edge(source=self.module, target=target, kind="imports"))
+        elif node.module and not node.level:
+            self.edges.append(Edge(source=self.module, target=node.module, kind="imports"))
         self.generic_visit(node)
 
 
@@ -158,7 +200,10 @@ def _parse_python(path: Path, rel: str) -> tuple[list[Node], list[Edge], dict[st
         return None
     visitor = _DeclVisitor(rel)
     visitor.visit(tree)
-    return visitor.nodes, visitor.edges, visitor.tables
+    nodes = visitor.nodes
+    if visitor.module:  # a `module` node so imports/blast-radius resolve to it
+        nodes = [Node(id=visitor.module, path=rel, line=1, kind="module"), *nodes]
+    return nodes, visitor.edges, visitor.tables
 
 
 def _assemble(nodes: list[Node], raw_edges: list[Edge]) -> Graph:

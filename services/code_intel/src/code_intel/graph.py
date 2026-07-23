@@ -86,7 +86,12 @@ class Graph:
             node.pagerank = float(pr.get(node.id, 0.0))
 
     def get_nodes_by_pagerank(self, limit: int | None = None) -> list[Node]:
-        ranked = sorted(self.nodes, key=lambda n: (-n.pagerank, n.id))
+        # The ranked OVERVIEW is key *symbols* (functions/classes/tables/routes),
+        # §3.4. `module` nodes exist for import blast-radius (get_dependents) but
+        # are the file granularity, not overview symbols, so they are excluded
+        # here (still fully queryable via graph traversal + resolve_symbol).
+        symbols = [n for n in self.nodes if n.kind != "module"]
+        ranked = sorted(symbols, key=lambda n: (-n.pagerank, n.id))
         return ranked[:limit] if limit is not None else ranked
 
     # -- traversal -------------------------------------------------------- #
