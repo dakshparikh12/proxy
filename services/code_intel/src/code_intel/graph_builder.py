@@ -150,6 +150,11 @@ class GraphBuilder:
                 continue
             rel = str(p.relative_to(clone_path))
             if is_excluded is not None and is_excluded(rel):
+                # Excluded files (secrets/noise, §3.3) are still ACCOUNTED for in the
+                # coverage record — flagged `excluded`, never silently dropped
+                # (§3.4 invariant: indexed + flagged == every tracked file, which is
+                # the readiness gate AC-M4-006/AC-M6-002).
+                rows.append(CoverageRow(rel, "flagged", "excluded"))
                 continue
             if p.suffix == ".py":
                 parsed = _parse_python(p, rel)

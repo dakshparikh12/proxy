@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
 
 logger = logging.getLogger("code_intel.repo_provider")
@@ -51,6 +52,21 @@ class RepoProvider:
             # git-host seam by value; it is never stored on ``self``.
             logger.info("code_intel op %s authorized (token redacted)", operation)
             return {"operation": operation, "authorized": True}
+        finally:
+            del token
+
+    def read_file(self, clone_root: Any, rel_path: str) -> bytes:
+        """Read ONE file's exact bytes from the pinned clone — the read path (§3.1).
+
+        Mints a per-operation token (authorization), then returns the RAW bytes
+        with NO normalization (line endings / encoding preserved), so the content
+        is byte-identical to what the git host holds at the pinned SHA (AC-M1-006).
+        The clone is Proxy's held copy fetched through this same seam, so a read is
+        the git-host read path — never a re-download that could re-encode.
+        """
+        token = self._mint_token()
+        try:
+            return (Path(clone_root) / rel_path).read_bytes()
         finally:
             del token
 
