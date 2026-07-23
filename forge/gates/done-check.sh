@@ -58,14 +58,17 @@ else echo FAIL; cat /tmp/forge_c1; C1=FAIL; FAIL=$((FAIL+1)); fi
 printf "[2] all-tasks-green (real execution) ... "
 if [ ! -f "$TASKS" ]; then echo "FAIL (no tasks.json)"; C2=FAIL; FAIL=$((FAIL+1)); else
   RED=$("$PYTHON" - "$TASKS" <<'PY'
-import json,sys,subprocess,re,os
+import json,sys,subprocess,re,os,shlex
 d=json.load(open(sys.argv[1])); red=[]
 run=os.environ.get("FORGE_RUN","uv run").split()
 for t in d["tasks"]:
     if not t.get("passes"): red.append(t["task_id"]+":unflipped"); continue
     cmd=(t.get("acceptance") or {}).get("cmd")
     if not cmd: red.append(t["task_id"]+":nocmd"); continue
-    r=subprocess.run(run+cmd.split()+["-p","no:cacheprovider","-p","no:testmon"],
+    # shlex.split (not str.split) so a quoted -k "sel" is one token WITHOUT the
+    # literal quotes — str.split keeps them, which pytest rejects as a bad -k
+    # expression (exit 4) and every task false-fails.
+    r=subprocess.run(run+shlex.split(cmd)+["-p","no:cacheprovider","-p","no:testmon"],
                      capture_output=True,text=True)
     if r.returncode==5: red.append(t["task_id"]+":no-tests")
     elif r.returncode!=0: red.append(t["task_id"]+f":rc{r.returncode}")
@@ -88,7 +91,10 @@ if [ "$C3" = PASS ]; then echo PASS; else echo FAIL; tail -6 /tmp/forge_c3; FAIL
 
 # ── C4 real-data eval >= baseline (N/A for zero-[eval] docs) ──────────────────
 printf "[4] real-data eval>=baseline ... "
-EVAL_CRIT=$(grep -cE "evidence_class:\s*['\"]?\[eval\]|eval:" "acceptance/${DOCID}/criteria/criteria.yaml" 2>/dev/null || echo 0)
+# grep -c already prints "0" on no-match (and exits 1); the old `|| echo 0`
+# appended a SECOND "0", yielding "0\n0" → the -eq test errored and fell
+# through to a false FAIL. Default only when the file is missing (grep exit 2).
+EVAL_CRIT=$(grep -cE "evidence_class:\s*['\"]?\[eval\]|eval:" "acceptance/${DOCID}/criteria/criteria.yaml" 2>/dev/null); EVAL_CRIT=${EVAL_CRIT:-0}
 if [ "$EVAL_CRIT" -eq 0 ]; then echo "N/A (no [eval] criteria in bundle)"; C4=NA
 elif [ ! -f "$BASELINE" ]; then echo "FAIL (no _baseline.json)"; C4=FAIL; FAIL=$((FAIL+1))
 elif $RUN --group eval pytest tests/eval -q -k "$ID" -p no:cacheprovider -p no:testmon >/tmp/forge_c4 2>&1; then
