@@ -23,8 +23,9 @@ Drop and rebuild the derived cache freely; never treat it as the record of truth
 ## Commands
 - `uv sync --all-packages` — install/refresh the whole workspace. **Never bare `uv sync`** (it prunes members' deps + the pinned tools); always follow with `uv pip install --python .venv/bin/python -r tools/linux-verify-requirements.txt`.
 - `uv run --package <name> pytest` — run one workspace member's tests/tools.
+- **`/forge <spec>`** — the packaged build loop (the `forge` plugin): understand → specify → plan → build → verify → DONE, for any spec. Accepts a doc-id (`/forge 00`) or a spec path (`/forge product/v0-spec/04-*.md`). **VERIFY mode** for already-built docs (00–03: confirm + fix, never rebuild); **BUILD mode** for new specs. This is the primary entry; `drive.sh`/`done-check.sh` below are the underlying engine forge orchestrates.
 - `./drive.sh <id>` — run the full v2 loop for spec `<id>` (e.g. `00`, `03`).
-- `./done-check.sh --spec <id>` — compute the DONE predicate (exit 0 = DONE).
+- `./done-check.sh --spec <id>` — compute the DONE predicate (exit 0 = DONE). (forge ships its own 5-conjunct `done-check` in `forge/gates/`.)
 - `alembic upgrade head` — apply the Postgres migrations to head.
 
 ## The build loop (doc-agnostic — every doc runs the SAME pipeline)

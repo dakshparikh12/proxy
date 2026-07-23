@@ -37,6 +37,21 @@ Check whether `acceptance/doc<NN>/` already exists and is **sealed**:
 
 State which mode you detected before proceeding.
 
+## Show your work (live progress — the founder is watching, for iteration)
+Keep the founder oriented at all times. Concretely:
+- **Maintain a live TODO list** (TodoWrite) — one item per phase, then per stream, then a running
+  task-batch counter. Mark items in_progress / completed as you go, so the founder sees the checklist move.
+- **Announce every phase transition** in one line: e.g. `▶ Phase ② SPECIFY (VERIFY mode, doc00)`.
+- **After the stream partition, print the streams** (module + task count each) so they see the shape.
+- **Report progress in batches**, not silently: e.g. `verified 40/157 tasks green · 1 red (T-AC-SUB-034) · 0 blocked`.
+  Show the actual test output for a task you just fixed (evidence, not assertion).
+- **Print every gate's result** — the `coverage.py` line and the full `done-check --spec` 5-conjunct table.
+- **Surface every founder gate immediately and stop** — show the exact decision (e.g. the SUB-034
+  sealed-test contradiction) with a recommendation, and wait. Never proceed past a founder gate silently.
+- **On any BLOCKED**, print `BLOCKED:<id>:<task> <reason>` and what you're doing next (continue other streams).
+- End with a clear **status line**: production-verified (with the done-check table), or the exact BLOCKED list.
+Prefer showing a small, real artifact (a diff, a test result, a table) over prose claims.
+
 ## The phases
 
 ## The phases (each names the skill / agent / gate that does it)
