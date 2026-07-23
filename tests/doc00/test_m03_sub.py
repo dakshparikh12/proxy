@@ -1240,7 +1240,7 @@ def test_sub_034_transcript_status_default_pending_flips_atomically():
     with S.pg_conn() as conn:
         seg = conn.execute(
             "INSERT INTO transcript_segments (meeting_id, text) "
-            "VALUES (NULL, 'hi') RETURNING id, status"
+            "VALUES (gen_random_uuid(), 'hi') RETURNING id, status"
         ).fetchone()
         assert seg[1] == "pending", f"fresh segment must be 'pending'; got {seg[1]!r}"
         seg_id = seg[0]

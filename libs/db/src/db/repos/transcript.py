@@ -6,24 +6,43 @@ comprehension).
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 
 async def flip_and_append(conn: Any, segment_id: Any, delta: str) -> None:
-    """Flip status→'comprehended' and append the note delta (one statement).
+    """Flip status→'comprehended' AND append the note delta to ``note_deltas`` — one tx.
 
-    Caller wraps this in a transaction; if a later step in that transaction
-    fails, both effects roll back together.
+    Per §3.3/§3.1 the comprehension flip is transactional with the **note_deltas
+    append**, NOT a write to ``transcript_segments``: that table has no ``note``
+    column (the early 0001 ``note`` column was dropped when migration 0004
+    reconciled the table to the sealed §3.3 schema). The caller wraps this in a
+    transaction; a failure rolls BOTH the append and the flip back together, so a
+    segment is never left half-comprehended.
+
+    ``entry_id``/``op`` are this seam's minimal faithful values for a fresh add
+    (a segment-keyed 'add'); the rich fold path (``scribe.pipeline``) supplies the
+    real entry identity via ``repos.notes.append_delta`` directly.
     """
+    meeting_id = await conn.fetchval(
+        "SELECT meeting_id FROM transcript_segments WHERE id = $1", segment_id
+    )
+    # Append the delta to the append-only ledger (§3.3); ON CONFLICT DO NOTHING
+    # keeps a stray re-append a silent no-op (replay idempotency, §3.3).
     await conn.execute(
         """
-        UPDATE transcript_segments
-           SET status = 'comprehended',
-               note = COALESCE(note, '') || $2
-         WHERE id = $1
+        INSERT INTO note_deltas (meeting_id, entry_id, op, payload, window_start_s)
+        VALUES ($1, $2, 'add', $3::jsonb, NULL)
+        ON CONFLICT (meeting_id, window_start_s, entry_id, op) DO NOTHING
         """,
+        meeting_id,
+        f"seg-{segment_id}",
+        json.dumps({"delta": delta}),
+    )
+    # Flip comprehension in the SAME transaction (§3.1 coupling).
+    await conn.execute(
+        "UPDATE transcript_segments SET status = 'comprehended' WHERE id = $1",
         segment_id,
-        delta,
     )
 
 

@@ -89,6 +89,22 @@ def decompose(doc_id: str) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "tasks.json"
 
+    # Preserve verified progress: re-decomposing must NOT wipe passes:true flags for
+    # tasks that still exist (same task_id). Without this, any run of the acceptance
+    # suite (which invokes decompose) resets the ledger and the DONE predicate can
+    # never latch. New/renamed tasks default to passes:false.
+    if out_path.exists():
+        try:
+            prev = json.loads(out_path.read_text())
+            passed = {
+                t["task_id"] for t in prev.get("tasks", []) if t.get("passes") is True
+            }
+        except (json.JSONDecodeError, KeyError, OSError):
+            passed = set()
+        for t in tasks:
+            if t["task_id"] in passed:
+                t["passes"] = True
+
     # [B5] docs 00-03 have their services/libs code built; mode = "verify"
     # An unbuilt doc would use mode = "build"
     payload = {

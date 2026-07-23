@@ -21,7 +21,10 @@ SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("unredacted x-api-key header", re.compile(r"(?i)x-api-key:\s*(?!REDACTED)\S{12,}")),
     ("openai-style key", re.compile(r"sk-[A-Za-z0-9]{20,}")),
     ("recall key prefix", re.compile(r"(?i)recall[_-]?(sk|key)[_-][A-Za-z0-9]{16,}")),
-    ("assemblyai hex key", re.compile(r"\b[a-f0-9]{32}\b")),
+    # A bare 32-hex is an AssemblyAI key ONLY when standalone; a W3C
+    # traceparent/traceresponse trace-id is also 32-hex but is always followed
+    # by "-<16hex>" (the span-id), so exclude that shape (not a secret).
+    ("assemblyai hex key", re.compile(r"\b[a-f0-9]{32}\b(?!-[a-f0-9]{16})")),
     ("long high-entropy token in api_key= param", re.compile(r"(?i)api_key=(?!REDACTED)[A-Za-z0-9_\-]{20,}")),
 ]
 

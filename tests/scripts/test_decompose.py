@@ -7,16 +7,27 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 
-def _run_decompose(doc_id: str) -> None:
-    """Run decompose programmatically via its main() function."""
+def _run_decompose(doc_id: str, out_dir) -> None:
+    """Run decompose into an ISOLATED out_dir (never the live slices ledger).
+
+    Redirecting only the output path keeps this unit test hermetic: it reads the
+    real bundle but must not mutate slices/<id>/tasks.json, which would wipe the
+    verified passes:true flags the DONE predicate depends on.
+    """
     import decompose  # noqa: PLC0415
-    decompose.decompose(doc_id)
+    _orig = decompose.slice_dir
+    decompose.slice_dir = lambda _id: out_dir  # type: ignore[assignment]
+    try:
+        decompose.decompose(doc_id)
+    finally:
+        decompose.slice_dir = _orig  # type: ignore[assignment]
 
 
-def test_decompose_doc00() -> None:
-    _run_decompose("00")
+def test_decompose_doc00(tmp_path) -> None:
+    out_dir = tmp_path / "slices" / "00"
+    _run_decompose("00", out_dir)
 
-    out = ROOT / "slices" / "00" / "tasks.json"
+    out = out_dir / "tasks.json"
     assert out.exists(), f"tasks.json not written at {out}"
 
     data = json.loads(out.read_text())
