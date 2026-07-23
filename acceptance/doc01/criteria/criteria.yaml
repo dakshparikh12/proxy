@@ -2946,3 +2946,18 @@
     type: real_repo_edge_soundness
     artifact: "tests/eval/test_e2e_estates.py::test_ac_lang_011"
   test_ids: [T-LANG-011]
+
+- criterion_id: AC-LANG-012
+  name: "find_references resolves a non-Python symbol via the multi-language warm resolver"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-2.2-LANG]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a repo with a symbol defined in a non-Python language (Go)"
+    when: "find_references is called with the multi-language warm resolver injected"
+    then: ["the result is 'resolved' (not a Python-only lower-bound fallback)"]
+  primary_oracle:
+    type: multilang_find_references
+    artifact: "tests/test_m9_langs.py::test_ac_lang_012"
+  test_ids: [T-LANG-012]

@@ -41,3 +41,47 @@ class PythonSymbolResolver:
 
     def restart(self) -> None:  # seam parity with a restartable language server
         pass
+
+
+class MultiLangResolver:
+    """A warm host-side resolver spanning EVERY supported grammar, not Python alone.
+
+    Pre-indexes definition sites across the clone — Python via ``ast``, every other
+    supported language via the tree-sitter tag extractor (:mod:`langs`) — so
+    ``find_references`` returns a warm ``resolved`` result for a symbol defined in
+    any language, not just Python. Same ``references`` / ``restart`` seam as the
+    injected language server. (Type-aware, cross-file *exact* resolution — the full
+    Serena/solid-lsp instrument — still layers on top; this is the mechanical index.)
+    """
+
+    def __init__(self, clone_root: str | pathlib.Path) -> None:
+        from . import langs
+
+        self._defs: dict[str, list[tuple[str, int]]] = {}
+        root = pathlib.Path(clone_root)
+        for path in root.rglob("*"):
+            if not path.is_file() or ".git" in path.parts:
+                continue
+            rel = str(path.relative_to(root))
+            suffix = path.suffix.lower()
+            if suffix == ".py":
+                try:
+                    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+                except SyntaxError:
+                    continue
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                        self._defs.setdefault(node.name, []).append((rel, node.lineno))
+            elif langs.supported(suffix):
+                extracted = langs.extract(rel, path.read_bytes(), langs.LANG_BY_SUFFIX[suffix])
+                if extracted is None:
+                    continue
+                for tag in extracted[0]:
+                    if tag.kind != "module":
+                        self._defs.setdefault(tag.id.split("::")[-1], []).append((tag.path, tag.line))
+
+    def references(self, symbol: str) -> list[tuple[str, int]]:
+        return self._defs.get(symbol, [])
+
+    def restart(self) -> None:
+        pass

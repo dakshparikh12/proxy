@@ -94,3 +94,23 @@ def test_ac_lang_010_supported_languages_span_the_major_grammars() -> None:
     assert expected <= set(langs._PATTERNS)
     for lang in expected:
         assert langs._compiled(lang), f"{lang}: no query compiled"
+
+
+def test_ac_lang_012_find_references_resolves_non_python_symbol(tmp_path: pathlib.Path) -> None:
+    """AC-LANG-012: with the multi-language warm resolver, find_references returns a
+    'resolved' result for a symbol defined in a non-Python language (Go), not just
+    Python — the precision instrument is no longer Python-only."""
+    from services.code_intel.mcp_server import CodeIntelMCPServer
+    from services.code_intel.warm_resolver import MultiLangResolver
+
+    (tmp_path / "pay.go").write_text("package p\nfunc Charge(){}\nfunc Checkout(){ Charge() }\n")
+    resolver = MultiLangResolver(tmp_path)  # warmed across all grammars
+    # sanity: the resolver actually indexed the Go definition
+    assert resolver.references("Charge"), "multi-lang resolver did not index the Go symbol"
+
+    server = CodeIntelMCPServer(graph=None, clone_path=tmp_path, lsp=resolver)
+    result = server.find_references("Charge")
+    assert result.status == "ok", "find_references found no references to the Go symbol"
+    assert all(i.confidence == "resolved" for i in result.results), (
+        "non-Python symbol not served 'resolved' by the multi-language warm resolver"
+    )
