@@ -3,7 +3,13 @@ name = "code_intel"
 version = "0.0.0"
 description = "services.code_intel — per-tenant clone/index/graph host."
 requires-python = ">=3.12"
-dependencies = ["contracts", "pydantic>=2", "cryptography>=42"]
+dependencies = [
+    "contracts",
+    "pydantic>=2",
+    "cryptography>=42",
+    "tree-sitter==0.25.2",
+    "tree-sitter-language-pack==0.13.0",
+]
 
 [tool.uv.sources]
 contracts = { workspace = true }

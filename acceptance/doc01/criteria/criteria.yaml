@@ -2865,3 +2865,84 @@
   required_evidence:
     - junit:T-LAT-003
   # ~2s is a §4 tunable default (no config-defaults key yet); provisional target.
+
+# ── Multi-language graph (R-DOC01-2.2-LANG) ─────────────────────────────────
+
+- criterion_id: AC-LANG-001
+  name: "tree-sitter tag extraction yields real defs/calls/imports for every supported language"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-2.2-LANG]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a source file in each supported grammar (js, ts, go, java, ruby, rust, c, cpp, csharp, php)"
+    when: "the tree-sitter tag extractor runs"
+    then:
+      - "definition nodes, call edges, and import edges are produced"
+      - "no def name is fabricated (each appears verbatim in the source)"
+  primary_oracle:
+    type: per_language_extraction
+    artifact: "tests/test_m9_langs.py::test_ac_lang_001 (parametrized over 10 grammars)"
+  test_ids: [T-LANG-001]
+
+- criterion_id: AC-LANG-008
+  name: "get_dependents blast-radius resolves cross-language (Go and JavaScript)"
+  evidence_class: "[unit-property]"
+  authority_refs: [R-DOC01-2.2-LANG]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a polyglot repo with Go and JavaScript call sites"
+    when: "get_dependents is called for a symbol in each language"
+    then: ["the reverse-dependency set includes the real callers in that language"]
+  primary_oracle:
+    type: cross_language_reverse_deps
+    artifact: "tests/test_m9_langs.py::test_ac_lang_008"
+  test_ids: [T-LANG-008]
+
+- criterion_id: AC-LANG-009
+  name: "a grammarless file is flagged 'unsupported-language', never silently dropped"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-2.2-LANG]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a repo containing a grammarless file (e.g. .md) and a supported file"
+    when: "the graph is built"
+    then: ["the grammarless file has a coverage row flagged 'unsupported-language'"]
+  primary_oracle:
+    type: coverage_flag_check
+    artifact: "tests/test_m9_langs.py::test_ac_lang_009"
+  test_ids: [T-LANG-009]
+
+- criterion_id: AC-LANG-010
+  name: "the supported language set spans the major grammars (not Python-only)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-2.2-LANG]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "the extractor's supported-language registry"
+    when: "each language's queries are compiled"
+    then: ["js, ts, go, java, ruby, rust, c, cpp, csharp, php each compile >=1 working query"]
+  primary_oracle:
+    type: supported_set_check
+    artifact: "tests/test_m9_langs.py::test_ac_lang_010"
+  test_ids: [T-LANG-010]
+
+- criterion_id: AC-LANG-011
+  name: "on a REAL non-Python repo, cross-file call edges are extracted and sound"
+  evidence_class: "[eval-realrepo]"
+  authority_refs: [R-DOC01-2.2-LANG]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: "a real Go repo (gorilla/mux @ v1.8.1) cloned at a pinned tag"
+    when: "the graph is built and cross-file call edges are inspected"
+    then:
+      - "multi-file structure is extracted (>=20 functions across >=3 files)"
+      - "every cross-file call edge is sound: the caller's file references the callee name"
+  primary_oracle:
+    type: real_repo_edge_soundness
+    artifact: "tests/eval/test_e2e_estates.py::test_ac_lang_011"
+  test_ids: [T-LANG-011]

@@ -873,3 +873,21 @@
   status: qualified
   # NOTE: dispositions.yaml D-INV-05 marked "no separate criterion needed"; doc01-sweep flags this as a real
   # gap because the built_at_sha node column exists solely to power this re-read behavior, which was untested.
+
+# ── Multi-language graph (§1 "any language", §2.2 tree-sitter tags) ──────────
+
+- requirement_id: R-DOC01-2.2-LANG
+  authority_type: specification
+  authority_document: DOC-01
+  source_location: "§1 end-goal; §2.2 the dependency/call graph"
+  source_quote: "find anything in the company's repository ... for any repo at any scale ... built mechanically from the LSP call graph + tree-sitter imports, using each language's tag queries."
+  normalized_statement: >
+    THE SYSTEM SHALL build the dependency graph (definition nodes + calls/imports
+    edges) mechanically via tree-sitter tag extraction for EVERY supported language
+    — not Python alone — so blast-radius (get_dependents) resolves across languages;
+    AND a grammarless file SHALL be flagged 'unsupported-language' (still searchable),
+    never silently absent.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified

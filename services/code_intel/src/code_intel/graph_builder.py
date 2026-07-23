@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from . import langs
 from .coverage import CoverageRow
 from .graph import Edge, Graph, Node
 
@@ -166,7 +167,19 @@ class GraphBuilder:
                 raw_edges.extend(fedges)
                 table_map.update(ftables)
                 rows.append(CoverageRow(rel, "indexed"))
+            elif langs.supported(p.suffix):
+                # Every other supported grammar → tree-sitter tag extraction (§2.2):
+                # the graph is multi-language, not Python-only.
+                extracted = langs.extract(rel, p.read_bytes(), langs.LANG_BY_SUFFIX[p.suffix.lower()])
+                if extracted is None:
+                    rows.append(CoverageRow(rel, "flagged", "parse-error"))
+                    continue
+                enodes, eedges = extracted
+                nodes.extend(enodes)
+                raw_edges.extend(eedges)
+                rows.append(CoverageRow(rel, "indexed"))
             else:
+                # Grammarless languages: flagged but ripgrep-searchable (§3.4).
                 rows.append(CoverageRow(rel, "flagged", "unsupported-language"))
 
         graph = _assemble(nodes, raw_edges)

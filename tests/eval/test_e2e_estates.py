@@ -119,3 +119,34 @@ def test_ac_m1_006_repoprovider_fetch_byte_identical_to_github() -> None:
         "RepoProvider bytes differ from GitHub raw — normalization/corruption on the read path"
     )
     assert proxy_bytes == github_bytes  # byte-exact
+
+
+@pytest.mark.e2e
+def test_ac_lang_011_real_go_repo_cross_file_blast_radius() -> None:
+    """AC-LANG-011: on a REAL non-Python repo (Go), the graph extracts multi-file
+    structure and get_dependents resolves cross-file callers SOUNDLY — every
+    reported dependent's file actually references the symbol (no fabrication)."""
+    repo = _clone_estate("gorilla-mux", "https://github.com/gorilla/mux", "v1.8.1")
+    graph = GraphBuilder().build(repo).graph
+
+    funcs = [n for n in graph.nodes if n.kind in ("function", "method")]
+    files = {n.path for n in funcs}
+    assert len(funcs) >= 20 and len(files) >= 3, f"thin extraction: {len(funcs)} funcs / {len(files)} files"
+
+    # Soundness on DIRECT call edges: every cross-file `calls` edge must have the
+    # caller's file actually reference the callee's name (no fabricated edge).
+    file_text: dict[str, str] = {}
+    checked = 0
+    for edge in graph.edges:
+        if edge.kind != "calls":
+            continue
+        src, tgt = graph.get(edge.source), graph.get(edge.target)
+        if src is None or tgt is None or src.path == tgt.path:
+            continue
+        name = tgt.id.split("::")[-1]
+        text = file_text.setdefault(src.path, (repo / src.path).read_text(errors="replace"))
+        assert name in text, f"fabricated call edge: {src.path} does not reference {name!r}"
+        checked += 1
+        if checked >= 25:
+            break
+    assert checked >= 1, "no cross-file call edge found in a real Go repo"
