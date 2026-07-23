@@ -1,0 +1,24 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "forge-marketplace",
+  "description": "Local marketplace for the forge spec-to-production build-loop plugin.",
+  "owner": {
+    "name": "Daksh Parikh"
+  },
+  "plugins": [
+    {
+      "name": "forge",
+      "description": "Spec to production-verified code build loop.",
+      "source": "./",
+      "category": "development",
+      "version": "0.1.0",
+      "license": "MIT",
+      "keywords": [
+        "spec-driven-development",
+        "tdd",
+        "verification",
+        "build-loop"
+      ]
+    }
+  ]
+}
