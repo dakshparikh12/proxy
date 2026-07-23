@@ -1,11 +1,19 @@
 ---
-description: Run the forge build loop on a spec/doc — understand → specify → plan → build → verify → DONE.
-argument-hint: <doc-id or spec-path>
+description: Run the forge build loop on any spec — understand → specify → plan → build → verify → DONE.
+argument-hint: <spec-path | doc-id>
 ---
 
 # /forge — spec → production-verified code
 
 You are driving the **forge** build loop for the target: **$ARGUMENTS**.
+
+## Resolve the target (accepts a spec PATH or a doc-id — works for any spec)
+- **A path to a spec file** (e.g. `product/v0-spec/04-*.md`, or any `path/to/spec.md` in any repo):
+  that file is the spec. Derive a short `<id>` from its name; the bundle lives at
+  `acceptance/<id>/` (create it in BUILD mode, or find the existing sealed one).
+- **A bare doc-id** (e.g. `00`, `03`) — this repo's convention: spec = `product/v0-spec/<NN>-*.md`,
+  bundle = `acceptance/doc<NN>/`, slice = `slices/<NN>/`.
+If the argument is ambiguous, state your resolution (spec file + bundle dir + id) before proceeding.
 
 Read `${CLAUDE_PLUGIN_ROOT}/README.md` and the skill `forge:forge-loop` first. **You provide the
 judgment; the gates provide the boolean; the hooks provide the physics.** Never fake DONE; never
