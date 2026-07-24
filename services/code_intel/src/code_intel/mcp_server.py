@@ -285,6 +285,10 @@ class CodeIntelMCPServer:
                 conc.exit()
 
     def _read_body(self, path_str: str, max_lines: int | None) -> BatchFile:
+        # Never-throw boundary (§14): a non-string path entry (e.g. None) returns a
+        # per-file error instead of raising TypeError inside Path(...).
+        if not isinstance(path_str, str):
+            return BatchFile(path=str(path_str), content=None, error="invalid path")
         clone = self.clone_path
         if clone is None:
             return BatchFile(path=path_str, content=None, error="no clone")
@@ -308,6 +312,10 @@ class CodeIntelMCPServer:
 
     def find_references(self, symbol: str) -> FindReferencesResult:
         self._db_query()
+        # Never-throw boundary (§14): a non-string / empty symbol abstains cleanly
+        # rather than reaching ripgrep with a NoneType argv (which raises TypeError).
+        if not isinstance(symbol, str) or not symbol.strip():
+            return FindReferencesResult(results=[], status="not-found")
         refs = self._grep_refs(symbol)
         label, needs_restart = self._probe_lsp(symbol)
         if needs_restart and self._lsp is not None and hasattr(self._lsp, "restart"):

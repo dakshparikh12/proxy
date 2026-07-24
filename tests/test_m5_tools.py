@@ -524,3 +524,29 @@ def test_ac_m5_005sa_sqlalchemy_reads_not_reported_as_writers():
     assert "app/readonly.py::list_accounts" not in ids, (
         "A read-only query.all() must never be reported as a writer"
     )
+
+
+def test_ac_m5_013_tool_handlers_never_throw_on_malformed_input(tmp_path):
+    """AC-M5-013 (never-throw boundary, §14): find_references and batch_read return a
+    typed result on malformed input (None / non-str), never raise. Regression for the
+    two throws the $0 simulation harness surfaced (rg got a NoneType argv;
+    Path(None) raised TypeError). Driven through the REAL CodeIntelMCPServer."""
+    from services.code_intel.graph_builder import GraphBuilder
+    from services.code_intel.mcp_server import CodeIntelMCPServer
+
+    (tmp_path / "m.py").write_text("def helper():\n    return 1\n")
+    graph = GraphBuilder().build(tmp_path).graph
+    server = CodeIntelMCPServer(graph=graph, clone_path=tmp_path, lsp=None)
+
+    # find_references: None / empty / whitespace abstain, never throw.
+    for bad in (None, "", "   "):
+        res = server.find_references(bad)  # type: ignore[arg-type]
+        assert res.status == "not-found"
+        assert res.results == []
+
+    # batch_read: a None path entry yields a per-file error, never a TypeError.
+    res = server.batch_read([None, "m.py"])  # type: ignore[list-item]
+    errs = [f for f in res.files if f.error is not None]
+    oks = [f for f in res.files if f.error is None]
+    assert any(f.error == "invalid path" for f in errs), "None path must yield an error entry"
+    assert any("helper" in (f.content or "") for f in oks), "valid path in same batch still read"
