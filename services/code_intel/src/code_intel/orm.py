@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import fnmatch
+import re
 from pathlib import Path
 
 from .gitio import run_git
@@ -16,6 +17,7 @@ from .results import ModuleRef, OwnerResult, Writer
 
 _WRITE_METHODS = {"create", "save", "delete", "update", "bulk_create", "get_or_create", "update_or_create", "insert"}
 _READ_METHODS = {"all", "filter", "get", "first", "last", "count", "exists"}
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def _py_files(clone_path: Path) -> list[Path]:
@@ -87,15 +89,43 @@ def _models_in_file(tree: ast.Module) -> set[str]:
     return models
 
 
-def _write_calls(func: ast.AST) -> list[tuple[str, str | None]]:
-    """Return (write-method, table-string-literal-or-None) inside ``func``."""
-    hits: list[tuple[str, str | None]] = []
+def _write_calls(func: ast.AST) -> list[tuple[str, str | None, str]]:
+    """Return ``(write-method, table-string-literal-or-None, receiver-text)`` for every
+    write-method call inside ``func``.
+
+    ``receiver-text`` is the un-parsed source of the write call's receiver chain plus its
+    arguments — the textual context a Tier-3 (search-only) match must associate with the
+    queried table name before it may claim the function writes that table. Without this the
+    fallback returned *every* function containing *any* write-method call (incl. ``dict.update``)
+    as a writer of the queried table, fabricating a blast-radius for tables that don't exist
+    (Law 2 — a confident-wrong answer softened by a ``lower-bound`` label is still forbidden).
+    """
+    hits: list[tuple[str, str | None, str]] = []
     for node in ast.walk(func):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             attr = node.func.attr
             if attr in _WRITE_METHODS:
-                hits.append((attr, _table_literal(node)))
+                hits.append((attr, _table_literal(node), _receiver_text(node)))
     return hits
+
+
+def _receiver_text(call: ast.Call) -> str:
+    """The receiver expression the write method is called on, plus the call's own args, as
+    source text — e.g. for ``db['orders'].insert(total=t)`` -> ``db['orders']`` (+ its args).
+    This is the textual scope a table name must appear in to be a real Tier-3 lead."""
+    parts: list[str] = []
+    try:
+        if isinstance(call.func, ast.Attribute):
+            parts.append(ast.unparse(call.func.value))
+        for arg in call.args:
+            parts.append(ast.unparse(arg))
+        for kw in call.keywords:
+            if kw.arg is not None:
+                parts.append(kw.arg)
+            parts.append(ast.unparse(kw.value))
+    except Exception:  # pragma: no cover - unparse is total on valid AST
+        return ""
+    return " ".join(parts)
 
 
 def _table_literal(call: ast.Call) -> str | None:
@@ -123,8 +153,8 @@ def who_writes(clone_path: Path, table: str) -> list[Writer]:
             continue
         file_models = _models_in_file(tree)
         for func in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
-            for method, table_lit in _write_calls(func):
-                if _write_targets_table(method, table_lit, table, model, file_models):
+            for method, table_lit, receiver in _write_calls(func):
+                if _write_targets_table(method, table_lit, table, model, file_models, receiver):
                     writers.append(
                         Writer(
                             id=f"{rel}::{func.name}",
@@ -143,13 +173,33 @@ def _write_targets_table(
     table: str,
     model: str | None,
     file_models: set[str],
+    receiver: str,
 ) -> bool:
+    # Tier-1/2: an explicit table literal (``db.table('orders').insert``) is an exact match.
     if table_lit is not None:
         return table_lit == table
+    # Tier-1 (Django): a model whose db_table/class-name resolved to the queried table and is
+    # in scope in this file — the ``.objects`` write is that model's, i.e. that table's.
     if model is not None and model in file_models:
         return True
-    # non-tier-1 / untyped write against a matching table name in scope
-    return model is None and bool(file_models) is False
+    # Tier-3 (search-only, non-tier-1): only a real textual lead counts. The queried table
+    # name must actually appear in the write call's receiver/args — never 'every function
+    # with any write method'. If the name is nowhere near the write, this is NOT a writer of
+    # that table (return not-found rather than a fabricated, label-softened blast-radius).
+    return _name_associates(table, receiver)
+
+
+def _name_associates(table: str, receiver: str) -> bool:
+    """True iff the queried table name is textually tied to the write call — as a whole
+    identifier token in the receiver chain / arguments (e.g. ``orders_table.save()``,
+    ``db['orders'].insert(...)``, ``session.query(Orders)``). Substring-only matches
+    (``order`` in ``reorder``) do not count."""
+    if not table or not receiver:
+        return False
+    candidates = {table, table.lower(), table.rstrip("s"), table.lower().rstrip("s")}
+    tokens = set(_IDENT_RE.findall(receiver))
+    tokens |= {t.lower() for t in tokens}
+    return bool(candidates & tokens)
 
 
 def shares_table(clone_path: Path, table: str) -> list[ModuleRef]:

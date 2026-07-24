@@ -1108,6 +1108,40 @@
   required_evidence:
     - junit:T-M5-008
 
+- criterion_id: AC-M5-006c
+  name: "who_writes for a nonexistent table on a real non-Django Python repo returns 0 writers"
+  evidence_class: "[e2e-real-repo]"
+  authority_refs: [R-DOC01-3.5-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A REAL non-Django Python repo (flask @36e4a824) with no ORM models and no 'users' table,
+      driven through the real product entrypoint CodeIntelMCPServer.who_writes on the real clone.
+    when: >
+      who_writes('users') and who_writes('totally_nonexistent_xyz') are called.
+    then:
+      - Zero writers are returned for each (status 'not-found').
+      - The Tier-3 search-only fallback never returns 'every function that calls any write
+        method' — a writer is surfaced only when the queried table name is textually tied to
+        the write call's receiver/args (a real grep-derived lead), never a fabricated,
+        lower-bound-softened blast-radius for a table that does not exist (Law 2).
+  applicability:
+    fixtures: []
+    estates: [flask]
+    excluded_estates: []
+    rationale: "Confident-wrong softened by a label is still forbidden; the fabricated blast-radius on non-Django Python was the exact Law-2 failure the spec bans."
+  primary_oracle:
+    type: cardinality_check
+    artifact: "server.who_writes('totally_nonexistent_xyz').writers == [] and server.who_writes('users').writers == []"
+  thresholds:
+    writers_for_nonexistent_table_allowed: 0
+  test_ids: [T-M5-006c]
+  fault_model_refs: [F-WHO-WRITES-FABRICATES-NON-DJANGO-PY]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-006c
+
 - criterion_id: AC-M5-007
   name: "shares_table returns independent modules co-accessing table with correct confidence tier"
   evidence_class: "[unit-example]"

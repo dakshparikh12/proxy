@@ -150,3 +150,36 @@ def test_ac_lang_011_real_go_repo_cross_file_blast_radius() -> None:
         if checked >= 25:
             break
     assert checked >= 1, "no cross-file call edge found in a real Go repo"
+
+
+@pytest.mark.e2e
+def test_ac_m5_006c_who_writes_nonexistent_table_on_real_non_django_repo() -> None:
+    """AC-M5-006c (regression, WHO-WRITES-FABRICATES-NON-DJANGO-PY): on a REAL non-Django
+    Python repo (flask), ``who_writes`` for a table that DOES NOT EXIST must return ZERO
+    writers — never 'every function that calls any write-method'. The search-only Tier-3
+    fallback previously returned all functions containing any .create/.save/.update/... call
+    (incl. dict.update()) for ANY table name, fabricating a write-path blast-radius for a
+    table that isn't there (Law 2: confident-wrong softened by a label is still forbidden).
+
+    Driven through the REAL product entrypoint: CodeIntelMCPServer.who_writes on the real clone.
+    """
+    from services.code_intel.mcp_server import CodeIntelMCPServer
+
+    repo = _clone_estate("flask", "https://github.com/pallets/flask", _FLASK_SHA)
+    graph = GraphBuilder().build(repo / "src").graph
+    server = CodeIntelMCPServer(graph=graph, clone_path=repo, lsp=None)
+
+    # flask has no 'users' table and no ORM models at all.
+    users = server.who_writes("users")
+    assert users.writers == [], (
+        f"who_writes('users') on flask fabricated {len(users.writers)} writers "
+        f"(e.g. {[w.id for w in users.writers[:3]]}); flask has no 'users' table"
+    )
+
+    # A guaranteed-nonexistent table name: must be empty AND must not equal the 'users' set
+    # (the old bug returned the SAME all-functions set regardless of the queried name).
+    ghost = server.who_writes("totally_nonexistent_xyz")
+    assert ghost.writers == [], (
+        f"who_writes('totally_nonexistent_xyz') fabricated {len(ghost.writers)} writers"
+    )
+    assert ghost.status == "not-found", f"expected status 'not-found', got {ghost.status!r}"
