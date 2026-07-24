@@ -67,7 +67,13 @@ norecursedirs = ["harness", ".venv", "node_modules", "fixtures"]
 # doc00 and doc01 each ship a `test_w_workflows.py` / `conftest.py` (no package
 # __init__.py); the default prepend import mode collides on the shared basenames.
 # importlib mode imports each by full path — no sys.path games, no collision.
-addopts = "--import-mode=importlib"
+# -p no:testmon: agents kept running `pytest --testmon -m "not reality..."` (the full
+# offline suite) during audits; testmon's cold-start turns the 2.5min suite into ~19min
+# and FROZE the build loop (3x). Prompt + hook fixes did not hold (subagents run in
+# bypassPermissions and skip plugin hooks). Disabling testmon globally caps ANY full-suite
+# run at ~2.5min — environment-level, works regardless of agent behaviour. The gate already
+# sets -p no:testmon; nothing legitimately uses testmon.
+addopts = "--import-mode=importlib -p no:testmon"
 # Verification-ladder tiers (GENERATOR.md §8.4). `reality`/`negative`/`e2e` are the
 # cassette-backed tiers driven through the real call_external seam via vcrpy; the
 # ladder-runner selects tests by these markers. `vcr` is registered by pytest-recording.
