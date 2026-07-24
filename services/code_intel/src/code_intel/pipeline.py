@@ -196,7 +196,12 @@ def run_full_pipeline(
     pipeline.coverage_record = coverage
 
     store = GraphStore(pipeline.graph_db_path, db_tracer=db_tracer, db_operation_counter=db_operation_counter)
-    store.write_graph(build.graph, drop_first=False)
+    # drop_first=True even on the INITIAL write (defense-in-depth, G6): graph_edges
+    # uses a plain INSERT, so a stale graph.db surviving at repo_dir/graph.db would
+    # accumulate duplicate edges + orphan nodes. The clean DB must be *guaranteed*
+    # by the write itself — never merely a side effect of Cloner.clone()'s rmtree —
+    # matching the drop-before-insert rebuild invariant (AC-M4-009).
+    store.write_graph(build.graph, drop_first=True)
     pipeline._store = store
     _touch_coverage_db(pipeline.coverage_db_path, db_tracer)
 
