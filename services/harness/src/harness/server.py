@@ -268,9 +268,12 @@ def _build_close_config(db: Any) -> Any | None:
         return None
 
     def _bucket() -> Any:
-        from google.cloud import storage  # lazy: GCS SDK only when a real close runs
+        # Route through the ONE libs.http seam — the sole legitimate home for the
+        # raw GCS client construction (§14: no raw external client in services/).
+        # The SDK is imported lazily inside the accessor so boot stays offline.
+        from libs.http.src.http.external import gcs_bucket
 
-        return storage.Client().bucket(bucket_name)
+        return gcs_bucket(bucket_name)
 
     class _LazyBucket:
         """Defers GCS client construction to first blob access (boot stays offline)."""

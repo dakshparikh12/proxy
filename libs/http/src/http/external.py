@@ -89,3 +89,18 @@ def anthropic_client(**kwargs: Any) -> AsyncAnthropic:
 def http_client(**kwargs: Any) -> httpx.AsyncClient:
     """The ONLY construction of a raw httpx client in the product."""
     return httpx.AsyncClient(**kwargs)
+
+
+def gcs_bucket(bucket_name: str) -> Any:
+    """The ONLY construction of the raw GCS storage client in the product.
+
+    Returns the ``google.cloud.storage`` bucket handle for ``bucket_name``. The
+    SDK is imported lazily HERE (never at import/boot time) so a host that only
+    needs the ``call_external`` seam does not drag in the GCS package, and boot
+    stays offline — no client is constructed until a real close pass asks for a
+    bucket. This is the sole legitimate home for the raw ``storage.Client``
+    construction; no product module outside ``libs/http`` may hold it.
+    """
+    from google.cloud import storage  # lazy: GCS SDK only when a real bucket is needed
+
+    return storage.Client().bucket(bucket_name)
