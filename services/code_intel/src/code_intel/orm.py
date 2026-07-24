@@ -703,45 +703,109 @@ def _name_associates(table: str, receiver: str) -> bool:
 # --------------------------------------------------------------------------- #
 # shares_table                                                                 #
 # --------------------------------------------------------------------------- #
-def shares_table(clone_path: Path, table: str) -> list[ModuleRef]:
+def _django_func_reads_table(func: ast.AST, model: str, table: str, file_models: set[str]) -> bool:
+    """True iff ``func`` performs a Django ORM READ whose target model is ``model``.
+
+    A read is ``Model.objects.<read>`` / ``Model.objects.filter(...).first()`` etc. (the
+    model is the ROOT of the read's receiver chain), so it is attributed to the RIGHT
+    model — never every read in a file for every imported model (the same disjoint-target
+    discipline ``_django_func_writes_table`` enforces for writes, Law 2)."""
+    if model not in file_models:
+        return False
+    for node in ast.walk(func):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr not in _READ_METHODS:
+            continue
+        # ``Model.objects.<read>`` / ``Model.objects.filter(...).<read>`` — model is the
+        # root of the receiver chain.
+        if _attr_chain_root(node.func.value) == model:
+            return True
+    return False
+
+
+def _sa_func_reads_table(func: ast.AST, model: str, file_models: set[str]) -> bool:
+    """True iff ``func`` runs a SQLAlchemy ``query(Model)`` / ``session.query(Model)`` read."""
+    if model not in file_models:
+        return False
+    for node in ast.walk(func):
+        if isinstance(node, ast.Call):
+            if model in _model_names_in_text(_receiver_text(node) + " " + _arg_text(node), {model}):
+                # ``query(Model)`` / ``session.query(Model).filter(...)`` — a genuine class
+                # reference in a query receiver/args (case-exact, never a keyword name).
+                if "query" in ast.unparse(node):
+                    return True
+    return False
+
+
+def table_touchers(clone_path: Path, table: str) -> tuple[list[Writer], str]:
+    """Every function that READS or WRITES ``table`` in the clone, as ``file::func`` leads,
+    plus the honesty confidence for the stack. This is the concrete toucher surface the
+    graph's reverse reads/writes edges into ``table::<Model>`` are built from and that
+    ``shares_table`` groups by owning module — a WRITE via an instance parameter
+    (``def post_invoice(i): i.save()``) is caught because it reuses the SAME per-function
+    write resolver ``who_writes`` uses, not a ``Model.objects`` substring scan (the
+    D01-SHARES-TABLE-NOT-GRAPH miss)."""
     stack = _tier1_stack(clone_path)
     tier1 = stack is not None
     table_map = _table_class_map(clone_path)
     model = table_map.get(table) or table_map.get(table.lower())
     confidence = "resolved" if tier1 else "lower-bound"
-    modules: dict[str, ModuleRef] = {}
     if model is None:
-        return []
+        return [], confidence
     if stack == "rails":
-        for p in _rb_files(clone_path):
-            rel = str(p.relative_to(clone_path))
-            text = p.read_text(encoding="utf-8", errors="replace")
-            if _defines_rails_model(text, model):
-                continue
-            if re.search(r"\b" + re.escape(model) + r"\b", text):
-                top = rel.split("/", 1)[0]
-                modules.setdefault(top, ModuleRef(id=top, confidence=confidence))
-        return list(modules.values())
+        # Rails is a line/method scan; writes are the durable co-access signal here.
+        return _rails_who_writes(clone_path, table, model, confidence), confidence
+
+    touchers: list[Writer] = []
+    seen: set[str] = set()
+    # WRITERS — the exact per-function write set (incl. instance-param ``i.save()``).
+    for w in who_writes(clone_path, table):
+        if w.id not in seen:
+            touchers.append(w)
+            seen.add(w.id)
+    # READERS — Django/SQLAlchemy queries against the model.
     for p in _py_files(clone_path):
         rel = str(p.relative_to(clone_path))
-        text = p.read_text(encoding="utf-8", errors="replace")
         try:
-            tree = ast.parse(text)
+            tree = ast.parse(p.read_text(encoding="utf-8", errors="replace"))
         except SyntaxError:
             continue
         if _defines_model(tree, model):
             continue
-        # a co-accessor references the model AND actually accesses/queries it — Django
-        # ``.objects`` or a SQLAlchemy ``query(Model)`` / ``session.add(Model(...))``
-        # construction. A bare import/type-hint mention is NOT a co-access (Law 2 — never
-        # fabricate a co-accessor that merely names the model in an annotation).
-        if model in text and (
-            f"{model}.objects" in text
-            or re.search(r"query\s*\(\s*" + re.escape(model) + r"\b", text)
-            or re.search(r"(?<![\w.])" + re.escape(model) + r"\s*\(", text)
-        ):
-            top = rel.split("/", 1)[0]
-            modules.setdefault(top, ModuleRef(id=top, confidence=confidence))
+        file_models = _models_in_file(tree)
+        for func in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+            fid = f"{rel}::{func.name}"
+            if fid in seen:
+                continue
+            reads = (
+                _sa_func_reads_table(func, model, file_models)
+                if stack == "sqlalchemy"
+                else _django_func_reads_table(func, model, table, file_models)
+            )
+            if reads:
+                touchers.append(Writer(id=fid, file=rel, line=func.lineno, confidence=confidence))
+                seen.add(fid)
+    return touchers, confidence
+
+
+def _owning_module(rel: str) -> str:
+    """The owning module for a source path — its top-level package directory
+    (``billing/svc.py`` -> ``billing``), the group the co-access is reported under (§3.8)."""
+    return rel.split("/", 1)[0]
+
+
+def shares_table(clone_path: Path, table: str) -> list[ModuleRef]:
+    """Owning modules (top-level packages) that read/write ``table`` — the reverse read
+    over the touchers of the ``table::<Model>`` node, grouped to the owning module (§3.8).
+
+    Kept as the ``list[ModuleRef]`` accessor for existing callers; the richer toucher +
+    ``shared`` surface is assembled in :meth:`CodeIntelMCPServer.shares_table`."""
+    touchers, confidence = table_touchers(clone_path, table)
+    modules: dict[str, ModuleRef] = {}
+    for t in touchers:
+        top = _owning_module(t.file)
+        modules.setdefault(top, ModuleRef(id=top, confidence=confidence))
     return list(modules.values())
 
 

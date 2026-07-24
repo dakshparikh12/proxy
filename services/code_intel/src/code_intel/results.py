@@ -64,6 +64,13 @@ class ModuleRef:
 class SharesTableResult:
     modules: list[ModuleRef] = field(default_factory=list)
     status: str = "ok"
+    # ``touchers`` are the concrete file:line leads (the functions that read/write the
+    # table) grouped under the owning modules — the spec return contract + §3.8 example
+    # require them, and ``direct_answer._first_hit`` reads them to mint a real citation.
+    touchers: list[Writer] = field(default_factory=list)
+    # ``shared`` is True iff more than one owning module touches the table — the hidden
+    # cross-module coupling a meeting misses (shared = len(modules) > 1).
+    shared: bool = False
 
 
 @dataclass

@@ -160,11 +160,14 @@ class _DeclVisitor(ast.NodeVisitor):
 
 
 def _is_model(node: ast.ClassDef) -> bool:
-    for base in node.bases:
-        text = ast.unparse(base) if hasattr(ast, "unparse") else ""
-        if "Model" in text:
-            return True
-    return False
+    """A DB model whose class becomes a ``table::<Name>`` node — recognised STRUCTURALLY
+    via the same detectors ``orm`` uses (Django ``models.Model`` base OR SQLAlchemy
+    declarative ``Base`` subclass / ``__tablename__``), so the graph's table nodes and
+    the data-flow tools' model→table map agree. A plain Pydantic ``BaseModel`` (whose base
+    merely *contains* the substring "Model") is NOT a DB table and must not become a node."""
+    from . import orm
+
+    return orm._is_django_model_base(node) or orm._is_sqlalchemy_model(node)
 
 
 def _explicit_db_table(node: ast.ClassDef) -> str | None:
@@ -183,8 +186,17 @@ def _explicit_db_table(node: ast.ClassDef) -> str | None:
     return None
 
 
+def _sqlalchemy_tablename(node: ast.ClassDef) -> str | None:
+    """The SQLAlchemy declarative ``__tablename__ = "notes"`` literal, or ``None``."""
+    for item in node.body:
+        if isinstance(item, ast.Assign) and isinstance(item.value, ast.Constant):
+            if any(isinstance(t, ast.Name) and t.id == "__tablename__" for t in item.targets):
+                return str(item.value.value)
+    return None
+
+
 def _db_table(node: ast.ClassDef) -> str:
-    explicit = _explicit_db_table(node)
+    explicit = _explicit_db_table(node) or _sqlalchemy_tablename(node)
     return explicit if explicit is not None else node.name.lower()
 
 
@@ -194,7 +206,7 @@ def _real_table_name(node: ast.ClassDef, rel: str) -> str:
     -> ``shop_order``). ``app_label`` is the app-package directory that holds the model's
     ``models`` module (mirrors ``orm._django_app_label`` so the graph node and the
     ``who_writes`` table map agree on the same real name)."""
-    explicit = _explicit_db_table(node)
+    explicit = _explicit_db_table(node) or _sqlalchemy_tablename(node)
     if explicit is not None:
         return explicit
     parts = Path(rel).parts
@@ -260,6 +272,21 @@ class GraphBuilder:
                 # Grammarless languages: flagged but ripgrep-searchable (§3.4).
                 rows.append(CoverageRow(rel, "flagged", "unsupported-language"))
 
+        # reads/writes edges into the ``table::<Model>`` nodes (§2.2 edge kinds /
+        # D01-GRAPH-EDGE-KINDS): a co-accessor function -> the table it touches. Built
+        # from the SAME per-function ORM resolver ``who_writes`` uses, so the graph edge
+        # set and the data-flow tools agree by construction and an instance-param write
+        # (``i.save()``) is a real edge, never a substring miss. Only for a tier-1 ORM
+        # clone (the exact-supported stacks) — a non-ORM repo has no table nodes.
+        # The ORM analysis is best-effort: it must never break the structural build,
+        # so a failure here degrades to the pre-existing edge set (Law 1: the graph is
+        # still sound, just without the data-flow edges) rather than raising.
+        if table_map:
+            try:
+                raw_edges.extend(_table_access_edges(clone_path, table_map))
+            except Exception:  # pragma: no cover - defensive; structural build must survive
+                pass
+
         # Stamp every node with the commit it was extracted at (§3.4 freshness).
         for n in nodes:
             n.built_at_sha = built_at_sha
@@ -290,6 +317,42 @@ class GraphBuilder:
         else:
             graph.compute_pagerank()
         return graph
+
+
+def _table_access_edges(clone_path: Path, table_map: dict[str, str]) -> list[Edge]:
+    """``writes``/``reads`` edges from each touching function to the ``table::<Model>`` node.
+
+    For every table in the build's ``table_map`` (real-DB-name and class-name keys both map
+    to the class), enumerate the functions that write it (``kind="writes"``) and those that
+    only read it (``kind="reads"``) via the ORM resolver, and emit an edge
+    ``file::func -> table::<Model>``. The source id is the SAME ``file::func`` node id the
+    declaration visitor stamped, and the target ``table::<Model>`` node already exists, so
+    ``_assemble`` keeps these edges verbatim. Importing ``orm`` lazily keeps the pure-AST
+    declaration pass import-light and avoids a cycle."""
+    from . import orm
+
+    # Use the ORM's authoritative model→table map (recognises SQLAlchemy ``__tablename__`` /
+    # Rails pluralisation), not just the visitor's Django-style ``_db_table`` keys — so a
+    # SQLAlchemy model whose real table name differs from its class name still gets edges.
+    # Pick ONE representative table key per model class (prefer the real table name over the
+    # class-name alias) so each toucher is enumerated once.
+    class_to_key: dict[str, str] = {}
+    for key, model in orm._table_class_map(clone_path).items():
+        # Prefer a key that is NOT just the lowercased class name (the real table name).
+        if model not in class_to_key or key.lower() != model.lower():
+            class_to_key.setdefault(model, key)
+            if key.lower() != model.lower():
+                class_to_key[model] = key
+    edges: list[Edge] = []
+    for model in sorted(class_to_key):
+        table_key = class_to_key[model]
+        target = f"table::{model}"  # the class-name table node the visitor always stamps
+        writer_ids = {w.id for w in orm.who_writes(clone_path, table_key)}
+        touchers, _conf = orm.table_touchers(clone_path, table_key)
+        for t in touchers:
+            kind = "writes" if t.id in writer_ids else "reads"
+            edges.append(Edge(source=t.id, target=target, kind=kind, file_path=t.file, line=t.line))
+    return edges
 
 
 def _file_universe(clone_path: Path, interceptor: Any) -> list[tuple[Path, str]]:

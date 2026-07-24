@@ -24,12 +24,14 @@ from .results import (
     DependentsResult,
     EntryPointsResult,
     FindReferencesResult,
+    ModuleRef,
     OwnerResult,
     RefItem,
     ResultItem,
     SharesTableResult,
     ToolManifest,
     WhoWritesResult,
+    Writer,
 )
 
 HOST_TOOL_NAMES = (
@@ -226,10 +228,81 @@ class CodeIntelMCPServer:
         return WhoWritesResult(writers=writers, status="ok" if writers else "not-found")
 
     def shares_table(self, table: str, _graph: Graph | None = None, _sha: str | None = None) -> SharesTableResult:
+        """Owning modules that share ``table`` — a GRAPH read over the reverse
+        ``reads``/``writes`` edges into the ``table::<Model>`` node, grouped to the owning
+        module, returning the ``touchers`` (file:line leads) and ``shared`` boolean the
+        spec's return contract + §3.8 example require (D01-SHARES-TABLE-NOT-GRAPH).
+
+        The graph is the primary source: a co-accessor is a source node with a
+        reads/writes edge to the table node — including a write via an instance parameter
+        (``def post_invoice(i): i.save()``), because those edges are built from the same
+        per-function ORM resolver ``who_writes`` uses. Falls back to the clone-side
+        resolver only when the pinned graph has no matching table node."""
         self._db_query()
         clone = self.clone_path
-        modules = orm.shares_table(clone, table) if clone and clone.exists() else []
-        return SharesTableResult(modules=modules, status="ok" if modules else "not-found")
+        graph = _graph if _graph is not None else self.graph
+
+        touchers = self._table_touchers_from_graph(graph, table)
+        tier1 = bool(clone and clone.exists() and orm.is_tier1(clone))
+        confidence = "resolved" if tier1 else "lower-bound"
+        if not touchers and clone and clone.exists():
+            # No table node in the pinned graph — fall back to the clone-side resolver so a
+            # freshly-built or spec-loaded graph still answers (never a silent miss).
+            touchers, confidence = orm.table_touchers(clone, table)
+
+        # Excluded files never surface as a lead (§3.3).
+        touchers = [t for t in touchers if not self._excluded(t.file)]
+        modules: dict[str, ModuleRef] = {}
+        for t in touchers:
+            top = t.file.split("/", 1)[0]
+            modules.setdefault(top, ModuleRef(id=top, confidence=confidence))
+        module_list = list(modules.values())
+        return SharesTableResult(
+            modules=module_list,
+            status="ok" if module_list else "not-found",
+            touchers=touchers,
+            shared=len(modules) > 1,
+        )
+
+    def _table_touchers_from_graph(self, graph: Graph | None, table: str) -> list[Writer]:
+        """Reverse ``reads``/``writes`` edges into the ``table::<name>`` node, resolved to
+        ``file:line`` leads via the source function nodes. Matches the table by class-name
+        or real-DB-name node id (both are stamped by the builder)."""
+        if graph is None:
+            return []
+        # Candidate table node ids: match the query against a table node by class name /
+        # real-DB name (case-folded), and also via the ORM model→class map so a query by
+        # the real table name (``notes``) resolves to the class-name node (``NoteSchema``)
+        # the builder stamped the edges onto.
+        want = table.lower()
+        aliases = {want, want.rstrip("s")}
+        clone = self.clone_path
+        if clone and clone.exists():
+            model = orm._table_class_map(clone).get(table) or orm._table_class_map(clone).get(want)
+            if model:
+                aliases.add(model.lower())
+        table_ids = {
+            n.id for n in graph.nodes
+            if n.kind == "table" and n.id.split("::", 1)[-1].lower() in aliases
+        }
+        if not table_ids:
+            return []
+        touchers: list[Writer] = []
+        seen: set[str] = set()
+        for e in graph.edges:
+            if e.kind not in ("reads", "writes") or e.target not in table_ids:
+                continue
+            if e.source in seen:
+                continue
+            src = graph.get(e.source)
+            file = src.path if src is not None else (e.file_path or "")
+            line = src.line if src is not None else e.line
+            if not file:
+                continue
+            conf = "lower-bound" if getattr(e, "resolution", "name") == "attr" else "resolved"
+            touchers.append(Writer(id=e.source, file=file, line=line, confidence=conf))
+            seen.add(e.source)
+        return touchers
 
     def owner(self, path: str, _graph: Graph | None = None, _sha: str | None = None) -> OwnerResult | None:
         self._db_query()

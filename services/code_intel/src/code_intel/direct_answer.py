@@ -196,6 +196,10 @@ def _first_hit(result: Any) -> tuple[str, int, str] | None:
     items = getattr(result, "results", None)
     if items is None:
         items = getattr(result, "writers", None)
+    if items is None:
+        # shares_table exposes its file:line leads as ``touchers`` (co-accessor
+        # functions), so a "who shares this table" ask mints a real citation.
+        items = getattr(result, "touchers", None)
     if not items:
         return None
     top = items[0]

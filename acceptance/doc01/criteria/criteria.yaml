@@ -1204,6 +1204,43 @@
   required_evidence:
     - junit:T-M5-009
 
+- criterion_id: AC-M5-007g
+  name: "shares_table is a GRAPH reverse-read over reads/writes edges into table::<name>, catches instance-param writes, and returns touchers[file:line] + shared"
+  evidence_class: "[eval-realrepo]"
+  authority_refs: [R-DOC01-3.5-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A real 2-app Django repo where billing/svc.py writes Invoice via
+      Invoice.objects.create(...) AND sales/svc.py writes the SAME table via an
+      instance parameter (def post_invoice(i): i.save()), built THROUGH the product
+      path via run_full_pipeline. (D01-SHARES-TABLE-NOT-GRAPH / D01-GRAPH-EDGE-KINDS.)
+    when: >
+      server.shares_table('invoice') is called on the pinned graph.
+    then:
+      - The build EMITS reads/writes edges from each touching function into the
+        table::Invoice node (the graph carries the edge kinds, not a substring scan).
+      - shares_table reads the REVERSE reads/writes edges into table::<name>, grouped
+        by owning module, and returns BOTH billing and sales — the instance-param
+        write (i.save()) is not dropped.
+      - The result exposes touchers (file:line co-accessor leads) and a shared boolean
+        equal to (len(modules) > 1); direct_answer._first_hit mints a citation from them.
+      - Confidence tiering matches who_writes semantics (resolved on a tier-1 stack).
+  applicability:
+    fixtures: []
+    estates: [estate-django-app]
+    excluded_estates: []
+    rationale: "The 'hidden cross-module coupling a meeting misses' value-prop must not silently drop a real co-accessor that writes via an instance param."
+  primary_oracle:
+    type: deterministic_execution
+    artifact: tests/code_intel/test_shares_table_graph_reverse_doc01.py
+  test_ids: [T-M5-007g]
+  fault_model_refs: []
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-007g
+
 - criterion_id: AC-M5-008
   name: "list_entry_points returns nodes with zero in-degree"
   evidence_class: "[unit-example]"
