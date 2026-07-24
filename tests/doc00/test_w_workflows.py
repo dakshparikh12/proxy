@@ -146,7 +146,15 @@ def test_w04_webhook_land_then_200_then_dedupe_then_drain():
 # ── W05 ───────────────────────────────────────────────────────────────────
 def test_w05_direct_answer_touches_no_e2b_no_workroom():
     """W05: a grounded direct-answer wake turn resolves via the code_intel API and touches neither E2B nor a Workroom session.
-    Chains AC-HOST-007."""
+    Chains AC-HOST-007.
+
+    Law 1 (grounded-or-silent): with NO code_intel index bound there is nothing
+    to cite, so the wake façade must ABSTAIN ('not found by this method',
+    grounded_citation falsy) — never emit a canned/fabricated file:line. A real
+    citation is legitimate ONLY when a live index is bound; that is proven by
+    the real-handle sub-check below. Either way the direct path touches neither
+    E2B nor a Workroom session.
+    """
     from services.harness.wake import answer_direct
 
     class Recorder:
@@ -154,15 +162,101 @@ def test_w05_direct_answer_touches_no_e2b_no_workroom():
             self.e2b_provisions = 0
             self.workroom_dispatches = 0
 
+    # --- no index bound → honest abstention, no fabricated citation.
     rec = Recorder()
     result = answer_direct(
         question="where is the retry budget enforced?",
         e2b=_counting(rec, "e2b_provisions"),
         workroom=_counting(rec, "workroom_dispatches"),
     )
-    assert result.grounded_citation, "a direct answer must cite file:line from the current clone"
+    assert not result.grounded_citation, (
+        "with no code_intel index bound the direct path must ABSTAIN, "
+        "never cite a fabricated file:line (Law 1)"
+    )
+    assert "not found by this method" in result.text.lower(), (
+        "abstention must say 'not found by this method' (Law 1), got: " + repr(result.text)
+    )
     assert rec.e2b_provisions == 0, "the direct path must NOT provision an E2B sandbox"
     assert rec.workroom_dispatches == 0, "the direct path must NOT dispatch a Workroom session"
+
+    # --- with a live index bound → a REAL citation is produced (and still no
+    #     E2B / Workroom). Uses a real code_intel server built from a clone at a
+    #     pinned SHA; skips only if no repo is reachable (never fabricates).
+    import os
+    import pathlib
+    import subprocess
+
+    from services.code_intel.meeting import MeetingSession
+    from services.code_intel.pipeline import run_full_pipeline
+
+    cache = pathlib.Path(os.environ.get("PROXY_ESTATE_CACHE", "/tmp/proxy_estates"))
+    flask_sha = "36e4a824f340fdee7ed50937ba8e7f6bc7d17f81"
+    repo = cache / "flask"
+    try:
+        if not (repo / ".git").exists() and not (repo / "src" / "flask").exists():
+            cache.mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                ["git", "clone", "--quiet", "https://github.com/pallets/flask", str(repo)],
+                check=True, timeout=180,
+            )
+            subprocess.run(
+                ["git", "-C", str(repo), "checkout", "--quiet", flask_sha],
+                check=True, timeout=60,
+            )
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as exc:  # pragma: no cover
+        pytest.skip(f"estate clone unavailable (network/git): {exc}")
+
+    pipeline = run_full_pipeline(tenant_id="tenant-w05", repo_url=str(repo))
+    clone_path = pathlib.Path(pipeline.clone_path)
+    session = MeetingSession.start(pipeline=pipeline, server=pipeline.server)
+
+    rec2 = Recorder()
+    grounded = answer_direct(
+        question="What depends on `Flask`?",
+        session=session,
+        e2b=_counting(rec2, "e2b_provisions"),
+        workroom=_counting(rec2, "workroom_dispatches"),
+    )
+    assert rec2.e2b_provisions == 0 and rec2.workroom_dispatches == 0, (
+        "the direct path must touch neither E2B nor a Workroom session"
+    )
+    cite = grounded.grounded_citation
+    if cite:  # a hit resolved → the citation must be a REAL location in the clone.
+        assert ":" in cite, f"citation must be file:line, got {cite!r}"
+        cfile, _, cline = cite.rpartition(":")
+        assert cfile and cline.isdigit(), f"citation must be file:line, got {cite!r}"
+        cited = clone_path / cfile
+        assert cited.is_file(), f"cited file {cfile!r} absent from pinned clone {clone_path}"
+        n = len(cited.read_text(encoding="utf-8", errors="replace").splitlines())
+        assert 1 <= int(cline) <= n, f"cited line {cline} out of range for {cfile} ({n} lines)"
+    else:  # honest abstention on this repo is acceptable; a canned citation is not.
+        assert "not found by this method" in grounded.text.lower()
+
+
+def test_w05b_wake_facade_abstains_without_index():
+    """W05b (Law 1 anti-fabrication): the wake direct-answer façade, when no
+    code_intel index is bound, MUST return an abstention sentinel — NOT a canned
+    file:line. Pins G3-WAKE-FABRICATED-CITATION-FALLBACK: no answer may ever cite
+    'libs/ops/src/ops/cost.py:1' (or any fixed location) the lookup did not
+    produce, for ANY question."""
+    from services.harness.wake import answer_direct
+
+    for question in (
+        "where is the retry budget enforced?",
+        "What does this function return?",
+        "who writes the users table?",
+        "",
+    ):
+        r = answer_direct(question=question)
+        assert not r.grounded_citation, (
+            f"no-index answer must abstain, not cite; got {r.grounded_citation!r} for {question!r}"
+        )
+        assert r.grounded_citation != "libs/ops/src/ops/cost.py:1", (
+            "the fabricated canned citation must never be emitted (Law 1)"
+        )
+        assert "not found by this method" in r.text.lower(), (
+            f"abstention text must say 'not found by this method', got {r.text!r}"
+        )
 
 
 def _counting(rec, attr):

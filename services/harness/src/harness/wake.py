@@ -22,10 +22,16 @@ from typing import Any
 
 @dataclass(frozen=True)
 class DirectAnswer:
-    """A grounded direct answer with a ``file:line`` citation from the clone."""
+    """A grounded direct answer with a ``file:line`` citation from the clone.
+
+    ``grounded_citation`` is ``None`` when the turn ABSTAINS (Law 1: no index
+    bound / nothing resolved → 'not found by this method'). A falsy citation is
+    an abstention, never a fabricated location; callers must not treat it as a
+    grounded answer.
+    """
 
     text: str
-    grounded_citation: str
+    grounded_citation: str | None
 
 
 def answer_direct(
@@ -68,8 +74,13 @@ def answer_direct(
         text = getattr(hit, "text", None) or f"Grounded answer for: {question}"
         return DirectAnswer(text=text, grounded_citation=citation)
 
-    # No handle: deterministic clone-grounded placeholder (no-touch contract only).
-    return DirectAnswer(
-        text=f"Grounded answer for: {question}",
-        grounded_citation="libs/ops/src/ops/cost.py:1",
-    )
+    # No handle: honest abstention, NEVER a fabricated citation (Law 1 —
+    # grounded-or-silent). With no code_intel index bound there is nothing to
+    # cite, so we delegate to the real resolver's abstention path — the ONE
+    # canonical 'not found by this method' sentinel — rather than synthesising a
+    # file:line the lookup never produced. grounded_citation is None (falsy):
+    # the caller must treat this as an abstention, not a grounded answer.
+    from .direct_answer import answer_direct as _resolve
+
+    abstained = _resolve(ask=question, e2b=e2b, workroom=workroom)
+    return DirectAnswer(text=abstained.text, grounded_citation=abstained.citation)
