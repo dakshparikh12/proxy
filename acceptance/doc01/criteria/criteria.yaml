@@ -3232,3 +3232,49 @@
   protocol_ref: PROTO-DETERMINISTIC-01
   required_evidence:
     - junit:T-M5-005rb
+
+- criterion_id: AC-M5-005dt
+  name: "who_writes / shares_table resolve the REAL Django default table name <app_label>_<model>, not only the model class name"
+  evidence_class: "[e2e-real-repo]"
+  authority_refs: [R-DOC01-3.5-03, R-DOC01-3.5-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A real Django app whose models declare NO explicit Meta.db_table, so their real DB
+      table is Django's default <app_label>_<model_lowercased> (app_label = the app package
+      dir holding models.py — e.g. shop/models.py::Order -> table shop_order). Driven through
+      the real product entrypoint (run_full_pipeline -> CodeIntelMCPServer.who_writes /
+      .shares_table) on the real clone. A PM/DBA in a schema-change discussion asks by the
+      REAL table name ('what writes shop_order?').
+    when: >
+      who_writes('shop_order') / who_writes('shop_refund') and shares_table('shop_order')
+      are called with the real default table name.
+    then:
+      - who_writes('shop_order') resolves the same writer set (status ok, confidence resolved
+        on the tier-1 stack) as who_writes('order') — the real-table-name query and the
+        bare-model-name query AGREE.
+      - shares_table('shop_order') resolves the same co-accessing modules as shares_table('order').
+      - A model that sets an explicit Meta.db_table still resolves by its declared name, and the
+        synthesized default name never shadows it.
+      - The dependency graph carries a node keyed to the real table name (table::shop_order)
+        alongside the canonical table::Order (AC-M4-008), so a lookup by the real table lands.
+      - A model/table with no writers returns not-found for BOTH the real-table and model-name
+        query (no fabricated blast-radius; Law 2).
+  applicability:
+    fixtures: [fixture-django-model]
+    estates: [estate-django-app]
+    excluded_estates: []
+    rationale: "The real DB table name (not the ORM class name) is what a schema-change / DBA discussion uses; who_writes must resolve it (gap D01-DJANGO-TABLE-NAME)."
+  primary_oracle:
+    type: real_tool_answer
+    artifact: "server.who_writes('<app_label>_<model>').writers == server.who_writes('<model>').writers (status ok, resolved); table::<app_label>_<model> present in graph"
+  thresholds:
+    resolved_recall: 1.0
+    wrong_tag_allowed: 0
+    real_table_name_mismatch_allowed: 0
+  test_ids: [T-M5-005dt]
+  fault_model_refs: [F-WHO-WRITES-MISSES-REAL-DJANGO-TABLE]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-005dt

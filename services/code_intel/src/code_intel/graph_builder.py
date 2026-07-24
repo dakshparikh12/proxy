@@ -75,12 +75,22 @@ class _DeclVisitor(ast.NodeVisitor):
             table = _db_table(node)
             self.tables[table] = node.name
             # A table node is ALWAYS exported (part of the public surface, §3.4).
-            self.nodes.append(
-                Node(
-                    id=f"table::{node.name}", path=self.rel, line=node.lineno,
-                    kind="table", exported=1,
+            # Canonical id is ``table::<ClassName>`` (AC-M4-008). Additionally stamp a
+            # node keyed to the REAL DB table name so a schema-change lookup by the real
+            # table (``table::shop_order`` — Django default ``<app_label>_<model>``, or an
+            # explicit ``Meta.db_table``) also lands on a graph node. Both ids point at the
+            # same declaration; the canonical class-name node is never removed.
+            table_ids = [f"table::{node.name}"]
+            real_table_id = f"table::{_real_table_name(node, self.rel)}"
+            if real_table_id not in table_ids:
+                table_ids.append(real_table_id)
+            for tid in table_ids:
+                self.nodes.append(
+                    Node(
+                        id=tid, path=self.rel, line=node.lineno,
+                        kind="table", exported=1,
+                    )
                 )
-            )
         # A module-level class whose name does not start with '_' is public surface.
         exported = 1 if (not self._func_stack and not node.name.startswith("_")) else 0
         self.nodes.append(
@@ -157,7 +167,8 @@ def _is_model(node: ast.ClassDef) -> bool:
     return False
 
 
-def _db_table(node: ast.ClassDef) -> str:
+def _explicit_db_table(node: ast.ClassDef) -> str | None:
+    """The model's explicit ``Meta.db_table`` string literal, or ``None`` (default)."""
     for item in node.body:
         if isinstance(item, ast.ClassDef) and item.name == "Meta":
             for stmt in item.body:
@@ -169,7 +180,33 @@ def _db_table(node: ast.ClassDef) -> str:
                             and isinstance(stmt.value, ast.Constant)
                         ):
                             return str(stmt.value.value)
-    return node.name.lower()
+    return None
+
+
+def _db_table(node: ast.ClassDef) -> str:
+    explicit = _explicit_db_table(node)
+    return explicit if explicit is not None else node.name.lower()
+
+
+def _real_table_name(node: ast.ClassDef, rel: str) -> str:
+    """The REAL DB table name for a Django model — the explicit ``Meta.db_table`` when
+    set, else Django's default ``<app_label>_<model_lower>`` (``shop/models.py::Order``
+    -> ``shop_order``). ``app_label`` is the app-package directory that holds the model's
+    ``models`` module (mirrors ``orm._django_app_label`` so the graph node and the
+    ``who_writes`` table map agree on the same real name)."""
+    explicit = _explicit_db_table(node)
+    if explicit is not None:
+        return explicit
+    parts = Path(rel).parts
+    # parts[-1] is the file (``models.py`` / ``orders.py``); the app dir is the parent,
+    # or the grandparent when the model lives in a ``models/`` package.
+    if len(parts) >= 2 and parts[-2] == "models":
+        app_label = parts[-3] if len(parts) >= 3 else parts[-2]
+    elif len(parts) >= 2:
+        app_label = parts[-2]
+    else:
+        app_label = ""
+    return f"{app_label}_{node.name.lower()}" if app_label else node.name.lower()
 
 
 class GraphBuilder:

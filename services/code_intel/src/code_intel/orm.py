@@ -164,23 +164,54 @@ def _rails_table_name(class_name: str, explicit: str | None) -> str:
     return snake + "s"
 
 
+def _django_app_label(model_file: Path) -> str:
+    """Django's default ``app_label`` for a model — the name of the app package that
+    contains its ``models.py`` (or ``models/`` package). Django derives ``app_label``
+    from the last component of the app's dotted module path, which on disk is the
+    directory the ``models`` module lives in (``shop/models.py`` -> ``shop``;
+    ``shop/models/orders.py`` -> ``shop``). Falls back to the parent directory name.
+    """
+    parent = model_file.parent
+    # A ``models/`` package: the app is its parent directory (``shop/models/…`` -> shop).
+    if parent.name == "models":
+        parent = parent.parent
+    return parent.name
+
+
+def _django_default_table(model_name: str, app_label: str) -> str:
+    """Django's default DB table for a model with no explicit ``Meta.db_table`` —
+    ``<app_label>_<model_name_lowercased>`` (``shop`` + ``Order`` -> ``shop_order``).
+    This is the REAL table name a schema-change discussion / DBA uses."""
+    return f"{app_label}_{model_name.lower()}"
+
+
 def _table_class_map(clone_path: Path) -> dict[str, str]:
     """Map ``table-name`` (and lowercased class name) -> model class name, across all
-    three tier-1 stacks. Django uses ``db_table``/class-name; SQLAlchemy ``__tablename__``;
-    Rails the pluralised-snake convention (or ``self.table_name``)."""
+    three tier-1 stacks. Django keys on: the bare class name (lowercased), the explicit
+    ``Meta.db_table`` when set, AND Django's REAL default table name
+    ``<app_label>_<model>`` when no ``db_table`` is set (so ``who_writes('shop_order')``
+    for the real table resolves, not only ``who_writes('order')``). SQLAlchemy uses
+    ``__tablename__``; Rails the pluralised-snake convention (or ``self.table_name``)."""
     mapping: dict[str, str] = {}
     for p in _py_files(clone_path):
         try:
             tree = ast.parse(p.read_text(encoding="utf-8", errors="replace"))
         except SyntaxError:
             continue
+        app_label = _django_app_label(p)
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
                 continue
             if _is_django_model_base(node):
-                table = _db_table(node)
+                explicit_dj = _explicit_db_table(node)
+                table = explicit_dj if explicit_dj is not None else node.name.lower()
                 mapping[table] = node.name
                 mapping[node.name.lower()] = node.name
+                # Register Django's REAL default table name (``<app_label>_<model>``) —
+                # but only when the model does not override it with an explicit
+                # ``Meta.db_table`` (which is authoritative and must not be shadowed).
+                if explicit_dj is None:
+                    mapping[_django_default_table(node.name, app_label)] = node.name
             elif _is_sqlalchemy_model(node):
                 table = _sa_tablename(node) or node.name.lower()
                 mapping[table] = node.name
@@ -197,14 +228,22 @@ def _table_class_map(clone_path: Path) -> dict[str, str]:
     return mapping
 
 
-def _db_table(node: ast.ClassDef) -> str:
+def _explicit_db_table(node: ast.ClassDef) -> str | None:
+    """The model's explicit ``Meta.db_table`` string literal, or ``None`` when it uses
+    Django's default (``<app_label>_<model>``). Separated from :func:`_db_table` so the
+    default-table synthesis can tell "declared its own name" from "uses the default"."""
     for item in node.body:
         if isinstance(item, ast.ClassDef) and item.name == "Meta":
             for stmt in item.body:
                 if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Constant):
                     if any(isinstance(t, ast.Name) and t.id == "db_table" for t in stmt.targets):
                         return str(stmt.value.value)
-    return node.name.lower()
+    return None
+
+
+def _db_table(node: ast.ClassDef) -> str:
+    explicit = _explicit_db_table(node)
+    return explicit if explicit is not None else node.name.lower()
 
 
 def _models_in_file(tree: ast.Module) -> set[str]:
