@@ -868,13 +868,53 @@ def owner(clone_path: Path, path: str) -> OwnerResult:
         match = _match_codeowners(codeowners.read_text(encoding="utf-8", errors="replace"), path)
         if match is not None:
             return OwnerResult(owner=match, confidence="resolved", file="CODEOWNERS", line=None)
-    # git-blame fallback — grounded but not authoritative
-    blame = run_git(
-        ["--git-dir", str(clone_path / ".git"), "log", "-1", "--format=%an", "--", path],
+    # git-blame fallback — grounded but not authoritative (Law 2 → lower-bound).
+    author = _blame_top_authors(clone_path, path) or "(unknown)"
+    return OwnerResult(owner=author, confidence="lower-bound", file=path, line=1)
+
+
+def _blame_top_authors(clone_path: Path, path: str, top: int = 3) -> str | None:
+    """Return the top recent git authors of ``path`` as a display string, or None.
+
+    The production Cloner materialises the work-tree at ``.../repos/<repo>/checkout``
+    with its git metadata ONE LEVEL UP (``.../repos/<repo>/.git``), so pointing
+    ``--git-dir`` at ``clone_path/.git`` (which does not exist on that split layout)
+    made ``git log`` return an empty author and ``owner()`` degrade to '(unknown)'
+    on every real repo. We instead let git DISCOVER the repo from INSIDE the clone
+    (``git -C <clone_path>``) — the same discovery form ``list_tracked_files`` uses —
+    which resolves correctly for both the split-clone layout and an ordinary clone.
+
+    Ownership is ranked by ``git shortlog -sne`` (recent-history commit count on the
+    path) — the strongest available "who owns this file" signal absent CODEOWNERS.
+    Multiple co-authors are joined so the reply names the real maintainers; the
+    result is a HINT and the caller always tags it 'lower-bound' (Law 2). Returns
+    ``None`` (never a fabricated name) when git resolves no author.
+    """
+    if not clone_path.exists():
+        return None
+    res = run_git(
+        ["-C", str(clone_path), "shortlog", "-sne", "HEAD", "--", path],
         check=False,
     )
-    author = blame.stdout.strip() or "(unknown)"
-    return OwnerResult(owner=author, confidence="lower-bound", file=path, line=1)
+    authors: list[str] = []
+    for raw in res.stdout.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        # shortlog -s lines are "<count>\t<name> <email>" — keep the identity.
+        _, _, ident = line.partition("\t")
+        ident = ident.strip()
+        if ident and ident not in authors:
+            authors.append(ident)
+    if authors:
+        return ", ".join(authors[:top])
+    # shortlog produced nothing (e.g. detached/odd ref) — fall back to the single
+    # most-recent commit author of the path via the same discovery form.
+    log = run_git(
+        ["-C", str(clone_path), "log", "-1", "--format=%an", "--", path],
+        check=False,
+    )
+    return log.stdout.strip() or None
 
 
 def _match_codeowners(text: str, path: str) -> str | None:

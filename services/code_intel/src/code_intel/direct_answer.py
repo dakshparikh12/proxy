@@ -88,6 +88,21 @@ _INTENT_PATTERNS: tuple[tuple[str, str], ...] = (
     (r"\bowns?\b|\bowner\b", "owner"),
 )
 
+# A file-PATH ask ("who owns src/flask/app.py?") names a path, not a dotted
+# symbol. ``owner`` resolves a repo-relative PATH, so the extractor must hand it
+# the FULL path — splitting on '/' and passing the trailing ``app.py`` token made
+# ``owner('app.py')`` miss (D01-OWNER-BLAME-UNKNOWN). These are the source/config
+# extensions whose bare filename (no slash) is still unambiguously a file path.
+_PATH_EXTENSIONS = (
+    ".py", ".pyi", ".go", ".ts", ".tsx", ".js", ".jsx", ".rb", ".java", ".rs",
+    ".c", ".h", ".cc", ".cpp", ".hpp", ".cs", ".kt", ".swift", ".php", ".scala",
+    ".sql", ".yaml", ".yml", ".toml", ".cfg", ".ini", ".json", ".md", ".rst",
+    ".txt", ".sh", ".proto", ".tf",
+)
+# A path token: a slash-joined path, or a bare filename ending in a known
+# extension. Anchored to path-ish characters (word chars, '/', '.', '-').
+_PATH_TOKEN = re.compile(r"[\w./\-]*[\w\-](?:/[\w./\-]+|\.[A-Za-z][A-Za-z0-9]*)")
+
 # Doc/changelog suffixes never carry a code DEFINITION — a find_references hit in
 # one of these is a text mention (a changelog line, a doc paragraph), so it must
 # never outrank a real source definition when answering a locate-question (Law 2).
@@ -129,12 +144,37 @@ class DirectAnswer:
         }
 
 
+def _looks_like_path(token: str) -> bool:
+    """True when ``token`` names a FILE PATH rather than a dotted code symbol.
+
+    A path either contains a directory separator (``src/flask/app.py``) or is a
+    bare filename ending in a known source/config extension (``app.py``). A bare
+    dotted symbol (``flask.url_for``, ``Flask``) is NOT a path. This is what lets
+    the owner route pass the FULL ``src/flask/app.py`` to ``owner()`` instead of a
+    trailing ``app.py`` token (D01-OWNER-BLAME-UNKNOWN)."""
+    if "/" in token:
+        return True
+    low = token.lower()
+    return any(low.endswith(ext) for ext in _PATH_EXTENSIONS)
+
+
 def _extract_symbol(ask: str) -> str | None:
     """Pull the most likely code symbol / table name out of a natural ask.
 
-    Prefers a back-ticked / quoted token (an explicit identifier), then a
-    dotted.path or CamelCase / snake_case token, else the last content word.
+    A file-PATH ask ("who owns src/flask/app.py?") is recognised FIRST and the
+    FULL path is returned — the owner tool resolves a repo-relative path, so
+    splitting on '/' and passing the trailing token would miss. Otherwise prefers
+    a back-ticked / quoted token (an explicit identifier), then a dotted.path or
+    CamelCase / snake_case token, else the last content word.
     """
+    # A back-ticked / quoted PATH keeps its slashes (an explicit file reference).
+    mq = re.search(r"[`'\"]([\w./\-]+)[`'\"]", ask)
+    if mq and _looks_like_path(mq.group(1)):
+        return mq.group(1)
+    # A bare (unquoted) file path anywhere in the ask — pick the longest.
+    path_hits: list[str] = [t for t in _PATH_TOKEN.findall(ask) if _looks_like_path(t)]
+    if path_hits:
+        return max(path_hits, key=len)
     m = re.search(r"[`'\"]([A-Za-z_][\w.]*)[`'\"]", ask)
     if m:
         return m.group(1)
@@ -365,6 +405,13 @@ def answer_direct(
     if symbol is not None:
         referent = _call(handle, "lookup_referent", symbol=symbol)
 
+    # An OWNERSHIP ask ("who owns src/flask/app.py?") names a PERSON, not a code
+    # definition line — its answer is the CODEOWNERS match ('resolved') or the top
+    # recent git authors of the path ('lower-bound'), cited to the path itself, not
+    # a file:line drawn from a read (D01-OWNER-BLAME-UNKNOWN).
+    if tool == "owner":
+        return _answer_owner(handle, symbol, ask)
+
     # A locate-question resolves to the DEFINITION over the pinned graph nodes
     # (D01-DIRECT-ANSWER-WHERE-MISROUTE) — not a caller and not a changelog line.
     if tool == "find_definition":
@@ -447,3 +494,45 @@ def _run_tool(handle: Any, tool: str, symbol: str | None) -> Any:
         return _call(handle, "get_dependents", symbol=symbol or "")
     except Exception:
         return None
+
+
+def _answer_owner(handle: Any, symbol: str | None, ask: str) -> DirectAnswer:
+    """Resolve an ownership ask to a grounded owner naming a real person.
+
+    The ``owner`` tool returns an :class:`~code_intel.results.OwnerResult` (a PERSON
+    + the source it came from), not a file:line code hit. A CODEOWNERS match is
+    'resolved' and cites ``CODEOWNERS``; the git-blame fallback names the top recent
+    authors of the path tagged 'lower-bound' and cites the path (Law 2). We abstain
+    honestly (Law 1) only when git resolves no author at all ('(unknown)')."""
+    if not symbol:
+        return DirectAnswer(
+            text="Not found by this method (owner: no path named in the ask).",
+            citation=None,
+            confidence="not-found",
+            tool="owner",
+        )
+    result = _call(handle, "owner", path=symbol)
+    owner_name = getattr(result, "owner", None)
+    if result is None or not owner_name or owner_name == "(unknown)":
+        return DirectAnswer(
+            text=f"Not found by this method (owner for '{symbol}').",
+            citation=None,
+            confidence="not-found",
+            tool="owner",
+        )
+    confidence = getattr(result, "confidence", "lower-bound")
+    src_file = getattr(result, "file", None) or symbol
+    line = getattr(result, "line", None)
+    citation = f"{src_file}:{line}" if line is not None else str(src_file)
+    tier = "CODEOWNERS" if confidence == "resolved" else "recent git authors"
+    text = (
+        f"Owner of '{symbol}' via {tier}: {owner_name} [{confidence}] "
+        f"— cited from {citation}"
+    )
+    return DirectAnswer(
+        text=text,
+        citation=citation,
+        confidence=confidence,
+        tool="owner",
+        read_confirmed=False,
+    )

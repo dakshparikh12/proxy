@@ -1418,6 +1418,45 @@
   required_evidence:
     - junit:T-M5-012
 
+# -- gap D01-OWNER-BLAME-UNKNOWN: blame fallback must name a REAL author on a real
+#    repo (the production split-clone layout), never '(unknown)'; and a file-path
+#    ownership ask routes the FULL path to owner() through the direct-answer path.
+- criterion_id: AC-M5-010b
+  name: "owner git-blame fallback names a REAL recent author on a real repo (no '(unknown)')"
+  evidence_class: "[integration-real-repo]"
+  authority_refs: [R-DOC01-3.5-06]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A real cloned repo with NO CODEOWNERS (pallets/flask @ 36e4a824), materialised
+      by the production Cloner at .../repos/<repo>/checkout with its .git one level up
+      (the split-clone layout), driven through run_full_pipeline -> CodeIntelMCPServer.
+    when: >
+      owner('src/flask/app.py') is called, and the reactive ask
+      "who owns src/flask/app.py?" is resolved through answer_direct.
+    then:
+      - owner() returns a REAL recent git author of the path (e.g. the maintainer),
+        never owner='(unknown)'.
+      - The confidence tag is 'lower-bound' (blame is a hint, not authoritative).
+      - _extract_symbol keeps the FULL path 'src/flask/app.py' (not the trailing
+        'app.py' token), so owner() is called with the correct path.
+      - answer_direct routes the ownership ask to the owner tool and returns a
+        grounded owner naming a real person, not 'not-found'.
+  applicability:
+    fixtures: []
+    estates: [flask]
+    excluded_estates: []
+    rationale: "The 'who owns this?' meeting question must yield a real answer on a real repo (Law 1/2)."
+  primary_oracle:
+    type: real_repo_owner_author_check
+    artifact: "owner('src/flask/app.py').owner names a real recent author; confidence == 'lower-bound'"
+  test_ids: [T-M5-012b]
+  fault_model_refs: [F-OWNER-MISSING-TAG]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-012b
+
 - criterion_id: AC-M5-011
   name: "batch_read reads up to 10 files in parallel and returns partial results on per-file failure"
   evidence_class: "[unit-example]"
