@@ -175,16 +175,23 @@ class CodeIntelMCPServer:
         limit = limit if limit is not None else get_int("get_dependents_limit")
         graph = _graph if _graph is not None else self.graph
         sha = _sha if _sha is not None else self.current_sha
-        dep_ids: set[str] = set()
+        # Per-dependent confidence: a dependent reached only through a heuristic
+        # attribute/method-call edge is a lower-bound; one reachable via an exact
+        # referent chain stays resolved (Law 2 — never overstate a search-derived
+        # result). A symbol may resolve to several nodes; a dependent is resolved
+        # if it is exact-reachable from ANY of them, lower-bound otherwise.
+        dep_conf: dict[str, str] = {}
         for target in graph.resolve_symbol(symbol):
-            dep_ids.update(graph.reverse_dependents(target.id))
-        nodes = [n for i in dep_ids if (n := graph.get(i)) is not None]
-        nodes = [n for n in nodes if not self._excluded(n.path)]
-        ranked = sorted(nodes, key=lambda n: (-n.pagerank, n.id))
+            for dep_id, conf in graph.reverse_dependents_with_confidence(target.id).items():
+                if dep_conf.get(dep_id) != "resolved":
+                    dep_conf[dep_id] = conf
+        nodes = [(n, dep_conf[i]) for i in dep_conf if (n := graph.get(i)) is not None]
+        nodes = [(n, c) for (n, c) in nodes if not self._excluded(n.path)]
+        ranked = sorted(nodes, key=lambda nc: (-nc[0].pagerank, nc[0].id))
         capped = ranked[:limit]
         items = [
-            ResultItem(id=n.id, path=n.path, file=n.path, line=n.line, pagerank=n.pagerank, confidence="resolved")
-            for n in capped
+            ResultItem(id=n.id, path=n.path, file=n.path, line=n.line, pagerank=n.pagerank, confidence=conf)
+            for (n, conf) in capped
         ]
         return DependentsResult(
             results=items,

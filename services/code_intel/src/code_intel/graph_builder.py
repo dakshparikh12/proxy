@@ -89,12 +89,27 @@ class _DeclVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
-        if self._func_stack and isinstance(node.func, ast.Name):
+        if self._func_stack:
             src = self._func_stack[-1]
-            self.edges.append(
-                Edge(source=src, target=node.func.id, kind="calls",
-                     file_path=self.rel, line=node.lineno)
-            )
+            if isinstance(node.func, ast.Name):
+                # Direct call `foo()` — an exact syntactic referent (resolution="name").
+                self.edges.append(
+                    Edge(source=src, target=node.func.id, kind="calls",
+                         file_path=self.rel, line=node.lineno)
+                )
+            elif isinstance(node.func, ast.Attribute):
+                # Method / qualified call `self.foo()` / `obj.method()` / `pkg.func()`
+                # (ast.Attribute). Previously DROPPED — a systematic lower-bound on
+                # the call graph (blast-radius under-report). Recover the trailing
+                # attr name as the target (the same name-based resolution _assemble
+                # already applies to import/name edges) and tag the edge
+                # resolution="attr" so the tool boundary reports any dependent
+                # reached through it as `lower-bound`, never `resolved` (Law 2:
+                # a heuristic-derived edge may bind the wrong same-named symbol).
+                self.edges.append(
+                    Edge(source=src, target=node.func.attr, kind="calls",
+                         file_path=self.rel, line=node.lineno, resolution="attr")
+                )
         self.generic_visit(node)
 
     # -- import edges (spec §2.2/§3.4: `imports` edges + `module` nodes) ------- #
@@ -279,7 +294,7 @@ def _assemble(nodes: list[Node], raw_edges: list[Edge]) -> Graph:
         if target_id and target_id != e.source:
             resolved.append(
                 Edge(source=e.source, target=target_id, kind=e.kind,
-                     file_path=e.file_path, line=e.line)
+                     file_path=e.file_path, line=e.line, resolution=e.resolution)
             )
     graph = Graph(nodes=nodes, edges=resolved)
     graph.index()

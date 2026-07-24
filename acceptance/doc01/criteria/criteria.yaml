@@ -3126,6 +3126,43 @@
     edges_missing_site_allowed: 0
   test_ids: [T-M4-014]
 
+- criterion_id: AC-M4-015
+  name: "Method / attribute call edges are extracted and honestly tagged lower-bound on REAL flask (G7)"
+  evidence_class: "[eval-realrepo]"
+  authority_refs: [R-DOC01-3.4-09, R-DOC01-3.5-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      The pinned real flask clone (github.com/pallets/flask @ 36e4a824) built THROUGH
+      the product path via run_full_pipeline. flask/app.py defines the method
+      full_dispatch_request, and wsgi_app (same file) calls self.full_dispatch_request(ctx)
+      an ast.Attribute (method) call that the extractor previously DROPPED.
+    when: >
+      The graph is inspected and the real tool pipeline.server.get_dependents is invoked.
+    then:
+      - A calls edge wsgi_app -> full_dispatch_request exists in pipeline.graph with a
+        non-empty file_path and line greater than 0 (attribute/method calls no longer dropped).
+      - That edge is persisted into graph_edges (kind='calls') through the real GraphStore.
+      - get_dependents('full_dispatch_request') includes wsgi_app.
+      - wsgi_app, reached via the heuristic attribute-resolved edge, is tagged
+        confidence='lower-bound' and NEVER 'resolved' (Law 2 never overstate a
+        search/heuristic-derived result as exhaustive).
+      - A dependent reachable purely via name-resolved (ast.Name) call chains is still
+        tagged 'resolved' (the lower-bound tag stays discriminating).
+  applicability:
+    fixtures: []
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "Method-call recovery + honesty tagging proven on a real repo through run_full_pipeline."
+  primary_oracle:
+    type: real_repo_call_graph
+    artifact: "tests/code_intel/test_method_call_edges_doc01.py::test_g7_method_call_edges_extracted_and_lower_bound_on_real_flask"
+  thresholds:
+    missing_method_call_edges_allowed: 0
+    method_call_dependents_tagged_resolved_allowed: 0
+  test_ids: [T-M4-015]
+
 - criterion_id: AC-M5-005sa
   name: "who_writes returns 'resolved' with the exact writer set on a SQLAlchemy tier-1 stack"
   evidence_class: "[e2e-real-repo]"

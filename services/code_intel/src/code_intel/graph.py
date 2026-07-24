@@ -34,6 +34,14 @@ class Edge:
     kind: str
     file_path: str = ""
     line: int = 0
+    # How the edge target was resolved. "name" = a direct ``ast.Name`` callee /
+    # in-repo import (an exact syntactic referent). "attr" = a method / qualified
+    # call (``self.foo()``, ``obj.method()``, ``pkg.func()``) recovered by
+    # trailing-attr-name heuristic — it may bind the wrong same-named symbol, so
+    # any dependent reached THROUGH such an edge is a lower-bound, never resolved
+    # (Law 2). Default "name" preserves the exact-referent semantics of every
+    # pre-existing edge kind (imports/reads/writes/extends/implements).
+    resolution: str = "name"
 
 
 @dataclass
@@ -99,35 +107,72 @@ class Graph:
         return ranked[:limit] if limit is not None else ranked
 
     # -- traversal -------------------------------------------------------- #
-    def _reverse_adj(self) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-        transitive: dict[str, list[str]] = defaultdict(list)
+    def _reverse_adj(self) -> tuple[dict[str, list[tuple[str, bool]]], dict[str, list[str]]]:
+        # transitive predecessors carry a ``heuristic`` flag: True when the edge
+        # was recovered by trailing-attr-name (``resolution == "attr"``, a method /
+        # qualified call). Any dependent whose ONLY reverse path crosses such an
+        # edge is a lower-bound (Law 2), so the flag must ride the adjacency.
+        transitive: dict[str, list[tuple[str, bool]]] = defaultdict(list)
         reads: dict[str, list[str]] = defaultdict(list)
         for e in self.edges:
             if e.kind == _READS:
                 reads[e.target].append(e.source)
             elif e.kind in _TRANSITIVE_KINDS:
-                transitive[e.target].append(e.source)
+                heuristic = e.kind == "calls" and getattr(e, "resolution", "name") == "attr"
+                transitive[e.target].append((e.source, heuristic))
         return transitive, reads
 
     def reverse_dependents(self, target_id: str) -> list[str]:
+        return list(self.reverse_dependents_with_confidence(target_id).keys())
+
+    def reverse_dependents_with_confidence(self, target_id: str) -> dict[str, str]:
+        """Reverse-dependency set, each tagged ``resolved`` or ``lower-bound``.
+
+        A dependent is ``resolved`` when it is reachable from ``target_id`` via at
+        least one reverse path made entirely of exact-referent edges (name-resolved
+        calls, imports, reads, writes, extends, implements). It is ``lower-bound``
+        when EVERY reverse path to it must cross a heuristic attribute/method-call
+        edge (``resolution == "attr"``) — that inclusion is real but the exact
+        binding is unproven, so it must never be overstated as ``resolved`` (Law 2).
+
+        Implemented as a 0-1 BFS: reaching a node via a name-only path (weight 0)
+        strictly dominates reaching it via any heuristic path (weight 1), so we
+        prefer the name-only frontier and only downgrade when no exact path exists.
+        """
         transitive, reads = self._reverse_adj()
-        result: set[str] = set()
-        seen = {target_id}
-        dq: deque[str] = deque([target_id])
+        # confidence[node] = False (exact/resolved) or True (lower-bound). Absent =
+        # not yet reached. A node once marked exact is never downgraded.
+        conf: dict[str, bool] = {}
+        # 0-1 BFS: two-ended deque — exact hops push front, heuristic hops push back.
+        dq: deque[tuple[str, bool]] = deque([(target_id, False)])
         while dq:
-            cur = dq.popleft()
-            for pred in transitive.get(cur, ()):
-                if pred not in seen:
-                    seen.add(pred)
-                    result.add(pred)
-                    dq.append(pred)
+            cur, cur_lb = dq.popleft()
+            # skip if we already have an equal-or-better label for cur
+            prev = conf.get(cur)
+            if cur != target_id:
+                if prev is False:
+                    continue  # already resolved — best possible
+                if prev is True and cur_lb:
+                    continue  # already lower-bound and this path is no better
+                conf[cur] = cur_lb
+            for pred, heuristic in transitive.get(cur, ()):
+                pred_lb = cur_lb or heuristic
+                known = conf.get(pred)
+                if known is False:
+                    continue
+                if known is True and pred_lb:
+                    continue
+                if pred_lb:
+                    dq.append((pred, True))
+                else:
+                    dq.appendleft((pred, False))
             if cur == target_id:
+                # reads edges are followed depth-1 only, and are exact referents.
                 for pred in reads.get(cur, ()):
-                    result.add(pred)
-                    if pred not in seen:
-                        seen.add(pred)
-                        dq.append(pred)
-        return [nid for nid in result if nid != target_id]
+                    if conf.get(pred) is not False:
+                        dq.appendleft((pred, False))
+        conf.pop(target_id, None)
+        return {nid: ("lower-bound" if lb else "resolved") for nid, lb in conf.items()}
 
     def entry_point_ids(self) -> list[str]:
         has_incoming: set[str] = set()
