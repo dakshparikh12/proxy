@@ -35,6 +35,7 @@ from scribe.coalescer import Coalescer, TranscriptSegment, Window
 from scribe.notes_reader import read_notes
 from scribe.pipeline import DeltaApplier, GapRecorder, HostBudget, ScribeCaller, run_scribe
 from scribe.prefix import MeetingHeader
+from scribe.referent import ReferentCorpus, lookup_referent
 from scribe.rolling_summary import (
     SummaryState,
     maybe_refresh_in_background,
@@ -251,8 +252,36 @@ def _kind_counters(existing: list[dict[str, Any]]) -> dict[str, int]:
     return max_by_prefix
 
 
+def _bind_referents(
+    entry: Any, corpus: "ReferentCorpus | None"
+) -> dict[str, dict[str, Any]]:
+    """Deterministically bind an entry's referent candidates to real code nodes.
+
+    §3.4 / AC-REFM-06 / AC-FAIL-07(-NEG): for each ``referents`` term the Scribe
+    marked, run the deterministic, no-LLM :func:`scribe.referent.lookup_referent`
+    over the meeting's ``graph_nodes`` + overview-areas corpus and record the outcome
+    as ``{term: {"binding": node_id|area|None, "binding_status": "bound"|"unbound"}}``.
+
+    A term that matches a real node/area is ``bound`` with the REAL id from the corpus
+    (never fabricated). A term that matches nothing — or ANY term when no corpus is
+    configured for the meeting — stays honestly ``unbound`` with ``binding=None``
+    (§3.8: the notes never fabricate to fill a hole). The original ``referents`` names
+    are always kept verbatim on the entry; this map rides ALONGSIDE them as the
+    resolved binding the Workroom (Doc 05) reads off ``/internal/notes``.
+    """
+    terms = getattr(entry, "referents", None) or []
+    bindings: dict[str, dict[str, Any]] = {}
+    for term in terms:
+        binding = lookup_referent(term, corpus) if corpus is not None else None
+        bindings[term] = {
+            "binding": binding,
+            "binding_status": "bound" if binding is not None else "unbound",
+        }
+    return bindings
+
+
 def _canonical_row(
-    op: Any, counters: dict[str, int]
+    op: Any, counters: dict[str, int], corpus: "ReferentCorpus | None" = None
 ) -> tuple[str, str, dict[str, Any]]:
     """Turn ONE delta op into the ``(entry_id, op, payload)`` the fold reader expects.
 
@@ -260,7 +289,10 @@ def _canonical_row(
 
     * ``add`` — mint a stable kind-prefixed id (``counters`` is mutated in place so a
       multi-add window gets distinct ids); the payload IS the entry's fields at top
-      level (``op.entry.model_dump``), never the ``{op, entry}`` envelope.
+      level (``op.entry.model_dump``), never the ``{op, entry}`` envelope. When the
+      entry carries ``referents``, the deterministic matcher binds each term over the
+      meeting's ``corpus`` and the resolved ``referent_bindings`` map rides on the
+      payload (AC-REFM-06) — surviving the fold verbatim to the Workroom read.
     * ``patch`` — keyed on ``op.target_id``; payload ``{changes, supersede_reason}``
       (the fold reads ``payload["changes"]``, superseded-not-erased).
     * ``close`` — keyed on ``op.target_id``; payload ``{resolution}`` (the fold sets
@@ -274,6 +306,10 @@ def _canonical_row(
         counters[prefix] = counters.get(prefix, 0) + 1
         entry_id = f"{prefix}{counters[prefix]}"
         payload = entry.model_dump(mode="json")
+        # Bind the referent candidates deterministically (no LLM) and attach the
+        # resolved bindings so the cross-service /internal/notes read is code-oriented.
+        if getattr(entry, "referents", None):
+            payload["referent_bindings"] = _bind_referents(entry, corpus)
         return entry_id, "add", payload
     if op_name == "patch":
         return (
@@ -298,6 +334,7 @@ def build_real_seams(
     *,
     summary_client: Any | None = None,
     call_external: Any | None = None,
+    referent_corpus: ReferentCorpus | None = None,
 ) -> RealSeams:
     """Bind the REAL vendor/Postgres seams for a live meeting (production wiring).
 
@@ -308,8 +345,14 @@ def build_real_seams(
       Segment B, the Scribe sees the meeting's history (back-references, a number at
       min 3 vs min 20, a decision's forming->final arc), not just the newest window.
     * ``apply_delta`` — appends each op to the append-only ``note_deltas`` ledger in
-      one transaction (the durable notes object is the left-fold of this ledger), then
-      drives the rolling-summary cadence OFF the hot path: it bumps
+      one transaction (the durable notes object is the left-fold of this ledger).
+      Before append, for each add op whose entry carries ``referents`` it runs the
+      deterministic no-LLM matcher (``scribe.referent.lookup_referent``) over the
+      meeting's ``referent_corpus`` and attaches the resolved ``referent_bindings``
+      onto the payload (§3.4 / AC-REFM-06) — so the cross-service ``/internal/notes``
+      read the Workroom consumes is code-oriented; an unmatched term (or any term
+      when no corpus is configured) stays honestly unbound. It then drives the
+      rolling-summary cadence OFF the hot path: it bumps
       ``summary_state`` and, on ``rolling_summary_due`` (N≈20 deltas OR ≈90s),
       schedules ``refresh_summary`` as a fire-and-forget task (AC-SCRIBE-07) so the
       next window never waits on the summary regen call.
@@ -389,7 +432,9 @@ def build_real_seams(
                 counters = _kind_counters(existing)
                 first = True
                 for op in ops:
-                    entry_id, op_name, payload = _canonical_row(op, counters)
+                    entry_id, op_name, payload = _canonical_row(
+                        op, counters, referent_corpus
+                    )
                     # The one-line goal/blocker signal rides the first written row's
                     # payload; the fold (Notes.fold_all) reads current_goal off ANY
                     # row, so one carrier is enough (§3.3.1).
@@ -459,6 +504,7 @@ def start_meeting_scribe(
     db: Any,
     *,
     host_budget: HostBudget | None = None,
+    referent_corpus: ReferentCorpus | None = None,
 ) -> ScribeRuntimeHandle:
     """Production entrypoint — launch the live notes engine with the REAL seams.
 
@@ -466,8 +512,13 @@ def start_meeting_scribe(
     actually maintains the ledger: the Doc 02 transcript stream flows through the
     coalescer into the real serial Scribe consumer, whose applied deltas are the
     durable notes object read cross-service at ``GET /internal/notes/{meeting_id}``.
+
+    ``referent_corpus`` is the meeting's code-index handle (Doc 01's overview areas +
+    per-repo ``graph_nodes``); when supplied the applier binds each marked referent to
+    a real code node so the notes the Workroom reads are code-oriented. Absent (a
+    meeting with no built index) referents stay honestly named-but-unbound.
     """
-    seams = build_real_seams(header, db)
+    seams = build_real_seams(header, db, referent_corpus=referent_corpus)
     return launch_scribe_runtime(
         header,
         carrier,
