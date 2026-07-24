@@ -186,12 +186,29 @@ def test_host_006_code_intel_stateful_encrypted_volume_scoped_api():
 # ── AC-HOST-007 ───────────────────────────────────────────────────────────
 @pytest.mark.integration
 def test_host_007_direct_answer_touches_neither_e2b_nor_workroom():
-    """AC-HOST-007: the direct-answer path provisions no E2B sandbox and dispatches no Workroom session."""
+    """AC-HOST-007: the direct-answer wake turn resolves a GROUNDED reply from the
+    REAL code_intel tools (a real file:line present in the pinned clone) while
+    provisioning no E2B sandbox and dispatching no Workroom session.
+
+    Driven end-to-end against the product entrypoints: run_full_pipeline builds
+    the real graph+clone for flask@36e4a824, a SHA-pinned MeetingSession wraps the
+    live CodeIntelMCPServer, and harness.direct_answer.answer_direct composes the
+    structural tools into a citation drawn from an ACTUAL file read — not a fixed
+    string, not a graph edge. A stub that returns a hardcoded citation FAILS the
+    'citation is present in the pinned clone' assertion below.
+    """
+    import os
+    import pathlib
+    import subprocess
+
     # Import the product direct-answer / code_intel path INSIDE the body -> red before it exists.
     try:
         from services.code_intel import answer_direct  # scripted direct-answer wake turn entrypoint
     except ImportError:
         from services.harness.direct_answer import answer_direct  # spec-derived fallback interface
+
+    from services.code_intel.meeting import MeetingSession
+    from services.code_intel.pipeline import run_full_pipeline
 
     # Instrumented seams: an E2B provisioner and a Workroom dispatcher that only record.
     class RecordingE2B:
@@ -213,21 +230,89 @@ def test_host_007_direct_answer_touches_neither_e2b_nor_workroom():
     e2b = RecordingE2B()
     workroom = RecordingWorkroom()
 
-    # Drive one scripted direct-answer wake turn against the code_intel internal API.
-    result = answer_direct(
+    # --- sub-check A: the no-touch contract holds even with no code_intel handle.
+    stub = answer_direct(
         ask="What does this function return?",
         tenant="tenant-A",
         sha="deadbeef",
         e2b=e2b,
         workroom=workroom,
     )
+    assert stub is not None, "direct-answer wake turn must resolve and answer"
+    assert e2b.provisions == 0 and workroom.dispatches == 0, "no-handle path must touch neither seam"
 
-    assert result is not None, "direct-answer wake turn must resolve and answer"
+    # --- sub-check B: the REAL grounded path on a real repo at the pinned SHA.
+    # Build the real graph+clone via the product entrypoint. Reuse the cached
+    # estate if present; else clone flask@36e4a824. Skip only if genuinely no
+    # repo is reachable (network/git absent) — never fabricate a citation.
+    cache = pathlib.Path(os.environ.get("PROXY_ESTATE_CACHE", "/tmp/proxy_estates"))
+    flask_sha = "36e4a824f340fdee7ed50937ba8e7f6bc7d17f81"
+    repo = cache / "flask"
+    try:
+        if not (repo / ".git").exists() and not (repo / "src" / "flask").exists():
+            cache.mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                ["git", "clone", "--quiet", "https://github.com/pallets/flask", str(repo)],
+                check=True, timeout=180,
+            )
+            subprocess.run(
+                ["git", "-C", str(repo), "checkout", "--quiet", flask_sha],
+                check=True, timeout=60,
+            )
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as exc:  # pragma: no cover
+        pytest.skip(f"estate clone unavailable (network/git): {exc}")
+
+    pipeline = run_full_pipeline(tenant_id="tenant-A-host007", repo_url=str(repo))
+    clone_path = pathlib.Path(pipeline.clone_path)
+    assert clone_path.exists(), "run_full_pipeline produced no clone"
+
+    session = MeetingSession.start(pipeline=pipeline, server=pipeline.server)
+    pinned_sha = session.pinned_sha
+    assert pinned_sha, "MeetingSession did not pin a SHA"
+
+    # A shaped reactive ask that the structural tools can ground against flask.
+    real = answer_direct(
+        ask="What depends on `Flask`?",
+        tenant="tenant-A-host007",
+        sha=pinned_sha,
+        e2b=e2b,
+        workroom=workroom,
+        session=session,
+    )
+    assert real is not None, "grounded direct-answer must resolve"
+
+    # The grounded path must NOT have touched either seam.
     assert e2b.provisions == 0, (
         f"direct-answer path provisioned {e2b.provisions} E2B sandbox(es); must be 0"
     )
     assert workroom.dispatches == 0, (
         f"direct-answer path dispatched {workroom.dispatches} Workroom session(s); must be 0"
+    )
+
+    # The answer must carry a REAL file:line citation present in the pinned clone.
+    citation = real["citation"] if isinstance(real, dict) else getattr(real, "citation", None)
+    confidence = real["confidence"] if isinstance(real, dict) else getattr(real, "confidence", "")
+    assert citation, "grounded direct-answer must cite a file:line from the pinned clone"
+    assert ":" in citation, f"citation must be file:line, got {citation!r}"
+    cite_file, _, cite_line = citation.rpartition(":")
+    assert cite_file and cite_line.isdigit(), f"citation must be file:line, got {citation!r}"
+
+    # PROVE the citation is a real location in the pinned clone: the file exists
+    # and the cited line number is within the file. A fixed/fabricated citation
+    # (e.g. 'libs/ops/src/ops/cost.py:1', which is not in a flask checkout) fails.
+    cited_path = clone_path / cite_file
+    assert cited_path.is_file(), (
+        f"cited file {cite_file!r} is not present in the pinned clone {clone_path}"
+    )
+    total_lines = len(cited_path.read_text(encoding="utf-8", errors="replace").splitlines())
+    lineno = int(cite_line)
+    assert 1 <= lineno <= total_lines, (
+        f"cited line {lineno} out of range for {cite_file} (has {total_lines} lines)"
+    )
+
+    # Honesty tiering (Law 2): a grounded citation is resolved or lower-bound.
+    assert confidence in ("resolved", "lower-bound"), (
+        f"grounded answer must be honesty-tiered resolved/lower-bound, got {confidence!r}"
     )
 
 

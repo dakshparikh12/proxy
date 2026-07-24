@@ -81,6 +81,8 @@ class MeetingSession:
             sha = self.pinned_sha
         if tool == "get_dependents":
             return server.get_dependents(args["symbol"], args.get("limit"), _graph=graph, _sha=sha)
+        if tool == "lookup_referent":
+            return server.lookup_referent(args["symbol"], _graph=graph, _sha=sha)
         if tool == "list_entry_points":
             return server.list_entry_points(_graph=graph, _sha=sha)
         if tool == "who_writes":
