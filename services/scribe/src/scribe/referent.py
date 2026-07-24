@@ -174,8 +174,57 @@ def _match_graph_nodes(term_norm: str, rows: list[tuple[str, str, str, str]]) ->
     return None
 
 
+# The canonical per-repo graph.db schema written by Doc 01's
+# ``code_intel.graph_store.GraphStore.write_graph`` (§12.2): columns
+# ``id, kind, file_path, line, exported, built_at_sha``. This is the REAL corpus a
+# meeting binds against. The legacy ``node_id, area, file, symbol`` shape is a
+# hand-built test double — we still read it (dual-schema) so a synthetic fixture
+# keeps working, but the real Doc-01 store is the one that matters in production.
+_REAL_SELECT = "SELECT id, kind, file_path, line FROM graph_nodes"
+_LEGACY_SELECT = "SELECT node_id, area, file, symbol FROM graph_nodes"
+
+
+def _top_package(file_path: str) -> str:
+    """Top-level path segment of ``file_path`` -> the node's overview *area*.
+
+    ``payments/checkout.py`` -> ``payments``; a bare file (``conf.py``) -> ``""``.
+    Deterministic, pure string work — the area a Doc-01 node belongs to.
+    """
+    fp = file_path.replace("\\", "/")
+    return fp.split("/", 1)[0] if "/" in fp else ""
+
+
+def _real_row_to_keys(node_id: str, file_path: str) -> tuple[str, str, str, str]:
+    """Derive ``(node_id, area, file, symbol)`` match keys from a real Doc-01 row.
+
+    Maps the canonical ``id``/``file_path`` to the matcher's four match keys so the
+    same ranking logic (symbol > file > area > id-leaf) works over the real schema:
+
+    * ``symbol`` = the leaf of ``id`` after ``::`` (``a.py::Cls.m`` -> ``m``); for a
+      dotted module id with no ``::`` (``docs.conf``) the leaf after ``.``; for a
+      ``table::name`` id the leaf ``name``.
+    * ``file``   = ``file_path`` (its leaf is also matched by ``_match_graph_nodes``).
+    * ``area``   = the top-level package of ``file_path`` (``payments/…`` -> ``payments``).
+    """
+    symbol = _leaf(node_id)
+    area = _top_package(file_path)
+    return (node_id, area, file_path, symbol)
+
+
+def _column_names(conn: sqlite3.Connection) -> set[str]:
+    """The column names of ``graph_nodes`` (via table_info — no row read)."""
+    cur = conn.execute("PRAGMA table_info(graph_nodes)")
+    return {str(row[1]) for row in cur.fetchall()}
+
+
 def _read_graph_nodes(db_path: Optional[str], *, strict: bool) -> list[tuple[str, str, str, str]]:
     """Read the ``graph_nodes`` corpus from SQLite — the ONLY table touched.
+
+    Handles BOTH the real Doc-01 canonical schema (``id, kind, file_path, line, …``,
+    written by ``GraphStore.write_graph``) and the legacy synthetic shape
+    (``node_id, area, file, symbol``). The real schema's ``id``/``file_path`` are
+    mapped into the matcher's ``(node_id, area, file, symbol)`` keys so the same
+    deterministic ranking binds a term to a REAL node id (AC-REFM-04).
 
     Returns ``[]`` (honest empty) when the database file is absent, has no
     ``graph_nodes`` table, or the table is empty. Reads are scoped to a single
@@ -194,10 +243,11 @@ def _read_graph_nodes(db_path: Optional[str], *, strict: bool) -> list[tuple[str
     if not db_path:
         return []
     conn: Optional[sqlite3.Connection] = None
+    real_schema = False
     try:
-        # Read-only, immutable=1 URI: we never write, and a concurrent writer can't
-        # corrupt our view. mode=ro makes a missing file raise (caught below) rather
-        # than silently create an empty db — so "absent corpus" is honest, not faked.
+        # Read-only URI: we never write, and a concurrent writer can't corrupt our
+        # view. mode=ro makes a missing file raise (caught below) rather than
+        # silently create an empty db — so "absent corpus" is honest, not faked.
         uri = f"file:{db_path}?mode=ro"
         conn = sqlite3.connect(uri, uri=True)
         # Scope guard: confirm the table exists via sqlite_master, then SELECT only
@@ -208,9 +258,16 @@ def _read_graph_nodes(db_path: Optional[str], *, strict: bool) -> list[tuple[str
         )
         if cur.fetchone() is None:
             return []
-        rows = conn.execute(
-            "SELECT node_id, area, file, symbol FROM graph_nodes"  # literal table name — no interpolation
-        ).fetchall()
+        # Pick the SELECT by the columns actually present: the real Doc-01 store
+        # exposes ``id``; the legacy double exposes ``node_id``. Neither present
+        # (e.g. a wrong-shape table) falls through to the real SELECT, which errors
+        # and degrades per policy — preserving the AC-REFM-04-NEG behavior.
+        cols = _column_names(conn)
+        if "id" in cols and "file_path" in cols:
+            real_schema = True
+            rows = conn.execute(_REAL_SELECT).fetchall()
+        else:
+            rows = conn.execute(_LEGACY_SELECT).fetchall()
     except sqlite3.Error as exc:
         if strict:
             raise ReferentCorpusError(f"graph_nodes corpus unreadable: {exc}") from exc
@@ -224,12 +281,18 @@ def _read_graph_nodes(db_path: Optional[str], *, strict: bool) -> list[tuple[str
     coerced: list[tuple[str, str, str, str]] = []
     for row in rows:
         try:
-            node_id, area, file, symbol = row
+            if real_schema:
+                node_id, _kind, file_path, _line = row
+                coerced.append(_real_row_to_keys(_as_str(node_id), _as_str(file_path)))
+            else:
+                node_id, area, file, symbol = row
+                coerced.append(
+                    (_as_str(node_id), _as_str(area), _as_str(file), _as_str(symbol))
+                )
         except (ValueError, TypeError) as exc:
             if strict:
                 raise ReferentCorpusError(f"malformed graph_nodes row: {row!r}") from exc
             continue
-        coerced.append((_as_str(node_id), _as_str(area), _as_str(file), _as_str(symbol)))
     return coerced
 
 
