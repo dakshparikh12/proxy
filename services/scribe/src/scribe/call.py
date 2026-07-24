@@ -25,6 +25,7 @@ seam.
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, TypeVar
 
@@ -46,6 +47,13 @@ SCRIBE_MAX_TOKENS: int = 1500
 
 # Telemetry service label handed to the cost seam.
 _SERVICE = "anthropic"
+
+_log = logging.getLogger(__name__)
+
+# The per-call cost sink: given the response ``usage`` object, records this window's
+# spend to the durable cost ledger. Bound to the real ``meeting_cost`` writer in the
+# production seams; a no-op when unset (cost telemetry is opt-in at the boundary).
+UsageSink = Callable[[Any], Awaitable[None]]
 
 
 def scribe_model() -> str:
@@ -115,6 +123,7 @@ async def scribe_call(
     call_external: CallExternal,
     client: Any | None = None,
     model: str | None = None,
+    on_usage: UsageSink | None = None,
 ) -> NoteDelta:
     """Issue EXACTLY ONE ``messages.create`` for one window and return the parsed delta.
 
@@ -125,6 +134,16 @@ async def scribe_call(
     error surfaces through the seam; a truncated/malformed turn surfaces as the
     typed ``ScribeMaxTokensError`` / ``ScribeNoDeltaError`` — never a silent drop
     or a partial delta (AC-SCRIBE-01-NEG / AC-SCRIBE-02-NEG).
+
+    When ``on_usage`` is bound, the response ``usage`` token counts are handed to it
+    BEFORE the parse — the Scribe is a bare ``messages.create`` (no SDK
+    ``total_cost_usd``), so its real per-call spend is derived from ``usage`` against
+    the Haiku rate card (:func:`scribe.cost.scribe_call_cost_usd`) and written to
+    ``meeting_cost`` there. Reporting the usage before the parse means a window that
+    parses to a ``max_tokens``/no-delta skip is STILL charged for the tokens the
+    vendor billed — a skip is not free (AC-PERF-01-NEG: no silent undercount). A
+    response that carries no usage, or a sink failure, is logged and swallowed:
+    cost telemetry never breaks the notes path (§3.8).
     """
     if client is None:
         client = _anthropic_client()
@@ -136,12 +155,22 @@ async def scribe_call(
 
     outcome = await call_external(_op, service=_SERVICE)
     resp = getattr(outcome, "value", outcome)  # seam returns ExternalCallOutcome
+    if on_usage is not None:
+        usage = getattr(resp, "usage", None)
+        if usage is None:
+            _log.warning("scribe micro-call returned no usage; cost telemetry unavailable")
+        else:
+            try:
+                await on_usage(usage)
+            except Exception:  # cost telemetry never breaks the notes path (§3.8)
+                _log.exception("scribe cost telemetry write failed; continuing")
     return parse_scribe_result(resp)
 
 
 __all__ = [
     "SCRIBE_MAX_TOKENS",
     "CallExternal",
+    "UsageSink",
     "scribe_model",
     "build_scribe_request",
     "scribe_call",

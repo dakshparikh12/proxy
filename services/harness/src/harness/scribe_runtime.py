@@ -391,10 +391,24 @@ def build_real_seams(
 
         return real_call_external
 
+    async def _on_usage(usage: Any) -> None:
+        # Derive this window's spend from the response usage token counts against the
+        # Haiku rate card and write it straight to meeting_cost.model_usd + the cache
+        # split (§3.9 / AC-COST-02). No provider seam in the cost path (AC-COST-11):
+        # this is a direct Postgres write, not routed through call_external.
+        from scribe.cost import record_scribe_cost_from_usage
+
+        await record_scribe_cost_from_usage(db, meeting_id=header.meeting_id, usage=usage)
+
     async def scribe_call(meeting_id: str, window: Window) -> Any:
         # Read the LIVE rolling summary — Segment B carries the meeting's history.
         return await _real_scribe_call(
-            header, holder.text, window, call_external=_call_external(), client=_client()
+            header,
+            holder.text,
+            window,
+            call_external=_call_external(),
+            client=_client(),
+            on_usage=_on_usage,
         )
 
     async def refresh_summary(meeting_id: str) -> None:
