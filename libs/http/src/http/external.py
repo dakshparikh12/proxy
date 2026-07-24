@@ -13,10 +13,12 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import httpx
-from anthropic import AsyncAnthropic
+
+if TYPE_CHECKING:  # import only for typing — the SDK is loaded lazily at call time
+    from anthropic import AsyncAnthropic
 
 T = TypeVar("T")
 
@@ -73,7 +75,14 @@ async def call_external(
 
 
 def anthropic_client(**kwargs: Any) -> AsyncAnthropic:
-    """The ONLY construction of the Anthropic model client in the product."""
+    """The ONLY construction of the Anthropic model client in the product.
+
+    The SDK is imported lazily HERE so modules that need only the ``call_external``
+    seam (e.g. the invite path's ``RecallTransport``) do not drag in the Anthropic
+    package at import time; the raw client is still constructed nowhere else.
+    """
+    from anthropic import AsyncAnthropic
+
     return AsyncAnthropic(**kwargs)
 
 

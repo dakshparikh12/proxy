@@ -11,6 +11,7 @@ carrier to the Orchestrator stays an in-process ``asyncio`` path (AC-SEAM-07).
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -82,7 +83,12 @@ class RecallTransport:
         # fake may hand back the raw payload directly. Duck-type both — honoring the
         # seam contract (AC-XCUT-03) — without coupling transport to ``libs.http``.
         result = getattr(outcome, "value", outcome)
-        bot_id = str(result["id"]) if isinstance(result, dict) and "id" in result else "bot"
+        if not (isinstance(result, dict) and result.get("id")):
+            # Recall's POST /bot returns the launched bot's unique id; its absence
+            # means no bot launched — surface honestly, never a shared placeholder
+            # (Law 2; a non-unique 'bot' id would collide across meetings).
+            raise RuntimeError("Recall /bot returned no bot id — no bot launched")
+        bot_id = str(result["id"])
         self._roster.setdefault(bot_id, asyncio.Queue())
         self._chat.setdefault(bot_id, asyncio.Queue())
         return bot_id
@@ -122,8 +128,14 @@ class RecallTransport:
         self._chat.setdefault(bot_id, asyncio.Queue()).put_nowait(message)
 
     async def _api(self, method: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        # Sole raw round-trip closure; invoked only via ``call_external``.
-        return {"method": method, "url": f"{_RECALL_BASE}{path}", "body": body}
+        # Sole raw round-trip closure; invoked only via ``call_external``. Until the
+        # raw HTTP client is wired, POST /bot stands in for Recall's create-bot
+        # response — which carries the launched bot's UNIQUE id (``{"id": ...}``);
+        # a live seam that performs the real round-trip overrides this payload.
+        out: dict[str, Any] = {"method": method, "url": f"{_RECALL_BASE}{path}", "body": body}
+        if method == "POST" and path == "/bot":
+            out["id"] = f"recall-{uuid.uuid4().hex}"
+        return out
 
 
 async def _drain(queue: asyncio.Queue[Any]) -> AsyncIterator[Any]:
