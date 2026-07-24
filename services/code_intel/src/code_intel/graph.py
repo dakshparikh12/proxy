@@ -12,7 +12,9 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 
-_TRANSITIVE_KINDS = {"calls", "imports", "writes", "extends", "implements"}
+# A ``read_write`` edge carries a write dependency, so it closes transitively like
+# ``writes`` (R-DOC01-3.5-02 closure); ``reads`` alone is depth-1 only (D-FOUNDER-A003).
+_TRANSITIVE_KINDS = {"calls", "imports", "writes", "read_write", "extends", "implements"}
 _READS = "reads"
 
 

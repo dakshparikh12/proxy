@@ -1241,6 +1241,52 @@
   required_evidence:
     - junit:T-M5-007g
 
+- criterion_id: AC-M4-016
+  name: "The real build EMITS the full edge-kind vocabulary — extends/implements from class bases and read_write for read-and-write co-accessors — so the class-hierarchy blast radius and who_writes resolve from the ONE graph"
+  evidence_class: "[eval-realrepo]"
+  authority_refs: [R-DOC01-3.5-02]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A real repo, built THROUGH the product path via run_full_pipeline. (a) A Python
+      class hierarchy: class HttpHandler(BaseHandler, Protocol); class ApiHandler(HttpHandler).
+      (b) A real Django app where reconcile_order() both READS (Order.objects.get) and
+      WRITES (o.save()) the Order table, while just_read() only reads it.
+      (D01-GRAPH-EDGE-KINDS-MISSING: before the fix the mechanical build emitted only
+      calls/imports/reads/writes — never extends/implements/read_write — so a base-class
+      change silently looked like it broke nothing, and who_writes ran a divergent AST
+      re-scan instead of the ONE graph.)
+    when: >
+      The graph edges are inspected and server.get_dependents('BaseHandler') /
+      server.who_writes('order') are called on the pinned graph.
+    then:
+      - The build EMITS an extends edge from each subclass to its PRIMARY base class node
+        (HttpHandler --extends--> BaseHandler; ApiHandler --extends--> HttpHandler) and an
+        implements edge to each additional base (HttpHandler --implements--> Protocol);
+        the base name binds the in-repo CLASS node, never the table:: node.
+      - A function that BOTH reads and writes the same table gets exactly ONE read_write
+        edge into table::<name> (spec §12.6 kind-per-verb), never a duplicate reads+writes pair.
+      - get_dependents('BaseHandler') returns the TRANSITIVE subclass set over the
+        extends/implements closure (HttpHandler AND ApiHandler) — the class-hierarchy
+        blast radius, no longer silently empty.
+      - who_writes('order') resolves from the graph (writes UNION read_write edges into the
+        table node — the same graph shares_table reads), returns the read_write co-accessor
+        as a writer and excludes the pure reader, tagged resolved on the tier-1 stack.
+  applicability:
+    fixtures: []
+    estates: [estate-django-app]
+    excluded_estates: []
+    rationale: "The dependency graph is the core value-add: a base-class or table-write blast radius that silently under-reports because the mechanical build never emitted extends/implements/read_write is the exact failure the graph exists to prevent."
+  primary_oracle:
+    type: deterministic_execution
+    artifact: tests/code_intel/test_graph_edge_kinds_doc01.py
+  test_ids: [T-M4-016]
+  fault_model_refs: []
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M4-016
+
 - criterion_id: AC-M5-008
   name: "list_entry_points returns nodes with zero in-degree"
   evidence_class: "[unit-example]"

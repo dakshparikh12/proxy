@@ -222,9 +222,22 @@ class CodeIntelMCPServer:
 
     # -- data-flow tools -------------------------------------------------- #
     def who_writes(self, table: str, _graph: Graph | None = None, _sha: str | None = None) -> WhoWritesResult:
+        """Every symbol that WRITES ``table`` — a GRAPH read over the reverse
+        ``writes`` ∪ ``read_write`` edges into the ``table::<name>`` node (spec §3.5 /
+        L185-190: ``[e for e in graph.edges if e.target == table_node and e.kind in
+        ('writes','read_write')]``), the SAME graph ``shares_table`` reads — never a
+        divergent ``orm.who_writes`` re-scan (D01-GRAPH-EDGE-KINDS / §12.6 ONE canonical
+        path). Falls back to the clone-side resolver only when the pinned graph has no
+        matching table node (a freshly-built/spec-loaded graph still answers)."""
         self._db_query()
         clone = self.clone_path
-        writers = orm.who_writes(clone, table) if clone and clone.exists() else []
+        graph = _graph if _graph is not None else self.graph
+
+        writers = self._table_touchers_from_graph(graph, table, kinds=("writes", "read_write"))
+        if not writers and clone and clone.exists():
+            # No table node in the pinned graph — fall back to the clone-side resolver.
+            writers = orm.who_writes(clone, table)
+        writers = [w for w in writers if not self._excluded(w.file)]
         return WhoWritesResult(writers=writers, status="ok" if writers else "not-found")
 
     def shares_table(self, table: str, _graph: Graph | None = None, _sha: str | None = None) -> SharesTableResult:
@@ -242,7 +255,9 @@ class CodeIntelMCPServer:
         clone = self.clone_path
         graph = _graph if _graph is not None else self.graph
 
-        touchers = self._table_touchers_from_graph(graph, table)
+        touchers = self._table_touchers_from_graph(
+            graph, table, kinds=("reads", "writes", "read_write")
+        )
         tier1 = bool(clone and clone.exists() and orm.is_tier1(clone))
         confidence = "resolved" if tier1 else "lower-bound"
         if not touchers and clone and clone.exists():
@@ -264,10 +279,15 @@ class CodeIntelMCPServer:
             shared=len(modules) > 1,
         )
 
-    def _table_touchers_from_graph(self, graph: Graph | None, table: str) -> list[Writer]:
-        """Reverse ``reads``/``writes`` edges into the ``table::<name>`` node, resolved to
-        ``file:line`` leads via the source function nodes. Matches the table by class-name
-        or real-DB-name node id (both are stamped by the builder)."""
+    def _table_touchers_from_graph(
+        self, graph: Graph | None, table: str, kinds: tuple[str, ...] = ("reads", "writes", "read_write")
+    ) -> list[Writer]:
+        """Reverse edges of the requested ``kinds`` into the ``table::<name>`` node, resolved
+        to ``file:line`` leads via the source function nodes. ``who_writes`` passes
+        ``("writes","read_write")`` (the write set); ``shares_table`` passes
+        ``("reads","writes","read_write")`` (the full co-access set) — the exact unions the
+        spec's tool bodies use. Matches the table by class-name or real-DB-name node id
+        (both are stamped by the builder)."""
         if graph is None:
             return []
         # Candidate table node ids: match the query against a table node by class name /
@@ -290,7 +310,7 @@ class CodeIntelMCPServer:
         touchers: list[Writer] = []
         seen: set[str] = set()
         for e in graph.edges:
-            if e.kind not in ("reads", "writes") or e.target not in table_ids:
+            if e.kind not in kinds or e.target not in table_ids:
                 continue
             if e.source in seen:
                 continue

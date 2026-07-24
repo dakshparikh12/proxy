@@ -93,10 +93,37 @@ class _DeclVisitor(ast.NodeVisitor):
                 )
         # A module-level class whose name does not start with '_' is public surface.
         exported = 1 if (not self._func_stack and not node.name.startswith("_")) else 0
+        class_id = f"{self.rel}::{node.name}"
         self.nodes.append(
-            Node(id=f"{self.rel}::{node.name}", path=self.rel, line=node.lineno,
+            Node(id=class_id, path=self.rel, line=node.lineno,
                  kind="class", exported=exported)
         )
+        # extends / implements edges (§2.2 / §3.4 edge vocabulary,
+        # D01-GRAPH-EDGE-KINDS): a subclass -> its base classes, so the class
+        # hierarchy is part of the ONE graph and ``get_dependents(Base)`` returns
+        # the transitive subclass blast radius over the extends/implements closure
+        # (R-DOC01-3.5-02). The PRIMARY base is the ``extends`` (single-inheritance
+        # spine); any additional bases are ``implements`` (mixed-in contracts /
+        # interfaces). Targets are the trailing base name (``models.Model`` ->
+        # ``Model``); ``_assemble`` binds it to the in-repo class node when one
+        # exists and drops it (external base) otherwise — the same name resolution
+        # every other edge kind uses. Tagged resolution="attr" for a qualified base
+        # (``pkg.Base``) so a dependent reached only through a heuristically-bound
+        # base is a lower-bound, never a silent wrong-exact (Law 2).
+        for i, base in enumerate(node.bases):
+            base_name, qualified = _base_name(base)
+            if base_name is None:
+                continue
+            self.edges.append(
+                Edge(
+                    source=class_id,
+                    target=base_name,
+                    kind="extends" if i == 0 else "implements",
+                    file_path=self.rel,
+                    line=node.lineno,
+                    resolution="attr" if qualified else "name",
+                )
+            )
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
@@ -157,6 +184,22 @@ class _DeclVisitor(ast.NodeVisitor):
                      file_path=self.rel, line=node.lineno)
             )
         self.generic_visit(node)
+
+
+def _base_name(base: ast.expr) -> tuple[str | None, bool]:
+    """The target class name for a base expression + whether it was qualified.
+
+    ``BaseHandler`` -> ``("BaseHandler", False)`` (bare name, exact referent);
+    ``models.Model`` / ``django.db.models.Model`` -> ``("Model", True)`` (qualified —
+    the trailing attr is the class name, resolved heuristically like a method call);
+    a subscripted / call base (``Generic[T]``, ``metaclass=...``) has no plain class
+    name -> ``(None, False)`` (skipped). Mirrors the name-based resolution
+    ``visit_Call`` uses for attribute-qualified targets so ``_assemble`` can bind it."""
+    if isinstance(base, ast.Name):
+        return base.id, False
+    if isinstance(base, ast.Attribute):
+        return base.attr, True
+    return None, False
 
 
 def _is_model(node: ast.ClassDef) -> bool:
@@ -348,9 +391,23 @@ def _table_access_edges(clone_path: Path, table_map: dict[str, str]) -> list[Edg
         table_key = class_to_key[model]
         target = f"table::{model}"  # the class-name table node the visitor always stamps
         writer_ids = {w.id for w in orm.who_writes(clone_path, table_key)}
+        reader_ids = orm.table_readers(clone_path, table_key)
         touchers, _conf = orm.table_touchers(clone_path, table_key)
         for t in touchers:
-            kind = "writes" if t.id in writer_ids else "reads"
+            writes = t.id in writer_ids
+            reads = t.id in reader_ids
+            # A function that BOTH reads and writes the same table gets ONE
+            # ``read_write`` edge (spec §12.6 / L190,L203 kind-per-verb), never a
+            # duplicate reads+writes pair; a pure writer -> ``writes``, a pure reader
+            # -> ``reads``. ``who_writes`` (the graph read below) then unions
+            # writes ∪ read_write, and ``shares_table`` unions reads ∪ writes ∪
+            # read_write, exactly as the spec's tool bodies do.
+            if writes and reads:
+                kind = "read_write"
+            elif writes:
+                kind = "writes"
+            else:
+                kind = "reads"
             edges.append(Edge(source=t.id, target=target, kind=kind, file_path=t.file, line=t.line))
     return edges
 
@@ -407,12 +464,22 @@ def _assemble(nodes: list[Node], raw_edges: list[Edge]) -> Graph:
     ids = {n.id for n in nodes}
     for n in nodes:
         by_name.setdefault(n.id.rsplit("::", 1)[-1], []).append(n.id)
+    kind_by_id = {n.id: n.kind for n in nodes}
     resolved: list[Edge] = []
     for e in raw_edges:
         if e.target in ids:
             resolved.append(e)
             continue
         candidates = by_name.get(e.target, [])
+        # A ``calls``/``extends``/``implements`` edge targets a CODE symbol (function /
+        # class), NEVER a ``table::`` node — a bare name that matches both a class and its
+        # ``table::<Name>`` node (an ORM model class ``Order`` + its table) must bind the
+        # class, so a constructor call ``Order(...)`` / a base ``class X(Order)`` resolves
+        # to the class, not spuriously to the table (which would forge a fake calls/extends
+        # edge into the table node). Only the ORM-built reads/writes/read_write edges target
+        # ``table::`` nodes, and those already carry a resolved ``table::`` target id.
+        if e.kind in ("calls", "extends", "implements"):
+            candidates = [c for c in candidates if kind_by_id.get(c) != "table"]
         # prefer a callee in a different file (cross-module call), else any.
         target_id = None
         src_file = e.source.rsplit("::", 1)[0]

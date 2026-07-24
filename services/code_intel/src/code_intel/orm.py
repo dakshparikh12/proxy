@@ -789,6 +789,44 @@ def table_touchers(clone_path: Path, table: str) -> tuple[list[Writer], str]:
     return touchers, confidence
 
 
+def table_readers(clone_path: Path, table: str) -> set[str]:
+    """The set of ``file::func`` ids that READ ``table`` (Django/SQLAlchemy query reads).
+
+    Unlike :func:`table_touchers` this does NOT subtract the writers — it reports every
+    reader, INCLUDING a function that also writes. The graph builder unions this with the
+    writer set to decide the per-toucher edge kind: a function in BOTH sets is a
+    ``read_write`` co-accessor (spec §12.6 kind-per-verb), one only here is a pure
+    ``reads``. A function defining the model is skipped (a model's own module is not a
+    co-accessor of its table, mirroring :func:`table_touchers`)."""
+    stack = _tier1_stack(clone_path)
+    if stack == "rails":
+        # Ruby is a line/method scan; the durable co-access signal there is writes.
+        return set()
+    table_map = _table_class_map(clone_path)
+    model = table_map.get(table) or table_map.get(table.lower())
+    if model is None:
+        return set()
+    readers: set[str] = set()
+    for p in _py_files(clone_path):
+        rel = str(p.relative_to(clone_path))
+        try:
+            tree = ast.parse(p.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:
+            continue
+        if _defines_model(tree, model):
+            continue
+        file_models = _models_in_file(tree)
+        for func in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+            reads = (
+                _sa_func_reads_table(func, model, file_models)
+                if stack == "sqlalchemy"
+                else _django_func_reads_table(func, model, table, file_models)
+            )
+            if reads:
+                readers.add(f"{rel}::{func.name}")
+    return readers
+
+
 def _owning_module(rel: str) -> str:
     """The owning module for a source path — its top-level package directory
     (``billing/svc.py`` -> ``billing``), the group the co-access is reported under (§3.8)."""
