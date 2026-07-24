@@ -63,3 +63,17 @@ async def get_by_bot_id(conn: Any, recall_bot_id: str) -> dict[str, Any] | None:
         recall_bot_id,
     )
     return dict(row) if row is not None else None
+
+
+async def get_repo_by_id(conn: Any, repo_id: Any) -> dict[str, Any] | None:
+    """Resolve a repo row (``id``/``tenant_id``/``full_name``) from its id.
+
+    The meeting-join path needs the repo's ``full_name`` to locate its per-tenant
+    ``graph.db`` (Doc 01's index) so the Scribe starts with a real referent corpus
+    (§3.4 code orientation). Returns ``None`` when no repo matches (fail closed).
+    """
+    row = await conn.fetchrow(
+        "SELECT id, tenant_id, full_name, default_branch FROM repos WHERE id = $1",
+        repo_id,
+    )
+    return dict(row) if row is not None else None

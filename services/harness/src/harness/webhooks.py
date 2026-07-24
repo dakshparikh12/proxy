@@ -58,6 +58,38 @@ def _bot_id(payload: dict[str, Any]) -> str | None:
     return None
 
 
+async def _resolve_referent_corpus(resolved: dict[str, Any], *, db: Database) -> Any:
+    """Build the meeting's referent corpus from its repo — or ``None`` if unavailable.
+
+    The gap DOC03-REFERENT-CORPUS-UNWIRED-IN-PRODUCTION: the sole join path started the
+    Scribe with NO corpus, so every §3.4 referent stayed ``binding_status='unbound'`` and
+    the Workroom read zero code orientation off ``/internal/notes``. The resolved bot row
+    already carries ``repo_id``; here we resolve that repo's ``full_name``, locate its
+    per-tenant ``graph.db`` (the exact artifact ``code_intel.graph_store`` writes — Doc 01's
+    index for that repo), and build a :class:`~scribe.referent.ReferentCorpus` pointed at it
+    so the applier binds ``checkout -> payments/checkout.py::checkout`` on a real meeting.
+
+    Fail closed to ``None`` (referents stay honestly named-but-unbound) whenever the repo is
+    unknown or its index has not been built yet — never a raise on the join path.
+    """
+    from code_intel.paths import repo_name_from_url, tenant_repo_dir
+    from scribe.referent import ReferentCorpus
+
+    repo_id = resolved.get("repo_id")
+    if repo_id is None:
+        return None
+    async with db.acquire() as conn:
+        repo = await repos.meetings.get_repo_by_id(conn, repo_id)
+    if repo is None or not repo.get("full_name"):
+        return None
+    repo_name = repo_name_from_url(str(repo["full_name"]))
+    graph_db = tenant_repo_dir(str(repo["tenant_id"]), repo_name) / "graph.db"
+    if not graph_db.exists():
+        # The repo's Doc 01 index has not been built yet — start honestly unbound.
+        return None
+    return ReferentCorpus(db_path=str(graph_db))
+
+
 def _transcript_body(payload: dict[str, Any]) -> dict[str, Any]:
     """The Recall real-time transcript passthrough body (``data`` if nested, else top).
 
@@ -108,7 +140,11 @@ async def _dispatch_meeting_event(
 
         header = MeetingHeader(meeting_id=meeting_id)
         carrier = SignalCarrier()
-        registry.start_meeting(header, carrier)
+        # Resolve the repo's Doc 01 index into a referent corpus so the Scribe starts with
+        # code orientation (§3.4) — the fix for DOC03-REFERENT-CORPUS-UNWIRED-IN-PRODUCTION.
+        # Threads start_meeting -> MeetingRuntime -> build_real_seams -> the applier.
+        referent_corpus = await _resolve_referent_corpus(resolved, db=db)
+        registry.start_meeting(header, carrier, referent_corpus=referent_corpus)
     elif is_transcript:
         # The live transcript reaches the notes engine: feed the passthrough body onto
         # the meeting's carrier (transport's emit end) so it flows carrier->coalescer->
