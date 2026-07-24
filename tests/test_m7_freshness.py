@@ -163,6 +163,89 @@ def test_ac_m7_006_mid_meeting_push_emits_repo_advanced_notification():
     )
 
 
+def test_ac_m7_008_push_pulls_delta_exactly_once_with_changed_files():
+    """AC-M7-008: A push webhook pulls the delta exactly once (no redundant git fetch)."""
+    from services.code_intel.pipeline import run_full_pipeline
+    from services.code_intel.webhook_handler import WebhookHandler
+    from tests.fixtures.repos import small_repo_fixture
+    from tests.fixtures.stubs import GitInterceptor, push_webhook_fixture
+
+    fixture = small_repo_fixture()
+    interceptor = GitInterceptor()
+    pipeline = run_full_pipeline(
+        tenant_id="tenant-m7-008",
+        repo_url=fixture.url,
+        git_interceptor=interceptor,
+    )
+
+    # Real wiring: the webhook handler shares the pipeline's own Cloner (built and
+    # stored on pipeline._cloner by run_full_pipeline) AND the pipeline. This is
+    # where the double-pull bit: handler pulls, then apply_push pulled again.
+    handler = WebhookHandler(cloner=pipeline._cloner, pipeline=pipeline)
+
+    interceptor.reset()
+    webhook = push_webhook_fixture(
+        repo_url=fixture.url,
+        sha="sha_after_push_008",
+        changed_files=["pkg/mod.py"],
+    )
+    handler.handle(webhook)
+
+    fetches = [a for a in interceptor.recorded_args if "fetch" in a and "origin" in a]
+    assert len(fetches) == 1, (
+        f"Expected exactly ONE 'git fetch origin' per push, got {len(fetches)}: {fetches}"
+    )
+
+
+def test_ac_m7_008b_surviving_pull_carries_changed_files_and_excludes_secret():
+    """AC-M7-008: the one pull that survives carries changed_files so a newly-changed
+    secret is excluded — correctness must not depend on a duplicate earlier pull."""
+    from services.code_intel.cloner import Cloner
+    from services.code_intel.exclusions import ExclusionManager
+    from services.code_intel.pipeline import run_full_pipeline
+    from services.code_intel.webhook_handler import WebhookHandler
+    from tests.fixtures.stubs import (
+        GitInterceptor,
+        GitleaksInstrumented,
+        PlantedSecretsRepo,
+        push_webhook_fixture,
+    )
+
+    fixture = PlantedSecretsRepo(secret_introduced_on_push=True)
+    gitleaks = GitleaksInstrumented()
+    exclusions = ExclusionManager(gitleaks=gitleaks)
+    interceptor = GitInterceptor()
+    cloner = Cloner(git_interceptor=interceptor, exclusion_manager=exclusions)
+    clone_path = cloner.clone(tenant_id="tenant-m7-008b", repo_url=fixture.url)
+
+    pipeline = run_full_pipeline(
+        tenant_id="tenant-m7-008b-pipe",
+        repo_url=fixture.url,
+        git_interceptor=interceptor,
+    )
+    # Point the pipeline's apply_push at the same cloner+clone we are inspecting.
+    pipeline._cloner = cloner
+    pipeline.clone_path = clone_path
+
+    handler = WebhookHandler(cloner=cloner, pipeline=pipeline)
+    gitleaks.reset()
+    interceptor.reset()
+
+    webhook = push_webhook_fixture(
+        repo_url=fixture.url,
+        sha="newsha008b",
+        changed_files=[fixture.new_secret_file],
+    )
+    handler.handle(webhook)
+
+    fetches = [a for a in interceptor.recorded_args if "fetch" in a and "origin" in a]
+    assert len(fetches) == 1, f"Expected exactly ONE delta pull, got {len(fetches)}"
+    assert fixture.new_secret_file in exclusions.get_excluded_paths(clone_path), (
+        f"New secret file {fixture.new_secret_file} not excluded — the surviving "
+        f"pull did not carry changed_files"
+    )
+
+
 def test_ac_m7_007_pr_meeting_pins_to_pr_head_not_default_branch():
     """AC-M7-007: Meeting about a PR pins meetings.pinned_sha to the PR head (not the default-branch tip)."""
     from services.code_intel.meeting import MeetingSession

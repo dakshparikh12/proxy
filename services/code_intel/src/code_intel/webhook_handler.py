@@ -53,14 +53,24 @@ class WebhookHandler:
         return WebhookResponse(status_code=200, enqueued=True)
 
     def _process_push(self, webhook: Any) -> None:
-        if self._cloner is not None:
+        # The handler owns THE pull when it has a cloner: it carries the push's
+        # changed_files so scan_after_pull excludes newly-changed secret files.
+        handler_pulled = self._cloner is not None
+        if handler_pulled:
             self._cloner.pull_delta(
                 repo_url=getattr(webhook, "repo_url", None),
                 changed_files=getattr(webhook, "changed_files", None),
             )
         pipeline = self._resolved_pipeline()
         if pipeline is not None:
-            pipeline.apply_push(getattr(webhook, "sha", "") or "", getattr(webhook, "num_commits", 1))
+            # Don't let apply_push re-pull (redundant git fetch, and it would
+            # re-scan with changed_files=None) when we already pulled. Exactly one
+            # delta pull happens per push, and it carries changed_files (AC-M7-008).
+            pipeline.apply_push(
+                getattr(webhook, "sha", "") or "",
+                getattr(webhook, "num_commits", 1),
+                pull=not handler_pulled,
+            )
         elif self._server is not None:
             self._server.invalidate_caches()
         if self._rebuild_counter is not None:

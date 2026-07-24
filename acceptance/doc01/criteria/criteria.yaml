@@ -1735,6 +1735,37 @@
   required_evidence:
     - junit:T-M7-006
 
+- criterion_id: AC-M7-008
+  name: "A push webhook pulls the delta exactly once (no redundant git fetch)"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.2-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A fixture repo already cloned via run_full_pipeline (the real Cloner is
+      stored on pipeline._cloner). The WebhookHandler is wired with BOTH that
+      cloner and the pipeline. A git command interceptor records every git argv.
+    when: >
+      A push webhook carrying changed_files is processed.
+    then:
+      - Exactly one 'git fetch origin' (delta pull) is recorded for the push.
+      - The single pull carries the webhook's changed_files (so scan_after_pull
+        excludes newly-changed secret files) — no pull with changed_files=None.
+  applicability:
+    fixtures: [fixture-git-interceptor, fixture-post-clone-push]
+    estates: []
+    excluded_estates: []
+    rationale: "A redundant fetch per push is wasted work and the two calls disagree on changed_files; correctness must not depend on ordering of a duplicate pull."
+  primary_oracle:
+    type: command_log_count_check
+    artifact: "count of 'git fetch origin' argv == 1 per push; pull carries changed_files"
+  test_ids: [T-M7-008]
+  fault_model_refs: [F-REDUNDANT-DELTA-PULL]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M7-008
+
 # ══════════════════════════════════════════════════════════════════
 # M8 — Precise navigation (LSP)
 # ══════════════════════════════════════════════════════════════════

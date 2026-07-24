@@ -96,8 +96,12 @@ class Pipeline:
             self._store.write_graph(graph, drop_first=True)
         return graph
 
-    def apply_push(self, new_sha: str, num_commits: int = 1) -> None:
-        if self._cloner is not None and self.clone_path and self.clone_path.exists():
+    def apply_push(self, new_sha: str, num_commits: int = 1, pull: bool = True) -> None:
+        # ``pull=False`` when the caller (the webhook handler) already pulled the
+        # delta itself carrying the push's ``changed_files`` — re-pulling here
+        # would be a redundant ``git fetch origin`` AND, worse, would re-scan with
+        # ``changed_files=None``. Exactly one pull happens per push (AC-M7-008).
+        if pull and self._cloner is not None and self.clone_path and self.clone_path.exists():
             self._cloner.pull_delta(self.clone_path)
         if self.clone_path and self.clone_path.exists():
             self.graph = self.rebuild_graph(built_at_sha=new_sha)
