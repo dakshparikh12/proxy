@@ -1,107 +1,89 @@
 ---
-description: Run the forge loop on any spec — understand → complete-the-bundle → plan → build → done → fresh-context spec-audit loop → PRODUCTION-VERIFIED.
-argument-hint: <spec-path | doc-id>
+description: The forge loop — spec → production-verified code. Comprehend (spec+codebase) → plan-to-integrate → build → verify ($0 sim + real data) → dual fresh-context audit → loop until PRODUCTION-VERIFIED. Flags: --auto --verify --build --budget.
+argument-hint: <spec-path|doc-id> [more ids...] [--auto] [--verify|--build] [--budget N]
 ---
 
 # /forge — spec → production-verified code
 
-You are driving the **forge** loop for: **$ARGUMENTS**.
+Driving the forge loop for: **$ARGUMENTS**. Read `${CLAUDE_PLUGIN_ROOT}/README.md` and the
+`forge:forge-loop` skill first. **Agents judge · scripts decide the boolean · hooks are the physics ·
+fresh-context agents (that did not build it) are the terminal gate.** Never fake DONE; flip
+`passes:true` only after the real path RAN on real data with evidence.
 
-Read `${CLAUDE_PLUGIN_ROOT}/README.md` and the skill `forge:forge-loop` first. **You provide the
-judgment; the gates provide the boolean; the hooks provide the physics; fresh-context agents provide
-the maker≠checker.** Never fake DONE; never edit tests/goldens to pass; flip `passes:true` only after
-the real path RAN on real data with evidence shown.
+## Invocation & flags
+- `/forge <target> [more targets...]` — one or more docs (doc-id like `01`, or a spec path). Multiple
+  targets → **independent docs run in PARALLEL, dependent ones in dependency order.**
+- `--auto` — unattended/overnight: **auto-approve the whole delegation set; on a genuine blocker,
+  RECORD it and move to other work** (never idle-wait); deliver a report at the end. (Default =
+  interactive: stop + ask on escalations.)
+- `--verify` / `--build` — force the mode (default: auto-detect by whether a sealed bundle exists).
+  **The modes differ ONLY in who authors the criteria; the loop below is identical.**
+- `--budget <N>` — token ceiling (e.g. `2M`); the loop scales depth to it and stops cleanly.
+- **For `--auto` OR multiple targets, LAUNCH THE RUNTIME** (do not drive by hand):
+  `Workflow({ scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/forge-run.js", args: { targets, auto, budget } })`.
+  It runs the loop below per doc — in parallel, in the background, resumably — and returns only when
+  every doc is `PRODUCTION-VERIFIED` or honestly `BLOCKED`. For a single interactive doc, drive it inline.
 
-## The ONE standard (identical for both modes)
-DONE means **every obligation the spec STATES or IMPLIES is delivered, WIRED into the real product
-path, and proven on REAL + MESSY data with the actual OUTPUT inspected against the spec's quality/
-latency bar — confirmed by fresh-context agents that did not build it.** Never "the code exists";
-never "the criteria are green"; always "the running product does the right thing on real data — fast,
-accurate, and honestly-labeled (`resolved`/`lower-bound`/`not-found-by-this-method`)." A capability
-that only works when a test injects a double is NOT done.
+## The ONE standard (both modes)
+DONE = **every obligation the spec STATES or IMPLIES is delivered, WIRED into the real product path,
+and proven on REAL + MESSY data with the actual OUTPUT inspected against the quality/latency bar the
+spec implies — confirmed by fresh agents that did not build it, and with the whole system (docs 0..N)
+still green.** Never "it exists"; never "the criteria are green"; always "the running product does the
+right thing — fast, accurate, honestly-labeled." A capability that only works when a test injects a
+double is NOT done.
 
-## Resolve the target (a spec PATH or a doc-id — works for any spec/any repo)
-- **A path** (e.g. `product/v0-spec/04-*.md`): that file is the spec; derive a short `<id>`; bundle at `acceptance/<id>/`.
-- **A doc-id** (e.g. `00`, `04`): spec = `product/v0-spec/<NN>-*.md`, bundle = `acceptance/doc<NN>/`, slice = `slices/<NN>/`.
-State your resolution (spec + bundle dir + id) before proceeding.
+## The loop (lean — most volume is deterministic; fresh agents only for judgment)
+1. **COMPREHEND (spec + codebase)** — `forge:analyst` (fresh, **scoped** context): the spec's
+   obligations (stated + **inferred**, the §8 quality/latency bar) **and a survey of the existing
+   system** → an intent brief **+ an INTEGRATION MAP** (what to reuse / extend / wire-into; the
+   downstream consumers). Planning is to *integrate*, never greenfield-duplicate.
+2. **FRAME** — BUILD: `forge:specify` authors criteria + tasks. VERIFY: load the sealed bundle. BOTH:
+   `coverage.py` (id-closure) + a **cheap completeness diff** (bundle vs the obligation list). *The
+   deep spec audit is step 6 — don't pay for two.*
+3. **PLAN-TO-INTEGRATE** — `streams.py` → file-disjoint streams (contracts first); `forge:planner-
+   reviewer` (fresh) **only for non-trivial builds**. Every plan **wires into existing entrypoints**
+   (no parallel / duplicate / unwired code — this is the class of bug that kills "done").
+4. **BUILD** — `forge:build-slice` per task: a failing acceptance test on the **real product
+   entrypoint** → code to green → evidence → flip. **One batched `forge:reviewer` per stream**, not
+   per task.
+5. **VERIFY (cheap → expensive, stop-early)** — deterministic-first:
+   - static + unit + **property/fuzz** (code, no model).
+   - **$0 SIMULATION HARNESS** — *hundreds* of real-life scenarios (classes: **normal · messy ·
+     fault-injected · adversarial · confident-wrong-bait**) fed through the **real product** with
+     external seams replayed from `[reality]` cassettes / deterministic generators. **Mostly
+     code-graded**; an LLM-judge ONLY for fuzzy outputs. A fresh oracle knows the spec-expected
+     behavior, compares the actual, and iterates. Only scenarios that pass graduate.
+   - **regression** — every prior doc's tests still green (the cumulative check).
+   - **real-infra + real-data eval + differential/metamorphic** — PAID, **small, only on what passed
+     sim**, on the real vendors the spec names.
+   - Run `done-check.sh` **in the background + poll — never synchronously** (a silent long command
+     stalls the agent; this is the failure mode we fixed).
+6. **DUAL TERMINAL AUDIT (fresh, didn't build) + loop** —
+   - **SPEC lens** — raw spec vs running code: "is this doc genuinely done, **0 gaps**?"
+   - **CODEBASE lens (cumulative, via CERTIFICATES)** — full regression + **deep-audit only the blast
+     radius** (doc N + any prior code it changed): "is everything that should exist by now (0..N)
+     built, **wired, actually working, 0 errors** — down to minutiae?"
+   - **CUSTOMER-ACCEPTANCE judge** — a demanding user in a *real meeting* throws real + messy +
+     adversarial inputs: is the output **ship-quality, fast, honest**? (bar **inferred** from the spec).
+   - Any finding → fix (loop to 3/4) → re-verify → re-audit. **Terminate only when both lenses = 0,
+     all green, eval ≥ the inferred bar.** On clean: write the doc's **audit certificate** (code hash +
+     verdict) and add every bug found to the **regression ratchet**.
+   - **Convergence guard**: the gap-set must strictly shrink; on a 2-round stall or a genuine infra
+     block → honest `BLOCKED` (in `--auto`: record + move on).
 
-## Mode — the ONLY difference is who authors the criteria (everything else is identical)
-- **BUILD** (no sealed bundle — e.g. 04–09): phase ② **authors** the criteria from the spec.
-- **VERIFY** (sealed bundle exists — e.g. 00–03): phase ② **loads** the bundle, then **re-audits it
-  against the raw spec and EXTENDS it where incomplete.** VERIFY never blindly trusts the seal — a
-  sealed bundle can under-specify its spec (that is the exact failure this loop closes), so the
-  criteria-auditor runs in BOTH modes.
-Both modes then run ③④⑤⑥ identically. State the mode you detected before proceeding.
+## Delegation (autonomous) — auto vs human
+Auto-approve: bundle-extension, `_baseline.json`, non-prod fixes. **Human-only (escalate; in `--auto`
+record + defer):** prod deploy · destructive/prod migration · `EXTRACTION_COUNT_HALT` · a genuine
+`SPEC_BLOCKED`.
 
-## Autonomy & delegation (when run unattended)
-**Auto-approve** (the loop proceeds without asking): extending the bundle with a missing criterion the
-auditor derived from the spec; creating/updating `_baseline.json`; any non-prod code/test fix.
-**Escalate and STOP** (these stay human, always): **prod deploy · destructive/prod migration ·
-`EXTRACTION_COUNT_HALT` · a genuine `SPEC_BLOCKED` spec contradiction.** Surface each with a
-recommendation and wait; never auto-approve these.
+## Reliability + token discipline
+No agent runs `done-check` or any >2-min command synchronously (background + poll). Every acceptance
+test drives the real product entrypoint on real data. Deterministic-first (scripts, not agents, decide
+counts/latency/byte-equality/diffs). Scoped fresh context (spec section + relevant files, not the whole
+tree). Model-tier: Opus for plan/deep-audit/hard-build · Sonnet for stream review · Haiku/no-model for
+sim runs + search. Parallel docs/streams: own Postgres port, shared idempotent clone cache, commit each
+green increment, certificates skip unchanged docs.
 
-## Show your work
-Live TODO per phase→stream→task-batch; announce each phase transition (`▶ ⑥ SPEC-AUDIT round 2`);
-print every gate result (the `coverage.py` line, the full `done-check` table, the ⑥ gap list); surface
-every escalation immediately and stop; on `BLOCKED:<id>:<task> <reason>` say what you do next. Prefer a
-real artifact (a diff, a test result, an output sample) over prose.
-
-## The phases
-
-**① UNDERSTAND** — dispatch `forge:analyst` (fresh) on the raw spec → an intent brief: real intent;
-hidden/derived/**inferred** obligations; edge & negative cases; **and the production bar** (the §8
-accuracy/latency thresholds and the messy-estate cases that define "customer quality"). Anchors all of ②–⑥.
-
-**② COMPLETE THE BUNDLE (spec ⇔ criteria closure)** —
-- BUILD: `forge:specify` → criteria (EARS: behavior + oracle + threshold + evidence_class) + atomic
-  tasks bound to criteria.
-- VERIFY: load `acceptance/doc<NN>/`.
-- **BOTH, then loop until SEAL-READY:** run `python3 "${CLAUDE_PLUGIN_ROOT}/gates/coverage.py" <id>`
-  (id-closure, exit 0) **and** dispatch `forge:criteria-auditor` (fresh — reads the RAW spec + intent
-  brief, not the criteria's reasoning). It must report **zero uncovered clauses, zero missed hidden
-  obligations, and that a `[eval]` criterion exists for every §8 output-quality / latency / messy-data
-  bar.** On REWORK: a **different** fresh agent authors the missing criteria (maker≠checker), extend
-  the bundle (auto in autonomous mode; else founder-seal), re-run coverage + auditor.
-
-**③ PLAN** — `python3 "${CLAUDE_PLUGIN_ROOT}/gates/streams.py" <id>` → file-disjoint streams
-(contracts first). Per stream, `forge:planner-reviewer` (fresh) locks the plan before any code. Streams
-run concurrently in isolated worktrees — **symlink `.venv` into each worktree so tests run there.**
-
-**④ BUILD + VERIFY (the ladder, through the PRODUCT PATH)** — per task, `forge:build-slice`: write the
-failing acceptance test that drives the **real product entrypoint** (e.g. `run_full_pipeline` → the
-real tool / the real service API) on real data — **never an injected double** — then code to green,
-show evidence, flip `passes:true`. After each green task, `forge:reviewer` (fresh) checks the diff vs
-the criterion + invariants **AND that it is WIRED into the production path** (an unwired seam is a
-fail). The ladder (static → unit → property → real-infra → real-data) is enforced by the hooks +
-`forge:eval-gate`, which runs every `[eval]` criterion on **real AND messy estates** and scores the
-**output** (correctness, groundedness, completeness, honesty, latency, cost) vs the §8 thresholds
-(deterministic graders where possible; a human-calibrated judge only for fuzzy outcomes). On repeated
-failure `/clear` + retry fresh; after N stalls, `BLOCKED` + continue other streams.
-
-**⑤ DONE** — `bash "${CLAUDE_PLUGIN_ROOT}/gates/done-check.sh" --spec <id>` (5 conjuncts incl.
-real-data eval ≥ baseline). **Run it in the BACKGROUND and poll — never synchronously inside a build
-step** (a silent long command trips the agent watchdog; this is what stalled prior runs).
-
-**⑥ SPEC-AUDIT LOOP (the terminal gate — both modes)** — dispatch fresh-context agents that did **not**
-build this doc. **Partition the spec into sections and audit in parallel:** each re-derives its
-section's obligations from the RAW spec and checks the **running code** — build via the real product
-entrypoint on **real + messy** estates, call the real tools, **inspect the actual output against the
-quality/latency bar, confirm wiring (no injected seam), measure performance.** Synthesize one gap list.
-- **If gaps:** author criteria (fresh) → extend the bundle → loop back to ③/④ for those gaps → re-run
-  ⑤ → re-audit ⑥.
-- **TERMINATE only when** ⑥ returns zero gaps **AND** ⑤ is green **AND** eval ≥ bar on the messy estate.
-- **Convergence guard:** the gap-set must **strictly shrink** each round; if it stalls for 2 rounds, or
-  a gap is genuinely infra-blocked (e.g. a language-server binary that cannot be installed here), STOP
-  and return the honest `BLOCKED` list — never loop forever, never fake convergence.
-
-## Reliability (baked in from the failure modes)
-- **No agent runs `done-check` or any >2-min command synchronously** — background + poll.
-- **Every acceptance test drives the real product entrypoint on real data;** ⑥ rejects any capability
-  that only works when a test injects it.
-- **Parallel docs / streams:** each on its own Postgres port; shared idempotent clone cache; commit
-  each green increment (durability across a long run).
-- Keep the standing fixes: `done-check` shlex/C4, decompose-preserve, self-healing fixture cache.
-
-## Return exactly one state
-**PRODUCTION-VERIFIED** — ⑤ green **and** ⑥ zero-gap **and** eval ≥ bar on real+messy data, with
+## Return exactly one state (per doc)
+**PRODUCTION-VERIFIED** — step 6 both-lenses-0 + all green + eval ≥ bar on real+messy data, with
 evidence — or the exact **BLOCKED / SPEC_BLOCKED** list (including anything infra-blocked). Nothing vague.
