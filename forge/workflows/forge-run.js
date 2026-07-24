@@ -81,11 +81,11 @@ async function runDoc(doc, priorTimings) {
       : `SCOPED audit — focus on what changed since last round (files: ${changed.slice(0, 40).join(', ') || 'recent commits'}) and their dependents/blast-radius; prior areas were certified clean, re-open one only if a change plausibly touches it. Do NOT re-derive the whole tree.`
     const [spec, code] = await parallel([
       () => agent(
-        `FRESH SPEC-LENS AUDIT of doc ${doc} — you did NOT build this; trust nothing. ${scope} Read product/v0-spec/${doc}-*.md, derive every obligation (stated + inferred), and check the RUNNING code delivers each: build via the real product entrypoint on a REAL repo (reuse the estate cache), call the real tool, confirm it is WIRED (an unwired seam that only works when a test injects it is a gap). Run a $0 sim + adversarial + messy-input pass and judge the OUTPUT as a demanding user in a live meeting (bar: ${brief.productionBar}) — a confident-wrong / slow / dishonest / unwired output is an ACCURACY gap. severity='accuracy' ONLY if it changes what the product tells the user (wrong/missing/unwired/dishonest/too-slow output, missing spec obligation, security, data loss); severity='cosmetic' for anything that does NOT change an output. Set changesOutput. Return gaps {id, description incl. fix + how it wires, severity, changesOutput, specCite}.${ADAPT} ${R}${clock(BUDGETS.auditRound)}`,
+        `FRESH SPEC-LENS AUDIT of doc ${doc} — you did NOT build this; trust nothing. ${scope} Read product/v0-spec/${doc}-*.md, derive every obligation (stated + inferred), and check the RUNNING code delivers each: build via the real product entrypoint on a REAL repo (reuse the estate cache), call the real tool, confirm it is WIRED (an unwired seam that only works when a test injects it is a gap). Run a $0 sim + adversarial + messy-input pass and judge the OUTPUT as a demanding user in a live meeting (bar: ${brief.productionBar}) — a confident-wrong / slow / dishonest / unwired output is an ACCURACY gap. (Do NOT run the offline test suite or \`uv run\` here — exercise the PRODUCT path; the gate owns the suite.) severity='accuracy' ONLY if it changes what the product tells the user (wrong/missing/unwired/dishonest/too-slow output, missing spec obligation, security, data loss); severity='cosmetic' for anything that does NOT change an output. Set changesOutput. Return gaps {id, description incl. fix + how it wires, severity, changesOutput, specCite}.${ADAPT} ${R}${clock(BUDGETS.auditRound)}`,
         { label: `audit-spec:${doc}:r${round}`, phase: P, agentType: 'general-purpose', schema: GAPS, effort: 'high' }
       ),
       () => agent(
-        `FRESH CODEBASE-LENS AUDIT — you did NOT build this. ${scope} Read the CODE (services/*, libs/*) for what should exist by now (docs 00..${doc}) and find defects that CHANGE BEHAVIOUR: dead/unwired code on the real path, broken integration between docs, unhandled edges that produce wrong output, silent failures, subtle correctness bugs. Run ONLY the blast-radius tests for the changed area (not the whole suite — the done-check gate runs that once). severity='accuracy' if it changes real output/behaviour/correctness/security; severity='cosmetic' otherwise (backlogged). Return gaps {id, description incl. fix, severity, changesOutput, specCite=file:line}.${ADAPT} ${R}${clock(BUDGETS.auditRound)}`,
+        `FRESH CODEBASE-LENS AUDIT — you did NOT build this. ${scope} Read the CODE (services/*, libs/*) for what should exist by now (docs 00..${doc}) and find defects that CHANGE BEHAVIOUR: dead/unwired code on the real path, broken integration between docs, unhandled edges that produce wrong output, silent failures, subtle correctness bugs. HARD RULE: judge primarily by READING + exercising the REAL product path on a real repo; to CONFIRM a specific suspected defect you may run AT MOST a couple of TARGETED tests via \`.venv/bin/pytest <file>::<test>\` — NEVER the offline suite, NEVER \`uv run\`, NEVER a broad \`-m "not ..."\` selector (the done-check GATE runs the full suite once; running it in the audit is a 3x time-waste and is forbidden). severity='accuracy' if it changes real output/behaviour/correctness/security; severity='cosmetic' otherwise (backlogged). Return gaps {id, description incl. fix, severity, changesOutput, specCite=file:line}.${ADAPT} ${R}${clock(BUDGETS.auditRound)}`,
         { label: `audit-code:${doc}:r${round}`, phase: P, agentType: 'general-purpose', schema: GAPS, effort: 'high' }
       ),
     ])
@@ -141,8 +141,14 @@ const priorTimings = {}   // phase -> accumulated seconds across completed docs 
 for (const wave of wavesOf(targets)) {
   const ready = wave.filter(doc => (DEPS[doc] || []).filter(d => targets.includes(d)).every(d => results[d] && results[d].status === 'CANDIDATE-VERIFIED'))
   for (const doc of wave.filter(d => !ready.includes(d))) { results[doc] = { doc, status: 'BLOCKED', reason: 'dependency not verified' }; log(`doc${doc}: BLOCKED (dependency)`) }
-  log(`── wave [${ready.join(', ')}] (parallel) · adaptive=${JSON.stringify(priorTimings)} ──`)
-  const done = await parallel(ready.map(doc => () => runDoc(doc, { ...priorTimings })))
+  // worktree mode → docs in a wave run in PARALLEL (isolated); main-repo mode → SEQUENTIAL
+  // (one working tree; parallel edits/commits would collide, and agents don't reliably
+  // cd into a worktree — proven fragile, so main-repo isolation is by serialization).
+  const par = Object.keys(WORKDIRS).length > 0
+  log(`── wave [${ready.join(', ')}] (${par ? 'parallel-worktree' : 'sequential-main-repo'}) · adaptive=${JSON.stringify(priorTimings)} ──`)
+  let done
+  if (par) { done = await parallel(ready.map(doc => () => runDoc(doc, { ...priorTimings }))) }
+  else { done = []; for (const doc of ready) done.push(await runDoc(doc, { ...priorTimings })) }
   ready.forEach((doc, i) => {
     results[doc] = done[i] || { doc, status: 'BLOCKED', reason: 'runDoc null' }
     const t = results[doc].timings || {}
