@@ -457,3 +457,54 @@ def test_obs_010_code_intel_volume_daily_snapshot_and_cache_not_truth():
     assert re.search(r"postgres|gcs", corpus), (
         "the durable source of truth (Postgres + GCS) must be documented distinct from the rebuildable volume cache"
     )
+
+
+# -- AC-OBS-005 hardening: heartbeat ping validates the URL scheme ----------
+def test_obs_005_default_ping_rejects_non_https_schemes():
+    """The real _default_ping seam must reject non-https schemes (file:/, http:,
+    custom) BEFORE opening a URL -- closing the B310 (CWE-22) hardening gap."""
+    import urllib.request
+    from services.harness.heartbeat import _default_ping
+
+    opened: list[str] = []
+    real_urlopen = urllib.request.urlopen
+
+    def _tripwire(url, *args, **kwargs):  # pragma: no cover
+        opened.append(url if isinstance(url, str) else str(url))
+        raise AssertionError(f"urlopen reached for a rejected scheme: {url!r}")
+
+    for bad in (
+        "file:///etc/passwd",
+        "http://hc-ping.com/deadbeef",
+        "ftp://hc-ping.com/x",
+        "gopher://evil/x",
+        "hc-ping.com/deadbeef",
+    ):
+        urllib.request.urlopen = _tripwire  # type: ignore[assignment]
+        try:
+            with pytest.raises(ValueError):
+                _default_ping(bad)
+        finally:
+            urllib.request.urlopen = real_urlopen  # type: ignore[assignment]
+
+    assert not opened, f"_default_ping opened a rejected-scheme URL: {opened}"
+
+
+def test_obs_005_default_ping_accepts_https(monkeypatch):
+    """An https:// ping URL passes scheme validation and reaches the opener."""
+    import urllib.request
+    from services.harness import heartbeat as hb
+
+    calls: list[str] = []
+
+    class _Resp:
+        status = 200
+
+    def _fake_urlopen(url, *args, **kwargs):
+        calls.append(url)
+        return _Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    resp = hb._default_ping("https://hc-ping.com/deadbeef")
+    assert calls == ["https://hc-ping.com/deadbeef"], f"https ping must reach opener; got {calls}"
+    assert getattr(resp, "status", None) == 200

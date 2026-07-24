@@ -15,10 +15,22 @@ HEALTHCHECKS_PING_HOST = "https://hc-ping.com"
 
 
 def _default_ping(url: str) -> Any:
-    """Best-effort HTTP GET to the Healthchecks.io check URL."""
+    """Best-effort HTTPS GET to the Healthchecks.io check URL.
+
+    The scheme is validated to be ``https`` BEFORE the URL is opened: urllib's
+    opener otherwise honours ``file:``/``ftp:``/custom schemes (bandit B310,
+    CWE-22), so a mis-supplied check URL could read a local file or reach an
+    unexpected handler. Rejecting anything but https closes that gap at the seam.
+    """
+    import urllib.parse
     import urllib.request
 
-    return urllib.request.urlopen(url, timeout=5)  # noqa: S310 - fixed https ping URL
+    # https-only scheme asserted just above -> the urllib B310 audit is satisfied.
+    if urllib.parse.urlsplit(url).scheme != "https":
+        raise ValueError(
+            f"heartbeat ping URL must use the https scheme, got {url!r}"
+        )
+    return urllib.request.urlopen(url, timeout=5)  # noqa: S310  # nosec B310
 
 
 def emit_heartbeat(
