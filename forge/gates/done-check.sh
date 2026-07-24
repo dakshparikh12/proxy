@@ -94,10 +94,34 @@ printf "[4] real-data eval>=baseline ... "
 # grep -c already prints "0" on no-match (and exits 1); the old `|| echo 0`
 # appended a SECOND "0", yielding "0\n0" → the -eq test errored and fell
 # through to a false FAIL. Default only when the file is missing (grep exit 2).
-EVAL_CRIT=$(grep -cE "evidence_class:\s*['\"]?\[eval\]|eval:" "acceptance/${DOCID}/criteria/criteria.yaml" 2>/dev/null); EVAL_CRIT=${EVAL_CRIT:-0}
+EVAL_CRIT=$(grep -cE "evidence_class:\s*['\"]?\[eval" "acceptance/${DOCID}/criteria/criteria.yaml" 2>/dev/null); EVAL_CRIT=${EVAL_CRIT:-0}
+# Select the doc's [eval] tests by the [eval] criteria's OWN task selectors —
+# NOT `-k "$ID"`, which matched random test-node substrings across the whole tree
+# (e.g. -k "03" hit one unrelated test; -k "00" hit six). Resolve real selectors.
+EVAL_K=$("$PYTHON" - "$DOCID" "$ID" <<'PY'
+import sys, re, json, pathlib
+docid, sid = sys.argv[1], sys.argv[2]
+cp = pathlib.Path(f"acceptance/{docid}/criteria/criteria.yaml")
+crit = cp.read_text() if cp.exists() else ""
+evalids, cur = set(), None
+for line in crit.splitlines():
+    m = re.match(r"\s*-?\s*criterion_id:\s*(\S+)", line)
+    if m: cur = m.group(1)
+    if cur and re.search(r"evidence_class:\s*['\"]?\[eval", line): evalids.add(cur)
+frags = []
+tp = pathlib.Path(f"slices/{sid}/tasks.json")
+if tp.exists():
+    for t in json.load(open(tp)).get("tasks", []):
+        if any(c in evalids for c in t.get("criterion_ids", [])):
+            mm = re.search(r'-k "([^"]+)"', (t.get("acceptance") or {}).get("cmd") or "")
+            if mm: frags.append(mm.group(1))
+print(" or ".join(dict.fromkeys(frags)))
+PY
+)
 if [ "$EVAL_CRIT" -eq 0 ]; then echo "N/A (no [eval] criteria in bundle)"; C4=NA
-elif [ ! -f "$BASELINE" ]; then echo "FAIL (no _baseline.json)"; C4=FAIL; FAIL=$((FAIL+1))
-elif $RUN --group eval pytest tests/eval -q -k "$ID" -p no:cacheprovider -p no:testmon >/tmp/forge_c4 2>&1; then
+elif [ ! -f "$BASELINE" ]; then echo "BLOCKED (has [eval] criteria but no _baseline.json — seal the eval baseline)"; C4=FAIL; FAIL=$((FAIL+1))
+elif [ -z "$EVAL_K" ]; then echo "FAIL (could not resolve [eval] test selectors from tasks.json)"; C4=FAIL; FAIL=$((FAIL+1))
+elif $RUN pytest -q -k "$EVAL_K" -p no:cacheprovider -p no:testmon >/tmp/forge_c4 2>&1; then
   echo PASS; C4=PASS
 else echo FAIL; tail -6 /tmp/forge_c4; C4=FAIL; FAIL=$((FAIL+1)); fi
 
