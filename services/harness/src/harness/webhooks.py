@@ -137,8 +137,20 @@ async def _dispatch_meeting_event(
         # Import lazily so this module imports without transport/scribe resolved.
         from scribe.prefix import MeetingHeader
         from transport.carrier import SignalCarrier
+        from transport.events import meeting_metadata
 
-        header = MeetingHeader(meeting_id=meeting_id)
+        # Populate the frozen §3.2 header from the SAME Recall webhook envelope this drain
+        # already processes: transport.events.meeting_metadata reads data.title (agenda) +
+        # data.participants (each {name}) verbatim from the callback (AC-EVENTS-05, never
+        # synthesized) — the fix for DOC03-MEETING-HEADER-EMPTY-IN-PRODUCTION. Frozen at
+        # join and byte-stable (render_header stable-sorts), so it never busts the Segment A
+        # cache (§3.2). Absent metadata falls back to the empty head (honestly (none)).
+        metadata = meeting_metadata(payload)
+        header = MeetingHeader(
+            meeting_id=meeting_id,
+            agenda=metadata.title,
+            participants=metadata.participants,
+        )
         carrier = SignalCarrier()
         # Resolve the repo's Doc 01 index into a referent corpus so the Scribe starts with
         # code orientation (§3.4) — the fix for DOC03-REFERENT-CORPUS-UNWIRED-IN-PRODUCTION.
