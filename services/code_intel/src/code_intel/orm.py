@@ -315,6 +315,17 @@ def who_writes(clone_path: Path, table: str) -> list[Writer]:
                         Writer(id=f"{rel}::{func.name}", file=rel, line=func.lineno, confidence=confidence)
                     )
                 continue
+            # Django tier-1: resolve each write's ACTUAL target model. A write only counts
+            # for the queried table when its receiver/instance resolves to that model — never
+            # every write in a file for every imported model (D01-WHO-WRITES-OVERATTRIBUTES).
+            # An explicit ``db.table('x').insert`` literal still falls through to the generic
+            # table-literal path below, so raw-connection writes are unaffected.
+            if stack == "django" and model is not None and not _func_has_table_literal(func):
+                if _django_func_writes_table(func, model, table, file_models):
+                    writers.append(
+                        Writer(id=f"{rel}::{func.name}", file=rel, line=func.lineno, confidence=confidence)
+                    )
+                continue
             for method, table_lit, receiver, arg_text in _write_calls(func):
                 if _write_targets_table(
                     method, table_lit, table, model, file_models, receiver, arg_text, stack
@@ -410,6 +421,138 @@ def _sa_func_writes_table(func: ast.AST, model: str | None, file_models: set[str
     return False
 
 
+def _func_has_table_literal(func: ast.AST) -> bool:
+    """True iff ``func`` contains any explicit ``x.table('name').<write>`` literal write — a
+    raw-connection path that resolves by table string, not by ORM model. Such functions keep
+    using the generic table-literal branch in ``_write_targets_table``."""
+    for _method, table_lit, _recv, _arg in _write_calls(func):
+        if table_lit is not None:
+            return True
+    return False
+
+
+def _django_model_typed_locals(func: ast.AST, model: str) -> set[str]:
+    """Local variable names bound to an instance of Django ``model`` inside ``func`` —
+    ``order = Order(...)`` or ``order = Order.objects.get(...)`` / ``.create(...)`` / etc.,
+    plus parameters annotated ``order: Order``. A later ``order.save()`` / ``order.delete()``
+    on one of these names targets ``model``'s table (and only that table). Mirrors the
+    SQLAlchemy typed-local resolver so ``x.save()`` is attributed to the RIGHT model, never
+    to every model imported into the file (§11.12 gate-(b), Law 2)."""
+    names: set[str] = set()
+
+    def _binds_model(value: ast.expr | None) -> bool:
+        # ``Order(...)`` — a direct construction of the model.
+        if isinstance(value, ast.Call):
+            callee = value.func
+            if (isinstance(callee, ast.Name) and callee.id == model) or (
+                isinstance(callee, ast.Attribute) and callee.attr == model
+            ):
+                return True
+            # ``Order.objects.get(...)`` / ``.create(...)`` / ``.filter(...).first()`` —
+            # a manager/queryset call whose root receiver is the model class returns a
+            # model instance. Require the model to be the ROOT of the receiver chain so a
+            # write on a *different* model in the same file is not misattributed.
+            if isinstance(callee, ast.Attribute) and _attr_chain_root(callee) == model:
+                return True
+        return False
+
+    if isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        for arg in [*func.args.args, *func.args.posonlyargs, *func.args.kwonlyargs]:
+            if arg.annotation is not None and model in set(_IDENT_RE.findall(ast.unparse(arg.annotation))):
+                names.add(arg.arg)
+    for node in ast.walk(func):
+        targets: list[ast.expr] = []
+        value: ast.expr | None = None
+        if isinstance(node, ast.Assign):
+            targets, value = list(node.targets), node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target] if node.target else []
+            value = node.value
+            if node.annotation is not None and model in set(_IDENT_RE.findall(ast.unparse(node.annotation))):
+                if isinstance(node.target, ast.Name):
+                    names.add(node.target.id)
+        if _binds_model(value):
+            for tgt in targets:
+                if isinstance(tgt, ast.Name):
+                    names.add(tgt.id)
+    return names
+
+
+def _attr_chain_root(node: ast.AST) -> str | None:
+    """The left-most identifier of an attribute chain — for ``Order.objects.get`` -> ``Order``,
+    for ``self.order.save`` -> ``self``. Used to tell ``Model.objects.create`` (a write on
+    ``Model``) from an unrelated manager call."""
+    cur: ast.AST | None = node
+    while isinstance(cur, (ast.Attribute, ast.Call)):
+        cur = cur.func if isinstance(cur, ast.Call) else cur.value
+    return cur.id if isinstance(cur, ast.Name) else None
+
+
+def _name_stems_for(table: str, model: str) -> set[str]:
+    """Receiver-variable name stems that legitimately tie a bare ``x.save()`` back to the
+    queried table/model — ``order`` for table ``orders``/model ``Order`` (mirrors the Rails
+    ``recv_tokens`` heuristic). Case-folded so an un-annotated ``def cancel_order(order)`` that
+    calls ``order.save()`` resolves, without needing a type annotation."""
+    stems = {table.lower(), table.lower().rstrip("s"), model.lower()}
+    return {s for s in stems if s}
+
+
+def _django_func_writes_table(func: ast.AST, model: str, table: str, file_models: set[str]) -> bool:
+    """True iff ``func`` performs a Django ORM write whose ACTUAL target model is ``model``.
+
+    Resolves each write call's real target instead of attributing every ``.save()``/``.create()``
+    in the file to every imported model (the D01-WHO-WRITES-OVERATTRIBUTES bug). Recognises:
+
+    * ``Model.objects.create(...)`` / ``.bulk_create([...])`` / ``.update()`` / ``.get_or_create``
+      / ``.update_or_create`` / ``Model.objects.filter(...).update()`` / ``.delete()`` — the
+      model is the ROOT of the write's receiver chain;
+    * ``Model(...).save()`` — the model is constructed in the receiver;
+    * ``instance.save()`` / ``instance.delete()`` where ``instance`` is a local/param resolved
+      to ``model`` (via ``_django_model_typed_locals``);
+    * ``instance.save()`` on an UN-annotated receiver whose NAME stems match the queried
+      table/model (``def cancel_order(order): order.save()``) — but only when that same name is
+      not resolved to a *different* in-file model in this function (so it never over-attributes).
+    """
+    if model not in file_models:
+        return False
+    typed_locals = _django_model_typed_locals(func, model)
+    # Names bound to some OTHER model in this function — a bare write on one of these is that
+    # other model's write, never ours, even if the name happens to stem-match.
+    other_model_locals: set[str] = set()
+    for other in file_models - {model}:
+        other_model_locals |= _django_model_typed_locals(func, other)
+    stems = _name_stems_for(table, model)
+    for node in ast.walk(func):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        attr = node.func.attr
+        if attr not in _WRITE_METHODS:
+            continue
+        recv_node = node.func.value
+        # ``instance.save()`` / ``instance.delete()`` on a model-typed local/param.
+        if isinstance(recv_node, ast.Name) and recv_node.id in typed_locals:
+            return True
+        # ``Model.objects.<write>`` / ``Model.objects.filter(...).<write>`` — model is the root
+        # of the receiver chain; or ``Model(...).save()`` — model constructed in the receiver.
+        root = _attr_chain_root(recv_node)
+        if root == model:
+            return True
+        recv_txt = _receiver_text(node)
+        if model in _model_names_in_text(recv_txt, {model}):
+            # A genuine class reference in the receiver/args (``Model(...)`` ctor or ``Model.objects``),
+            # not a lowercased keyword-arg name (matching is case-exact, so those never match).
+            return True
+        # Un-annotated receiver whose name stems match this table/model — accept ONLY when it is
+        # not resolved to a different in-file model here (keeps the disjoint-writer guarantee).
+        if (
+            isinstance(recv_node, ast.Name)
+            and recv_node.id.lower() in stems
+            and recv_node.id not in other_model_locals
+        ):
+            return True
+    return False
+
+
 def _write_targets_table(
     method: str,
     table_lit: str | None,
@@ -436,7 +579,11 @@ def _write_targets_table(
                 return model in _model_names_in_text(f"{receiver} {arg_text}", {model})
             # query(Model).delete()/update() — the model appears in the receiver chain.
             return model in _model_names_in_text(receiver, {model})
-        return True
+        # Django (fallback for the rare mixed raw+ORM function reaching here): the write only
+        # targets the queried table when its model is a genuine class reference in the write's
+        # receiver/args — never a blanket "any write in this file". This keeps the old blast
+        # radius from ever returning even on the residual path (D01-WHO-WRITES-OVERATTRIBUTES).
+        return model in _model_names_in_text(f"{receiver} {arg_text}", {model})
     # Tier-3 (search-only, non-tier-1): only a real textual lead counts.
     return _name_associates(table, receiver)
 
