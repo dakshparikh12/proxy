@@ -70,11 +70,28 @@ _INTENT_PATTERNS: tuple[tuple[str, str], ...] = (
     (r"\bwrites?\s+(?:to\s+)?(?:the\s+)?\w+\s+table", "who_writes"),
     (r"\b(?:shares?|sharing)\b.*\btable\b", "shares_table"),
     (r"\b(?:who|what|which)\b.*\b(?:also|else)\b.*\btable\b", "shares_table"),
+    # A "where is X used/referenced" ask wants the CALL SITES → find_references.
+    (r"\bwhere\b.*\b(?:used|referenced|calls?|called|imports?|imported)\b", "find_references"),
+    (r"\b(?:reference|references|referenced)\b", "find_references"),
+    # A locate-question — "where is X", "where is X defined", "where does X live",
+    # "where's X", "where can I find X", "which file is X in" — wants the
+    # DEFINITION of X (its defining node's file:line), NOT a caller. This MUST
+    # precede the generic get_dependents fallback so a bare "where is url_for?"
+    # returns the def in src/flask/helpers.py, never a random caller
+    # (D01-DIRECT-ANSWER-WHERE-MISROUTE).
+    (r"\bwhere(?:'s|\s+is|\s+are|\s+does|\s+can|\s+do)\b", "find_definition"),
+    (r"\bwhere\b.*\b(?:defined|declared|lives?|located|find)\b", "find_definition"),
+    (r"\b(?:defined|declaration|definition)\b", "find_definition"),
+    (r"\bwhich\s+file\b", "find_definition"),
     (r"\b(?:depends?|dependent|dependents|calls?|callers?|uses?|imports?)\b", "get_dependents"),
-    (r"\b(?:reference|references|referenced|where.*(?:used|defined|referenced))\b", "find_references"),
     (r"\bentry\s*points?\b", "list_entry_points"),
     (r"\bowns?\b|\bowner\b", "owner"),
 )
+
+# Doc/changelog suffixes never carry a code DEFINITION — a find_references hit in
+# one of these is a text mention (a changelog line, a doc paragraph), so it must
+# never outrank a real source definition when answering a locate-question (Law 2).
+_DOC_SUFFIXES = (".rst", ".md", ".txt", ".rst.txt", ".changes", ".changelog")
 
 
 @dataclass(frozen=True)
@@ -211,6 +228,98 @@ def _first_hit(result: Any) -> tuple[str, int, str] | None:
     return str(file), int(line), str(conf)
 
 
+def _is_doc(path: str) -> bool:
+    return path.lower().endswith(_DOC_SUFFIXES)
+
+
+def _def_is_indented(handle: Any, file: str, line: int) -> bool:
+    """True when the declaration at ``file:line`` is INDENTED (a method / nested
+    def) rather than a module-level definition (column 0). Read from the real
+    clone (Law 1) — a module-level ``def url_for`` outranks the indented method
+    ``Flask.url_for`` of the same name when answering "where is url_for?". A read
+    that cannot confirm the line is treated as module-level (indented=False) so a
+    read miss never demotes an otherwise-canonical definition."""
+    result = _call(handle, "batch_read", paths=[file], max_lines_per_file=None)
+    for bf in getattr(result, "files", None) or []:
+        content = getattr(bf, "content", None)
+        if getattr(bf, "error", None) is not None or content is None:
+            continue
+        lines = content.splitlines()
+        if 1 <= line <= len(lines):
+            raw = str(lines[line - 1])
+            return bool(raw[:1].isspace())
+    return False
+
+
+def _find_definition(handle: Any, symbol: str | None) -> tuple[str, int, str] | None:
+    """Resolve the DEFINITION of ``symbol`` — its defining node's file:line.
+
+    A locate-question ("where is X?") wants where X *lives*, not who calls it. We
+    resolve it over the SAME pinned graph the other tools read (no parallel index):
+
+      1. ``resolve_symbol(symbol)`` → the declaration node(s) the builder stamped
+         (id ``<file>::<name>``, ``line`` = the ``def``/``class`` line). Prefer a
+         real definition kind (function/class/table) in a NON-doc source file,
+         ranked by pagerank then id — so the canonical public ``url_for`` in
+         ``src/flask/helpers.py`` outranks a same-named method and never a caller.
+      2. If the graph has no matching declaration node (e.g. a C-extension symbol,
+         or a graph not yet built), fall back to ``find_references`` but rank a
+         SOURCE hit ABOVE any ``.rst``/``.md``/changelog text mention (Law 2) so a
+         "where defined" answer never cites a changelog line.
+
+    Returns ``(file, line, confidence)`` or ``None`` (honest abstention, Law 1).
+    """
+    if not symbol:
+        return None
+    server = _server_of(handle)
+    graph = getattr(server, "graph", None)
+    if graph is not None and hasattr(graph, "resolve_symbol"):
+        nodes = list(graph.resolve_symbol(symbol))
+        # A definition is a declaration node — a function/class/table/module —
+        # never an edge. Prefer a real symbol decl in a non-doc source file.
+        decls = [
+            n for n in nodes
+            if getattr(n, "kind", "") in ("function", "class", "table")
+            and not _is_doc(getattr(n, "path", ""))
+        ]
+        if decls:
+            # Rank the candidate definitions deterministically (Law 4: physics):
+            #   1. a MODULE-LEVEL definition (the ``def``/``class`` line starts at
+            #      column 0) outranks a METHOD of the same name (an indented ``def``
+            #      nested in a class). The graph stamps both as ``<file>::<name>``
+            #      with kind "function", so a "where is url_for?" would otherwise
+            #      pick the higher-pagerank ``Flask.url_for`` METHOD over the
+            #      canonical module-level ``url_for`` in helpers.py — the wrong
+            #      "definition". We read the real clone to see the indentation.
+            #   2. then highest pagerank (the most-referenced def of that name);
+            #   3. then node id, for a fully deterministic tie-break.
+            def _rank(n: Any) -> tuple[int, float, str]:
+                indented = _def_is_indented(handle, str(n.path), int(n.line))
+                return (1 if indented else 0, -getattr(n, "pagerank", 0.0), n.id)
+
+            decls.sort(key=_rank)
+            top = decls[0]
+            # A single unambiguous declaration → resolved; several same-named
+            # declarations → lower-bound (we picked the top-ranked one).
+            conf = "resolved" if len(decls) == 1 else "lower-bound"
+            return str(top.path), int(top.line), conf
+
+    # Graph miss → grep fallback, but rank SOURCE above doc/changelog text.
+    refs_result = _call(handle, "find_references", symbol=symbol)
+    items = list(getattr(refs_result, "results", None) or [])
+    if not items:
+        return None
+    source = [r for r in items if not _is_doc(getattr(r, "file", ""))]
+    ranked = source or items  # only fall back to a doc hit if there is no source hit
+    top = ranked[0]
+    file = getattr(top, "file", None)
+    line = getattr(top, "line", None)
+    if file is None or line is None:
+        return None
+    # A grep-derived location is never overstated as resolved (Law 2).
+    return str(file), int(line), "lower-bound"
+
+
 def answer_direct(
     *,
     ask: str,
@@ -256,9 +365,14 @@ def answer_direct(
     if symbol is not None:
         referent = _call(handle, "lookup_referent", symbol=symbol)
 
-    # Run the primary tool. Tables/paths take the raw token; symbol tools too.
-    result = _run_tool(handle, tool, symbol)
-    hit = _first_hit(result) if result is not None else None
+    # A locate-question resolves to the DEFINITION over the pinned graph nodes
+    # (D01-DIRECT-ANSWER-WHERE-MISROUTE) — not a caller and not a changelog line.
+    if tool == "find_definition":
+        hit = _find_definition(handle, symbol)
+    else:
+        # Run the primary tool. Tables/paths take the raw token; symbol tools too.
+        result = _run_tool(handle, tool, symbol)
+        hit = _first_hit(result) if result is not None else None
 
     if hit is None:
         # Grounded silence — Law 1: we do not invent a location.
@@ -279,7 +393,13 @@ def answer_direct(
     # Honesty tiering (Law 2): a citation is 'resolved' only when a single
     # unambiguous referent was found AND the read confirmed the line AND the
     # tool itself reported 'resolved'. Anything search-derived is 'lower-bound'.
-    if confirmed and tool_conf == "resolved" and referent is not None:
+    # find_definition tiers off its OWN confidence (it already resolved a single
+    # unambiguous declaration node when 'resolved'), so it does not additionally
+    # require the global single-referent probe — a symbol with one def is resolved
+    # even though lookup_referent's single-match global gate is a stricter probe.
+    if tool == "find_definition":
+        confidence = "resolved" if (confirmed and tool_conf == "resolved") else "lower-bound"
+    elif confirmed and tool_conf == "resolved" and referent is not None:
         confidence = "resolved"
     else:
         confidence = "lower-bound"

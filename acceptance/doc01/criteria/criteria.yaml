@@ -1241,6 +1241,52 @@
   required_evidence:
     - junit:T-M5-007g
 
+- criterion_id: AC-M5-007w
+  name: "a locate-question ('where is X?') resolves to X's DEFINITION (defining node file:line), never a caller or a changelog line"
+  evidence_class: "[eval-realrepo]"
+  authority_refs: [R-DOC01-3.5-04]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A real repo (pallets/flask) built THROUGH the product path via
+      run_full_pipeline, where url_for is DEFINED as a module-level function in
+      src/flask/helpers.py and also exists as a same-named method Flask.url_for in
+      src/flask/app.py, and is CALLED from example/tutorial code. A reactive wake
+      turn asks a bare locate-question 'where is url_for?' with no 'used/defined'
+      keyword. (D01-DIRECT-ANSWER-WHERE-MISROUTE.)
+    when: >
+      answer_direct(ask='where is url_for?', code_intel=server) is called on the
+      pinned graph/clone.
+    then:
+      - direct_answer._classify routes the bare 'where is X' to find_definition —
+        NOT the get_dependents fallback (which would return a random caller) and
+        NOT find_references (a call-site / changelog text hit).
+      - find_definition resolves X's DEFINING node over the SAME pinned graph
+        (resolve_symbol), preferring a module-level definition over a same-named
+        method (read from the real clone: the def line is at column 0), ranked by
+        pagerank then id — so it cites src/flask/helpers.py, never src/flask/app.py
+        (the method) and never examples/.../blog.py (a caller).
+      - When the graph has no matching declaration node it falls back to
+        find_references but ranks a SOURCE hit ABOVE any .rst/.md/changelog text
+        mention, so a 'where defined' answer never cites a changelog line.
+      - The citation is drawn from an actual batch_read of the clone at the pinned
+        SHA (Law 1); a single unambiguous def is tagged 'resolved', several
+        same-named defs 'lower-bound' (Law 2).
+  applicability:
+    fixtures: []
+    estates: [estate-flask]
+    excluded_estates: []
+    rationale: "A user in a meeting asking 'where is X?' must get X's definition — presenting a caller (or a changelog line) as the grounded location is exactly the misleading-output failure the value-prop forbids."
+  primary_oracle:
+    type: deterministic_execution
+    artifact: tests/code_intel/test_direct_answer_where_misroute_doc01.py
+  test_ids: [T-M5-007w]
+  fault_model_refs: []
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-007w
+
 - criterion_id: AC-M4-016
   name: "The real build EMITS the full edge-kind vocabulary — extends/implements from class bases and read_write for read-and-write co-accessors — so the class-hierarchy blast radius and who_writes resolve from the ONE graph"
   evidence_class: "[eval-realrepo]"
