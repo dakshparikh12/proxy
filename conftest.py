@@ -250,12 +250,34 @@ def _restore_current_event_loop():
     above; it changes no product behaviour and touches no sealed test. It only
     intervenes when the loop has actually been nulled — a well-behaved test that
     already owns a running/current loop is left untouched.
+
+    Implementation note (Python 3.12): we must NOT let the bare
+    ``asyncio.get_event_loop()`` fire. On 3.12 that getter emits
+    ``DeprecationWarning: There is no current event loop`` whenever no loop is
+    set-and-un-nulled, and is scheduled to become a hard ``RuntimeError`` in a
+    future Python — a latent breakage that would surface in every async test run.
+    (The ``asyncio.get_event_loop_policy().get_event_loop()`` variant warns in
+    exactly the same state, so it is not a real fix either.) We instead probe for
+    a usable current loop WITHOUT the deprecated auto-create semantics:
+    ``get_running_loop()`` reports a running loop (never warns), and the private-
+    but-stable ``policy._local._loop`` reports a *set* loop (also never warns).
+    Only when neither yields a usable, open loop do we install a fresh one via
+    ``new_event_loop()``. Same effect the old guard intended, zero deprecation in
+    every global-loop state (running / set / nulled / never-set).
     """
     import asyncio
 
+    loop = None
     try:
-        asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
     except RuntimeError:
+        # No loop is *running* on this thread; fall back to the *set* loop, read
+        # directly off the policy's thread-local so we never touch the deprecated
+        # auto-creating getter. ``getattr`` keeps us safe against CPython internals
+        # drift — a missing attribute simply means "no usable loop, install one".
+        policy = asyncio.get_event_loop_policy()
+        loop = getattr(getattr(policy, "_local", None), "_loop", None)
+    if loop is None or loop.is_closed():
         asyncio.set_event_loop(asyncio.new_event_loop())
     yield
 
