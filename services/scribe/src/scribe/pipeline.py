@@ -33,18 +33,17 @@ from typing import Protocol
 
 from .coalescer import Window
 
+# The typed errors are OWNED by ``.parse`` (where the real micro-call chain
+# ``scribe_call -> parse_scribe_result`` raises them). We import — never redefine —
+# them here so ``DROP_ERRORS`` catches the EXACT classes the real chain raises. A
+# second local definition would be a distinct class the real path never raises, so a
+# truncated/malformed window would escape the drop and stall the whole meeting
+# (§3.1/§3.2.1). Re-exported below for callers that import them off ``pipeline``.
+from .parse import ScribeMaxTokensError, ScribeNoDeltaError
+
 # --- Physics constant: the per-call deadline (§3.1). Only physics live in code. ---
 MICRO_CALL_TIMEOUT_S: float = 3.5
 """Per-micro-call deadline enforced by ``asyncio.wait_for`` (§3.1)."""
-
-
-# ---- Typed errors (§3.2.1). Both are non-retryable at the window level. ----
-class ScribeMaxTokensError(Exception):
-    """stop_reason == 'max_tokens': window/output too big — skip this window."""
-
-
-class ScribeNoDeltaError(Exception):
-    """Model didn't call the tool — malformed turn, skip this window."""
 
 
 # The exact set of drop-triggering exceptions (§3.1). A result that is NOT one of
