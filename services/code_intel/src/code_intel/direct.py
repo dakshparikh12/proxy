@@ -6,9 +6,11 @@ provisioning an E2B sandbox and *without* dispatching a Workroom session; the
 ``e2b`` and ``workroom`` seams are accepted only so the caller can prove the
 direct path touches neither.
 
-This is the ``(ask, tenant, sha)``-shaped façade over the REAL resolver in
-:mod:`harness.direct_answer`. When a live ``code_intel`` handle (a
-:class:`code_intel.mcp_server.CodeIntelMCPServer` or a
+This is the ``(ask, tenant, sha)``-shaped, dict-returning façade over the ONE
+canonical resolver, which lives in the SAME layer at
+:mod:`code_intel.direct_answer` (G4: no ``from harness`` upward import — the
+harness re-exports the resolver downward, never the reverse). When a live
+``code_intel`` handle (a :class:`code_intel.mcp_server.CodeIntelMCPServer` or a
 :class:`code_intel.meeting.MeetingSession`) is supplied, the ask is routed
 through the real structural tools and the returned ``answer`` carries a real
 ``file:line`` citation drawn from an actual file read at the pinned SHA — never a
@@ -38,10 +40,9 @@ def answer_direct(
     live ``code_intel`` server / ``session`` is bound, the ``citation`` is a real
     ``file:line`` present in the pinned clone; otherwise the answer abstains.
     """
-    # Delegate to the single real resolver (harness owns the wake turn; it
-    # composes THIS service's tools). Imported lazily to keep code_intel free of
-    # a hard import-time dependency on the harness service.
-    from harness.direct_answer import answer_direct as _resolve
+    # Delegate to the ONE canonical resolver, which lives in THIS layer
+    # (code_intel composes its own tools). No upward import into harness (G4).
+    from .direct_answer import answer_direct as _resolve
 
     handle = session if session is not None else code_intel
     answer = _resolve(

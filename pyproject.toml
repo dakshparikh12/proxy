@@ -58,7 +58,7 @@ ignore_missing_imports = true
 # under its walk name. (Doc 02 transport is the first cross-member runtime importer;
 # it imports both ``contracts`` and ``agentkit`` — the AbortRegistry reused for barge-in.)
 [[tool.mypy.overrides]]
-module = ["contracts.*", "agentkit.*", "harness.*"]
+module = ["contracts.*", "agentkit.*", "harness.*", "code_intel.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

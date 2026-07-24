@@ -514,3 +514,48 @@ def test_host_014_key_destroy_crypto_shreds_only_that_tenant():
     assert vol_b.decrypt(ct_b) == b"tenant B private code", (
         "tenant B must remain fully readable after tenant A's key is destroyed (blast radius bounded to A)"
     )
+
+
+# -- AC-HOST-007b (G4: one canonical answer_direct, no layering inversion) --
+def test_host_007b_single_canonical_answer_direct_no_layering_inversion():
+    """G4-DUPLICATE-ANSWER-DIRECT-ENTRYPOINTS: exactly ONE canonical direct-answer
+    resolver (harness.direct_answer.answer_direct); the code_intel (Doc 01, lower
+    layer) source imports nothing from harness (the upper layer that COMPOSES it
+    -- a layering inversion); and whatever services.code_intel re-exports as
+    answer_direct resolves to that one canonical resolver, never a parallel stub.
+    Drives the REAL product modules (no test double)."""
+    import inspect
+    import importlib
+    import pathlib as _pl
+
+    from services.harness.direct_answer import answer_direct as canonical
+    sig = inspect.signature(canonical)
+    assert "ask" in sig.parameters, "canonical answer_direct is the (ask=...)-shaped resolver"
+
+    ci_src = _pl.Path("services/code_intel/src/code_intel")
+    offenders = []
+    for py in ci_src.rglob("*.py"):
+        text = py.read_text(encoding="utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            s = line.strip()
+            if s.startswith("from harness") or s.startswith("import harness"):
+                offenders.append(f"{py}:{i}: {s}")
+    assert not offenders, (
+        "code_intel (Doc 01, lower layer) must not import harness (upper layer) -- "
+        "layering inversion; harness composes code_intel, never the reverse:\n"
+        + "\n".join(offenders)
+    )
+
+    ci = importlib.import_module("services.code_intel")
+    exported = getattr(ci, "answer_direct", None)
+    if exported is not None:
+        out = exported(ask="where is retry?", tenant="t", sha="deadbeef", e2b=object(), workroom=object())
+        text = out["answer"] if isinstance(out, dict) else getattr(out, "text", str(out))
+        assert "answered from code_intel index" not in text.lower(), (
+            "services.code_intel.answer_direct must not be the hardcoded stub "
+            f"(returned: {text!r})"
+        )
+        assert "not found by this method" in text.lower(), (
+            "with no index bound the canonical direct path abstains (Law 1), "
+            f"got: {text!r}"
+        )
