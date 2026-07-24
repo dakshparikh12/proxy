@@ -17,7 +17,11 @@ set -uo pipefail
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 PYTHON="${FORGE_PYTHON:-.venv/bin/python}"; [ -x "$PYTHON" ] || PYTHON="python3"
-RUN="${FORGE_RUN:-uv run}"
+# Default to the venv python directly, NOT `uv run`: `uv run` auto-syncs the uv
+# workspace and PRUNES members (db/contracts/agentkit/...), breaking every import
+# mid-build (it killed a run). All uses are `$RUN pytest ...`, so `.venv/bin/python -m`
+# expands to `.venv/bin/python -m pytest ...` — venv-direct, no sync, no prune.
+RUN="${FORGE_RUN:-.venv/bin/python -m}"
 
 usage() { echo "usage: $0 --spec <id> | --task <id> <task_id>" >&2; exit 2; }
 [ $# -ge 2 ] || usage
@@ -66,7 +70,7 @@ import json,sys,subprocess,os,shlex
 d=json.load(open(sys.argv[1]))
 tasks=d.get("tasks") if isinstance(d,dict) else None
 if not isinstance(tasks,list): print("SCHEMA:tasks-not-a-list"); sys.exit(0)
-run=os.environ.get("FORGE_RUN","uv run").split(); red=[]
+run=os.environ.get("FORGE_RUN",".venv/bin/python -m").split(); red=[]  # venv-direct, never `uv run` (prunes workspace)
 for t in tasks:
     if not isinstance(t,dict): red.append(str(t)[:24]+":task-not-dict"); continue
     tid=t.get("task_id","?")
