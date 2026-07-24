@@ -950,6 +950,39 @@
   required_evidence:
     - junit:T-M5-001
 
+- criterion_id: AC-M5-001b
+  name: "A factory-minted per-query server is QUERYABLE on the real graph (not an empty shell)"
+  evidence_class: "[integration]"
+  authority_refs: [R-DOC01-3.5-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      run_full_pipeline has indexed a real repo and exposes pipeline.server_factory
+      (MCPServerFactory.for_pipeline). The factory is bound to the pipeline's
+      immutable graph/clone/warm-LSP grounding context.
+    when: >
+      A server is minted via factory.create_for_query(query) and asked who_writes /
+      get_dependents on the real graph.
+    then:
+      - The minted server answers the tool call against the real graph/clone (status ok, real writers).
+      - Each create_for_query returns a distinct instance bound to the SAME immutable graph (never a bare CodeIntelMCPServer() shell).
+  applicability:
+    fixtures: []
+    estates: [fastapi-crud-sync]
+    excluded_estates: []
+    rationale: "The advertised per-query factory must produce a queryable server, not a counter-only shell."
+  primary_oracle:
+    type: real_tool_answer
+    artifact: "factory.create_for_query(...).who_writes('notes').status == 'ok' on the real graph; server.graph is pipeline.graph"
+  thresholds:
+    empty_shell_allowed: 0
+  test_ids: [T-M5-001b]
+  fault_model_refs: [F-SHARED-MCP-SERVER]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-001b
+
 - criterion_id: AC-M5-002
   name: "get_dependents returns transitive reverse-dependency set over correct edge types"
   evidence_class: "[unit-example]"

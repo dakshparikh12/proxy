@@ -361,16 +361,88 @@ class CodeIntelMCPServer:
 
 
 class MCPServerFactory:
-    """Mints a fresh MCP server per query (never shared, AC-M5-001)."""
+    """Mints a fresh MCP server per query (never shared, AC-M5-001).
 
-    def __init__(self, instance_counter: Any = None) -> None:
+    A minted server is a *cheap wrapper* rebound per query over an **immutable,
+    shared** grounding context — the pipeline's pinned graph + clone + host-side
+    warm LSP (§3.5 ``make_code_intel_server(graph, lsp, overview)``; SDK MCP
+    servers are connection-bound, so callers store the factory and resolve one
+    fresh instance at the query chokepoint). Bind the factory to the real
+    pipeline via :meth:`for_pipeline` so every minted-per-query instance is
+    actually queryable (answers who_writes/get_dependents on the real graph) —
+    never a bare empty shell.
+    """
+
+    def __init__(
+        self,
+        instance_counter: Any = None,
+        pipeline: Any = None,
+        db_counter: Any = None,
+        lsp: Any = None,
+        lsp_lifecycle: Any = None,
+    ) -> None:
         self._counter = instance_counter
+        self._pipeline = pipeline
+        self._db_counter = db_counter
+        self._lsp = lsp
+        self._lsp_lifecycle = lsp_lifecycle
+
+    @classmethod
+    def for_pipeline(
+        cls,
+        pipeline: Any,
+        instance_counter: Any = None,
+        db_counter: Any = None,
+    ) -> MCPServerFactory:
+        """Bind the factory to a live pipeline's immutable graph/clone/warm-LSP.
+
+        The pipeline holds the shared, pinned grounding context; every
+        ``create_for_query`` mints a distinct wrapper over *that same* context.
+        """
+        return cls(
+            instance_counter=instance_counter,
+            pipeline=pipeline,
+            db_counter=db_counter,
+            lsp=getattr(pipeline, "lsp", None),
+            lsp_lifecycle=getattr(pipeline, "_lsp_lifecycle", None),
+        )
 
     async def create_for_query(self, query: str) -> CodeIntelMCPServer:
-        server = CodeIntelMCPServer()
+        # A fresh, distinct wrapper per query (AC-M5-001) — bound to the shared,
+        # immutable pipeline grounding context so it is actually queryable.
+        server = CodeIntelMCPServer(
+            pipeline=self._pipeline,
+            db_counter=self._db_counter,
+            lsp=self._lsp,
+            lsp_lifecycle=self._lsp_lifecycle,
+        )
         if self._counter is not None:
             self._counter.record()
         return server
+
+
+def make_code_intel_server(
+    graph: Graph | None = None,
+    lsp: Any = None,
+    overview: Any = None,
+    *,
+    clone_path: Path | None = None,
+    exclusion_manager: ExclusionManager | None = None,
+    tenant_id: str = "",
+    db_counter: Any = None,
+) -> CodeIntelMCPServer:
+    """Spec factory (§3.5): mint a queryable server over immutable graph/overview
+    + a warm host-side LSP. ``graph``/``overview`` are shared and immutable; only
+    this cheap wrapper is rebuilt per query. Returns a bound, queryable server.
+    """
+    return CodeIntelMCPServer(
+        graph=graph,
+        clone_path=clone_path,
+        exclusion_manager=exclusion_manager,
+        lsp=lsp,
+        tenant_id=tenant_id,
+        db_counter=db_counter,
+    )
 
 
 def _synthetic_node(node_id: str) -> Any:

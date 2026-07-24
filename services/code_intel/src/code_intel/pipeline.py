@@ -47,6 +47,7 @@ class Pipeline:
         self.current_sha: str = ""
         self.graph_retention_index: dict[str, GraphVersion] = {}
         self.server: Any = None
+        self.server_factory: Any = None
         self._store: GraphStore | None = None
         self._table_map: dict[str, str] = {}
         self._live_sessions: list[MeetingSession] = []
@@ -211,9 +212,12 @@ def run_full_pipeline(
         _emit(readiness_listener, "not_ready")
 
     # a server bound to the pipeline so meeting/webhook lifecycles share state
-    from .mcp_server import CodeIntelMCPServer
+    from .mcp_server import CodeIntelMCPServer, MCPServerFactory
 
     pipeline.server = CodeIntelMCPServer(pipeline=pipeline, db_counter=db_counter, lsp_lifecycle=lsp_lifecycle)
+    # the per-query factory (§3.5): callers store this and mint one fresh,
+    # queryable wrapper per query over the pipeline's immutable graph/clone/LSP.
+    pipeline.server_factory = MCPServerFactory.for_pipeline(pipeline, db_counter=db_counter)
     return pipeline
 
 
