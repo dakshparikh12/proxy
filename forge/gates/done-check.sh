@@ -55,27 +55,39 @@ if "$PYTHON" "$SELF_DIR/coverage.py" "$ID" >/tmp/forge_c1 2>&1; then echo PASS; 
 else echo FAIL; cat /tmp/forge_c1; C1=FAIL; FAIL=$((FAIL+1)); fi
 
 # ── C2 tasks-green: run EVERY task's real cmd (closes the flag-trust hole) ────
+# FAIL-CLOSED: the helper is wrapped so a crash (e.g. a malformed task whose
+# `acceptance` is a bare string, not {cmd}) can NEVER read as PASS — the old code
+# let a helper crash leave RED="" → silent false-PASS. Now: any non-dict task or
+# non-dict `acceptance` is flagged red, and a nonzero helper exit forces FAIL.
 printf "[2] all-tasks-green (real execution) ... "
 if [ ! -f "$TASKS" ]; then echo "FAIL (no tasks.json)"; C2=FAIL; FAIL=$((FAIL+1)); else
   RED=$("$PYTHON" - "$TASKS" <<'PY'
-import json,sys,subprocess,re,os,shlex
-d=json.load(open(sys.argv[1])); red=[]
-run=os.environ.get("FORGE_RUN","uv run").split()
-for t in d["tasks"]:
-    if not t.get("passes"): red.append(t["task_id"]+":unflipped"); continue
-    cmd=(t.get("acceptance") or {}).get("cmd")
-    if not cmd: red.append(t["task_id"]+":nocmd"); continue
+import json,sys,subprocess,os,shlex
+d=json.load(open(sys.argv[1]))
+tasks=d.get("tasks") if isinstance(d,dict) else None
+if not isinstance(tasks,list): print("SCHEMA:tasks-not-a-list"); sys.exit(0)
+run=os.environ.get("FORGE_RUN","uv run").split(); red=[]
+for t in tasks:
+    if not isinstance(t,dict): red.append(str(t)[:24]+":task-not-dict"); continue
+    tid=t.get("task_id","?")
+    if not t.get("passes"): red.append(tid+":unflipped"); continue
+    acc=t.get("acceptance")
+    # acceptance MUST be an object {cmd:...}; a bare string is malformed, not runnable.
+    cmd=acc.get("cmd") if isinstance(acc,dict) else None
+    if not cmd: red.append(tid+(":bad-acceptance-shape" if acc is not None else ":nocmd")); continue
     # shlex.split (not str.split) so a quoted -k "sel" is one token WITHOUT the
-    # literal quotes — str.split keeps them, which pytest rejects as a bad -k
-    # expression (exit 4) and every task false-fails.
+    # literal quotes — str.split keeps them, which pytest rejects (exit 4).
     r=subprocess.run(run+shlex.split(cmd)+["-p","no:cacheprovider","-p","no:testmon"],
                      capture_output=True,text=True)
-    if r.returncode==5: red.append(t["task_id"]+":no-tests")
-    elif r.returncode!=0: red.append(t["task_id"]+f":rc{r.returncode}")
+    if r.returncode==5: red.append(tid+":no-tests")
+    elif r.returncode!=0: red.append(tid+f":rc{r.returncode}")
 print(" ".join(red[:20])+(f" (+{len(red)-20} more)" if len(red)>20 else "") if red else "")
 PY
 )
-  if [ -z "$RED" ]; then echo PASS; C2=PASS; else echo "FAIL"; echo "  red: $RED"; C2=FAIL; FAIL=$((FAIL+1)); fi
+  RC_C2=$?
+  if [ "$RC_C2" -ne 0 ]; then echo "FAIL (C2 helper errored rc${RC_C2} — fail-closed)"; C2=FAIL; FAIL=$((FAIL+1))
+  elif [ -z "$RED" ]; then echo PASS; C2=PASS
+  else echo "FAIL"; echo "  red: $RED"; C2=FAIL; FAIL=$((FAIL+1)); fi
 fi
 
 # ── C3 static + unit + invariants ────────────────────────────────────────────
