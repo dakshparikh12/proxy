@@ -1,9 +1,18 @@
 """Deterministic ORM / ownership analysis for the data-flow tools (M5).
 
-``who_writes`` / ``shares_table`` recognise tier-1 ORM stacks (Django) and label
-results ``resolved``; on any non-tier-1 stack they degrade to ``lower-bound`` and
-never fabricate an exact answer (Law 2, AC-M5-005/006). ``owner`` resolves via
-CODEOWNERS (``resolved``) then git-blame (``lower-bound``). All model-free.
+``who_writes`` / ``shares_table`` recognise the three tier-1 ORM stacks the spec
+names exact-supported — **Django ORM**, **SQLAlchemy**, and **Rails ActiveRecord**
+(§4 tiering / §11.12 spike-gate / §12.6) — and label their write sets ``resolved``;
+on any non-tier-1 stack they degrade to ``lower-bound`` and never fabricate an exact
+answer (Law 2, AC-M5-005/006). ``owner`` resolves via CODEOWNERS (``resolved``) then
+git-blame (``lower-bound``). All model-free.
+
+Per-ORM detection is **structural**, never a substring scan (Law 2 — a stray
+"django"/"sqlalchemy" in a comment or requirements note must not flip a repo to
+``resolved``): Python stacks are recognised from real AST import / base-class nodes;
+Ruby (Rails) from an ``ActiveRecord::Base`` subclass in a ``.rb`` file. Each stack's
+model→table map and its write-method vocabulary are wired so the exact writers of a
+queried table resolve on all three stacks, not Django alone.
 """
 from __future__ import annotations
 
@@ -15,29 +24,38 @@ from pathlib import Path
 from .gitio import run_git
 from .results import ModuleRef, OwnerResult, Writer
 
+# Django + generic ORM write verbs (``.objects.create``/``.save``/``mgr.bulk_create``).
 _WRITE_METHODS = {"create", "save", "delete", "update", "bulk_create", "get_or_create", "update_or_create", "insert"}
+# SQLAlchemy Session write verbs (``session.add(obj)`` / ``.commit()`` / ``.delete(obj)``
+# / ``.merge(obj)`` / ``.add_all([...])`` / ``.flush()``), plus ``query(...).delete/update``
+# which are already in ``_WRITE_METHODS`` via ``delete``/``update``.
+_SA_SESSION_WRITE_METHODS = {"add", "add_all", "merge", "commit", "flush"}
 _READ_METHODS = {"all", "filter", "get", "first", "last", "count", "exists"}
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+# Rails ActiveRecord persistence methods (instance + class), incl. bang forms.
+_RAILS_WRITE_METHODS = {
+    "save", "save!", "create", "create!", "update", "update!", "update_attribute",
+    "update_attributes", "update_all", "destroy", "destroy!", "destroy_all",
+    "delete", "delete_all", "insert", "insert_all", "upsert", "upsert_all",
+    "increment!", "decrement!", "toggle!", "touch",
+}
+_RB_CLASS_RE = re.compile(r"^\s*class\s+([A-Z]\w*)\s*<\s*(ApplicationRecord|ActiveRecord::Base)\b", re.M)
+_RB_TABLE_NAME_RE = re.compile(r"self\.table_name\s*=\s*['\"]([^'\"]+)['\"]")
 
 
 def _py_files(clone_path: Path) -> list[Path]:
     return [p for p in sorted(clone_path.rglob("*.py")) if ".git" not in p.parts]
 
 
-def is_tier1(clone_path: Path) -> bool:
-    """True iff the clone is a Django-ORM stack, detected **structurally** — an actual
-    ``import django`` / ``from django…`` statement in the AST, never a substring scan.
+def _rb_files(clone_path: Path) -> list[Path]:
+    return [p for p in sorted(clone_path.rglob("*.rb")) if ".git" not in p.parts]
 
-    Law 2 (never a silent wrong-exact): the previous ``"django.db" in text`` scan matched
-    a stray "django" in a comment, docstring, requirements note, or migration history and
-    then labelled ``who_writes`` results ``resolved`` on a repo that is not a Django stack.
-    Comments/strings are absent from the AST, so an import-node check cannot be fooled by
-    prose. SQLAlchemy and Rails ActiveRecord are tier-1 in the spec's support matrix, but
-    their exhaustive write-path detection is **not** implemented in this module — so we do
-    NOT report them ``resolved`` here (a Django-shaped, incomplete write set tagged
-    ``resolved`` would itself be a silent wrong-exact). They fall through to ``lower-bound``,
-    honestly labelled, until real per-ORM write detection lands (§4 tiering / §12.6).
-    """
+
+# --------------------------------------------------------------------------- #
+# Tier detection (structural, never a substring scan)                         #
+# --------------------------------------------------------------------------- #
+def _detect_django(clone_path: Path) -> bool:
     for p in _py_files(clone_path):
         try:
             tree = ast.parse(p.read_text(encoding="utf-8", errors="replace"))
@@ -53,8 +71,103 @@ def is_tier1(clone_path: Path) -> bool:
     return False
 
 
+def _detect_sqlalchemy(clone_path: Path) -> bool:
+    """True iff a real ``import sqlalchemy`` / ``from sqlalchemy…`` import node exists in
+    the AST — the structural signal of a SQLAlchemy stack. Comments/strings are absent
+    from the AST, so a prose mention cannot flip the repo to ``resolved`` (Law 2)."""
+    for p in _py_files(clone_path):
+        try:
+            tree = ast.parse(p.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                if node.module and node.module.split(".")[0] == "sqlalchemy":
+                    return True
+            elif isinstance(node, ast.Import):
+                if any(alias.name.split(".")[0] == "sqlalchemy" for alias in node.names):
+                    return True
+    return False
+
+
+def _detect_rails(clone_path: Path) -> bool:
+    """True iff a ``.rb`` file declares a class subclassing ``ActiveRecord::Base`` (or the
+    conventional ``ApplicationRecord`` base). Structural class-header match, not a scan for
+    the word 'rails' anywhere (a Gemfile note or comment must not flip the repo)."""
+    for p in _rb_files(clone_path):
+        if _RB_CLASS_RE.search(p.read_text(encoding="utf-8", errors="replace")):
+            return True
+    return False
+
+
+def _tier1_stack(clone_path: Path) -> str | None:
+    """The tier-1 ORM stack of the clone (``"django"`` / ``"sqlalchemy"`` / ``"rails"``),
+    or ``None`` for a non-tier-1 stack. Django is checked first for backward-compatible
+    behaviour, then SQLAlchemy, then Rails."""
+    if _detect_django(clone_path):
+        return "django"
+    if _detect_sqlalchemy(clone_path):
+        return "sqlalchemy"
+    if _detect_rails(clone_path):
+        return "rails"
+    return None
+
+
+def is_tier1(clone_path: Path) -> bool:
+    """True iff the clone is one of the three spec-supported exact ORM stacks —
+    Django, SQLAlchemy, or Rails ActiveRecord — each detected **structurally**
+    (an AST import / base-class node, never a substring scan). §4 / §12.6."""
+    return _tier1_stack(clone_path) is not None
+
+
+# --------------------------------------------------------------------------- #
+# Model → table map (per stack)                                               #
+# --------------------------------------------------------------------------- #
+def _is_django_model_base(node: ast.ClassDef) -> bool:
+    return any("Model" in ast.unparse(b) for b in node.bases)
+
+
+def _is_sqlalchemy_model(node: ast.ClassDef) -> bool:
+    """A SQLAlchemy declarative model: a class that either has a ``__tablename__``
+    class attribute, or subclasses a declarative base (``Base`` / ``DeclarativeBase`` /
+    ``*Base`` produced by ``declarative_base()``). The ``__tablename__`` signal alone is
+    decisive; the base-name heuristic is the fallback for mapped classes without one."""
+    for item in node.body:
+        if isinstance(item, ast.Assign):
+            if any(isinstance(t, ast.Name) and t.id == "__tablename__" for t in item.targets):
+                return True
+    for b in node.bases:
+        text = ast.unparse(b)
+        if text == "Base" or text.endswith(".Base") or "DeclarativeBase" in text or text.endswith("Base"):
+            return True
+    return False
+
+
+def _sa_tablename(node: ast.ClassDef) -> str | None:
+    for item in node.body:
+        if isinstance(item, ast.Assign) and isinstance(item.value, ast.Constant):
+            if any(isinstance(t, ast.Name) and t.id == "__tablename__" for t in item.targets):
+                return str(item.value.value)
+    return None
+
+
+def _rails_table_name(class_name: str, explicit: str | None) -> str:
+    """Rails convention: table name is the pluralised snake_case of the class name
+    (``OrderItem`` -> ``order_items``), unless ``self.table_name = '...'`` overrides it."""
+    if explicit:
+        return explicit
+    snake = re.sub(r"(?<!^)(?=[A-Z])", "_", class_name).lower()
+    if snake.endswith("y") and snake[-2:-1] not in "aeiou":
+        return snake[:-1] + "ies"
+    if snake.endswith(("s", "x", "z", "ch", "sh")):
+        return snake + "es"
+    return snake + "s"
+
+
 def _table_class_map(clone_path: Path) -> dict[str, str]:
-    """Map ``db_table`` (and lowercased class name) -> model class name."""
+    """Map ``table-name`` (and lowercased class name) -> model class name, across all
+    three tier-1 stacks. Django uses ``db_table``/class-name; SQLAlchemy ``__tablename__``;
+    Rails the pluralised-snake convention (or ``self.table_name``)."""
     mapping: dict[str, str] = {}
     for p in _py_files(clone_path):
         try:
@@ -62,10 +175,25 @@ def _table_class_map(clone_path: Path) -> dict[str, str]:
         except SyntaxError:
             continue
         for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef) and any("Model" in ast.unparse(b) for b in node.bases):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            if _is_django_model_base(node):
                 table = _db_table(node)
                 mapping[table] = node.name
                 mapping[node.name.lower()] = node.name
+            elif _is_sqlalchemy_model(node):
+                table = _sa_tablename(node) or node.name.lower()
+                mapping[table] = node.name
+                mapping[node.name.lower()] = node.name
+    for p in _rb_files(clone_path):
+        text = p.read_text(encoding="utf-8", errors="replace")
+        explicit = _RB_TABLE_NAME_RE.search(text)
+        explicit_name = explicit.group(1) if explicit else None
+        for m in _RB_CLASS_RE.finditer(text):
+            cls = m.group(1)
+            table = _rails_table_name(cls, explicit_name)
+            mapping[table] = cls
+            mapping[cls.lower()] = cls
     return mapping
 
 
@@ -80,39 +208,42 @@ def _db_table(node: ast.ClassDef) -> str:
 
 
 def _models_in_file(tree: ast.Module) -> set[str]:
+    """Model class names in scope in this file — defined here or imported. Covers Django
+    (``models.Model``) and SQLAlchemy declarative models so a write call referencing the
+    model (``session.add(Account(...))``) can be tied back to that model's table."""
     models: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module and "models" in node.module:
+        if isinstance(node, ast.ImportFrom) and node.module and ("models" in node.module or "model" in node.module):
             models.update(a.name for a in node.names)
-        if isinstance(node, ast.ClassDef) and any("Model" in ast.unparse(b) for b in node.bases):
-            models.add(node.name)
+        if isinstance(node, ast.ClassDef):
+            if _is_django_model_base(node) or _is_sqlalchemy_model(node):
+                models.add(node.name)
     return models
 
 
-def _write_calls(func: ast.AST) -> list[tuple[str, str | None, str]]:
-    """Return ``(write-method, table-string-literal-or-None, receiver-text)`` for every
-    write-method call inside ``func``.
+# --------------------------------------------------------------------------- #
+# Write-call extraction                                                        #
+# --------------------------------------------------------------------------- #
+def _write_calls(func: ast.AST) -> list[tuple[str, str | None, str, str]]:
+    """Return ``(write-method, table-string-literal-or-None, receiver-text, arg-text)`` for
+    every write-method call inside ``func`` (Django/generic + SQLAlchemy session verbs).
 
-    ``receiver-text`` is the un-parsed source of the write call's receiver chain plus its
-    arguments — the textual context a Tier-3 (search-only) match must associate with the
-    queried table name before it may claim the function writes that table. Without this the
-    fallback returned *every* function containing *any* write-method call (incl. ``dict.update``)
-    as a writer of the queried table, fabricating a blast-radius for tables that don't exist
-    (Law 2 — a confident-wrong answer softened by a ``lower-bound`` label is still forbidden).
-    """
-    hits: list[tuple[str, str | None, str]] = []
+    ``receiver-text`` is the un-parsed source of the write call's receiver chain; ``arg-text``
+    is the un-parsed argument list. For a Tier-3 (search-only) match the queried table name
+    must appear textually in one of them before the function may be claimed a writer — so the
+    fallback never returns *every* function containing *any* write method (Law 2)."""
+    hits: list[tuple[str, str | None, str, str]] = []
     for node in ast.walk(func):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             attr = node.func.attr
-            if attr in _WRITE_METHODS:
-                hits.append((attr, _table_literal(node), _receiver_text(node)))
+            if attr in _WRITE_METHODS or attr in _SA_SESSION_WRITE_METHODS:
+                hits.append((attr, _table_literal(node), _receiver_text(node), _arg_text(node)))
     return hits
 
 
 def _receiver_text(call: ast.Call) -> str:
     """The receiver expression the write method is called on, plus the call's own args, as
-    source text — e.g. for ``db['orders'].insert(total=t)`` -> ``db['orders']`` (+ its args).
-    This is the textual scope a table name must appear in to be a real Tier-3 lead."""
+    source text — e.g. for ``db['orders'].insert(total=t)`` -> ``db['orders']`` (+ its args)."""
     parts: list[str] = []
     try:
         if isinstance(call.func, ast.Attribute):
@@ -128,6 +259,25 @@ def _receiver_text(call: ast.Call) -> str:
     return " ".join(parts)
 
 
+def _arg_text(call: ast.Call) -> str:
+    """The write call's positional arguments as source text (the constructed row/model).
+    For ``session.add(Account(name=n))`` this carries ``Account(...)`` so the model name is
+    visible even though the receiver is only ``session``."""
+    parts: list[str] = []
+    try:
+        for arg in call.args:
+            parts.append(ast.unparse(arg))
+    except Exception:  # pragma: no cover
+        return ""
+    return " ".join(parts)
+
+
+def _model_names_in_text(text: str, models: set[str]) -> set[str]:
+    """Model class names (from ``models``) that appear as whole identifier tokens in ``text``."""
+    tokens = set(_IDENT_RE.findall(text))
+    return {m for m in models if m in tokens}
+
+
 def _table_literal(call: ast.Call) -> str | None:
     """For ``x.table('orders').insert(...)`` recover the 'orders' literal."""
     cur: ast.AST | None = call.func
@@ -139,12 +289,18 @@ def _table_literal(call: ast.Call) -> str | None:
     return None
 
 
+# --------------------------------------------------------------------------- #
+# who_writes                                                                   #
+# --------------------------------------------------------------------------- #
 def who_writes(clone_path: Path, table: str) -> list[Writer]:
-    tier1 = is_tier1(clone_path)
+    stack = _tier1_stack(clone_path)
+    tier1 = stack is not None
     table_map = _table_class_map(clone_path)
     model = table_map.get(table) or table_map.get(table.lower())
     confidence = "resolved" if tier1 else "lower-bound"
     writers: list[Writer] = []
+    if stack == "rails":
+        return _rails_who_writes(clone_path, table, model, confidence)
     for p in _py_files(clone_path):
         rel = str(p.relative_to(clone_path))
         try:
@@ -153,18 +309,105 @@ def who_writes(clone_path: Path, table: str) -> list[Writer]:
             continue
         file_models = _models_in_file(tree)
         for func in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
-            for method, table_lit, receiver in _write_calls(func):
-                if _write_targets_table(method, table_lit, table, model, file_models, receiver):
+            if stack == "sqlalchemy":
+                if _sa_func_writes_table(func, model, file_models):
                     writers.append(
-                        Writer(
-                            id=f"{rel}::{func.name}",
-                            file=rel,
-                            line=func.lineno,
-                            confidence=confidence,
-                        )
+                        Writer(id=f"{rel}::{func.name}", file=rel, line=func.lineno, confidence=confidence)
+                    )
+                continue
+            for method, table_lit, receiver, arg_text in _write_calls(func):
+                if _write_targets_table(
+                    method, table_lit, table, model, file_models, receiver, arg_text, stack
+                ):
+                    writers.append(
+                        Writer(id=f"{rel}::{func.name}", file=rel, line=func.lineno, confidence=confidence)
                     )
                     break
     return writers
+
+
+def _sa_model_typed_locals(func: ast.AST, model: str) -> set[str]:
+    """Local variable names bound to a construction of ``model`` inside ``func`` —
+    ``acct = Account(...)``. These are the SQLAlchemy instances a later ``session.add``/
+    ``session.delete`` persists, so a write on one of them targets ``model``'s table."""
+    names: set[str] = set()
+    # Parameters annotated with the model type — ``def close(acct: Account)``.
+    if isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        for arg in [*func.args.args, *func.args.posonlyargs, *func.args.kwonlyargs]:
+            if arg.annotation is not None:
+                ann = ast.unparse(arg.annotation)
+                if model in set(_IDENT_RE.findall(ann)):
+                    names.add(arg.arg)
+    # Locals bound to a construction of the model — ``acct = Account(...)`` (or annotated
+    # ``acct: Account = ...``).
+    for node in ast.walk(func):
+        targets: list[ast.expr] = []
+        value: ast.expr | None = None
+        if isinstance(node, ast.Assign):
+            targets, value = list(node.targets), node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets, value = ([node.target] if node.target else []), node.value
+            if node.annotation is not None and model in set(_IDENT_RE.findall(ast.unparse(node.annotation))):
+                if isinstance(node.target, ast.Name):
+                    names.add(node.target.id)
+        if isinstance(value, ast.Call):
+            callee = value.func
+            is_model_ctor = (isinstance(callee, ast.Name) and callee.id == model) or (
+                isinstance(callee, ast.Attribute) and callee.attr == model
+            )
+            # ``note = session.query(Note).filter(...).first()`` — a local bound to a query on
+            # the model is a model-typed instance (the row later mutated/deleted/committed).
+            bound_from_query = model in _model_names_in_text(ast.unparse(value), {model}) and (
+                "query" in ast.unparse(value) or "get" in ast.unparse(value)
+            )
+            if is_model_ctor or bound_from_query:
+                for tgt in targets:
+                    if isinstance(tgt, ast.Name):
+                        names.add(tgt.id)
+    return names
+
+
+def _sa_func_writes_table(func: ast.AST, model: str | None, file_models: set[str]) -> bool:
+    """True iff ``func`` performs a SQLAlchemy write against ``model``'s table. Recognises:
+
+    * ``session.add(m)`` / ``add_all([m])`` / ``merge(m)`` / ``delete(m)`` where ``m`` is a
+      model instance (either ``Model(...)`` inline or a local bound to one), and the
+      accompanying ``commit()``/``flush()`` in the same function;
+    * ``query(Model).delete()`` / ``.update(...)`` — the model in the query receiver;
+    * a direct ``Model(...)`` construction that is subsequently added/committed.
+    """
+    if model is None or model not in file_models:
+        return False
+    typed_locals = _sa_model_typed_locals(func, model)
+    # Attribute mutations on a model-typed local/param — ``note.title = ...`` — mark a pending
+    # dirty write that a subsequent ``session.commit()`` flushes (the idiomatic UPDATE path).
+    mutates_model_instance = False
+    for node in ast.walk(func):
+        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+            tgts = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for t in tgts:
+                if isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name) and t.value.id in typed_locals:
+                    mutates_model_instance = True
+    for node in ast.walk(func):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        attr = node.func.attr
+        recv = _receiver_text(node)
+        args = _arg_text(node)
+        ctx = f"{recv} {args}"
+        model_in_ctx = model in _model_names_in_text(ctx, {model}) or bool(
+            typed_locals & set(_IDENT_RE.findall(args))
+        )
+        # session.add(m)/add_all([m])/merge(m)/delete(m) on a model instance.
+        if attr in {"add", "add_all", "merge", "delete"} and model_in_ctx:
+            return True
+        # query(Model).delete()/update() — the model in the query receiver chain.
+        if attr in {"delete", "update"} and model in _model_names_in_text(recv, {model}):
+            return True
+        # commit()/flush() after mutating a model-typed instance's attributes (UPDATE path).
+        if attr in {"commit", "flush"} and mutates_model_instance:
+            return True
+    return False
 
 
 def _write_targets_table(
@@ -174,26 +417,95 @@ def _write_targets_table(
     model: str | None,
     file_models: set[str],
     receiver: str,
+    arg_text: str,
+    stack: str | None,
 ) -> bool:
     # Tier-1/2: an explicit table literal (``db.table('orders').insert``) is an exact match.
     if table_lit is not None:
         return table_lit == table
-    # Tier-1 (Django): a model whose db_table/class-name resolved to the queried table and is
-    # in scope in this file — the ``.objects`` write is that model's, i.e. that table's.
     if model is not None and model in file_models:
+        # Django: ``Model.objects.<write>`` / ``instance.save()`` where the model resolved to
+        # the queried table and is in scope. SQLAlchemy: the model class is constructed inside
+        # a session write (``session.add(Account(...))``) or targeted by ``query(Account)…``.
+        if stack == "sqlalchemy":
+            if method in _SA_SESSION_WRITE_METHODS:
+                # add/merge on a session — the queried model must appear in the args (the row
+                # being persisted). ``commit``/``flush`` with the model in-scope also counts as
+                # it flushes that unit of work; require the model token to appear in the func's
+                # write context (receiver or args) to stay honest.
+                return model in _model_names_in_text(f"{receiver} {arg_text}", {model})
+            # query(Model).delete()/update() — the model appears in the receiver chain.
+            return model in _model_names_in_text(receiver, {model})
         return True
-    # Tier-3 (search-only, non-tier-1): only a real textual lead counts. The queried table
-    # name must actually appear in the write call's receiver/args — never 'every function
-    # with any write method'. If the name is nowhere near the write, this is NOT a writer of
-    # that table (return not-found rather than a fabricated, label-softened blast-radius).
+    # Tier-3 (search-only, non-tier-1): only a real textual lead counts.
     return _name_associates(table, receiver)
+
+
+def _rails_who_writes(clone_path: Path, table: str, model: str | None, confidence: str) -> list[Writer]:
+    """Rails: a method that calls an ActiveRecord persistence verb (``save!``/``create!``/
+    ``update!``/``destroy`` …) whose receiver/args tie back to the queried model or table.
+    Ruby is not parsed by the Python AST, so this is a structural line/method scan of the
+    ``.rb`` sources — still deterministic and grounded to a ``file::method`` citation."""
+    writers: list[Writer] = []
+    if model is None:
+        return writers
+    verb_alt = "|".join(re.escape(m) for m in sorted(_RAILS_WRITE_METHODS, key=len, reverse=True))
+    # ``<receiver>.<verb>`` — a persistence call with an explicit receiver.
+    qualified_re = re.compile(r"([A-Za-z_][\w]*(?:::[A-Za-z_]\w*)*)\.(" + verb_alt + r")(?![\w!?])")
+    # A bare persistence call (implicit ``self`` receiver) — ``create!(...)`` / ``save!``.
+    bare_re = re.compile(r"(?:^|[^.\w])(" + verb_alt + r")(?![\w!?])")
+    class_re = re.compile(r"^(\s*)class\s+([A-Z]\w*)")
+    def_re = re.compile(r"^(\s*)def\s+(?:self\.)?([A-Za-z_]\w*[!?=]?)")
+    # Receiver-variable stems that tie back to this model/table (``acct`` ~ account, etc.).
+    recv_tokens: set[str] = {table.lower(), table.lower().rstrip("s"), model.lower()}
+
+    for p in _rb_files(clone_path):
+        rel = str(p.relative_to(clone_path))
+        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        cur_class: str | None = None
+        cur_method: str | None = None
+        cur_line = 0
+        emitted: set[str] = set()
+
+        def _emit(name: str, line: int) -> None:
+            if name not in emitted:
+                writers.append(Writer(id=f"{rel}::{name}", file=rel, line=line, confidence=confidence))
+                emitted.add(name)
+
+        for i, raw in enumerate(lines, start=1):
+            cm = class_re.match(raw)
+            if cm:
+                cur_class = cm.group(2)
+                continue
+            dm = def_re.match(raw)
+            if dm:
+                cur_method = dm.group(2)
+                cur_line = i
+                continue
+            if cur_method is None:
+                continue
+            in_model_body = cur_class == model
+            for qm in qualified_re.finditer(raw):
+                receiver = qm.group(1)
+                recv_id = receiver.split(".")[0]
+                # Explicit model-class receiver (``Account.create!``) — exact.
+                if recv_id == model or receiver == model:
+                    _emit(cur_method, cur_line)
+                # ``self.save!`` inside the model's own class body — exact (self IS this model).
+                elif receiver == "self" and in_model_body:
+                    _emit(cur_method, cur_line)
+                # A receiver variable whose name is a stem of the model/table.
+                elif recv_id.lower() in recv_tokens:
+                    _emit(cur_method, cur_line)
+            # Bare persistence verb (implicit self) inside the model's class body.
+            if in_model_body and not qualified_re.search(raw) and bare_re.search(raw):
+                _emit(cur_method, cur_line)
+    return writers
 
 
 def _name_associates(table: str, receiver: str) -> bool:
     """True iff the queried table name is textually tied to the write call — as a whole
-    identifier token in the receiver chain / arguments (e.g. ``orders_table.save()``,
-    ``db['orders'].insert(...)``, ``session.query(Orders)``). Substring-only matches
-    (``order`` in ``reorder``) do not count."""
+    identifier token in the receiver chain / arguments."""
     if not table or not receiver:
         return False
     candidates = {table, table.lower(), table.rstrip("s"), table.lower().rstrip("s")}
@@ -202,14 +514,28 @@ def _name_associates(table: str, receiver: str) -> bool:
     return bool(candidates & tokens)
 
 
+# --------------------------------------------------------------------------- #
+# shares_table                                                                 #
+# --------------------------------------------------------------------------- #
 def shares_table(clone_path: Path, table: str) -> list[ModuleRef]:
-    tier1 = is_tier1(clone_path)
+    stack = _tier1_stack(clone_path)
+    tier1 = stack is not None
     table_map = _table_class_map(clone_path)
     model = table_map.get(table) or table_map.get(table.lower())
     confidence = "resolved" if tier1 else "lower-bound"
     modules: dict[str, ModuleRef] = {}
     if model is None:
         return []
+    if stack == "rails":
+        for p in _rb_files(clone_path):
+            rel = str(p.relative_to(clone_path))
+            text = p.read_text(encoding="utf-8", errors="replace")
+            if _defines_rails_model(text, model):
+                continue
+            if re.search(r"\b" + re.escape(model) + r"\b", text):
+                top = rel.split("/", 1)[0]
+                modules.setdefault(top, ModuleRef(id=top, confidence=confidence))
+        return list(modules.values())
     for p in _py_files(clone_path):
         rel = str(p.relative_to(clone_path))
         text = p.read_text(encoding="utf-8", errors="replace")
@@ -217,10 +543,17 @@ def shares_table(clone_path: Path, table: str) -> list[ModuleRef]:
             tree = ast.parse(text)
         except SyntaxError:
             continue
-        # a co-accessor references the model AND queries it (``.objects``)
         if _defines_model(tree, model):
             continue
-        if model in text and f"{model}.objects" in text:
+        # a co-accessor references the model AND actually accesses/queries it — Django
+        # ``.objects`` or a SQLAlchemy ``query(Model)`` / ``session.add(Model(...))``
+        # construction. A bare import/type-hint mention is NOT a co-access (Law 2 — never
+        # fabricate a co-accessor that merely names the model in an annotation).
+        if model in text and (
+            f"{model}.objects" in text
+            or re.search(r"query\s*\(\s*" + re.escape(model) + r"\b", text)
+            or re.search(r"(?<![\w.])" + re.escape(model) + r"\s*\(", text)
+        ):
             top = rel.split("/", 1)[0]
             modules.setdefault(top, ModuleRef(id=top, confidence=confidence))
     return list(modules.values())
@@ -229,11 +562,18 @@ def shares_table(clone_path: Path, table: str) -> list[ModuleRef]:
 def _defines_model(tree: ast.Module, model: str) -> bool:
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and node.name == model:
-            if any("Model" in ast.unparse(b) for b in node.bases):
+            if _is_django_model_base(node) or _is_sqlalchemy_model(node):
                 return True
     return False
 
 
+def _defines_rails_model(text: str, model: str) -> bool:
+    return any(m.group(1) == model for m in _RB_CLASS_RE.finditer(text))
+
+
+# --------------------------------------------------------------------------- #
+# owner                                                                        #
+# --------------------------------------------------------------------------- #
 def owner(clone_path: Path, path: str) -> OwnerResult:
     codeowners = clone_path / "CODEOWNERS"
     if codeowners.is_file():

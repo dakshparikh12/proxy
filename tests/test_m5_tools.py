@@ -436,3 +436,91 @@ def test_ac_m5_016_stale_graph_node_reread_live_before_citation():
         assert not stale_confident, (
             f"Stale node served as confident citation without re-read: {stale_confident}"
         )
+
+
+def _load_golden_writers(name: str, table: str) -> set:
+    """Read the mechanically-derived golden writer id set for a fixture."""
+    import json
+    from pathlib import Path
+
+    golden_path = Path(f"fixtures/goldens/{name}/who-writes-{table}.json")
+    golden = json.loads(golden_path.read_text())
+    return {w["id"] for w in golden["writers"]}
+
+
+def test_ac_m5_005sa_who_writes_resolved_on_sqlalchemy_orm():
+    """AC-M5-005sa: who_writes returns 'resolved' on a SQLAlchemy tier-1 stack, and the
+    writer set matches the golden — the exact add/commit/delete writers, reads excluded.
+
+    Regression for gap ORM-TIER1-ONLY-DJANGO: SQLAlchemy was previously unrecognised
+    (is_tier1 -> False) and its writers were MISSED entirely (who_writes -> [])."""
+    from services.code_intel.mcp_server import CodeIntelMCPServer
+    from tests.fixtures.repos import sqlalchemy_model_fixture
+
+    fixture = sqlalchemy_model_fixture()
+    server = CodeIntelMCPServer.from_fixture(fixture)
+
+    result = server.who_writes("accounts")
+
+    golden_writers = _load_golden_writers("fixture-sqlalchemy-model", "accounts")
+    result_ids = {w.id for w in result.writers}
+    assert result_ids == golden_writers, (
+        f"SQLAlchemy who_writes writer set mismatch. Expected: {golden_writers}, Got: {result_ids}"
+    )
+    assert result.writers, "SQLAlchemy who_writes must not be empty on a real SQLAlchemy repo"
+    for writer in result.writers:
+        assert writer.confidence == "resolved", (
+            f"Writer {writer.id} has confidence={writer.confidence!r}, expected 'resolved' on SQLAlchemy"
+        )
+
+
+def test_ac_m5_005rb_who_writes_resolved_on_rails_activerecord():
+    """AC-M5-005rb: who_writes returns 'resolved' on a Rails ActiveRecord tier-1 stack, and
+    the writer set matches the golden (model-class + in-model-body persistence writers).
+
+    Regression for gap ORM-TIER1-ONLY-DJANGO: Rails was previously unrecognised."""
+    from services.code_intel.mcp_server import CodeIntelMCPServer
+    from tests.fixtures.repos import rails_activerecord_fixture
+
+    fixture = rails_activerecord_fixture()
+    server = CodeIntelMCPServer.from_fixture(fixture)
+
+    result = server.who_writes("accounts")
+
+    golden_writers = _load_golden_writers("fixture-rails-activerecord", "accounts")
+    result_ids = {w.id for w in result.writers}
+    assert result_ids == golden_writers, (
+        f"Rails who_writes writer set mismatch. Expected: {golden_writers}, Got: {result_ids}"
+    )
+    assert result.writers, "Rails who_writes must not be empty on a real Rails repo"
+    for writer in result.writers:
+        assert writer.confidence == "resolved", (
+            f"Writer {writer.id} has confidence={writer.confidence!r}, expected 'resolved' on Rails"
+        )
+
+
+def test_ac_m5_005sa_is_tier1_true_for_sqlalchemy_and_rails():
+    """AC-M5-005sa/rb: is_tier1() recognises SQLAlchemy and Rails stacks (all three
+    spec-supported exact ORMs), not Django alone — the step-0.5 architecture gate."""
+    from services.code_intel import orm
+    from tests.fixtures.repos import rails_activerecord_fixture, sqlalchemy_model_fixture
+
+    sa = sqlalchemy_model_fixture()
+    rb = rails_activerecord_fixture()
+    assert orm.is_tier1(sa.clone_path) is True, "SQLAlchemy stack must be tier-1"
+    assert orm.is_tier1(rb.clone_path) is True, "Rails ActiveRecord stack must be tier-1"
+
+
+def test_ac_m5_005sa_sqlalchemy_reads_not_reported_as_writers():
+    """AC-M5-005sa: a read-only ``session.query(Account).all()`` is NOT a writer — the
+    exact write set must exclude pure reads (no over-reporting on the exact stack)."""
+    from services.code_intel.mcp_server import CodeIntelMCPServer
+    from tests.fixtures.repos import sqlalchemy_model_fixture
+
+    fixture = sqlalchemy_model_fixture()
+    server = CodeIntelMCPServer.from_fixture(fixture)
+    result = server.who_writes("accounts")
+    ids = {w.id for w in result.writers}
+    assert "app/readonly.py::list_accounts" not in ids, (
+        "A read-only query.all() must never be reported as a writer"
+    )

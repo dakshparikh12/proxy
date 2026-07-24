@@ -885,3 +885,38 @@ def pr_meeting_fixture() -> PRMeetingFixture:
         pr_head_sha=pr_sha,
         default_branch_tip=main_sha,
     )
+
+
+# --------------------------------------------------------------------------- #
+# SQLAlchemy / Rails ActiveRecord tier-1 ORM fixtures (gap ORM-TIER1-ONLY-DJANGO) #
+# --------------------------------------------------------------------------- #
+_SQLALCHEMY_FILES: dict = {'app/__init__.py': '', 'app/models.py': "from sqlalchemy import Column, Integer, String\nfrom sqlalchemy.orm import declarative_base\n\nBase = declarative_base()\n\n\nclass Account(Base):\n    __tablename__ = 'accounts'\n    id = Column(Integer, primary_key=True)\n    name = Column(String)\n", 'app/service.py': 'from sqlalchemy.orm import Session\n\nfrom app.models import Account\n\n\ndef open_account(session: Session, name: str) -> Account:\n    acct = Account(name=name)\n    session.add(acct)\n    session.commit()\n    return acct\n\n\ndef close_account(session: Session, acct: Account) -> None:\n    session.delete(acct)\n    session.commit()\n', 'app/readonly.py': 'from sqlalchemy.orm import Session\n\nfrom app.models import Account\n\n\ndef list_accounts(session: Session):\n    return session.query(Account).all()\n'}
+
+
+def sqlalchemy_model_fixture() -> RepoFixture:
+    repo, sha = build_git_repo("sqlalchemy-model", _SQLALCHEMY_FILES)
+    tracked = sorted(_SQLALCHEMY_FILES.keys())
+    return RepoFixture(
+        url=str(repo),
+        clone_path=repo,
+        expected_sha=sha,
+        expected_file_list=tracked,
+        all_files=tracked,
+        extra={"orm": "sqlalchemy", "tier": "tier-1"},
+    )
+
+
+_RAILS_FILES: dict = {'app/models/account.rb': 'class Account < ApplicationRecord\n  validates :name, presence: true\n\n  def self.open_account(name)\n    Account.create!(name: name)\n  end\n\n  def deactivate\n    self.active = false\n    save!\n  end\nend\n', 'app/models/order.rb': 'class Order < ActiveRecord::Base\n  def self.place(total)\n    Order.create!(total: total)\n  end\nend\n', 'app/readers/account_reader.rb': 'class AccountReader\n  def find(id)\n    Account.find(id)\n  end\nend\n'}
+
+
+def rails_activerecord_fixture() -> RepoFixture:
+    repo, sha = build_git_repo("rails-activerecord", _RAILS_FILES)
+    tracked = sorted(_RAILS_FILES.keys())
+    return RepoFixture(
+        url=str(repo),
+        clone_path=repo,
+        expected_sha=sha,
+        expected_file_list=tracked,
+        all_files=tracked,
+        extra={"orm": "rails", "tier": "tier-1"},
+    )

@@ -3029,3 +3029,73 @@
     unstamped_node_rows_allowed: 0
     edges_missing_site_allowed: 0
   test_ids: [T-M4-014]
+
+- criterion_id: AC-M5-005sa
+  name: "who_writes returns 'resolved' with the exact writer set on a SQLAlchemy tier-1 stack"
+  evidence_class: "[e2e-real-repo]"
+  authority_refs: [R-DOC01-3.5-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A repo using SQLAlchemy declarative models (Base/__tablename__), driven through the
+      real product entrypoint CodeIntelMCPServer.who_writes on the real clone. Golden writer
+      set derived mechanically by running the real entrypoint.
+    when: >
+      who_writes('accounts') is called.
+    then:
+      - is_tier1 is True (SQLAlchemy is one of the three spec-supported exact ORMs).
+      - Writers are returned with confidence='resolved'.
+      - The writer set matches the golden (session.add/commit and session.delete writers),
+        and a read-only session.query(Account).all() is NOT reported as a writer.
+  applicability:
+    fixtures: [fixture-sqlalchemy-model]
+    estates: []
+    excluded_estates: []
+    rationale: "SQLAlchemy is named exact-supported in Doc01 §4; it was previously unrecognised (gap ORM-TIER1-ONLY-DJANGO)."
+  primary_oracle:
+    type: deterministic_golden_with_tag_check
+    artifact: goldens/fixture-sqlalchemy-model/who-writes-accounts.json
+  thresholds:
+    resolved_recall: 1.0
+    wrong_tag_allowed: 0
+  test_ids: [T-M5-005sa]
+  fault_model_refs: [F-WHO-WRITES-SILENT-EXACT, F-WHO-WRITES-MISSES-SQLALCHEMY]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-005sa
+
+- criterion_id: AC-M5-005rb
+  name: "who_writes returns 'resolved' with the exact writer set on a Rails ActiveRecord tier-1 stack"
+  evidence_class: "[e2e-real-repo]"
+  authority_refs: [R-DOC01-3.5-03]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A repo using Rails ActiveRecord models (class < ActiveRecord::Base / ApplicationRecord),
+      driven through the real product entrypoint CodeIntelMCPServer.who_writes on the real clone.
+      Golden writer set derived mechanically.
+    when: >
+      who_writes('accounts') is called.
+    then:
+      - is_tier1 is True (Rails ActiveRecord is one of the three spec-supported exact ORMs).
+      - Writers are returned with confidence='resolved'.
+      - The writer set matches the golden (model-class-receiver create!/update! and in-model-body
+        save!/destroy persistence writers).
+  applicability:
+    fixtures: [fixture-rails-activerecord]
+    estates: []
+    excluded_estates: []
+    rationale: "Rails ActiveRecord is named exact-supported in Doc01 §4; it was previously unrecognised (gap ORM-TIER1-ONLY-DJANGO)."
+  primary_oracle:
+    type: deterministic_golden_with_tag_check
+    artifact: goldens/fixture-rails-activerecord/who-writes-accounts.json
+  thresholds:
+    resolved_recall: 1.0
+    wrong_tag_allowed: 0
+  test_ids: [T-M5-005rb]
+  fault_model_refs: [F-WHO-WRITES-SILENT-EXACT, F-WHO-WRITES-MISSES-RAILS]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M5-005rb

@@ -1,0 +1,18 @@
+{
+  "_derivation": "stdlib ast/line scan for ORM write markers on a tier-1 stack, derived by running CodeIntelMCPServer.who_writes on the real fixture clone",
+  "table": "accounts",
+  "writers": [
+    {
+      "id": "app/service.py::close_account",
+      "file": "app/service.py",
+      "line": 13,
+      "confidence": "resolved"
+    },
+    {
+      "id": "app/service.py::open_account",
+      "file": "app/service.py",
+      "line": 6,
+      "confidence": "resolved"
+    }
+  ]
+}

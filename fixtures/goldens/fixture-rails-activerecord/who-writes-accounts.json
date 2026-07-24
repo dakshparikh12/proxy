@@ -1,0 +1,18 @@
+{
+  "_derivation": "stdlib ast/line scan for ORM write markers on a tier-1 stack, derived by running CodeIntelMCPServer.who_writes on the real fixture clone",
+  "table": "accounts",
+  "writers": [
+    {
+      "id": "app/models/account.rb::deactivate",
+      "file": "app/models/account.rb",
+      "line": 8,
+      "confidence": "resolved"
+    },
+    {
+      "id": "app/models/account.rb::open_account",
+      "file": "app/models/account.rb",
+      "line": 4,
+      "confidence": "resolved"
+    }
+  ]
+}
