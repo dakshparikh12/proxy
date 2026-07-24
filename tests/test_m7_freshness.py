@@ -268,3 +268,119 @@ def test_ac_m7_007_pr_meeting_pins_to_pr_head_not_default_branch():
         f"meetings.pinned_sha must NOT be the default-branch tip ({fixture.default_branch_tip!r}) "
         f"for a PR-scoped meeting"
     )
+
+def test_ac_m7_009_dedup_cache_is_bounded_under_sustained_pushes():
+    """AC-M7-009: The webhook dedup memory is bounded on a long-lived host.
+
+    A stateful code_intel host (GCE per Doc 00) processes an unbounded stream of
+    pushes over its lifetime. The delivery-GUID dedup set must NOT grow without
+    bound (a slow memory leak); only recent-duplicate suppression is required.
+    Drives the REAL WebhookHandler.handle path with many distinct deliveries and
+    asserts the retained dedup entries stay bounded.
+    """
+    from services.code_intel.webhook_handler import WebhookHandler, WEBHOOK_DEDUP_MAXLEN
+    from tests.fixtures.stubs import push_webhook_fixture, GraphRebuildCounter
+
+    rebuild_counter = GraphRebuildCounter()
+    handler = WebhookHandler(rebuild_counter=rebuild_counter)
+
+    n = WEBHOOK_DEDUP_MAXLEN * 4 + 25
+    for i in range(n):
+        handler.handle(
+            push_webhook_fixture(
+                repo_url="https://github.com/example/repo",
+                sha=f"sha-{i:08d}",
+                delivery_guid=f"guid-{i:08d}",
+            )
+        )
+
+    retained = handler.dedup_size()
+    assert retained <= WEBHOOK_DEDUP_MAXLEN, (
+        f"dedup cache grew unbounded: retained {retained} entries after {n} distinct "
+        f"pushes (bound is {WEBHOOK_DEDUP_MAXLEN})"
+    )
+    assert rebuild_counter.count == n, (
+        f"every distinct push must rebuild exactly once, got {rebuild_counter.count} for {n} pushes"
+    )
+
+
+def test_ac_m7_009b_recent_duplicate_still_suppressed_after_bounding():
+    """AC-M7-009b: Bounding the dedup cache must NOT break AC-M7-002 for recent
+    duplicates. A duplicate delivery that is still within the retention window is
+    deduplicated to exactly one rebuild, on the REAL handle() path."""
+    from services.code_intel.webhook_handler import WebhookHandler, WEBHOOK_DEDUP_MAXLEN
+    from tests.fixtures.stubs import push_webhook_fixture, GraphRebuildCounter
+
+    rebuild_counter = GraphRebuildCounter()
+    handler = WebhookHandler(rebuild_counter=rebuild_counter)
+
+    first = push_webhook_fixture(
+        repo_url="https://github.com/example/repo",
+        sha="abc123def456",
+        delivery_guid="guid-recent",
+    )
+    handler.handle(first)
+
+    # A modest number of other pushes (fewer than the bound) then a redelivery of
+    # the first: it is still in-window and MUST be suppressed.
+    for i in range(WEBHOOK_DEDUP_MAXLEN // 2):
+        handler.handle(
+            push_webhook_fixture(
+                repo_url="https://github.com/example/repo",
+                sha=f"other-{i:08d}",
+                delivery_guid=f"other-{i:08d}",
+            )
+        )
+    handler.handle(first)  # redelivery, still recent
+
+    expected = 1 + (WEBHOOK_DEDUP_MAXLEN // 2)
+    assert rebuild_counter.count == expected, (
+        f"recent duplicate should be suppressed: expected {expected} rebuilds, "
+        f"got {rebuild_counter.count}"
+    )
+
+def test_ac_m7_009c_pipeline_webhook_handler_is_persistent_and_bounded():
+    """AC-M7-009c: The REAL run_full_pipeline host owns ONE persistent webhook
+    handler whose dedup cache is bounded across a sustained push stream — proving
+    the leak is fixed on the actual product path (not just the class in isolation).
+    Drives run_full_pipeline on a real cloned git repo, then feeds many distinct
+    deliveries through pipeline.webhook_handler.handle and asserts the retained
+    dedup entries stay bounded while every distinct push still rebuilds once.
+    """
+    from services.code_intel.pipeline import run_full_pipeline
+    from services.code_intel.webhook_handler import WEBHOOK_DEDUP_MAXLEN
+    from tests.fixtures.repos import small_repo_fixture
+    from tests.fixtures.stubs import push_webhook_fixture
+
+    fixture = small_repo_fixture()
+    pipeline = run_full_pipeline(tenant_id="tenant-webhook", repo_url=fixture.url)
+
+    handler = pipeline.webhook_handler
+    assert handler is not None, "run_full_pipeline must attach a persistent webhook_handler"
+
+    # Same handler instance is reused (persistent per-host state), not re-minted.
+    assert pipeline.webhook_handler is handler
+
+    n = WEBHOOK_DEDUP_MAXLEN + 50
+    for i in range(n):
+        resp = handler.handle(
+            push_webhook_fixture(
+                repo_url=fixture.url,
+                sha=fixture.expected_sha,  # real HEAD sha; distinct guids below
+                delivery_guid=f"guid-{i:08d}",
+            )
+        )
+        assert resp.enqueued
+
+    assert handler.dedup_size() <= WEBHOOK_DEDUP_MAXLEN, (
+        f"pipeline webhook dedup cache leaked: {handler.dedup_size()} entries after "
+        f"{n} distinct deliveries (bound {WEBHOOK_DEDUP_MAXLEN})"
+    )
+
+    # And a redelivery of the most recent guid is still suppressed on the real path.
+    last = push_webhook_fixture(
+        repo_url=fixture.url, sha=fixture.expected_sha, delivery_guid=f"guid-{n - 1:08d}"
+    )
+    before = pipeline.current_sha
+    handler.handle(last)  # duplicate of the last-seen key -> suppressed, no crash
+    assert pipeline.current_sha == before

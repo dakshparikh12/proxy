@@ -48,6 +48,11 @@ class Pipeline:
         self.graph_retention_index: dict[str, GraphVersion] = {}
         self.server: Any = None
         self.server_factory: Any = None
+        # ONE persistent webhook handler per (long-lived) host. Its bounded dedup
+        # cache is per-host state, so it must outlive individual pushes — it is
+        # created once here and reused, never re-minted per delivery (which would
+        # defeat both dedup and its bound).
+        self.webhook_handler: Any = None
         self._store: GraphStore | None = None
         self._table_map: dict[str, str] = {}
         self._live_sessions: list[MeetingSession] = []
@@ -222,6 +227,19 @@ def run_full_pipeline(
     # the per-query factory (§3.5): callers store this and mint one fresh,
     # queryable wrapper per query over the pipeline's immutable graph/clone/LSP.
     pipeline.server_factory = MCPServerFactory.for_pipeline(pipeline, db_counter=db_counter)
+
+    # ONE persistent webhook handler bound to this long-lived host: its bounded
+    # LRU dedup cache is the per-host recent-duplicate window (see
+    # webhook_handler.WEBHOOK_DEDUP_MAXLEN). Reusing this single instance across
+    # every delivered push is what keeps memory O(maxlen) instead of leaking.
+    from .webhook_handler import WebhookHandler
+
+    pipeline.webhook_handler = WebhookHandler(
+        cloner=pipeline._cloner,
+        pipeline=pipeline,
+        server=pipeline.server,
+        git_interceptor=git_interceptor,
+    )
     return pipeline
 
 

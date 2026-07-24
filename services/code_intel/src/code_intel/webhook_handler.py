@@ -7,8 +7,16 @@ graph, and coverage.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
+
+# Recent-duplicate suppression only needs a bounded window. On a long-lived
+# stateful code_intel host (GCE per Doc 00 deployables) an unbounded dedup set
+# would leak memory proportional to total pushes over the process lifetime. We
+# retain the last WEBHOOK_DEDUP_MAXLEN (delivery_guid, sha) keys as an LRU; older
+# keys evict. GitHub redelivers within minutes, so this window is ample.
+WEBHOOK_DEDUP_MAXLEN = 2048
 
 
 @dataclass
@@ -25,13 +33,23 @@ class WebhookHandler:
         pipeline: Any = None,
         rebuild_counter: Any = None,
         git_interceptor: Any = None,
+        dedup_maxlen: int = WEBHOOK_DEDUP_MAXLEN,
     ) -> None:
         self._cloner = cloner
         self._server = server
         self._pipeline = pipeline
         self._rebuild_counter = rebuild_counter
         self._git_interceptor = git_interceptor
-        self._seen: set[tuple[str, str]] = set()
+        # Bounded LRU of recently-seen (delivery_guid, sha) keys. OrderedDict is
+        # used as an LRU: seeing a key moves it to the most-recent end; when the
+        # map exceeds dedup_maxlen the least-recent key is evicted. The value is
+        # unused (a set of keys), so we store None.
+        self._dedup_maxlen = max(1, dedup_maxlen)
+        self._seen: "OrderedDict[tuple[str, str], None]" = OrderedDict()
+
+    def dedup_size(self) -> int:
+        """Number of retained dedup keys (bounded by dedup_maxlen)."""
+        return len(self._seen)
 
     def _resolved_pipeline(self) -> Any:
         if self._pipeline is not None:
@@ -47,8 +65,14 @@ class WebhookHandler:
             return WebhookResponse(status_code=401, enqueued=False)
         key = (getattr(webhook, "delivery_guid", ""), getattr(webhook, "sha", ""))
         if key in self._seen:
+            # Recent duplicate: suppress rebuild and refresh its LRU recency so a
+            # redelivered-again key isn't prematurely evicted.
+            self._seen.move_to_end(key)
             return WebhookResponse(status_code=200, enqueued=True)
-        self._seen.add(key)
+        self._seen[key] = None
+        # Evict least-recently-seen keys past the bound (memory stays O(maxlen)).
+        while len(self._seen) > self._dedup_maxlen:
+            self._seen.popitem(last=False)
         self._process_push(webhook)
         return WebhookResponse(status_code=200, enqueued=True)
 

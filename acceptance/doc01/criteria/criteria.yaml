@@ -1619,6 +1619,38 @@
   required_evidence:
     - junit:T-M7-002
 
+- criterion_id: AC-M7-009
+  name: "Webhook dedup memory is bounded on a long-lived host"
+  evidence_class: "[unit-example]"
+  authority_refs: [R-DOC01-3.6-01]
+  criticality: P1
+  blocking: true
+  behavior:
+    given: >
+      A long-lived stateful code_intel host (GCE per Doc 00) processing an
+      unbounded stream of distinct push deliveries over its lifetime, via the
+      real run_full_pipeline-owned persistent WebhookHandler.
+    when: >
+      Far more than WEBHOOK_DEDUP_MAXLEN distinct deliveries are handled.
+    then:
+      - The retained dedup entries never exceed WEBHOOK_DEDUP_MAXLEN (no leak).
+      - Every distinct push still triggers exactly one rebuild.
+      - A still-recent duplicate delivery is still deduplicated (AC-M7-002 holds).
+  applicability:
+    fixtures: [fixture-duplicate-webhook, small_repo_fixture]
+    estates: []
+    excluded_estates: []
+    rationale: "An unbounded dedup set is a slow memory leak proportional to total pushes over the process lifetime."
+  primary_oracle:
+    type: bound_check
+    artifact: "dedup_size() <= WEBHOOK_DEDUP_MAXLEN"
+  test_ids: [T-M7-009, T-M7-009b, T-M7-009c]
+  fault_model_refs: [F-WEBHOOK-SEEN-SET-UNBOUNDED]
+  protocol_ref: PROTO-DETERMINISTIC-01
+  required_evidence:
+    - junit:T-M7-009
+    - junit:T-M7-009c
+
 - criterion_id: AC-M7-003
   name: "Meeting start reconciles ls-remote vs local tip and pulls drift before confirming readiness"
   evidence_class: "[unit-example]"
