@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from scribe.call import scribe_call as _real_scribe_call
@@ -119,7 +119,16 @@ async def _pump_transcripts(
                 for window in coalescer.feed(seg):
                     await queue.put(window)
                 pending = None
-            for window in coalescer.flush():
+            flushed = coalescer.flush()
+            # Sweep any chat that landed after the last window's end (the meeting ended
+            # on silence, so flush produced no trailing buffer to fold it into) onto the
+            # last window — meeting chat is never lost from the notes record (§3.1).
+            leftover = coalescer.drain_trailing_chat()
+            if leftover and flushed:
+                flushed[-1] = replace(
+                    flushed[-1], chat_messages=flushed[-1].chat_messages + leftover
+                )
+            for window in flushed:
                 await queue.put(window)
             await queue.put(None)  # sentinel: drain the serial consumer and stop
             return
@@ -127,8 +136,6 @@ async def _pump_transcripts(
 
 def _close_segment(seg: TranscriptSegment, *, end_s: float) -> TranscriptSegment:
     """Fix a provisional segment's end (>= start, never a zero/negative span)."""
-    from dataclasses import replace
-
     fixed_end = end_s if end_s > seg.start_s else seg.start_s + _TRAILING_SPAN_S
     return replace(seg, end_s=fixed_end)
 

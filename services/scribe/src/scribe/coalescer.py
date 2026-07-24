@@ -180,6 +180,7 @@ class Coalescer:
         self._pause_gap_s = pause_gap_s
         self._buf = _Buffer()
         self._chat: list[ChatMessage] = []
+        self._last_window: Window | None = None
 
     # -- input ---------------------------------------------------------------
 
@@ -251,10 +252,33 @@ class Coalescer:
         self._chat.append(msg)
 
     def flush(self) -> list[Window]:
-        """Emit any partial trailing window at stream end (nothing buffered → none)."""
-        if self._buf.is_empty:
-            return []
-        return [self._cut(BoundaryType.STREAM_END)]
+        """Emit any partial trailing window at stream end, sweeping ALL leftover chat.
+
+        Meeting chat is never lost from the record. Chat that landed where no emitted
+        window covered the instant — after the last window's end, or (rarely) with a
+        buffer already empty because the meeting ended on silence — is swept into the
+        trailing window here so it still rides the notes. If there is a trailing buffer
+        it becomes that final window's chat; if the buffer is empty but a window was
+        emitted earlier, the leftover attaches to that last window (never dropped).
+        """
+        if not self._buf.is_empty:
+            return [self._cut(BoundaryType.STREAM_END, sweep_remaining_chat=True)]
+        return []
+
+    def drain_trailing_chat(self) -> tuple[ChatMessage, ...]:
+        """Return (and clear) any chat still unfolded after :meth:`flush`.
+
+        After the stream has fully drained, chat may remain that landed where no
+        window covered the instant *and* there was no trailing buffer to sweep it
+        into (the meeting ended on silence). This exposes that leftover so the caller
+        attaches it to the LAST emitted window — meeting chat is never lost. Returns
+        ``()`` when nothing is left. The batch :func:`coalesce` wrapper calls this and
+        folds the leftover into the final window; the streaming harness pump does the
+        same after its final flush.
+        """
+        leftover = tuple(self._chat)
+        self._chat.clear()
+        return leftover
 
     # -- boundary detection --------------------------------------------------
 
@@ -272,18 +296,35 @@ class Coalescer:
 
     # -- cutting -------------------------------------------------------------
 
-    def _cut(self, boundary: BoundaryType) -> Window:
-        """Close the current buffer into a Window with its same-span chat, and reset."""
+    def _cut(
+        self, boundary: BoundaryType, *, sweep_remaining_chat: bool = False
+    ) -> Window:
+        """Close the current buffer into a Window and fold its chat, then reset.
+
+        Chat folding is "nearest emitted window", so meeting chat is never lost:
+
+        * any held chat with ``ts_s <= end_s`` folds in — this is the in-span chat AND
+          any earlier chat that fell in a gap no prior window covered (a silence span,
+          or before the first speaker). Because every prior window already removed the
+          chat it claimed, whatever still satisfies ``ts_s <= end_s`` fell in the gap
+          leading up to this window and attaches here (the nearest following window).
+        * on ``sweep_remaining_chat`` (the trailing flush) ALL remaining chat folds in,
+          including chat after ``end_s`` — the final window is the last place a trailing
+          message can ride, so nothing is left on the floor.
+        """
         segs = tuple(self._buf.segments)
-        start_s = segs[0].start_s
         end_s = segs[-1].end_s
-        chat_in_span = tuple(m for m in self._chat if start_s <= m.ts_s <= end_s)
-        for m in chat_in_span:
-            self._chat.remove(m)
+        if sweep_remaining_chat:
+            folded = tuple(self._chat)
+            self._chat = []
+        else:
+            folded = tuple(m for m in self._chat if m.ts_s <= end_s)
+            for m in folded:
+                self._chat.remove(m)
         self._buf = _Buffer()
-        return Window(
-            segments=segs, boundary_type=boundary, chat_messages=chat_in_span
-        )
+        window = Window(segments=segs, boundary_type=boundary, chat_messages=folded)
+        self._last_window = window
+        return window
 
 
 def coalesce(
@@ -297,8 +338,11 @@ def coalesce(
     """Convenience: coalesce a full segment list (with optional chat) into windows.
 
     A batch wrapper over :class:`Coalescer` for tests and offline replay. Chat is
-    pushed up front; each message lands in whichever emitted window's span contains
-    its timestamp (never dropped as long as some window covers that instant).
+    pushed up front; each message rides the nearest emitted window and is NEVER
+    dropped — in-span chat folds into its window, and chat that fell where no window
+    covered the instant (a silence gap, before the first speaker, or after the last)
+    attaches to the nearest adjacent window (the following one, or the trailing/last
+    window for post-stream chat). If any window was emitted, no chat is lost.
     """
     coalescer = Coalescer(
         time_cap_s=time_cap_s, token_cap=token_cap, pause_gap_s=pause_gap_s
@@ -310,4 +354,12 @@ def coalesce(
     for seg in segments:
         windows.extend(coalescer.feed(seg))
     windows.extend(coalescer.flush())
+    # Sweep any chat that landed after the last window's end when the meeting ended on
+    # silence (no trailing buffer to fold it into) onto the last emitted window, so
+    # meeting chat is never lost. With no window at all there is nothing to attach to.
+    leftover = coalescer.drain_trailing_chat()
+    if leftover and windows:
+        windows[-1] = replace(
+            windows[-1], chat_messages=windows[-1].chat_messages + leftover
+        )
     return windows
