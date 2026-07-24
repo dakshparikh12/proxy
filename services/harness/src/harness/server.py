@@ -229,7 +229,85 @@ async def _real_provisioner_ready(app: Any) -> None:
     app.state.provisioner_ready = gate
     # The Recall bot + sandbox provisioner are created in startup (Doc 02 wires
     # the real provisioning); request handlers await this gate before use.
+    #
+    # The per-meeting runtime registry is constructed HERE so meeting-join (and the
+    # bot provisioner) resolve one MeetingRuntime — its in-process SignalCarrier +
+    # its live Scribe notes engine — per meeting. This is the production wiring that
+    # makes ``run_scribe`` actually run for a real meeting (DOC03-SCRIBE-PIPELINE).
+    from services.harness.src.harness.meeting_runtime import MeetingRuntimeRegistry
+
+    # The close-pass vendor edges (GCS finalized-notes bucket + Recall chat poster +
+    # the Sonnet close caller). When configured, the registry runs the ordered close
+    # pass on meeting end so the permanent markdown notes record is produced live
+    # (gap DOC03-CLOSE-PASS-UNWIRED). Absent config -> bare teardown (dev/no-bucket).
+    close_config = _build_close_config(app.state.db)
+    app.state.meeting_runtimes = MeetingRuntimeRegistry(
+        app.state.db, close_config=close_config
+    )
     set_provisioner_ready(gate)
+
+
+def _build_close_config(db: Any) -> Any | None:
+    """Build the real meeting-close vendor config from settings (production wiring).
+
+    Constructs the real GCS finalized-notes bucket handle from ``settings.gcs_bucket``
+    and a chat poster that routes the notes link through the real Recall ``post_chat``
+    seam (the ONE ``call_external`` funnel). Returns ``None`` when no notes bucket is
+    configured (a dev host with no GCS) so meeting end still tears the runtime down.
+
+    The notes URL embeds the meeting id (``gs://<bucket>/meetings/<id>/notes.md``), so
+    the registry-level poster resolves the meeting's Recall bot from the URL and posts
+    through transport — no per-meeting poster state is needed on the registry.
+    """
+    from services.harness.src.harness import settings as settings_mod
+    from services.harness.src.harness.scribe_runtime import CloseConfig
+
+    cfg = settings_mod.settings
+    bucket_name = getattr(cfg, "gcs_bucket", "") or ""
+    if not bucket_name:
+        return None
+
+    def _bucket() -> Any:
+        from google.cloud import storage  # lazy: GCS SDK only when a real close runs
+
+        return storage.Client().bucket(bucket_name)
+
+    class _LazyBucket:
+        """Defers GCS client construction to first blob access (boot stays offline)."""
+
+        def blob(self, name: str) -> Any:
+            return _bucket().blob(name)
+
+    async def _post_chat_link(url: str) -> None:
+        # Resolve the meeting id embedded in the notes URL, look up its Recall bot,
+        # and post the link through the REAL Recall chat seam via call_external.
+        import re
+
+        from transport.recall import RecallTransport
+
+        from libs.db import repos
+        from libs.http.src.http.external import call_external as real_call_external
+
+        m = re.search(r"/meetings/([^/]+)/notes\.md$", url)
+        if m is None:
+            return
+        meeting_id = m.group(1)
+        async with db.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT recall_bot_id FROM meetings WHERE id = $1::uuid", meeting_id
+            )
+        bot_id = row and row["recall_bot_id"]
+        if not bot_id:
+            return
+        transport = RecallTransport(real_call_external, api_key=cfg.recall_api_key)
+        await transport.post_chat(str(bot_id), f"Meeting notes: {url}", pinned=True)
+        _ = repos  # repos import kept for parity with the sibling resolve paths
+
+    return CloseConfig(
+        bucket=_LazyBucket(),
+        bucket_name=bucket_name,
+        post_chat_link=_post_chat_link,
+    )
 
 
 async def _real_reaper(app: Any) -> None:

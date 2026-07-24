@@ -498,6 +498,202 @@ def build_real_seams(
     )
 
 
+# ---------------------------------------------------------------------------
+# The CLOSE PASS wiring — run scribe.close.run_close_pass on the real meeting end.
+# ---------------------------------------------------------------------------
+#
+# Gap DOC03-CLOSE-PASS-UNWIRED: ``scribe.close.run_close_pass`` (the permanent
+# notes deliverable — Sonnet enrichment over the folded ledger + gap/pending
+# backfill -> markdown -> GCS create-only write -> chat link -> teardown, IN THAT
+# ORDER, §3.7) had ZERO production callers. On a real meeting end the webhook
+# ``call_ended`` path only drained the Scribe consumer and tore the runtime down,
+# so the meeting's CORE deliverable was never produced live. This section is the
+# missing assembly: it folds the durable ``note_deltas`` ledger, reduces it through
+# the close model, and runs the ordered close BEFORE the runtime is torn down.
+#
+# Exactly as ``build_real_seams`` injects ``call_external`` / clients for the
+# offline tier, :class:`CloseConfig` injects the three VENDOR edges (the Sonnet
+# structured caller, the GCS bucket, the chat-link poster) so the PRODUCT
+# orchestration runs for real while the recordable vendor boundary stays a seam.
+
+
+@dataclass(frozen=True)
+class CloseConfig:
+    """The vendor/infra edges the close pass needs, injected at the boot seam.
+
+    ``bucket``/``bucket_name`` are the GCS finalized-notes target; ``post_chat_link``
+    posts the notes URL in the meeting chat; ``close_caller`` is the strong-model
+    ``generateStructured`` surface (defaults to the real Anthropic-native caller);
+    ``call_external`` is the ONE retry+cost telemetry funnel (defaults to the real
+    ``libs.http.call_external``). Every field is a seam so the same orchestration
+    runs live in a test (recordable caller + create-only bucket double) and in
+    production (real Anthropic + real GCS) — never a product double.
+    """
+
+    bucket: Any
+    bucket_name: str
+    post_chat_link: Any
+    close_caller: Any | None = None
+    call_external: Any | None = None
+
+
+class _MeetingCloseOpSink:
+    """The single ``operation_runs`` meeting-close row, DB-backed (AC-CLOSE-07).
+
+    Maps the close-pass sink protocol onto the ONE durable ops table (there is NO
+    close_jobs table): ``start`` claims a ``operation_type='meeting-close'`` running
+    row keyed on ``scope_id=meeting_id``; ``mark_succeeded`` flips it to ``completed``
+    and write-throughs the SDK-reported spend to ``meeting_cost.model_usd`` (§3.9);
+    ``mark_failed`` flips it to ``failed`` and records the ``error_type`` on the row's
+    ``error`` column. The status vocabulary is the schema's
+    (running/completed/failed/interrupted) — ``succeeded`` maps to ``completed``.
+    """
+
+    def __init__(self, db: Any) -> None:
+        self._db = db
+        self._run_id: Any = None
+
+    async def start(self, meeting_id: Any) -> None:
+        async with self._db.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO operation_runs (scope_id, operation_type, status, created_by)
+                VALUES ($1, 'meeting-close', 'running', $2)
+                ON CONFLICT (scope_id, operation_type) WHERE status = 'running'
+                DO NOTHING
+                RETURNING id
+                """,
+                str(meeting_id),
+                getattr(self._db, "instance_id", "harness"),
+            )
+        if row is None:
+            raise RuntimeError(
+                f"meeting-close already running for {meeting_id!r} (crash-recovery guard)"
+            )
+        self._run_id = row["id"]
+
+    async def mark_succeeded(self, meeting_id: Any, *, total_cost_usd: float | None) -> None:
+        async with self._db.acquire() as conn:
+            await conn.execute(
+                "UPDATE operation_runs SET status = 'completed', completed_at = now() "
+                "WHERE id = $1 AND status = 'running'",
+                self._run_id,
+            )
+            if total_cost_usd is not None:
+                # Cost write-through to meeting_cost.model_usd (§3.9). ADD so the
+                # close spend accumulates onto the live-meeting model spend rather
+                # than clobbering it; the row is created lazily on first spend.
+                await conn.execute(
+                    """
+                    INSERT INTO meeting_cost (meeting_id, model_usd, updated_at)
+                    VALUES ($1, $2, now())
+                    ON CONFLICT (meeting_id)
+                    DO UPDATE SET model_usd = meeting_cost.model_usd + EXCLUDED.model_usd,
+                                  updated_at = now()
+                    """,
+                    meeting_id,
+                    float(total_cost_usd),
+                )
+
+    async def mark_failed(self, meeting_id: Any, *, error_type: str) -> None:
+        async with self._db.acquire() as conn:
+            await conn.execute(
+                "UPDATE operation_runs SET status = 'failed', completed_at = now(), error = $2 "
+                "WHERE id = $1 AND status = 'running'",
+                self._run_id,
+                error_type,
+            )
+
+
+async def run_meeting_close(
+    header: MeetingHeader,
+    db: Any,
+    close_config: CloseConfig,
+    *,
+    teardown: Callable[[], Awaitable[None]],
+) -> Any:
+    """Produce the permanent notes record on meeting end (the wired close pass, §3.7).
+
+    The ONE production caller of ``scribe.close.run_close_pass``. Runs AFTER the
+    serial Scribe consumer has drained (the ledger is complete) and BEFORE the
+    runtime is torn down, in the mandatory order (render -> GCS create-only write ->
+    chat link -> teardown):
+
+      1. Fold the durable ``note_deltas`` ledger via the canonical ``read_notes``
+         fold — the same object the room reads at ``/internal/notes``. An empty
+         ledger (a meeting that produced no notes) is a no-op: nothing to finalize.
+      2. Read the gap/pending transcript backfill (``status IN ('gap','pending')``)
+         — the ONLY raw transcript the close pass pulls (§3.7 / AC-CLOSE-04).
+      3. Reduce the folded ledger + backfill into ONE ``FinalNotes`` through the
+         strong-model ``reduce_close`` (Sonnet seat, one pass under threshold).
+      4. Run ``run_close_pass``: render markdown -> GCS ``write_finalized_notes``
+         (create-only, ``if_generation_match=0``) -> post the chat link -> teardown,
+         each step confirmed before the next, all on ONE ``meeting-close``
+         operation_runs row.
+
+    Returns the ``CloseResult`` (``None`` if the ledger was empty, so teardown is
+    still the caller's responsibility). Never re-raises a close failure past the
+    op-row bookkeeping — the sink records the honest failed row and the error
+    surfaces so a human operator observes the blocked teardown (§3.8).
+    """
+    from scribe.close import (
+        OPERATION_TYPE,
+        CloseInput,
+        anthropic_structured_caller,
+        reduce_close,
+        resolve_close_model,
+        run_close_pass,
+    )
+    from scribe.notes_reader import read_notes
+
+    meeting_id = header.meeting_id
+
+    # 1) Fold the durable ledger. An empty ledger has nothing to finalize.
+    notes = await read_notes(meeting_id, db=db)
+    if notes.is_empty:
+        return None
+
+    folded_ledger = notes.render_for_summary()
+
+    # 2) Gap/pending backfill — the only raw transcript the close pass reads.
+    from scribe.close import fetch_gap_pending_spans
+
+    async with db.acquire() as conn:
+        spans = await fetch_gap_pending_spans(conn, meeting_id)
+
+    close_input = CloseInput(folded_ledger=folded_ledger, gap_pending_spans=spans)
+
+    # 3) Reduce into ONE FinalNotes through the strong-model close call.
+    caller = (
+        close_config.close_caller
+        if close_config.close_caller is not None
+        else anthropic_structured_caller()
+    )
+    if close_config.call_external is not None:
+        call_external = close_config.call_external
+    else:
+        from libs.http.src.http.external import call_external as call_external  # lazy vendor seam
+
+    model = resolve_close_model()
+    reduced = await reduce_close(
+        close_input, model=model, caller=caller, call_external=call_external
+    )
+
+    # 4) The ordered close (render -> GCS -> chat link -> teardown) on ONE op row.
+    _ = OPERATION_TYPE  # documents the operation_runs.operation_type this sink writes
+    sink = _MeetingCloseOpSink(db)
+    return await run_close_pass(
+        meeting_id,
+        reduced.final_notes,
+        reduced.total_cost_usd,
+        bucket=close_config.bucket,
+        bucket_name=close_config.bucket_name,
+        post_chat_link=close_config.post_chat_link,
+        teardown=teardown,
+        op_sink=sink,
+    )
+
+
 def start_meeting_scribe(
     header: MeetingHeader,
     carrier: Any,
@@ -532,9 +728,11 @@ def start_meeting_scribe(
 __all__ = [
     "ScribeRuntimeHandle",
     "RealSeams",
+    "CloseConfig",
     "launch_scribe_runtime",
     "build_real_seams",
     "start_meeting_scribe",
+    "run_meeting_close",
 ]
 
 # Silence "imported but unused" for the re-exported protocol types used in signatures.

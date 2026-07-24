@@ -18,6 +18,8 @@ provisioner) constructs exactly one runtime per meeting and can find it again.
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -25,7 +27,19 @@ from scribe.pipeline import HostBudget
 from scribe.prefix import MeetingHeader
 from scribe.referent import ReferentCorpus
 
-from .scribe_runtime import ScribeRuntimeHandle, start_meeting_scribe
+from .scribe_runtime import (
+    CloseConfig,
+    ScribeRuntimeHandle,
+    run_meeting_close,
+    start_meeting_scribe,
+)
+
+# Bound on waiting for the serial Scribe consumer to DRAIN on meeting end before
+# the close pass folds the ledger. The MeetingEnd signal pushes the None sentinel
+# and the consumer drains; this cap keeps a hung consumer from blocking teardown
+# forever (a genuinely stuck consumer is cancelled and the close still runs off the
+# durable note_deltas already committed). unit: seconds.
+_DRAIN_TIMEOUT_S: float = 30.0
 
 # Per-host cap on concurrent Scribe micro-calls (§3.1) — one shared semaphore so a
 # busy meeting cannot starve another on the same host. A physics bound, not policy.
@@ -55,6 +69,34 @@ class MeetingRuntime:
             )
         return self._scribe
 
+    async def _drain(self) -> None:
+        """Wait for the serial consumer to drain on meeting end (bounded).
+
+        The transport MeetingEnd signal pushes the None sentinel through the pump so
+        the consumer drains and the ledger is complete before the close pass folds
+        it. A consumer that does not drain within the bound is left to be cancelled
+        by teardown — the close still runs off the durable note_deltas committed so
+        far (§3.8: a stuck path degrades honestly, never deadlocks meeting end).
+        """
+        if self._scribe is None:
+            return
+        with contextlib.suppress(asyncio.TimeoutError, Exception):
+            await asyncio.wait_for(self._scribe.wait(), timeout=_DRAIN_TIMEOUT_S)
+
+    async def run_close(self, close_config: CloseConfig) -> Any:
+        """Drain the consumer, then run the ordered close pass BEFORE teardown.
+
+        This is the wired meeting-end deliverable: the consumer drains, the durable
+        ledger is folded + reduced through the strong-model close, the permanent
+        markdown notes are written to GCS create-only, the chat link is posted, and
+        ONLY THEN is the runtime torn down (``aclose`` IS the close pass's teardown
+        step, so the mandatory render->GCS->chat->teardown order is preserved).
+        """
+        await self._drain()
+        return await run_meeting_close(
+            self.header, self.db, close_config, teardown=self.aclose
+        )
+
     async def aclose(self) -> None:
         """Tear the notes engine down and close the carrier (host teardown)."""
         if self._scribe is not None:
@@ -74,10 +116,20 @@ class MeetingRuntimeRegistry:
     meeting's Scribe consumer draws from the one semaphore.
     """
 
-    def __init__(self, db: Any, *, host_inflight: int = DEFAULT_HOST_INFLIGHT) -> None:
+    def __init__(
+        self,
+        db: Any,
+        *,
+        host_inflight: int = DEFAULT_HOST_INFLIGHT,
+        close_config: CloseConfig | None = None,
+    ) -> None:
         self._db = db
         self._host_budget = HostBudget(limit=host_inflight)
         self._runtimes: dict[str, MeetingRuntime] = {}
+        # The close-pass vendor edges (GCS bucket + chat poster + Sonnet caller).
+        # Bound at boot; when absent, meeting end still tears the runtime down but
+        # cannot produce the permanent record — so the wiring supplies it.
+        self._close_config = close_config
 
     def start_meeting(
         self,
@@ -110,9 +162,28 @@ class MeetingRuntimeRegistry:
         return self._runtimes.get(meeting_id)
 
     async def end_meeting(self, meeting_id: str) -> None:
-        """Stop + drop a meeting's runtime (host teardown / meeting end)."""
+        """Run the close pass, THEN stop + drop a meeting's runtime (meeting end).
+
+        This is the wired meeting-end path (gap DOC03-CLOSE-PASS-UNWIRED): when a
+        close config is bound the runtime drains, folds the ledger, produces the
+        permanent markdown notes record (GCS create-only), posts the chat link, and
+        ONLY THEN tears down — in that order (the close pass's own teardown step is
+        the runtime ``aclose``). Without a close config it falls back to a bare
+        teardown. The runtime is dropped from the table regardless, so a close-pass
+        failure (surfaced for a human to observe, §3.8) never leaks the runtime.
+        """
         runtime = self._runtimes.pop(meeting_id, None)
-        if runtime is not None:
+        if runtime is None:
+            return
+        try:
+            if self._close_config is not None:
+                await runtime.run_close(self._close_config)
+            else:
+                await runtime.aclose()
+        finally:
+            # run_close's teardown IS aclose; a no-notes/empty-ledger close returns
+            # without tearing down, and any close failure must still release the
+            # engine — so ensure the runtime is closed exactly once here too.
             await runtime.aclose()
 
 
