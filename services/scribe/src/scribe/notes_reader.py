@@ -236,6 +236,39 @@ class Notes:
             "freshness_flag": self.freshness_flag.to_dict(),
         }
 
+    def render_for_summary(self) -> str:
+        """Stable-ordered plain-text rendering of the notes object for Segment B regen.
+
+        Feeds :func:`scribe.rolling_summary.regenerate_rolling_summary` — the compact
+        rolling-summary generator reads the *current notes object* (never the raw
+        transcript, §3.2). Entries are rendered in the deterministic fold order
+        (:attr:`order`, id order), each as ``<entry_id> [<kind>] <text>`` with the
+        resolution/firmness/status suffix that carries the forming->final and
+        hedged->firm progression the cross-time obligations (§2/§3.5) depend on. No
+        wall-clock, no counts — so the same ``note_deltas`` state renders identically
+        (the same input the summary model sees on every refresh at that version).
+        """
+        lines: list[str] = []
+        if self.current_goal:
+            lines.append(f"GOAL: {self.current_goal}")
+        for eid in self.order:
+            entry = self.entries[eid]
+            kind = str(entry.get("kind", "note"))
+            text = str(entry.get("text", "")).strip()
+            suffix_parts: list[str] = []
+            for field_name in ("firmness", "status"):
+                val = entry.get(field_name)
+                if val is not None:
+                    suffix_parts.append(f"{field_name}={val}")
+            if entry.get("resolved") is True:
+                res = entry.get("resolution")
+                suffix_parts.append(
+                    f"resolved: {res}" if res is not None else "resolved"
+                )
+            suffix = f" ({'; '.join(suffix_parts)})" if suffix_parts else ""
+            lines.append(f"{eid} [{kind}] {text}{suffix}")
+        return "\n".join(lines)
+
     def to_canonical_json(self) -> str:
         """Byte-stable JSON of the notes object (AC-CSREAD-10).
 

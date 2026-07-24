@@ -32,8 +32,14 @@ from typing import Any
 
 from scribe.call import scribe_call as _real_scribe_call
 from scribe.coalescer import Coalescer, TranscriptSegment, Window
+from scribe.notes_reader import read_notes
 from scribe.pipeline import DeltaApplier, GapRecorder, HostBudget, ScribeCaller, run_scribe
 from scribe.prefix import MeetingHeader
+from scribe.rolling_summary import (
+    SummaryState,
+    maybe_refresh_in_background,
+    regenerate_rolling_summary,
+)
 
 
 # A transcript word count → token estimate (physics only): ~1 token per word is a
@@ -170,13 +176,41 @@ def launch_scribe_runtime(
 # The REAL seams (vendor + Postgres) — bound for the production wiring.
 # ---------------------------------------------------------------------------
 
+@dataclass
+class _SummaryHolder:
+    """The live, mutable Segment B text the ``scribe_call`` closure reads each window.
+
+    §3.2/§4: the rolling summary IS cached Segment B — it carries the meeting's
+    history into every micro-call. The rolling-summary cadence task swaps a freshly
+    regenerated summary into :attr:`text`; the very next ``scribe_call`` reads it, so
+    the Scribe sees the meeting's cross-time structure (back-references, a number at
+    min 3 vs min 20, a decision's forming->final progression) instead of the fixed
+    head + the single newest window. Starts empty (window-local) until the first
+    refresh fires.
+    """
+
+    text: str = ""
+
+
 @dataclass(frozen=True)
 class RealSeams:
-    """The three bound production seams ``run_scribe`` consumes."""
+    """The bound production seams ``run_scribe`` consumes, plus the rolling-summary wiring.
+
+    The three seams (``scribe_call`` / ``apply_delta`` / ``mark_gap``) are what
+    ``run_scribe`` calls. The rolling-summary members are the beside-the-loop cadence
+    that keeps Segment B live: :attr:`summary_holder` is the mutable text the
+    ``scribe_call`` closure reads; :attr:`summary_state` is the per-meeting cadence
+    (delta count + clock); :attr:`refresh_summary` folds the live notes and swaps the
+    holder. ``apply_delta`` drives the cadence off the hot path — a test can also
+    drive :attr:`refresh_summary` directly to assert the wiring on the real path.
+    """
 
     scribe_call: ScribeCaller
     apply_delta: DeltaApplier
     mark_gap: GapRecorder
+    summary_holder: _SummaryHolder
+    summary_state: SummaryState
+    refresh_summary: Callable[[str], Awaitable[None]]
 
 
 # Kind → the stable id prefix a minted entry carries. A kind-prefixed id (``c3``,
@@ -258,35 +292,88 @@ def _canonical_row(
     )
 
 
-def build_real_seams(header: MeetingHeader, db: Any) -> RealSeams:
+def build_real_seams(
+    header: MeetingHeader,
+    db: Any,
+    *,
+    summary_client: Any | None = None,
+    call_external: Any | None = None,
+) -> RealSeams:
     """Bind the REAL vendor/Postgres seams for a live meeting (production wiring).
 
     * ``scribe_call`` — the single ``scribe.call.scribe_call`` micro-call, routed
       through the ONE ``libs.http.call_external`` funnel (retry + cost telemetry)
-      with the real Anthropic client; adapted to the ``(meeting_id, window)``
-      protocol ``run_scribe`` expects (the rolling summary starts empty and is
-      maintained by the rolling-summary cadence elsewhere).
-    * ``apply_delta`` — appends each op to the append-only ``note_deltas`` ledger
-      in one transaction (the durable notes object is the left-fold of this ledger).
+      with the real Anthropic client. It reads the LIVE rolling summary from
+      ``summary_holder.text`` on every window — so once the cadence has refreshed
+      Segment B, the Scribe sees the meeting's history (back-references, a number at
+      min 3 vs min 20, a decision's forming->final arc), not just the newest window.
+    * ``apply_delta`` — appends each op to the append-only ``note_deltas`` ledger in
+      one transaction (the durable notes object is the left-fold of this ledger), then
+      drives the rolling-summary cadence OFF the hot path: it bumps
+      ``summary_state`` and, on ``rolling_summary_due`` (N≈20 deltas OR ≈90s),
+      schedules ``refresh_summary`` as a fire-and-forget task (AC-SCRIBE-07) so the
+      next window never waits on the summary regen call.
     * ``mark_gap`` — records a dropped span as an explicit comprehension gap on the
       transcript plane (a ``status='gap'`` segment), never a silent miss (§3.1/§3.3).
+    * ``refresh_summary`` — folds the meeting's LIVE notes object from ``note_deltas``
+      (the same canonical ``read_notes`` fold the room reads), renders it stable-ordered,
+      regenerates the compact Segment B via ``regenerate_rolling_summary`` (through the
+      ONE ``call_external`` seam), and swaps the new text into ``summary_holder`` — the
+      very next micro-call reads it.
     """
     # The vendor client is built LAZILY on the first micro-call — never at
     # bind time — so the Postgres-only seams (apply_delta / mark_gap) neither
     # require the Anthropic SDK to be importable nor open a client for a meeting
     # that produces no window. One client is constructed per meeting and reused.
     _client_box: dict[str, Any] = {}
+    holder = _SummaryHolder()
+    summary_state = SummaryState()
 
-    async def scribe_call(meeting_id: str, window: Window) -> Any:
-        from libs.http.src.http.external import anthropic_client, call_external
+    def _client() -> Any:
+        from libs.http.src.http.external import anthropic_client
 
         client = _client_box.get("client")
         if client is None:
             client = anthropic_client()
             _client_box["client"] = client
+        return client
+
+    def _call_external() -> Any:
+        # The ONE retry+cost-telemetry funnel (§14). Resolved lazily so the vendor SDK
+        # is imported only when a real call fires; ``call_external`` overrides it for
+        # the offline integration tier (the vendor boundary, never a product double).
+        if call_external is not None:
+            return call_external
+        from libs.http.src.http.external import call_external as real_call_external
+
+        return real_call_external
+
+    async def scribe_call(meeting_id: str, window: Window) -> Any:
+        # Read the LIVE rolling summary — Segment B carries the meeting's history.
         return await _real_scribe_call(
-            header, "", window, call_external=call_external, client=client
+            header, holder.text, window, call_external=_call_external(), client=_client()
         )
+
+    async def refresh_summary(meeting_id: str) -> None:
+        """Fold the live notes, regenerate Segment B, swap it into the holder.
+
+        Reads the CURRENT notes object off the durable ``note_deltas`` fold (never the
+        raw transcript, §3.2), renders it stable-ordered, and regenerates the compact
+        summary through the one external-call seam. On an empty ledger (no deltas yet)
+        there is nothing to summarise, so the holder is left untouched. The summary
+        model uses the same Anthropic client as the Scribe (``summary_client`` overrides
+        only for the deterministic wiring test — never a production double).
+        """
+        notes = await read_notes(meeting_id, db=db)
+        if notes.is_empty:
+            return
+        notes_text = notes.render_for_summary()
+        new_summary = await regenerate_rolling_summary(
+            notes_text,
+            call_external=_call_external(),
+            client=summary_client if summary_client is not None else _client(),
+        )
+        holder.text = new_summary
 
     async def apply_delta(meeting_id: str, window: Window, delta: Any) -> None:
         from db.repos import notes as notes_repo
@@ -328,6 +415,17 @@ def build_real_seams(header: MeetingHeader, db: Any) -> RealSeams:
                         payload={"current_goal": current_goal},
                         window_start_s=window.start_s,
                     )
+        # Beside-the-loop rolling-summary cadence (§3.2): count the applied deltas and,
+        # if a refresh is now due (N≈20 deltas OR ≈90s), regenerate Segment B OFF the
+        # hot path — the tx is already committed, so the fold reads the fresh notes and
+        # the serial consumer proceeds to the next window without awaiting the regen.
+        applied_ops = max(1, len(ops))  # a goal-only (op-less) window still counts as one
+        summary_state.note_delta_applied(applied_ops)
+        maybe_refresh_in_background(
+            summary_state,
+            lambda: refresh_summary(meeting_id),
+            now_s=asyncio.get_event_loop().time(),
+        )
 
     async def mark_gap(
         meeting_id: str, start_s: float, end_s: float, *, reason: str
@@ -345,7 +443,14 @@ def build_real_seams(header: MeetingHeader, db: Any) -> RealSeams:
             )
         del row  # inserted for the close-pass backfill; id not needed here
 
-    return RealSeams(scribe_call=scribe_call, apply_delta=apply_delta, mark_gap=mark_gap)
+    return RealSeams(
+        scribe_call=scribe_call,
+        apply_delta=apply_delta,
+        mark_gap=mark_gap,
+        summary_holder=holder,
+        summary_state=summary_state,
+        refresh_summary=refresh_summary,
+    )
 
 
 def start_meeting_scribe(
