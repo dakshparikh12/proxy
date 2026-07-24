@@ -71,6 +71,18 @@ def _decode(payload: Any) -> dict[str, Any]:
     return dict(payload)
 
 
+def _text_of(payload: dict[str, Any]) -> Any:
+    """Entry ``text`` regardless of op shape: add rows carry it flat; patch rows nest
+    field changes under the canonical ``changes`` key (the sealed §3.3 store shape the
+    production fold reads). Reads whichever is present so the supersede-chain assertions
+    hold against the canonical payload shape, not a flat one."""
+    d = _decode(payload)
+    changes = d.get("changes")
+    if isinstance(changes, dict) and "text" in changes:
+        return changes["text"]
+    return d.get("text")
+
+
 async def _folded_entry(pool: Any, mid: uuid.UUID, entry_id: str) -> dict[str, Any]:
     """What the NEXT Scribe call sees for this entry: the production fold."""
     rows = await _raw_rows(pool, mid)
@@ -155,7 +167,7 @@ async def test_corr_02_supersede_chain_intact(
 
     rows = await _raw_rows(pool, mid)
     # every intermediate value survives on the ledger, in write order
-    texts = [_decode(r["payload"]).get("text") for r in rows]
+    texts = [_text_of(r["payload"]) for r in rows]
     assert texts == ["V0", "V1", "V2"]
     # V2 is the current folded value
     entry = await _folded_entry(pool, mid, "E1")
@@ -184,7 +196,7 @@ async def test_corr_02neg_no_in_place_overwrite_of_prior(
     assert after_add[0]["id"] == before_add[0]["id"]
     assert _decode(after_add[0]["payload"])["text"] == "V0"
     # a distinct patch row carries the new value (INSERT supersede, not UPDATE)
-    assert any(r["op"] == "patch" and _decode(r["payload"]).get("text") == "V1" for r in after)
+    assert any(r["op"] == "patch" and _text_of(r["payload"]) == "V1" for r in after)
 
 
 # ── AC-CORR-03 : next Scribe call's notes prefix shows the corrected value ─────

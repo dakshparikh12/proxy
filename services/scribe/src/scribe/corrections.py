@@ -261,9 +261,15 @@ def _payload_for(correction: Correction) -> dict[str, Any]:
         payload["closed"] = True
         payload["resolution"] = op.resolution
     else:
-        # Merge the field changes so the fold updates the entry's current value.
-        for key, value in op.changes.items():
-            payload[key] = _jsonable(value)
+        # Field changes go under the canonical ``changes`` key — the exact shape the
+        # production left-fold reads (``Notes.fold_all`` does
+        # ``changes = payload.get("changes", payload)``). Nesting them here keeps the
+        # correction's attribution metadata (corrector/corrected_at/supersede_reason)
+        # OUT of the folded entry's fields; a flat merge leaked all three into the
+        # entry (they landed as bogus note fields on every downstream read).
+        payload["changes"] = {
+            key: _jsonable(value) for key, value in op.changes.items()
+        }
         payload["supersede_reason"] = op.supersede_reason
     return payload
 
