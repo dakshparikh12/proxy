@@ -15,6 +15,7 @@ from typing import Any, Callable
 
 from . import langs
 from .coverage import CoverageRow
+from .gitio import list_tracked_files
 from .graph import Edge, Graph, Node
 
 _DJANGO_MARKERS = ("django.db", "from django")
@@ -189,10 +190,7 @@ class GraphBuilder:
         rows: list[CoverageRow] = []
         table_map: dict[str, str] = {}
 
-        for p in sorted(clone_path.rglob("*")):
-            if not p.is_file() or ".git" in p.parts:
-                continue
-            rel = str(p.relative_to(clone_path))
+        for p, rel in _file_universe(clone_path, self._interceptor):
             if is_excluded is not None and is_excluded(rel):
                 # Excluded files (secrets/noise, §3.3) are still ACCOUNTED for in the
                 # coverage record — flagged `excluded`, never silently dropped
@@ -255,6 +253,39 @@ class GraphBuilder:
         else:
             graph.compute_pagerank()
         return graph
+
+
+def _file_universe(clone_path: Path, interceptor: Any) -> list[tuple[Path, str]]:
+    """The set of files the build indexes/flags, as ``(abs_path, rel)`` pairs.
+
+    Driven by the SAME ``git ls-files`` tracked set the readiness coverage gate
+    counts against (single source of truth), so ``indexed + flagged ==
+    len(tracked)`` is structurally guaranteed, never merely incidental — an
+    untracked/generated file that lands in the checkout is outside this universe
+    and can never inflate the count past the gate's denominator (G8).
+
+    Degradation (identical to the gate's ``not tracked`` branch): when the tracked
+    set is UNAVAILABLE (no ``.git`` / git failure — e.g. an unreachable-upstream
+    clone that returned an empty checkout, or a synthetic fixture dir walked
+    directly) we fall back to the on-disk walk so the build still classifies every
+    present file rather than indexing nothing.
+    """
+    tracked = list_tracked_files(clone_path, interceptor)
+    if tracked is not None:
+        pairs: list[tuple[Path, str]] = []
+        for rel in sorted(tracked):
+            p = clone_path / rel
+            # ls-files can list a tracked path that a checkout of a specific SHA
+            # did not materialise (e.g. sparse/partial); skip absent/non-files so
+            # the walk only classifies real on-disk files.
+            if p.is_file():
+                pairs.append((p, rel))
+        return pairs
+    return [
+        (p, str(p.relative_to(clone_path)))
+        for p in sorted(clone_path.rglob("*"))
+        if p.is_file() and ".git" not in p.parts
+    ]
 
 
 def _parse_python(path: Path, rel: str) -> tuple[list[Node], list[Edge], dict[str, str]] | None:

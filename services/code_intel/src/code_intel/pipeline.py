@@ -16,7 +16,7 @@ from .cloner import Cloner
 from .config import get_int
 from .coverage import CoverageRecord
 from .exclusions import ExclusionManager
-from .gitio import run_git
+from .gitio import list_tracked_files, run_git
 from .graph import Graph
 from .graph_builder import GraphBuilder
 from .graph_store import GraphStore
@@ -265,9 +265,11 @@ def _resolve_head(clone_path: Path) -> str | None:
 def _coverage_gate_ok(clone_path: Path, indexed: int, flagged: int) -> bool:
     if not clone_path.exists():
         return False
-    gitdir = clone_path.parent / ".git"
-    res = run_git(["--git-dir", str(gitdir), "ls-files"], check=False)
-    tracked = [ln for ln in res.stdout.splitlines() if ln.strip()]
+    # Same ``git ls-files`` universe the build walk enumerates (single source of
+    # truth, G8): the equality below is structural, not incidental. ``None`` /
+    # empty tracked set (git unavailable, or a directly-walked fixture) degrades
+    # to "anything classified is enough", matching the build's rglob fallback.
+    tracked = list_tracked_files(clone_path)
     if not tracked:
         return indexed + flagged > 0
     return indexed + flagged == len(tracked)
