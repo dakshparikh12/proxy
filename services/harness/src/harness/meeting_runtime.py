@@ -48,7 +48,18 @@ DEFAULT_HOST_INFLIGHT: int = 8
 
 @dataclass
 class MeetingRuntime:
-    """One live meeting's in-process runtime — its carrier + its notes engine."""
+    """One live meeting's in-process runtime — its carrier + its notes engine.
+
+    The runtime owns BOTH ends of the one in-process stream: transport's emit end
+    (:attr:`_hearing`, a real ``HearingStage`` bound to :attr:`carrier`) and the notes
+    engine's subscribe end (the Scribe consumer, also on :attr:`carrier`). The live
+    meeting-join path feeds real Recall real-time transcript passthrough messages into
+    :meth:`ingest_transcript`; they fan onto the carrier and flow
+    transport->carrier->coalescer->Scribe into the durable ``note_deltas`` ledger. This
+    is the load-bearing bridge between Doc 02's signal surface and Doc 03's consumer
+    (gap DOC02-DOC03-TRANSCRIPT-BRIDGE): before it, the Scribe subscribed to an empty
+    carrier and the ledger was never populated on a real meeting.
+    """
 
     header: MeetingHeader
     carrier: Any
@@ -56,9 +67,17 @@ class MeetingRuntime:
     host_budget: HostBudget
     referent_corpus: ReferentCorpus | None = None
     _scribe: ScribeRuntimeHandle | None = field(default=None, init=False)
+    _hearing: Any = field(default=None, init=False)
 
     def start(self) -> ScribeRuntimeHandle:
-        """Launch the live notes engine on this meeting's carrier (idempotent)."""
+        """Launch the live notes engine on this meeting's carrier (idempotent).
+
+        Also constructs the transport-side ``HearingStage`` bound to the SAME carrier —
+        the production emit end — so live transcript passthrough fed to
+        :meth:`ingest_transcript` fans onto the stream the Scribe consumes. The Scribe
+        subscribe end is registered FIRST (``start_meeting_scribe`` subscribes
+        synchronously), so no early transcript is dropped on the floor.
+        """
         if self._scribe is None:
             self._scribe = start_meeting_scribe(
                 self.header,
@@ -67,7 +86,25 @@ class MeetingRuntime:
                 host_budget=self.host_budget,
                 referent_corpus=self.referent_corpus,
             )
+        if self._hearing is None:
+            # Import lazily so the harness imports without transport resolved.
+            from transport.hearing import HearingStage
+
+            self._hearing = HearingStage(carrier=self.carrier)
         return self._scribe
+
+    async def ingest_transcript(self, msg: dict[str, Any]) -> None:
+        """Fan ONE real Recall real-time transcript passthrough message onto the carrier.
+
+        The production emit end of the bridge: the harness webhook drain hands each live
+        ``transcript`` passthrough body here; the runtime's ``HearingStage`` parses it
+        with the fail-loud confirmed-wire parser and emits the resulting ``Transcript``
+        signal onto :attr:`carrier` — the SAME stream the Scribe subscribes to. Ensures
+        the stage is bound (a transcript that races the runtime start still finds one).
+        """
+        if self._hearing is None:
+            self.start()
+        await self._hearing.ingest_wire_transcript(msg)
 
     async def _drain(self) -> None:
         """Wait for the serial consumer to drain on meeting end (bounded).

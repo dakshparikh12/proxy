@@ -153,6 +153,27 @@ class HearingStage:
         record = Transcript(words=words, speaker=speaker, t=t)
         await self._handle(record)
 
+    async def ingest_wire_transcript(self, msg: dict[str, Any]) -> None:
+        """Ingest a CONFIRMED-schema Recall real-time transcript passthrough message.
+
+        This is the PRODUCTION emit end (the live meeting-join wiring, gap
+        DOC02-DOC03-TRANSCRIPT-BRIDGE): the harness webhook drain hands each real
+        Recall real-time ``transcript`` passthrough body here, and the ONE fail-loud
+        wire parser (:func:`transport.wire.parse_transcript`, CANONICAL §11.10) turns
+        it into a complete speaker-attributed :class:`~transport.signals.Transcript`
+        which is then fanned onto the SAME ``SignalCarrier`` the notes engine (Doc 03)
+        subscribes to. Wire drift (missing/renamed/mistyped/empty field) raises
+        :class:`~transport.wire.WireDriftError` here rather than fanning a wrong record
+        downstream — transport's emit end and the notes engine's subscribe are the two
+        ends of the one in-process stream.
+        """
+        # Import lazily so the module's confirmed-parser dependency stays local to this
+        # production feeder (tests that only exercise the fan-out don't pay for it).
+        from .wire import parse_transcript
+
+        record = parse_transcript(msg)
+        await self._handle(record)
+
     async def _handle(self, record: Transcript) -> None:
         # Consent hard gate: before the notice posts, nothing is observed or recorded —
         # the pre-consent record is discarded, never emitted or routed (AC-JOIN-04).

@@ -10145,3 +10145,29 @@
   primary_oracle:
     type: fault_injection
     artifact: inject a real db:sqlite fault at the seam; assert honest degradation, no corruption
+
+- criterion_id: AC-BRIDGE-01
+  name: The live transcript reaches the notes engine — transport's emit end is bound to the meeting's carrier on the real join path
+  evidence_class: '[integration]'
+  authority_refs:
+  - R-doc03-SCRIBE-01
+  criticality: P1
+  blocking: true
+  golden_path: true
+  dependency_class: null
+  verification_ladder:
+  - tier: lint
+  - tier: unit
+  - tier: integration
+  behavior:
+    given: A live meeting whose runtime was started by the real Recall in_call webhook drain (its Scribe subscribed to the meeting's ONE SignalCarrier)
+    when: Real Recall real-time transcript passthrough webhooks for that bot are drained through harness.webhooks.drain_pending_webhooks (no test ever emits on the carrier)
+    then:
+    - Each passthrough body is parsed by the fail-loud confirmed-wire parser (transport.wire.parse_transcript) and fanned onto the SAME carrier the Scribe consumes, via the runtime's production HearingStage
+    - A subscriber attached beside the Scribe receives the exact per-speaker Transcript records (words, speaker, timestamp) in order — proving transport's emit end and the notes engine's subscribe end are the two ends of the one in-process stream
+    - A drifted passthrough message fails loud (logged, CANONICAL §11.10) but still drains — one bad vendor message never poisons the webhook queue
+  primary_oracle:
+    type: execution
+    artifact: drive drain_pending_webhooks with in_call + transcript.data + call_ended webhooks; assert the runtime's carrier delivers the exact Transcript records to a probe subscriber with no manual emit
+  test_ids:
+  - T-BRIDGE-01
