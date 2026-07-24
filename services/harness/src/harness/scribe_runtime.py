@@ -94,10 +94,24 @@ async def _pump_transcripts(
     run), so no early ``Transcript`` is ever dropped on the floor.
     """
     # Import lazily so the module imports without the transport package resolved.
-    from transport.signals import MeetingEnd, Transcript
+    from scribe.coalescer import ChatMessage as _ScribeChat
+    from transport.signals import ChatMessage, MeetingEnd, Transcript
 
     pending: TranscriptSegment | None = None
     async for signal in stream:
+        if isinstance(signal, ChatMessage):
+            # Inbound meeting chat rides the SAME carrier the Scribe pump consumes
+            # (transport.chat.ChatChannel.dispatch_inbound emits it here). Fold it into
+            # the coalescer so the window whose span holds it carries it — meeting chat
+            # is never dropped from the notes record (§3.1 / AC-COAL-04). The transport
+            # ChatMessage carries no timestamp, so it lands at the current stream
+            # position (the last final word seen; 0.0 before the first word), which the
+            # coalescer folds into the current/next window (or sweeps at flush).
+            ts_s = pending.start_s if pending is not None else 0.0
+            coalescer.push_chat(
+                _ScribeChat(sender=signal.sender, text=signal.message, ts_s=ts_s)
+            )
+            continue
         if isinstance(signal, Transcript):
             if not signal.is_final:
                 continue  # partial hypotheses do not cut windows (final words only)
