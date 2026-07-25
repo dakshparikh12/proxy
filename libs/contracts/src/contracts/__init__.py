@@ -30,6 +30,21 @@ from .registry import (
     CHANNEL_REGISTRY as CHANNEL_REGISTRY,
 )
 from .registry import (
+    INBOUND as INBOUND,
+)
+from .registry import (
+    MESSAGE_HANDLERS as MESSAGE_HANDLERS,
+)
+from .registry import (
+    MESSAGE_PRODUCERS as MESSAGE_PRODUCERS,
+)
+from .registry import (
+    MESSAGE_PROJECTORS as MESSAGE_PROJECTORS,
+)
+from .registry import (
+    OUTBOUND as OUTBOUND,
+)
+from .registry import (
     SIGNAL_SURFACE_EVENTS as SIGNAL_SURFACE_EVENTS,
 )
 from .registry import (
@@ -45,6 +60,15 @@ from .registry import (
     assert_registry_closed as assert_registry_closed,
 )
 from .registry import (
+    register_handler as register_handler,
+)
+from .registry import (
+    register_producer as register_producer,
+)
+from .registry import (
+    register_projector as register_projector,
+)
+from .registry import (
     validate_inbound_message as validate_inbound_message,
 )
 
@@ -53,7 +77,12 @@ __all__ = [
     "AgentChunk",
     "Bundle",
     "CHANNEL_REGISTRY",
+    "INBOUND",
+    "MESSAGE_HANDLERS",
+    "MESSAGE_PRODUCERS",
+    "MESSAGE_PROJECTORS",
     "MessageType",
+    "OUTBOUND",
     "validate_inbound_message",
     "ChannelReport",
     "ChunkType",
@@ -69,4 +98,7 @@ __all__ = [
     "SIGNAL_SURFACE_EVENTS",
     "assert_fields_consumed",
     "assert_registry_closed",
+    "register_handler",
+    "register_producer",
+    "register_projector",
 ]
