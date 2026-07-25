@@ -313,6 +313,18 @@ async def provision_async(
     if already_live:
         return handle  # idempotent: no second create on the backend
     if backend is not None:
+        # The env crossing into the sandbox is a CURATED ALLOW-LIST (§3.10 safety wiring):
+        # ONLY the scoped short-lived per-job token + its claim id + the tenant tag — never a
+        # host secret. This bare set is exactly the allow-list shape
+        # ``workroom.agent_config.get_sandbox_sdk_env`` (the canonical curator, the
+        # workroom.safety-wiring node) produces; it is NOT imported here to keep ops below
+        # workroom in the layer graph (no circular import), and it is verified
+        # allow-list-conformant + curator-idempotent by tests/doc05/test_safety_wiring.py.
+        # The EGRESS default-deny network policy (``get_sandbox_network_policy`` →
+        # ``render_e2b_network_kwarg`` → the E2B ``create(network={denyOut:[all], allowOut})``
+        # kwarg) is a FLAGGED Phase-3 residual: e2b is absent + config frozen, so the
+        # ``network=`` wiring into the real ``AsyncSandbox.create`` lands with the live bake,
+        # never faked here.
         envs = {
             "JWT_SECRET": handle.jwt_secret,   # this sandbox's own secret (§3.5)
             "SESSION_ID": handle.session_id,   # the per-sandbox claim id (§3.5)
