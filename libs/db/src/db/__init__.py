@@ -15,6 +15,15 @@ from .config import (
     load_defaults as load_defaults,
 )
 from .config import (
+    sandbox_jwt_refresh_margin_s as sandbox_jwt_refresh_margin_s,
+)
+from .config import (
+    sandbox_jwt_ttl_s as sandbox_jwt_ttl_s,
+)
+from .config import (
+    sandbox_mcp_port as sandbox_mcp_port,
+)
+from .config import (
     sandbox_timeout_s as sandbox_timeout_s,
 )
 from .config import (
@@ -35,6 +44,9 @@ __all__ = [
     "heartbeat_s",
     "load_defaults",
     "repos",
+    "sandbox_jwt_refresh_margin_s",
+    "sandbox_jwt_ttl_s",
+    "sandbox_mcp_port",
     "sandbox_timeout_s",
     "sandbox_ttl_s",
     "stale_after_s",

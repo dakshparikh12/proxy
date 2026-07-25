@@ -14,7 +14,13 @@ from typing import Any
 
 _FALLBACK: dict[str, dict[str, Any]] = {
     "ops": {"stale_after_s": 40, "heartbeat_s": 10, "reconcile_interval_s": 300},
-    "sandbox": {"timeout_s": 3600, "ttl_s": 3600},
+    "sandbox": {
+        "timeout_s": 3600,
+        "ttl_s": 3600,
+        "mcp_port": 8081,
+        "jwt_ttl_s": 900,
+        "jwt_refresh_margin_s": 300,
+    },
     "stt": {"refresh_interval_s": 600},
 }
 
@@ -64,6 +70,21 @@ def sandbox_timeout_s() -> int:
 def sandbox_ttl_s() -> int:
     """TTL past which the reconcile sweep destroys a leaked sandbox."""
     return _get("sandbox", "ttl_s")
+
+
+def sandbox_mcp_port() -> int:
+    """The per-sandbox MCP-over-HTTP tool-transport sidecar port inside E2B (§3.5)."""
+    return _get("sandbox", "mcp_port")
+
+
+def sandbox_jwt_ttl_s() -> int:
+    """Short-TTL of the per-sandbox HS256 JWT the token_provider mints (§3.5)."""
+    return _get("sandbox", "jwt_ttl_s")
+
+
+def sandbox_jwt_refresh_margin_s() -> int:
+    """Re-mint margin: re-sign once the cached JWT is within this many seconds of exp (§3.5)."""
+    return _get("sandbox", "jwt_refresh_margin_s")
 
 
 def stt_refresh_interval_s() -> int:

@@ -15,6 +15,15 @@ from .src.db import (
 )
 from .src.db import repos as repos
 from .src.db import (
+    sandbox_jwt_refresh_margin_s as sandbox_jwt_refresh_margin_s,
+)
+from .src.db import (
+    sandbox_jwt_ttl_s as sandbox_jwt_ttl_s,
+)
+from .src.db import (
+    sandbox_mcp_port as sandbox_mcp_port,
+)
+from .src.db import (
     sandbox_timeout_s as sandbox_timeout_s,
 )
 from .src.db import (
@@ -32,6 +41,9 @@ __all__ = [
     "heartbeat_s",
     "load_defaults",
     "repos",
+    "sandbox_jwt_refresh_margin_s",
+    "sandbox_jwt_ttl_s",
+    "sandbox_mcp_port",
     "sandbox_timeout_s",
     "sandbox_ttl_s",
     "stale_after_s",

@@ -16,6 +16,17 @@ reconcile_interval_s = 300
 timeout_s = 3600
 # TTL past which the reconcile sweep destroys a leaked sandbox. unit: seconds. range: 300..7200.
 ttl_s = 3600
+# The per-sandbox MCP-over-HTTP tool-transport sidecar port inside E2B (§3.5). The host
+# builds the sandbox MCP URL from get_host(this port). unit: port. range: 1024..65535.
+mcp_port = 8081
+# Short-TTL of the per-sandbox HS256 JWT the token_provider mints (§3.5). A sandbox handle
+# can live the whole meeting; the token is re-minted within the refresh margin of exp so a
+# long build never hits expiry. unit: seconds. range: 300..3600.
+jwt_ttl_s = 900
+# Re-mint margin: the token_provider re-signs once the cached JWT is within this many
+# seconds of exp (~5 min) — read exp from the token itself, no TTL duplication. unit:
+# seconds. range: 60..600.
+jwt_refresh_margin_s = 300
 
 [stt]
 # In-process STT credential refresh cadence (availability-critical; never the
