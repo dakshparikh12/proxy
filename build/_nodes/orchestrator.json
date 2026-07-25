@@ -609,22 +609,51 @@
     "title": "Per-meeting runtime provisioner + harness assembly",
     "region": "04-ORCHESTRATOR",
     "disposition": "build-new",
-    "spec_refs": ["04-ORCHESTRATOR.md#3.2","04-ORCHESTRATOR.md#3.6","CANONICAL-DECISIONS.md#12.1"],
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#3.2",
+      "04-ORCHESTRATOR.md#3.6",
+      "CANONICAL-DECISIONS.md#12.1"
+    ],
     "requirement_ids": [],
     "criterion_ids": [],
-    "intent": "On a Recall in_call webhook, atomically claim the operation_runs row (ops.claim_meeting), instantiate the per-meeting harness — transport + scribe + orchestrator + the workroom host-shell in ONE in-process asyncio scope — wire the SignalCarrier ONCE at join to all subscribers, and launch asyncio.run(the run-loop) to run the meeting to close. This is the entry-point that turns the built pieces into a running meeting; on pod recycle a fresh harness re-claims and resumes.",
+    "intent": "On a Recall in_call webhook, atomically claim the operation_runs row (ops.claim_meeting), instantiate the per-meeting harness \u2014 transport + scribe + orchestrator + the workroom host-shell in ONE in-process asyncio scope \u2014 wire the SignalCarrier ONCE at join to all subscribers, and launch asyncio.run(the run-loop) to run the meeting to close. This is the entry-point that turns the built pieces into a running meeting; on pod recycle a fresh harness re-claims and resumes.",
     "definition_of_done": "An in_call webhook triggers the provisioner to atomically claim the meeting via ops.claim_meeting; the harness instantiates all four subsystems in a single scope; the SignalCarrier is subscribed ONCE at join (not re-wired per event); asyncio.run() starts the event loop; the meeting runs until the meeting_end webhook or timeout; a recycle kills this task and the next harness re-claims + resumes via ops.resume_with_fallback. NOT done if the loop is never launched from the webhook, the carrier is re-wired per-event, or the claim is not atomic.",
-    "consumes": ["recall.webhook","ops.claim_meeting","ops.resume_with_fallback","transport.signal_carrier","transport.join_consent","scribe.note_deltas","orchestrator.wake_turn","orchestrator.bundle_dispatch"],
+    "consumes": [
+      "recall.webhook",
+      "ops.claim_meeting",
+      "ops.resume_with_fallback",
+      "transport.signal_carrier",
+      "transport.join_consent",
+      "scribe.note_deltas",
+      "orchestrator.wake_turn",
+      "orchestrator.bundle_dispatch"
+    ],
     "exposes": [],
-    "depends_on": ["orchestrator.run-loop","orchestrator.standing-pipes"],
-    "integration_point": "services/harness/src/harness/meeting_runtime.py — the per-meeting asyncio entry that assembles + runs the runtime",
+    "depends_on": [
+      "orchestrator.run-loop",
+      "orchestrator.standing-pipes"
+    ],
+    "integration_point": "services/harness/src/harness/meeting_runtime.py \u2014 the per-meeting asyncio entry that assembles + runs the runtime",
     "acceptance": "WHEN a Recall in_call webhook arrives THE SYSTEM SHALL atomically claim the meeting, assemble + wire the per-meeting harness once, and run the asyncio event loop to close",
     "acceptance_cmd": "tests/doc04/e2e/test_meeting_runtime_provisioner.py",
     "evidence_class": "integration",
-    "journeys_now_live": ["J-09-S1-happy-arc","J-09-S5-recycle-survives","J-09-S6-concurrency"],
-    "codebase_anchors": ["services/harness/src/harness/meeting_runtime.py"],
-    "invariants": ["operation_runs atomic claim (one harness per meeting)","SignalCarrier wired once at join","is_owner fencing gates every emit"],
-    "risks": ["assembly order: carrier must be wired before subscribers","recycle re-claim race"],
+    "journeys_now_live": [
+      "J-09-S1-happy-arc",
+      "J-09-S5-recycle-survives",
+      "J-09-S6-concurrency"
+    ],
+    "codebase_anchors": [
+      "services/harness/src/harness/meeting_runtime.py"
+    ],
+    "invariants": [
+      "operation_runs atomic claim (one harness per meeting)",
+      "SignalCarrier wired once at join",
+      "is_owner fencing gates every emit"
+    ],
+    "risks": [
+      "assembly order: carrier must be wired before subscribers",
+      "recycle re-claim race"
+    ],
     "human_gated": false,
     "status": "pending"
   },
@@ -942,7 +971,7 @@
     "title": "Accept-handler \u2014 human accepts a staged draft after the call (control_plane route)",
     "region": "04-ORCHESTRATOR",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "04-ORCHESTRATOR.md#3.16.1",
       "CANONICAL-DECISIONS.md#4",
@@ -966,9 +995,9 @@
     "depends_on": [
       "orchestrator.reconcile-sandbox-verify"
     ],
-    "integration_point": "services/harness/src/harness/accept_route.py + services/harness/src/control_plane/accept.py + services/harness/src/control_plane/authz.py (the POST /m/{id}/drafts/{id}/accept route)",
-    "acceptance": "WHEN a tenant member accepts a persisted core notes-edit draft THE SYSTEM SHALL apply the notes edit and flip the row to applied idempotently; WHEN the draft is a code-change THE SYSTEM SHALL record approval and expose the bundle without pushing; a cross-tenant or bad-CSRF accept SHALL be rejected.",
-    "acceptance_cmd": "services/harness/tests -k accept_handler or accept_route or accept_draft",
+    "integration_point": "services/harness/src/control_plane/accept_route.py (install_accept_route mounted in control_plane/app.py) + control_plane/accept.py (apply) + control_plane/authz.py (tenant+CSRF)",
+    "acceptance": "POST /m/{id}/drafts/{id}/accept applies a persisted core notes-edit draft + flips row to applied (idempotent); cross-tenant + bad CSRF rejected; code-change records approval + bundle link WITHOUT push; apply reads durable storage",
+    "acceptance_cmd": "tests/doc04/test_accept_handler_durable.py",
     "evidence_class": "[integration]",
     "journeys_now_live": [
       "J-09-S3-staged-draft-accept",
@@ -976,7 +1005,7 @@
       "J-09-S9-tenant-isolation"
     ],
     "codebase_anchors": [
-      "services/harness/src/harness/accept_route.py",
+      "services/harness/src/control_plane/accept_route.py",
       "services/harness/src/control_plane/accept.py",
       "services/harness/src/control_plane/authz.py"
     ],

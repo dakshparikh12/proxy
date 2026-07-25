@@ -5943,7 +5943,7 @@
       "title": "Accept-handler \u2014 human accepts a staged draft after the call (control_plane route)",
       "region": "04-ORCHESTRATOR",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "04-ORCHESTRATOR.md#3.16.1",
         "CANONICAL-DECISIONS.md#4",
@@ -5970,9 +5970,9 @@
         "scribe.pipeline-apply",
         "transport.chat"
       ],
-      "integration_point": "services/harness/src/harness/accept_route.py + services/harness/src/control_plane/accept.py + services/harness/src/control_plane/authz.py (the POST /m/{id}/drafts/{id}/accept route)",
-      "acceptance": "WHEN a tenant member accepts a persisted core notes-edit draft THE SYSTEM SHALL apply the notes edit and flip the row to applied idempotently; WHEN the draft is a code-change THE SYSTEM SHALL record approval and expose the bundle without pushing; a cross-tenant or bad-CSRF accept SHALL be rejected.",
-      "acceptance_cmd": "services/harness/tests -k accept_handler or accept_route or accept_draft",
+      "integration_point": "services/harness/src/control_plane/accept_route.py (install_accept_route mounted in control_plane/app.py) + control_plane/accept.py (apply) + control_plane/authz.py (tenant+CSRF)",
+      "acceptance": "POST /m/{id}/drafts/{id}/accept applies a persisted core notes-edit draft + flips row to applied (idempotent); cross-tenant + bad CSRF rejected; code-change records approval + bundle link WITHOUT push; apply reads durable storage",
+      "acceptance_cmd": "tests/doc04/test_accept_handler_durable.py",
       "evidence_class": "[integration]",
       "journeys_now_live": [
         "J-09-S3-staged-draft-accept",
@@ -5980,7 +5980,7 @@
         "J-09-S9-tenant-isolation"
       ],
       "codebase_anchors": [
-        "services/harness/src/harness/accept_route.py",
+        "services/harness/src/control_plane/accept_route.py",
         "services/harness/src/control_plane/accept.py",
         "services/harness/src/control_plane/authz.py"
       ],
