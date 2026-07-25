@@ -25,18 +25,31 @@ and writes every artifact — BEFORE/AFTER ``auth.py``, the unified diff, the re
 sequence, the in-sandbox execution proof, the deepeval score + reasoning, and the Envelope +
 staged-draft summary — to ``workroom_real_task_evidence.txt`` for inspection.
 
+The staged-draft handoff is proven end-to-end on the REAL substrate: the gate runs through a
+LIVE local Postgres (provisioned + migrated to head by ``build/setup-test-env.sh``), seeds the
+``meetings`` parent row the ``staged_drafts`` FK requires, and wires a REAL host connection into
+the driver + the ``propose_change`` server. When the worker calls
+``mcp__propose_change__propose_change`` the change persists as EXACTLY one ``staged_drafts`` row
+(status ``proposed`` / surfaced as ``needs_review``) + one durable object bundle, and the real
+``draft_id`` rides onto the Envelope. After the sandbox is killed the test reads that row BACK
+from Postgres to prove a human could accept it from durable storage alone — the sandbox is gone.
+
 **Honest-gate contract (Law 2 — never overstate):** the test asserts the REAL product path
 genuinely performed the work — the validation code REALLY landed on the sandbox disk, a REAL
-Envelope + REAL staged draft were produced, and the judge scored the edit ≥ threshold. If the
-real product path does NOT do the work end-to-end, the test FAILS at the exact assertion and
-the evidence file records the precise break point — a genuine FAIL with a precise diagnosis is
-the correct, valuable result of a gate meant to catch a hollow assembly. It NEVER fakes a pass.
+Envelope + a REAL persisted staged draft (read back from Postgres) were produced, and the judge
+scored the edit ≥ threshold. If the real product path does NOT do the work end-to-end, the test
+FAILS at the exact assertion and the evidence file records the precise break point — a genuine
+FAIL with a precise diagnosis is the correct, valuable result of a gate meant to catch a hollow
+assembly. It NEVER fakes a pass.
 """
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import difflib
 import os
+import subprocess
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
@@ -337,6 +350,97 @@ class _RunStore:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# The REAL durable substrate seam — a local Postgres migrated to head (provided
+# by build/setup-test-env.sh via DATABASE_URL/TEST_DATABASE_URL). The staged-draft
+# write executes on the HOST against THIS connection (never in the egress-denied
+# sandbox), exactly like the production propose_change host server (drafts.py §3.8).
+# ═══════════════════════════════════════════════════════════════════════════
+def _local_dsn() -> str | None:
+    """A DSN pointing at a reachable local test Postgres (set by setup-test-env), or None."""
+    for var in ("TEST_DATABASE_URL", "DATABASE_URL"):
+        v = os.environ.get(var, "").strip()
+        # Only a local/TCP DSN is a valid test target (never the prod Cloud SQL unix socket).
+        if v.startswith(("postgresql://", "postgres://")) and "@/" not in v and "cloudsql" not in v:
+            return v
+    return None
+
+
+def _open_pg_conn() -> Any:
+    """Open a raw psycopg3 autocommit connection to the local test Postgres.
+
+    This is the trusted-HOST connection the real ``propose_change`` tool binds to (the sync
+    ``ProposedDraft`` path in ``workroom.drafts.propose_change``): the GCS/Postgres write runs
+    where the creds live, never in the sandbox. Returns None if no local Postgres is reachable
+    (the gate then FAILS honestly at the persistence assertion — never fakes a pass).
+    """
+    dsn = _local_dsn()
+    if dsn is None:
+        return None
+    import psycopg
+
+    return psycopg.connect(dsn, autocommit=True)
+
+
+def _ensure_schema_at_head(conn: Any) -> None:
+    """Ensure the substrate is migrated to head; run ``alembic upgrade head`` if a table is missing."""
+    for table in ("tenants", "meetings", "staged_drafts"):
+        if conn.execute("SELECT to_regclass(%s)", (table,)).fetchone()[0] is None:
+            dsn = _local_dsn() or ""
+            env = dict(os.environ, DATABASE_URL=dsn)
+            root = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True
+            ).stdout.strip()
+            r = subprocess.run(
+                [sys.executable, "-m", "alembic", "upgrade", "head"],
+                cwd=root or None, env=env, capture_output=True, text=True,
+            )
+            assert r.returncode == 0, f"alembic upgrade head failed: {r.stderr}"
+            return
+
+
+def _seed_meeting_parent_row(conn: Any, meeting_id: Any) -> None:
+    """Seed the ``tenants`` + ``meetings`` parent rows so ``staged_drafts.meeting_id`` FK is satisfied.
+
+    The gate mints ``meeting_id`` itself (it is ``bundle.notes_ref`` — the meeting the worker
+    runs under), so the ``meetings`` row is inserted with THAT explicit id (not a DB-generated
+    one) so the persisted draft's FK resolves to this exact meeting.
+    """
+    tenant_id = conn.execute(
+        "INSERT INTO tenants (name) VALUES (%s) RETURNING id",
+        (f"e2e-{uuid.uuid4().hex[:8]}",),
+    ).fetchone()[0]
+    conn.execute(
+        "INSERT INTO meetings (id, tenant_id, status) VALUES (%s, %s, 'ended')",
+        (str(meeting_id), tenant_id),
+    )
+
+
+def _read_staged_draft_row(conn: Any, draft_id: Any) -> dict[str, Any] | None:
+    """Read ONE ``staged_drafts`` row back from durable Postgres by draft_id (None if absent).
+
+    Proves a human could accept the draft from DURABLE storage after the sandbox is gone: the
+    row + its object bundle handle outlive the sandbox teardown.
+    """
+    row = conn.execute(
+        "SELECT draft_id, meeting_id, kind, summary, artifact_ref, status "
+        "FROM staged_drafts WHERE draft_id = %s",
+        (str(draft_id),),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "draft_id": row[0], "meeting_id": row[1], "kind": row[2],
+        "summary": row[3], "artifact_ref": row[4], "status": row[5],
+    }
+
+
+def _count_drafts_for_meeting(conn: Any, meeting_id: Any) -> int:
+    return conn.execute(
+        "SELECT count(*) FROM staged_drafts WHERE meeting_id = %s", (str(meeting_id),)
+    ).fetchone()[0]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Evidence accumulation.
 # ═══════════════════════════════════════════════════════════════════════════
 class _Evidence:
@@ -421,6 +525,27 @@ def _run_gate(sbx: Any, evidence: _Evidence, failures: list[str]) -> None:
     sandbox_provider._ALIVE[handle.id] = True  # type: ignore[attr-defined]
     sandbox_provider._SECRET_BY_SANDBOX[handle.id] = handle.jwt_secret  # type: ignore[attr-defined]
 
+    # -- 2b. Open the REAL host DB + seed the meeting parent row --------------
+    # The staged-draft write (propose_change) persists to Postgres + the object store on the
+    # trusted HOST. Open the real host connection (the sync ProposedDraft path the tool binds
+    # to) and seed the `meetings` parent row the `staged_drafts` FK requires, keyed to THIS
+    # meeting_id (== bundle.notes_ref). No fake stands in — a real row, a real FK.
+    db_conn = _open_pg_conn()
+    if db_conn is None:
+        failures.append(
+            "no local Postgres reachable (TEST_DATABASE_URL/DATABASE_URL unset) — the staged "
+            "draft cannot persist; run via `bash build/setup-test-env.sh env WORKROOM_LIVE_E2E=1 ...`"
+        )
+    else:
+        _ensure_schema_at_head(db_conn)
+        _seed_meeting_parent_row(db_conn, meeting_id)
+        evidence.add(
+            "REAL DB SEED (local Postgres, migrated to head)",
+            f"DSN            : {_local_dsn()}\n"
+            f"meeting_id     : {meeting_id}   (seeded as the staged_drafts FK parent)\n"
+            f"drafts before  : {_count_drafts_for_meeting(db_conn, meeting_id)}",
+        )
+
     # Swap the `code` HTTP MCP server for our in-process E2B-backed SDK server, keeping the
     # rest of the REAL registration (the §3.4 isolation triad, the curated worker tool subset,
     # the stable cached prefix, disallowed_tools) exactly as the product builds it.
@@ -446,6 +571,7 @@ def _run_gate(sbx: Any, evidence: _Evidence, failures: list[str]) -> None:
 
     driver = SessionDriver(
         store=store,
+        db=db_conn,  # the REAL trusted-host connection the propose_change server binds to (§3.8)
         sandbox_fs=_E2BFsAdapter(sbx, SANDBOX_ROOT),
         disposition="worker",  # the readwrite build worker (§3.6)
         model="claude-opus-4-8",  # the worker seat (§3.2)
@@ -551,7 +677,8 @@ def _run_gate(sbx: Any, evidence: _Evidence, failures: list[str]) -> None:
         if envelope.status not in ("done", "needs_review"):
             failures.append(f"Envelope status is {envelope.status!r} (expected done/needs_review)")
 
-    # A REAL staged draft (propose_change) must have produced a draft_id.
+    # A REAL staged draft (propose_change) must have produced a draft_id ON THE ENVELOPE
+    # AND persisted a real row the human-accept handoff reads from durable storage.
     draft_id = getattr(envelope, "draft_id", None) if envelope else None
     proposed = _find_propose_change_call(toolset)
     if draft_id is None and not proposed:
@@ -559,6 +686,80 @@ def _run_gate(sbx: Any, evidence: _Evidence, failures: list[str]) -> None:
             "no staged draft produced — the worker never called propose_change / no draft_id "
             "on the Envelope (Law 3: a world-touching change must be staged)"
         )
+    if draft_id is None:
+        failures.append(
+            "the Envelope carries NO draft_id — propose_change did not persist (an is_error "
+            "staging never fabricates a draft, Law 2). See the persisted-row section for why."
+        )
+
+    # -- 5b. Prove the draft is durable: read the staged_drafts row BACK from Postgres ---
+    # This is the human-accept handoff: after the sandbox is killed, a named human accepts the
+    # draft from the DURABLE row + object bundle alone (never a dead in-memory session, §3.8).
+    persisted_row: dict[str, Any] | None = None
+    if db_conn is not None:
+        if draft_id is not None:
+            persisted_row = _read_staged_draft_row(db_conn, draft_id)
+        drafts_after = _count_drafts_for_meeting(db_conn, meeting_id)
+        if persisted_row is None:
+            failures.append(
+                f"NO staged_drafts row found in Postgres for draft_id={draft_id!r} — the draft "
+                "did not persist durably (a human could not accept it after the sandbox is gone)"
+            )
+        else:
+            # EXACTLY one draft, FK-correct, needs-review-equivalent status, with a durable
+            # bundle carrying the ACTUAL code change a human accepts. We DON'T assert the free
+            # -text ``kind`` label to a fixed string: ``kind`` is agent-chosen (the tool schema
+            # is ``{"kind": str, "summary": str}`` and the product only DEFAULTS it to
+            # "code-change" when omitted, drafts.py:315) — the worker legitimately labelled this
+            # "edit". The product INVARIANT (§3.8 / Law 3) is a durable, human-acceptable draft
+            # holding the code change, NOT a particular label; we prove the SUBSTANCE below.
+            if drafts_after != 1:
+                failures.append(
+                    f"expected EXACTLY 1 staged_drafts row for the meeting, found {drafts_after}"
+                )
+            if str(persisted_row["meeting_id"]) != str(meeting_id):
+                failures.append(
+                    f"persisted draft meeting_id {persisted_row['meeting_id']!r} != {meeting_id!r}"
+                )
+            # The draft must carry a non-empty label + summary (the human-review surface).
+            if not persisted_row["kind"]:
+                failures.append("persisted draft has an EMPTY kind (no draft label at all)")
+            if not persisted_row["summary"]:
+                failures.append("persisted draft has an EMPTY summary (nothing for a human to review)")
+            # The durable row is 'proposed' (the surfaced Envelope status is 'needs_review').
+            if persisted_row["status"] != "proposed":
+                failures.append(
+                    f"persisted draft status is {persisted_row['status']!r} (expected 'proposed' "
+                    "— the row a human accepts from durable storage)"
+                )
+            if not persisted_row["artifact_ref"]:
+                failures.append("persisted draft has NO artifact_ref (no durable bundle handle)")
+            else:
+                # The bundle body must be readable from the durable object store (sandbox gone)
+                # AND carry the ACTUAL code change — the substance a human accepts. This is the
+                # real invariant: the draft holds the auth.py change (path + the validation the
+                # agent produced), not merely a non-empty blob.
+                try:
+                    from workroom import objectstore
+
+                    bundle_body = objectstore.get(persisted_row["artifact_ref"])
+                except Exception as exc:  # noqa: BLE001
+                    bundle_body = None
+                    failures.append(f"reading the durable bundle body raised: {exc}")
+                if not bundle_body:
+                    failures.append(
+                        "the durable bundle body is empty/missing — a human could not accept the "
+                        "code change from durable storage after the sandbox is gone"
+                    )
+                elif "auth.py" not in bundle_body:
+                    failures.append(
+                        "the durable bundle body does not reference the edited file (webapp/auth.py) "
+                        f"— it does not carry the staged code change; body: {bundle_body[:400]!r}"
+                    )
+    evidence.add(
+        "PERSISTED staged_drafts ROW (read back from Postgres — the human-accept handoff)",
+        _summarize_persisted_row(persisted_row, draft_id, db_conn, meeting_id),
+    )
 
     # -- 6. deepeval GEval score on the produced edit -------------------------
     score, reason = _score_edit_with_geval(before=before, after=after, diff=diff, ask=ASK)
@@ -571,6 +772,10 @@ def _run_gate(sbx: Any, evidence: _Evidence, failures: list[str]) -> None:
         failures.append("deepeval GEval did not produce a score")
     elif score < 0.7:
         failures.append(f"deepeval GEval score {score} < 0.7 threshold")
+
+    if db_conn is not None:
+        with contextlib.suppress(Exception):
+            db_conn.close()
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -769,6 +974,40 @@ def _summarize_envelope(envelope: Any, run_error: str | None, store: _RunStore, 
     if run_error:
         lines.append(f"run_task error: {run_error}")
     return "\n".join(lines)
+
+
+def _summarize_persisted_row(
+    row: dict[str, Any] | None, draft_id: Any, db_conn: Any, meeting_id: Any
+) -> str:
+    """Render the staged_drafts row read BACK from Postgres — the durable human-accept handoff."""
+    if db_conn is None:
+        return "NO local Postgres was wired — the staged draft could not persist (gate FAILS)."
+    if row is None:
+        return (
+            f"NO staged_drafts row found in Postgres for draft_id={draft_id!r}.\n"
+            "The propose_change write did not land a durable row — a human could NOT accept "
+            "this change after the sandbox is gone. (An is_error staging never fabricates a "
+            "draft, Law 2 — see the ENVELOPE summary for the tool's error, if any.)"
+        )
+    body_len = "?"
+    with contextlib.suppress(Exception):
+        from workroom import objectstore
+
+        body = objectstore.get(row["artifact_ref"])
+        body_len = str(len(body)) if body is not None else "MISSING"
+    return (
+        "read back from durable Postgres AFTER the E2B sandbox was killed:\n"
+        f"  draft_id     : {row['draft_id']}\n"
+        f"  meeting_id   : {row['meeting_id']}   (FK → the seeded meetings row)\n"
+        f"  kind         : {row['kind']}\n"
+        f"  summary      : {row['summary']}\n"
+        f"  status       : {row['status']}   (durable 'proposed'; surfaced as needs_review)\n"
+        f"  artifact_ref : {row['artifact_ref']}\n"
+        f"  bundle bytes : {body_len}   (the durable object body a human accepts from)\n"
+        f"  total rows   : {_count_drafts_for_meeting(db_conn, meeting_id)} for this meeting\n"
+        "\nA named human can accept this draft from the durable row + object bundle alone — "
+        "the sandbox is gone and no in-memory review session is consulted (§3.8 / Law 3)."
+    )
 
 
 def _score_edit_with_geval(*, before: str, after: str, diff: str, ask: str) -> tuple[float | None, str]:
