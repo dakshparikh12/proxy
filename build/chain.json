@@ -5506,7 +5506,7 @@
       "title": "Standing pipes wiring + STT credential refresh loop (join-time plumbing)",
       "region": "04-ORCHESTRATOR",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "04-ORCHESTRATOR.md#2",
         "04-ORCHESTRATOR.md#3",
@@ -5608,7 +5608,7 @@
         "recycle re-claim race"
       ],
       "human_gated": false,
-      "status": "pending"
+      "status": "verified"
     },
     {
       "id": "orchestrator.claim-fence-affinity-verify",
@@ -5887,7 +5887,7 @@
       "title": "Reconcile sweep + ManagedResource sandbox lifecycle + Scheduler (verify)",
       "region": "04-ORCHESTRATOR",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "04-ORCHESTRATOR.md#3.8",
         "04-ORCHESTRATOR.md#3.9",
@@ -6003,7 +6003,7 @@
       "title": "The ordered close \u2014 freeze \u2192 close pass \u2192 destroy sandbox \u2192 complete row \u2192 teardown last",
       "region": "04-ORCHESTRATOR",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "04-ORCHESTRATOR.md#3.16",
         "CANONICAL-DECISIONS.md#12.10",
