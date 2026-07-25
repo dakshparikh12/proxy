@@ -184,13 +184,30 @@ def test_provision_drives_injected_backend_through_call_external() -> None:
 
 def test_heartbeat_activity_bump_extends_timeout_anti_reap() -> None:
     """The heartbeat activity-bump extends the sandbox timeout so a silently-thinking
-    build's sandbox is NOT reaped (§3.9). It runs through the backend's set_timeout."""
+    build's sandbox is NOT reaped (§3.9). It runs through the backend's set_timeout.
+
+    BINDING: provision's create already records the provision-time backstop in
+    ``timeouts_set`` (``h.timeout_s``), so a ``>= h.timeout_s`` check would be a
+    tautology satisfied BEFORE any bump — gutting ``heartbeat_bump`` to a no-op would
+    still pass it. This oracle instead proves the bump (a) issued a NEW ``set_timeout``
+    (the recorded list GREW) and (b) pushed the deadline STRICTLY BEYOND the
+    provision-time backstop. A no-op bump fails both — the anti-reap is load-bearing.
+    """
     from tests.doc05.fakes import FakeE2BBackend
 
     fake = FakeE2BBackend()
     h = asyncio.run(sandbox_provider.provision_async(meeting_id="m-hb", tenant="acme", backend=fake))
+    before = list(fake.timeouts_set[h.id])  # the provision-time backstop is already here
+    assert before == [h.timeout_s], "provision-time create should record exactly the backstop"
+
     asyncio.run(sandbox_provider.heartbeat_bump(h, backend=fake))
-    assert fake.timeouts_set[h.id][-1] >= h.timeout_s, "activity-bump did not extend the timeout"
+
+    after = fake.timeouts_set[h.id]
+    assert len(after) == len(before) + 1, "activity-bump did not issue a NEW set_timeout"
+    assert after[-1] > h.timeout_s, (
+        "activity-bump did not extend the deadline BEYOND the provision-time backstop — "
+        "a silently-thinking build would still be reaped at the original timeout"
+    )
 
 
 def test_backend_destroy_of_gone_is_idempotent() -> None:

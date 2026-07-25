@@ -332,12 +332,26 @@ async def heartbeat_bump(handle: SandboxHandle, *, backend: Any = None, timeout_
     """The §3.9 heartbeat activity-bump: extend the sandbox timeout so a
     silently-thinking build's sandbox is NOT reaped by the E2B timeout backstop.
 
+    E2B's ``set_timeout(seconds)`` resets the auto-kill countdown to ``seconds``
+    from now; a bump must therefore push the deadline STRICTLY BEYOND the
+    provision-time backstop, or a build that stays silent longer than the original
+    ``handle.timeout_s`` window would still be reaped — the exact §3.9 failure this
+    bump exists to prevent. So the default extension is a FRESH full activity window
+    ADDED ON TOP of the base backstop (``handle.timeout_s + one base window``): each
+    bump provably moves the auto-kill deadline forward past the original backstop.
+
     Idempotent + safe to call on a bump cadence; a no-op when the sandbox is gone.
     Runs through the backend's ``set_timeout`` (behind ``call_external``).
     """
     if not _ALIVE.get(handle.id, False):
         return
-    extend_to = int(timeout_s) if timeout_s is not None else handle.timeout_s
+    if timeout_s is not None:
+        extend_to = int(timeout_s)
+    else:
+        # A fresh activity window on top of the provision-time backstop — strictly
+        # greater than ``handle.timeout_s`` so the extension is real (not a no-op
+        # re-set of the same deadline) and the anti-reap is load-bearing.
+        extend_to = handle.timeout_s + sandbox_timeout_s()
     if backend is not None:
         await backend.set_timeout(sandbox_id=handle.id, timeout=extend_to)
 

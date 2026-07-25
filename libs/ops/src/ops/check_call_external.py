@@ -8,11 +8,13 @@ This guard makes the single-seam invariant *enforced*, not merely documented.
 
 It is an AST scan of product code (``services/`` + ``libs/``) for raw vendor-client
 *constructions* — the async/sync Anthropic model clients (Claude), the httpx async and
-sync HTTP clients, the ``google.cloud.storage`` GCS client, and the raw Recall / STT /
-TTS clients (Deepgram / ElevenLabs / Cartesia). For every such construction the
-enclosing file must be the seam home under ``libs/http``; a construction anywhere else
-is flagged with its ``path:line``. It mirrors ``check_sdk_isolation_triad``'s
-scan-services+libs AST structure — an automated check, never a manual re-audit.
+sync HTTP clients, the ``google.cloud.storage`` GCS client, the raw Recall / STT /
+TTS clients (Deepgram / ElevenLabs / Cartesia), AND the E2B ``AsyncSandbox`` (the
+Workroom sandbox backend — its ``.create(...)`` classmethod is the sandbox
+construction). For every such construction the enclosing file must be the seam home
+under ``libs/http``; a construction anywhere else is flagged with its ``path:line``.
+It mirrors ``check_sdk_isolation_triad``'s scan-services+libs AST structure — an
+automated check, never a manual re-audit.
 
 Aliased imports (``from anthropic import AsyncAnthropic as _AA``) and lazy
 imports-inside-functions are recognized by tracking the module's import bindings.
@@ -45,6 +47,19 @@ _CLIENT_NAMES: frozenset[str] = frozenset(
         "Deepgram",  # STT
         "ElevenLabs",  # TTS
         "Cartesia",  # TTS
+        "AsyncSandbox",  # E2B Workroom sandbox (``from e2b import AsyncSandbox``)
+    }
+)
+
+# E2B constructs the sandbox via a classmethod on the imported class name rather than a
+# bare ``AsyncSandbox()`` call: ``AsyncSandbox.create(...)`` (also ``.connect(...)``).
+# Because ``AsyncSandbox`` is a tracked constructor *name* (bound via ``from e2b import
+# AsyncSandbox``), a ``<name>.<factory>`` call whose base name resolves to a client
+# constructor is a raw construction too. These are the E2B factory attributes.
+_NAME_FACTORY_ATTRS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("AsyncSandbox", "create"),  # the E2B sandbox construction (the live wire surface)
+        ("AsyncSandbox", "connect"),  # re-attach to an existing sandbox (also a raw client)
     }
 )
 
@@ -63,7 +78,7 @@ _CLIENT_ATTRS: frozenset[tuple[str, str]] = frozenset(
 
 # Vendor packages whose bare-name imports we track so an aliased construction resolves.
 _VENDOR_MODULES: frozenset[str] = frozenset(
-    {"anthropic", "httpx", "storage", "google", "recall", "deepgram", "elevenlabs", "cartesia"}
+    {"anthropic", "httpx", "storage", "google", "recall", "deepgram", "elevenlabs", "cartesia", "e2b"}
 )
 
 
@@ -147,10 +162,17 @@ def _is_raw_client_call(node: ast.Call, binds: _ImportBindings) -> bool:
         return func.id in _CLIENT_NAMES and func.id not in ("Client", "AsyncClient")
     # Attribute form: a vendor module's client attribute called as a constructor.
     if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-        mod_local = func.value.id
-        mod_canonical = binds.modules.get(mod_local, mod_local)
-        mod_canonical = _canonical_module(mod_canonical)
-        return (mod_canonical, func.attr) in _CLIENT_ATTRS
+        base_local = func.value.id
+        # (a) ``<module>.<attr>`` — e.g. ``httpx.AsyncClient()`` / ``storage.Client()``.
+        mod_canonical = _canonical_module(binds.modules.get(base_local, base_local))
+        if (mod_canonical, func.attr) in _CLIENT_ATTRS:
+            return True
+        # (b) ``<ClientName>.<factory>`` — a factory classmethod on an imported client
+        # constructor NAME (bare or aliased), e.g. ``AsyncSandbox.create(...)`` (E2B).
+        # The base name resolves to a tracked constructor via the import bindings, or is
+        # itself a bare known constructor name.
+        name_canonical = binds.names.get(base_local, base_local)
+        return (name_canonical, func.attr) in _NAME_FACTORY_ATTRS
     return False
 
 
