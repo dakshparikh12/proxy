@@ -63,12 +63,16 @@ def create_app() -> FastAPI:
     # Mounted here so the Workroom's cross-service notes read has a LIVE endpoint
     # alongside /internal/reconcile (closes the DOC03-CSREAD mount gap).
     from .accept_route import install_accept_route
+    from .gateway_route import install_gateway_route
     from .internal import install_internal_routes
 
     install_internal_routes(app)
     # The authenticated draft-accept surface (§12.9): POST /m/{id}/drafts/{id}/accept
     # BEHIND the auth wall, reading durable storage (post-teardown safe).
     install_accept_route(app)
+    # The WS upgrade gateway (§4.3/§12.9): /ws authenticates at the connection UPGRADE —
+    # an unauthenticated upgrade is rejected (401) BEFORE the 101, never per-message.
+    install_gateway_route(app)
 
     @app.get("/health")
     async def health() -> Any:
