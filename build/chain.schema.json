@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "proxy-build chain",
+  "description": "The one artifact: an ordered, dependency-validated task list. Order must be a valid linearization of the dependency graph — every depends_on references an EARLIER node id.",
+  "type": "object",
+  "required": ["version", "nodes"],
+  "properties": {
+    "version": { "type": "string" },
+    "docs": {
+      "type": "array",
+      "description": "The spec docs this chain covers. Must be the whole product.",
+      "items": { "type": "string" },
+      "default": ["00", "01", "02", "03", "04", "05", "08", "09"]
+    },
+    "external_inputs": {
+      "type": "array",
+      "description": "Interfaces that enter the product from outside (satisfy a `consumes` with no producing node). e.g. recall.webhook, chat.inbound.",
+      "items": { "type": "string" }
+    },
+    "product_endpoints": {
+      "type": "array",
+      "description": "Interfaces that leave the product to the user/world (satisfy an `exposes` with no consuming node). e.g. notes.finalized.",
+      "items": { "type": "string" }
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/node" }
+    }
+  },
+  "$defs": {
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "title", "region", "status",
+        "spec_refs", "requirement_ids", "criterion_ids", "intent", "definition_of_done",
+        "consumes", "exposes", "depends_on", "integration_point",
+        "acceptance", "acceptance_cmd", "evidence_class", "journeys_now_live",
+        "codebase_anchors", "invariants", "risks", "human_gated"
+      ],
+      "properties": {
+        "id":       { "type": "string", "pattern": "^[a-z0-9]+([._-][a-z0-9]+)*$", "description": "stable unique id, e.g. scribe.fold-transcript" },
+        "title":    { "type": "string", "description": "short human label" },
+        "region":   { "type": "string", "description": "owning spec doc, e.g. 03-MEETING-UNDERSTANDING" },
+        "status":   { "enum": ["not-built", "built:needs-verification", "verified"] },
+
+        "spec_refs":       { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "cited spec sections — the source of truth (file#section)" },
+        "requirement_ids": { "type": "array", "items": { "type": "string" }, "description": "R-* obligations discharged (from acceptance/doc*/requirements)" },
+        "criterion_ids":   { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "AC-* sealed acceptance criteria this node satisfies" },
+        "intent":            { "type": "string", "minLength": 40, "description": "what this realizes + what the cited spec means here; cites, never re-copies the spec" },
+        "definition_of_done":{ "type": "string", "minLength": 40, "description": "concretely what 'done' is AND what does not count as done" },
+
+        "consumes": { "type": "array", "items": { "type": "string" }, "description": "interfaces needed (must be produced by an earlier node or be an external_input)" },
+        "exposes":  { "type": "array", "items": { "type": "string" }, "description": "interfaces produced (must be consumed by someone or be a product_endpoint)" },
+        "depends_on": { "type": "array", "items": { "type": "string" }, "description": "earlier node ids only — no forward references (the acyclic guarantee)" },
+        "integration_point": { "type": "string", "description": "where in the live product this wires in — file/path, not a standalone module" },
+
+        "acceptance":      { "type": "string", "description": "EARS: WHEN <trigger> THE SYSTEM SHALL <behavior> [within <threshold>]" },
+        "acceptance_cmd":  { "type": "string", "description": "pytest selector args (path + -k filter), run on the real path by build/gates/verify-node.sh — NOT a full shell command" },
+        "evidence_class":  { "type": "string", "description": "[static] | [unit] | [integration] | [reality] | [eval] | [e2e] | [negative]" },
+        "journeys_now_live": { "type": "array", "items": { "type": "string" }, "description": "cumulative product journeys that must pass once this node lands (the verifier's oracle)" },
+
+        "codebase_anchors": { "type": "array", "items": { "type": "string" }, "description": "files/paths where this node lives" },
+        "invariants": { "type": "array", "items": { "type": "string" }, "description": "product laws this node must not break, e.g. CON-004 call_external seam, isolation triad" },
+        "risks": { "type": "array", "items": { "type": "string" }, "description": "known hazards for the builder to watch" },
+        "human_gated": { "type": "boolean", "description": "true for baseline / extraction-count / migration / deploy touchpoints" }
+      }
+    }
+  }
+}
