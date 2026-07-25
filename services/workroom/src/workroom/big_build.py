@@ -60,12 +60,15 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 # The imported provider seam + delta-izer + boundary exception (CANONICAL §11.9 / §1.1) —
 # NEVER reimplemented here. The plan turn drives the SAME seam the session driver + wake loop
-# drive, through the SAME ``ProviderQuery`` options shape.
+# drive, through the SAME ``ProviderQuery`` options shape. ``AbortRegistry`` (§11.9) mints the
+# per-task controller the sequential build threads onto every resumed subtask ``query()``.
 from agentkit import (
+    AbortController,
+    AbortRegistry,
     ProviderError,
     ProviderQuery,
     pick_provider,
@@ -82,6 +85,10 @@ from .agent_config import (
     disposition_tool_policy,
     seat_for_disposition,
 )
+
+# The tool-boundary progress tap (§3.12) — the executor streams tool_start + each captured
+# commit as progress through this ONE emitter (never a bespoke progress path here).
+from .envelope import ProgressSink, emit_tool_boundary_progress
 
 # The triad guard markers, named on this query()-driving module so the seam it drives is
 # covered end-to-end (§11.11) — the options it hands the provider carry the real triad.
@@ -633,10 +640,541 @@ def render_plan_for_chat(plan: Plan) -> str:
     return "\n".join(lines)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# The resumed-session SUBTASK EXECUTOR (node ``workroom.sequential-build``, §3.6.2)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# After the plan turn (``BigBuildPlanner``) produces the persisted AC-tagged plan, this
+# executor runs its units. The load-bearing skeleton of ``~/platform``'s
+# ``PlanExecutionHandler`` (their own words: "one continuous Claude conversation for the
+# entire execution; each subtask is a follow-up in the same session"):
+#
+#   * **SEQUENTIAL in ONE resumed session** — each unit is a fresh ``query()`` on the
+#     persisted plan ``session_id`` with a tight ``max_turns`` + an explicit
+#     "do THIS subtask, then STOP. Do NOT start the next." V0 core is sequential: NO
+#     fan-out / worktree / commit-lock lives on this path (that is Expansion, §5 / §12.4),
+#     which is exactly what dissolves the concurrent-shared-session race.
+#   * per unit — **checkpoint (git commit) → READ THE CHECKPOINT BACK from git** (capture
+#     HEAD before the turn, read ``head_before..HEAD`` after for the commits it ACTUALLY
+#     created; NEVER mark done off the model's narration) → **publish-or-fail** (publish the
+#     committed tree to the staging destination; if publish THROWS the subtask FAILS, it
+#     never reports success — their ``captureAndPublishCommits`` throws precisely so a
+#     subtask can't pass silently).
+#   * **a checkpoint per unit** persists into the SAME ``operation_runs`` row's ``progress``
+#     (the durable substrate, §12.10 — NO bespoke table), so a mid-crash resume SKIPS the
+#     finished units and never redoes them.
+#   * streams ``tool_start`` + each captured commit as progress (§3.12) so the room sees
+#     live progress.
+#
+# SDK context-editing (§10.2) is safe on this path because the durable state — the persisted
+# plan + the read-back git checkpoints — lives OUTSIDE the model context; a cleared
+# ``tool_result`` is re-derivable, never lost state.
+
+
+class SandboxGit(Protocol):
+    """The git-backed sandbox surface the executor reads the checkpoint back through (§3.6.2).
+
+    In production these run INSIDE the E2B sandbox (git via the sandbox ``run_command``
+    transport; publish to the staging destination through the host seam). The executor drives
+    them host-side; the tests back this Protocol with a REAL git repo so the read-back is
+    proven against real ``git rev-parse`` / ``git rev-list`` — never a git mock. The E2B
+    template bake is the flagged Phase-3 residual, never faked here.
+    """
+
+    async def read_head(self) -> str | None:
+        """Capture ``HEAD`` before a subtask turn (``None`` on an unborn repo)."""
+        ...
+
+    async def list_commits(self, rev_range: str) -> list[dict[str, str]]:
+        """Read ``head_before..HEAD`` back from git — the commits the turn ACTUALLY created."""
+        ...
+
+    async def publish(
+        self, *, unit_id: str, commits: list[dict[str, str]], destination: str
+    ) -> None:
+        """Publish the committed tree to the staging destination — THROWS on a publish fault
+        (so a subtask can never pass silently on a failed publish)."""
+        ...
+
+
+@dataclass
+class SubtaskCheckpoint:
+    """One unit's durable checkpoint — the READ-BACK commits, never the model's narration.
+
+    ``commits`` are the ``{sha, subject}`` records read back from ``head_before..HEAD`` (the
+    source of truth); a unit is ``done`` ONLY when this list is non-empty AND publish
+    succeeded. Persisted into the ``operation_runs`` row so a resume skips finished units.
+    """
+
+    unit_id: str
+    commits: list[dict[str, str]]
+    published: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"unit_id": self.unit_id, "commits": list(self.commits), "published": self.published}
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> SubtaskCheckpoint:
+        return cls(
+            unit_id=str(raw.get("unit_id")),
+            commits=list(raw.get("commits") or []),
+            published=bool(raw.get("published", True)),
+        )
+
+
+@dataclass
+class BuildResult:
+    """The terminal result of a sequential build (the ``workroom.build_result`` this node
+    exposes). ``status`` is ``done`` when every unit checkpointed + published; ``failed`` on
+    a no-read-back-commit unit, a publish failure, or a provider fault — NEVER a silent green.
+
+    ``units_done`` / ``checkpoints`` are the READ-BACK-proven finished units (each with real
+    git SHAs); ``failed_unit`` + ``reason`` name the honest failure (Law 2: spoken plainly).
+    """
+
+    status: str
+    units_done: list[str] = field(default_factory=list)
+    checkpoints: list[dict[str, Any]] = field(default_factory=list)
+    failed_unit: str | None = None
+    reason: str | None = None
+
+    def to_persisted(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "units_done": list(self.units_done),
+            "checkpoints": list(self.checkpoints),
+            "failed_unit": self.failed_unit,
+            "reason": self.reason,
+        }
+
+
+# The per-subtask instruction after the cached prefix (§3.9): a tight scope-control lever —
+# do THIS unit, then STOP (their cheapest, highest-leverage scope lever, §3.6.2). The
+# ``SUBTASK_ID`` line is the structured marker the executor + progress correlate the unit by.
+_SUBTASK_INSTRUCTION = (
+    "SUBTASK_ID: {unit_id}\n"
+    "Build ONLY this subtask, commit it in the sandbox (git), then STOP. "
+    "Do NOT start the next subtask.\n"
+    "Title: {title}\n"
+    "Files to touch: {files}\n"
+    "Done when: {done_when}\n"
+    "Verify: {verify}"
+)
+
+
+class SubtaskFailure(RuntimeError):
+    """An honest per-subtask failure (Rule 6 / §3.3) — a read-back-empty commit or a publish
+    throw. Carries the unit id + reason into the ``failed`` BuildResult; never an uncaught
+    exception across the host boundary (which would kill the build blind)."""
+
+    def __init__(self, unit_id: str, reason: str) -> None:
+        super().__init__(reason)
+        self.unit_id = unit_id
+        self.reason = reason
+
+
+class BigBuildExecutor:
+    """Run the plan's units SEQUENTIALLY in one resumed session — checkpoint → git read-back
+    → publish-or-fail → durable per-unit checkpoint (node ``workroom.sequential-build``, §3.6.2).
+
+    Injectable seams so the REAL host path is proven against in-process fakes (e2b not
+    installed; the live bake is the flagged residual):
+
+      * ``provider`` — the ``agentkit.Provider`` for the worker turns (defaults to the
+        registry provider for the worker seat's model). Each unit is ONE resumed ``query()``.
+      * ``sandbox`` — the :class:`SandboxGit` surface (read_head / list_commits / publish).
+      * ``store`` / ``db`` — the ``operation_runs`` row where the plan + session id already
+        live and where the per-unit checkpoints + terminal build result persist (the SAME
+        row, §12.10 — never a bespoke table).
+      * ``chat`` — the chat surface (best-effort progress, unused for now beyond parity).
+      * ``on_progress`` — the harness progress sink (tool_start + captured commits, §3.12).
+      * ``abort_registry`` — the imported ``AbortRegistry`` (§11.9); a per-task controller is
+        threaded onto every resumed subtask query so "Proxy, quiet"/meeting-end halts the loop.
+    """
+
+    def __init__(
+        self,
+        *,
+        provider: Any = None,
+        sandbox: SandboxGit | None = None,
+        store: Any = None,
+        chat: Any = None,
+        db: Any = None,
+        on_progress: ProgressSink | None = None,
+        abort_registry: AbortRegistry | None = None,
+        worker_max_turns: int = 6,
+        staging_destination: str = "staging",
+    ) -> None:
+        self._provider = provider
+        self._sandbox = sandbox
+        self._store = store
+        self._chat = chat
+        self._db = db
+        self._on_progress = on_progress
+        self._abort_registry = abort_registry if abort_registry is not None else AbortRegistry()
+        # A tight per-subtask max_turns (§3.11 — never the SDK default 1000; a subtask is one
+        # bounded unit of work with an explicit STOP).
+        self._worker_max_turns = worker_max_turns
+        self._staging_destination = staging_destination
+
+    # -- the public entry point: run (and resume) the sequential build --------
+
+    async def run(self, bundle: Bundle, *, run_id: Any) -> BuildResult:
+        """Execute the persisted plan's units sequentially, resuming from durable checkpoints.
+
+        Loads the plan + session id + any existing checkpoints from the SAME ``operation_runs``
+        row (the durable substrate). Iterates the units IN ORDER, SKIPPING units already
+        checkpointed (a mid-crash resume never redoes finished units). Per remaining unit: one
+        resumed ``query()`` → read the checkpoint back from git → publish-or-fail → persist the
+        checkpoint. Stops at the first failing unit with an honest ``failed`` result (never a
+        silent green). Never raises (Rule 6) — a provider/publish/read-back fault becomes a
+        ``failed`` BuildResult persisted into the same row.
+        """
+        meeting_id = str(bundle.notes_ref)
+        controller = self._abort_registry.make(f"{meeting_id}|{bundle.task_id}")
+        try:
+            plan, session_id = await self._load_plan(run_id)
+        except PlanError as exc:
+            result = BuildResult(status="failed", reason=f"no runnable plan: {exc}")
+            await self._persist_build(run_id, result)
+            return result
+
+        done = await self._load_checkpoints(run_id)
+        done_ids = [cp.unit_id for cp in done]
+        checkpoints: list[SubtaskCheckpoint] = list(done)
+
+        for unit in plan.units:
+            if unit.id in done_ids:
+                continue  # a finished unit — resume SKIPS it, never redoes it (§3.6.2)
+            try:
+                cp = await self._run_one_subtask(unit, session_id, controller)
+            except SubtaskFailure as exc:
+                # An honest per-subtask failure (no read-back commit, or publish threw). Stop
+                # here — never march past a failed unit, never silent-green (§3.6.2).
+                result = BuildResult(
+                    status="failed",
+                    units_done=[cp.unit_id for cp in checkpoints],
+                    checkpoints=[cp.to_dict() for cp in checkpoints],
+                    failed_unit=exc.unit_id,
+                    reason=exc.reason,
+                )
+                await self._persist_build(run_id, result)
+                return result
+            except ProviderError as exc:
+                result = BuildResult(
+                    status="failed",
+                    units_done=[cp.unit_id for cp in checkpoints],
+                    checkpoints=[cp.to_dict() for cp in checkpoints],
+                    failed_unit=unit.id,
+                    reason=f"provider error on {unit.id}: {exc}",
+                )
+                await self._persist_build(run_id, result)
+                return result
+            except Exception as exc:  # noqa: BLE001 - Rule 6: a sandbox/crash fault fails honestly
+                result = BuildResult(
+                    status="failed",
+                    units_done=[cp.unit_id for cp in checkpoints],
+                    checkpoints=[cp.to_dict() for cp in checkpoints],
+                    failed_unit=unit.id,
+                    reason=f"{type(exc).__name__} on {unit.id}: {exc}",
+                )
+                await self._persist_build(run_id, result)
+                return result
+            checkpoints.append(cp)
+            # Durably checkpoint per unit IMMEDIATELY (§3.6.2) — the resume-skip source of truth.
+            await self._persist_checkpoints(run_id, checkpoints, status="running")
+
+        result = BuildResult(
+            status="done",
+            units_done=[cp.unit_id for cp in checkpoints],
+            checkpoints=[cp.to_dict() for cp in checkpoints],
+        )
+        await self._persist_build(run_id, result)
+        return result
+
+    # -- one subtask: resumed query() → git read-back → publish-or-fail -------
+
+    async def _run_one_subtask(
+        self, unit: PlanUnit, session_id: str | None, controller: AbortController
+    ) -> SubtaskCheckpoint:
+        """Run ONE unit as a resumed ``query()``, read its checkpoint back from git, publish-
+        or-fail (§3.6.2). Marks done ONLY off the READ-BACK commits — never off narration.
+
+        1. capture ``HEAD`` before the turn;
+        2. drive the resumed worker ``query()`` (tight max_turns + STOP);
+        3. read ``head_before..HEAD`` for the commits it ACTUALLY created — an EMPTY range
+           (the model narrated work it never committed) is a :class:`SubtaskFailure`;
+        4. publish-or-fail — a publish that THROWS fails the subtask (never silent-green).
+        """
+        if self._sandbox is None:
+            raise SubtaskFailure(unit.id, "no sandbox git surface wired")
+        head_before = await self._sandbox.read_head()
+        # (2) the resumed worker turn — one continuous conversation on the plan session id.
+        await self._drive_subtask_query(unit, session_id, controller)
+        # (3) READ THE CHECKPOINT BACK from git — the source of truth, not the model's summary.
+        rev_range = f"{head_before}..HEAD" if head_before else "HEAD"
+        commits = await self._sandbox.list_commits(rev_range)
+        if not commits:
+            # No commit landed in head_before..HEAD → the turn narrated work it never
+            # checkpointed. NEVER mark done off narration — fail the subtask honestly (§3.6.2).
+            raise SubtaskFailure(
+                unit.id,
+                f"no commit read back from git for {unit.id} "
+                "(head_before..HEAD empty) — refusing to mark done off narration",
+            )
+        # (4) publish-or-fail — a publish throw FAILS the subtask, it never reports success.
+        try:
+            await self._sandbox.publish(
+                unit_id=unit.id, commits=commits, destination=self._staging_destination
+            )
+        except Exception as exc:  # noqa: BLE001 - a publish fault FAILS the subtask (§3.6.2)
+            raise SubtaskFailure(
+                unit.id, f"publish failed for {unit.id}: {type(exc).__name__}: {exc}"
+            ) from exc
+        # Stream each captured commit as progress so the room sees the checkpoint land (§3.12).
+        await self._emit_commit_progress(unit, commits)
+        return SubtaskCheckpoint(unit_id=unit.id, commits=commits, published=True)
+
+    async def _drive_subtask_query(
+        self, unit: PlanUnit, session_id: str | None, controller: AbortController
+    ) -> None:
+        """Drive ONE resumed worker ``query()`` for a subtask; stream tool-boundary progress.
+
+        The options are the readwrite ``worker`` disposition (the sandbox write set), resuming
+        the persisted plan ``session_id`` with a tight ``max_turns`` and the STOP instruction —
+        the SAME immutable ``ProviderQuery`` shape the session driver + wake loop use. A
+        pass-through ``ERROR`` chunk surfaces as :class:`ProviderError` (Rule 6 boundary). The
+        abort is threaded so "Proxy, quiet"/meeting-end halts the loop (§3.11)."""
+        options = self._build_worker_options(session_id, controller)
+        provider = self._provider_for(options)
+        prompt = self._render_subtask_prompt(unit)
+        raw_stream = provider.stream(prompt, options)
+        # stream_deltas first (per-msg_id deltas, §1.1), THEN the tool-boundary progress tap —
+        # so tool_start streams from the REAL tool-use stream, never the model's prose (§3.12).
+        progressing = emit_tool_boundary_progress(
+            stream_deltas(raw_stream), unit_task_id(unit), self._on_progress
+        )
+        async for chunk in progressing:
+            if controller.aborted:
+                break
+            if chunk.type == "ERROR":
+                raise ProviderError(chunk)
+
+    def _render_subtask_prompt(self, unit: PlanUnit) -> str:
+        """The volatile per-subtask prompt (after the cached prefix breakpoint, §3.9).
+
+        Carries the tight STOP scope-control instruction + the unit's files/done-when/verify
+        so the model does ONE subtask (§3.6.2). No transcript data is trusted as instruction
+        (§3.10) — the plan unit is the trusted command here."""
+        return _SUBTASK_INSTRUCTION.format(
+            unit_id=unit.id,
+            title=unit.title,
+            files=", ".join(unit.files),
+            done_when=unit.done_when,
+            verify=unit.verify,
+        )
+
+    def _build_worker_options(
+        self, session_id: str | None, controller: AbortController
+    ) -> ProviderQuery:
+        """Build the immutable readwrite ``worker`` ``ProviderQuery`` for a subtask turn.
+
+        The curated worker tool subset + the structural block-list come from the ONE owner
+        (``disposition_tool_policy('worker')`` — the sandbox write set); the model from the
+        imported worker seat (Opus-class ``BIG_BUILD``, §3.2); thinking OFF on the worker path
+        (D-022). ``resume`` = the persisted plan ``session_id`` so every subtask is a follow-up
+        turn in ONE continuous conversation (§3.6.2); ``max_turns`` is the tight per-subtask
+        budget (never the SDK default 1000, §3.11); ``abort`` threads the per-task controller.
+        """
+        policy = disposition_tool_policy("worker")
+        model = self._model_for("worker")
+        enabled, budget = thinking_policy(model, disposition_role("worker"))
+        return ProviderQuery(
+            model=model,
+            allowed_tools=tuple(policy.allowed_tools),
+            system_prompt=WORKROOM_SYSTEM_PREFIX,
+            max_turns=self._worker_max_turns,
+            tools=(),                       # computed built-in allow-list: [] in sandbox mode (§3.4)
+            strict_mcp_config=True,         # triad
+            setting_sources=(),             # triad
+            thinking_enabled=enabled,       # OFF on the worker path (D-022)
+            thinking_budget_tokens=budget,
+            resume=session_id,              # resume the SAME plan session (one conversation, §3.6.2)
+            abort=controller,               # the per-task abort (§3.11)
+        )
+
+    def _model_for(self, disposition: str) -> str:
+        """Resolve the per-role model for a disposition via the IMPORTED seat table (§3.2).
+
+        No ``claude-*`` literal here — the worker seat (Opus-class ``BIG_BUILD``) resolves
+        through ``llm.routing.model_for`` (env-overridable per seat)."""
+        from llm.routing import model_for
+
+        model: str = model_for(seat_for_disposition(disposition))
+        return model
+
+    def _provider_for(self, options: ProviderQuery) -> Any:
+        """The provider seam for a turn (injected fake, else the registry provider, §3.2)."""
+        if self._provider is not None:
+            return self._provider
+        return pick_provider(options.model)
+
+    async def _emit_commit_progress(self, unit: PlanUnit, commits: list[dict[str, str]]) -> None:
+        """Stream each read-back commit as a progress event (§3.6.2 "each captured commit").
+
+        Best-effort (Rule 6) — a progress-sink fault never fails the build. The commit is the
+        HOST-observed git read-back, never the model's prose."""
+        if self._on_progress is None:
+            return
+        import contextlib
+
+        from contracts import ProgressEvent
+
+        for c in commits:
+            sha = str(c.get("sha", ""))[:12]
+            with contextlib.suppress(Exception):
+                await self._on_progress(
+                    ProgressEvent(
+                        headline=f"checkpoint {unit.id}: {sha}",
+                        detail=None,
+                        artifact=None,
+                        receipts=[f"committed {sha} — {c.get('subject', '')}"],
+                        task_id=unit_task_id(unit),
+                    )
+                )
+
+    # -- load the plan + checkpoints from the durable operation_runs row -------
+
+    async def _load_plan(self, run_id: Any) -> tuple[Plan, str | None]:
+        """Load the persisted plan + SDK session id from the SAME ``operation_runs`` row (§3.1).
+
+        The plan reconstitutes reproducibly from the durable ``progress.plan`` (:meth:`Plan.
+        from_persisted`); the session id rides ``progress.session_id`` (or the plan's own).
+        Raises :class:`PlanError` if no plan is persisted (nothing to build)."""
+        progress = await self._read_progress(run_id)
+        plan_data = progress.get("plan")
+        if not plan_data:
+            raise PlanError("no persisted plan on the operation_runs row")
+        plan = Plan.from_persisted(plan_data)
+        session_id = progress.get("session_id") or plan.session_id
+        return plan, session_id
+
+    async def _load_checkpoints(self, run_id: Any) -> list[SubtaskCheckpoint]:
+        """Load the durable per-unit checkpoints (the resume-skip source of truth, §3.6.2).
+
+        Reads ``progress.build.checkpoints`` off the SAME row so a fresh executor (post-crash)
+        knows which units already finished — those are SKIPPED, never redone."""
+        progress = await self._read_progress(run_id)
+        build = progress.get("build") or {}
+        return [SubtaskCheckpoint.from_dict(cp) for cp in (build.get("checkpoints") or [])]
+
+    async def _read_progress(self, run_id: Any) -> dict[str, Any]:
+        """Read the ``operation_runs`` row's ``progress`` jsonb (durable substrate, §12.10)."""
+        if self._store is not None:
+            getter = getattr(self._store, "get_progress", None)
+            if getter is not None:
+                return dict(await getter(run_id=run_id) or {})
+            return {}
+        if self._db is not None:
+            return await self._read_progress_db(run_id)
+        return {}
+
+    async def _read_progress_db(self, run_id: Any) -> dict[str, Any]:
+        """Read ``progress`` off the durable ``operation_runs`` row (§12.10)."""
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            async with self._db.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT progress FROM operation_runs WHERE id = $1", run_id
+                )
+            if row is not None and row["progress"] is not None:
+                progress = row["progress"]
+                return progress if isinstance(progress, dict) else json.loads(progress)
+        return {}
+
+    # -- persist the checkpoints + terminal build result (SAME row, §12.10) ---
+
+    async def _persist_checkpoints(
+        self, run_id: Any, checkpoints: list[SubtaskCheckpoint], *, status: str
+    ) -> None:
+        """Persist the per-unit checkpoints into the SAME row's ``progress.build`` (§3.6.2).
+
+        The resume-skip source of truth — written IMMEDIATELY per unit so a crash between
+        units resumes with exactly the finished units skipped. Rides the SAME ``operation_runs``
+        row's ``progress`` jsonb (never a bespoke table, §12.10)."""
+        patch = {
+            "build": {
+                "status": status,
+                "units_done": [cp.unit_id for cp in checkpoints],
+                "checkpoints": [cp.to_dict() for cp in checkpoints],
+            }
+        }
+        await self._merge_progress(run_id, patch)
+
+    async def _persist_build(self, run_id: Any, result: BuildResult) -> None:
+        """Persist the terminal build result into the SAME row's ``progress.build`` (§3.1).
+
+        A ``failed`` build (publish failure / no-read-back / provider fault) is recorded
+        durably (Law 2: failures spoken plainly, never silently dropped); a ``done`` build
+        records every finished unit. Best-effort by construction (Rule 6 — a persist fault is
+        logged, never a crash)."""
+        await self._merge_progress(run_id, {"build": result.to_persisted()})
+
+    async def _merge_progress(self, run_id: Any, patch: dict[str, Any]) -> None:
+        """Merge a jsonb patch into the SAME ``operation_runs`` row's ``progress`` (§12.10)."""
+        if self._store is not None:
+            setter = getattr(self._store, "set_progress", None)
+            if setter is not None:
+                await setter(run_id=run_id, progress=dict(patch))
+                return
+        if self._db is not None:
+            await self._merge_progress_db(run_id, patch)
+
+    async def _merge_progress_db(self, run_id: Any, patch: dict[str, Any]) -> None:
+        """Merge ``patch`` into ``operation_runs.progress`` on the durable Postgres substrate.
+
+        A single jsonb-merge UPDATE on the row keyed by ``id`` (never a new column/table) — the
+        build checkpoints reconstitute from this durable row so a restart resumes. Best-effort
+        (Rule 6): a persist fault must NOT crash the run, but a lost durable persist is a real
+        degradation — it is LOGGED, never silently swallowed (Law 2)."""
+        try:
+            async with self._db.acquire() as conn:
+                await conn.execute(
+                    "UPDATE operation_runs "
+                    "SET progress = coalesce(progress, '{}'::jsonb) || $2::jsonb "
+                    "WHERE id = $1",
+                    run_id,
+                    json.dumps(patch),
+                )
+        except Exception as exc:  # noqa: BLE001 - Rule 6: never crash the run; degrade loudly
+            _LOG.warning(
+                "durable build-progress persist FAILED for run_id=%s keys=%s: %s",
+                run_id,
+                sorted(patch),
+                exc,
+            )
+
+
+def unit_task_id(unit: PlanUnit) -> Any:
+    """A stable per-unit id for progress correlation — a deterministic UUID5 off the unit id.
+
+    Progress events want a ``task_id``; the plan unit id is a string, so we derive a stable
+    UUID from it (same unit → same id across turns) without inventing a new identity scheme."""
+    import uuid
+
+    return uuid.uuid5(uuid.NAMESPACE_URL, f"workroom-unit:{unit.id}")
+
+
 __all__ = [
+    "BigBuildExecutor",
     "BigBuildPlanner",
+    "BuildResult",
     "Plan",
     "PlanError",
     "PlanUnit",
+    "SandboxGit",
+    "SubtaskCheckpoint",
+    "SubtaskFailure",
     "render_plan_for_chat",
 ]
