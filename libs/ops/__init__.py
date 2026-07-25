@@ -13,6 +13,9 @@ from .src.ops import (
     MEETING_HARNESS_OP as MEETING_HARNESS_OP,
 )
 from .src.ops import (
+    DispatchDecision as DispatchDecision,
+)
+from .src.ops import (
     MeetingCost as MeetingCost,
 )
 from .src.ops import (
@@ -67,6 +70,7 @@ from .src.ops import (
 
 __all__ = [
     "MEETING_HARNESS_OP",
+    "DispatchDecision",
     "MeetingCost",
     "OperationHandle",
     "before_send",

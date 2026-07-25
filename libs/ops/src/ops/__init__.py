@@ -23,6 +23,9 @@ from .claim import (
     with_meeting_lock as with_meeting_lock,
 )
 from .cost import (
+    DispatchDecision as DispatchDecision,
+)
+from .cost import (
     MeetingCost as MeetingCost,
 )
 from .cost import (
@@ -55,6 +58,7 @@ from .sentry import before_send as before_send
 
 __all__ = [
     "MEETING_HARNESS_OP",
+    "DispatchDecision",
     "MeetingCost",
     "OperationHandle",
     "before_send",
