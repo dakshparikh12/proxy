@@ -131,6 +131,14 @@ def create_app() -> FastAPI:
     # The WS upgrade gateway (§4.3/§12.9): /ws authenticates at the connection UPGRADE —
     # an unauthenticated upgrade is rejected (401) BEFORE the 101, never per-message.
     install_gateway_route(app)
+    # The connect page's two PUBLIC REST routes (§2.7/§4.6): GET /connect/status (the
+    # readiness poll — REST, not a WS message, CANONICAL §12.12) and POST
+    # /connect/install/start (launch the GitHub-App install AND fire the connect→index
+    # trigger — the first live run_full_pipeline caller). Both are on the PUBLIC_ROUTES
+    # allowlist (no meeting exists yet) and validated like any public API.
+    from .connect import install_connect_routes
+
+    install_connect_routes(app)
 
     @app.get("/health")
     async def health() -> Any:
