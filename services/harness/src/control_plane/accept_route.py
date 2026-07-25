@@ -159,13 +159,23 @@ class _AuthzedRequest:
         self.csrf_valid = csrf_valid
 
 
-def install_accept_route(app: "FastAPI") -> None:
+def install_accept_route(
+    app: "FastAPI", *, dependencies: "list[Any] | None" = None
+) -> None:
     """Mount POST /m/{meeting_id}/drafts/{draft_id}/accept BEHIND the auth wall.
 
     The route resolves the durable connection off ``app.state.db`` (a missing handle
     is an honest 503, never a fabricated 200), derives the principal + tenant from the
     signed session server-side, checks the CSRF header, and delegates to
     :func:`handle_accept`. The response status is the handler's status verbatim.
+
+    ``dependencies`` (a list of FastAPI ``Depends``) is declared at the route so the
+    §4.6 ``protected()`` wrapper's server-side auth gate fires BEFORE the handler —
+    a fail-closed 401/403 for an anonymous or tenant-less caller. It is the marker
+    the ``tests/security/test_routes_are_scoped.py`` enumeration reads to prove this
+    mutation is tenant-scoped, not raw. The handler keeps its own session/CSRF/
+    server-side tenant checks as defense-in-depth (the accept is the one
+    world-touching click, Law 3).
 
     ``app`` is the concrete :class:`fastapi.FastAPI` ``create_app`` builds; the
     annotation gives ``app.post`` a typed signature so the route decorator is a
@@ -175,7 +185,7 @@ def install_accept_route(app: "FastAPI") -> None:
     from starlette.requests import Request
     from starlette.responses import JSONResponse, Response
 
-    @app.post(ACCEPT_PATH, include_in_schema=True)
+    @app.post(ACCEPT_PATH, include_in_schema=True, dependencies=dependencies or [])
     async def accept_draft_route(meeting_id: str, draft_id: str, request: Request) -> Response:
         db = getattr(request.app.state, "db", None)
         if db is None:

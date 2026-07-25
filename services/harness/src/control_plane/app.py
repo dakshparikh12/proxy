@@ -47,6 +47,48 @@ def _install_signed_session(app: FastAPI) -> None:
     )
 
 
+async def _resolve_session_from_request(request: Request) -> dict[str, Any] | None:
+    """Adapt the signed-session cookie into the ``{user_id, tenant_id}`` shape the
+    §4.6 ``protected()`` wrapper reads — server-side, never a client-supplied field.
+
+    The Authlib/session-middleware surface exposes the signed-in user on
+    ``request.session["user"]`` (an OIDC ``userinfo`` dict). The tenant rides the
+    session server-side; ``protected()`` 403s a session that carries no tenant and
+    401s an absent/invalid session. A missing SessionMiddleware (an app built
+    without the optional dep) reads as no session ⇒ 401 — fail-closed.
+    """
+    try:
+        session = request.session.get("user")
+    except (AssertionError, AttributeError):
+        return None
+    if not isinstance(session, dict):
+        return None
+    tenant_id = session.get("tenant_id")
+    user_id = session.get("user_id") or session.get("email") or session.get("sub")
+    if user_id is None:
+        return None
+    return {"user_id": user_id, "tenant_id": tenant_id}
+
+
+def _stamp_internal_scoped(app: FastAPI) -> None:
+    """Mark the ``/internal/*`` routes as internal-bearer-token-scoped (§4.6).
+
+    These routes are gated by the ``X-Internal-Token`` header (a server-to-server
+    trust plane, NEVER the user session cookie), so they are tenant-scoped by a
+    different gate than ``protected()``. Stamping their endpoints lets the
+    route-enumeration test classify them as scoped rather than raw — the test then
+    still fails on any genuinely-unwrapped route.
+    """
+    from libs.http import mark_internal_scoped
+
+    for route in app.routes:
+        path = getattr(route, "path", "") or ""
+        if path.startswith("/internal/"):
+            endpoint = getattr(route, "endpoint", None)
+            if endpoint is not None:
+                mark_internal_scoped(endpoint)
+
+
 def create_app() -> FastAPI:
     """Construct the control_plane ASGI app with the /auth routes + /health.
 
@@ -59,6 +101,13 @@ def create_app() -> FastAPI:
     app = FastAPI(title="proxy-control-plane")
     _install_signed_session(app)
 
+    # §4.6 safeError: an external caller (Recall, an anonymous connect-page visitor)
+    # NEVER sees an internal error string — every non-validation error collapses to a
+    # per-status fallback; a RequestValidationError returns the caller's own issues.
+    from libs.http import install_safe_error_handler
+
+    install_safe_error_handler(app)
+
     # The token-gated /internal notes + reconcile routes and the /m user surface.
     # Mounted here so the Workroom's cross-service notes read has a LIVE endpoint
     # alongside /internal/reconcile (closes the DOC03-CSREAD mount gap).
@@ -67,9 +116,18 @@ def create_app() -> FastAPI:
     from .internal import install_internal_routes
 
     install_internal_routes(app)
+    # The §4.6 internal-token trust plane: the /internal/* routes are gated by the
+    # X-Internal-Token header (a server-to-server bearer, NEVER the user session
+    # cookie), so they are tenant-scoped by a different gate than protected(). Stamp
+    # them so the route-enumeration test recognises them as scoped, not raw.
+    _stamp_internal_scoped(app)
     # The authenticated draft-accept surface (§12.9): POST /m/{id}/drafts/{id}/accept
-    # BEHIND the auth wall, reading durable storage (post-teardown safe).
-    install_accept_route(app)
+    # BEHIND the auth wall, reading durable storage (post-teardown safe). It declares
+    # the §4.6 protected() wrapper so a fail-closed 401/403 fires server-side BEFORE
+    # the handler — the marker the route-scope test reads to prove it is not raw.
+    from libs.http import protected
+
+    install_accept_route(app, dependencies=[protected(_resolve_session_from_request)])
     # The WS upgrade gateway (§4.3/§12.9): /ws authenticates at the connection UPGRADE —
     # an unauthenticated upgrade is rejected (401) BEFORE the 101, never per-message.
     install_gateway_route(app)

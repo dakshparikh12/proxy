@@ -34,16 +34,37 @@ from .src.http.gateway import RejectUpgrade as RejectUpgrade
 from .src.http.handlers.channel_action import handle_channel_action as handle_channel_action
 from .src.http.internal import get_notes as get_notes
 from .src.http.internal import internal_notes as internal_notes
+from .src.http.registry import PUBLIC_ROUTES as PUBLIC_ROUTES
+
+# The §4.6 contract-registry HTTP wrappers + safeError, re-exported off the clean
+# package seam so the live control_plane mount binds them without the ``src`` deep path.
+from .src.http.registry import AuthzCtx as AuthzCtx
+from .src.http.registry import PublicAuthzCtx as PublicAuthzCtx
+from .src.http.registry import classify_route as classify_route
+from .src.http.registry import mark_internal_scoped as mark_internal_scoped
+from .src.http.registry import protected as protected
+from .src.http.registry import public as public
+from .src.http.safe_error import install_safe_error_handler as install_safe_error_handler
+from .src.http.safe_error import safe_error_handler as safe_error_handler
 
 __all__ = [
+    "AuthzCtx",
     "Connection",
     "DispatchCtx",
+    "PUBLIC_ROUTES",
+    "PublicAuthzCtx",
     "RejectUpgrade",
     "authorize_upgrade",
+    "classify_route",
     "dispatch",
     "get_notes",
     "handle_channel_action",
+    "install_safe_error_handler",
     "internal_notes",
+    "mark_internal_scoped",
+    "protected",
+    "public",
     "resolve_entity_tenant",
     "run_dispatch",
+    "safe_error_handler",
 ]
