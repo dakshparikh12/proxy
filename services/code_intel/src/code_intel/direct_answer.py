@@ -60,6 +60,12 @@ _STOPWORDS = frozenset(
         "point", "points", "owner", "owns", "own", "it", "its", "me", "please",
         "tell", "show", "find", "get", "give", "about", "here", "there", "we",
         "you", "i", "our", "your", "my",
+        # The wake-word / address token — every reactive ask is spoken TO Proxy
+        # ("Proxy, where is url_for?"). "Proxy" is the product's own name, never a
+        # code symbol in a tenant's repo, so it must be stripped before symbol
+        # extraction — otherwise the CamelCase address token shadows the real
+        # symbol and every grounded lookup misroutes to a search for "Proxy".
+        "proxy",
     }
 )
 
