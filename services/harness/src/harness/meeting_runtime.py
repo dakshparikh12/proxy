@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -34,6 +35,7 @@ from .scribe_runtime import (
     run_meeting_close,
     start_meeting_scribe,
 )
+from .stt import _noop_refresh, refresh_stt_credentials
 
 # Bound on waiting for the serial Scribe consumer to DRAIN on meeting end before
 # the close pass folds the ledger. The MeetingEnd signal pushes the None sentinel
@@ -68,18 +70,35 @@ class MeetingRuntime:
     host_budget: HostBudget
     referent_corpus: ReferentCorpus | None = None
     operation_handle: Any = None
+    # The availability-critical STT-credential refresh seam (§3.8): its cadence and the
+    # bound refresh callable, threaded from the registry. The loop runs on its OWN
+    # in-process asyncio interval (below) — never the scale-to-zero reconcile cron.
+    stt_refresh_fn: Callable[[], Awaitable[None]] = _noop_refresh
+    stt_refresh_interval_s: float | None = None
     _scribe: ScribeRuntimeHandle | None = field(default=None, init=False)
     _hearing: Any = field(default=None, init=False)
     _run_loop: RunLoop | None = field(default=None, init=False)
+    _stt_refresh: "asyncio.Task[None] | None" = field(default=None, init=False)
 
     def start(self) -> ScribeRuntimeHandle:
-        """Launch the live notes engine on this meeting's carrier (idempotent).
+        """Launch the join-time standing-pipe plumbing on this meeting's carrier (§2/§3).
 
-        Also constructs the transport-side ``HearingStage`` bound to the SAME carrier —
-        the production emit end — so live transcript passthrough fed to
-        :meth:`ingest_transcript` fans onto the stream the Scribe consumes. The Scribe
-        subscribe end is registered FIRST (``start_meeting_scribe`` subscribes
-        synchronously), so no early transcript is dropped on the floor.
+        The standing pipes are wired ONCE here, at join, as pure forwarding with zero
+        agent calls (§3.2). This launches:
+
+        * the live notes engine — the Scribe serial consumer subscribed to the ONE
+          ``SignalCarrier`` exactly once (audio→STT→transcript→Scribe→material-events);
+        * the transport-side ``HearingStage`` bound to the SAME carrier (the production
+          emit end) so live transcript passthrough fed to :meth:`ingest_transcript` fans
+          onto the stream the Scribe consumes; and
+        * the availability-critical STT-credential refresh loop on its OWN in-process
+          asyncio interval (§3.8 — NOT the scale-to-zero reconcile cron, because a live
+          meeting provably has a warm instance).
+
+        Idempotent: a redelivered ``in_call`` returns the already-wired pipes without a
+        second subscription (subscription count stays 1). The Scribe subscribe end is
+        registered FIRST (``start_meeting_scribe`` subscribes synchronously), so no early
+        transcript is dropped on the floor.
         """
         if self._scribe is None:
             self._scribe = start_meeting_scribe(
@@ -94,7 +113,22 @@ class MeetingRuntime:
             from transport.hearing import HearingStage
 
             self._hearing = HearingStage(carrier=self.carrier)
+        if self._stt_refresh is None:
+            # The STT-credential refresh runs on its OWN in-process interval task, wired
+            # once at join and torn down at meeting end — never on the reconcile cron
+            # (§3.8). It is a standing pipe: no agent, no decision, just a constant
+            # connection kept warm for as long as the meeting is live.
+            self._stt_refresh = asyncio.ensure_future(
+                refresh_stt_credentials(
+                    self.stt_refresh_fn, interval_s=self.stt_refresh_interval_s
+                )
+            )
         return self._scribe
+
+    @property
+    def stt_refresh_running(self) -> bool:
+        """True iff the STT-credential refresh loop task is live (started, not stopped)."""
+        return self._stt_refresh is not None and not self._stt_refresh.done()
 
     async def ingest_transcript(self, msg: dict[str, Any]) -> None:
         """Fan ONE real Recall real-time transcript passthrough message onto the carrier.
@@ -239,7 +273,17 @@ class MeetingRuntime:
         )
 
     async def aclose(self) -> None:
-        """Tear the notes engine down and close the carrier (host teardown)."""
+        """Tear the standing pipes down and close the carrier (host teardown).
+
+        Cancels the availability-critical STT-credential refresh loop (it must not
+        outlive the meeting it serves — §3.8) and the Scribe notes engine, then closes
+        the carrier. Best-effort and idempotent: a second teardown is a no-op.
+        """
+        if self._stt_refresh is not None:
+            self._stt_refresh.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._stt_refresh
+            self._stt_refresh = None
         if self._scribe is not None:
             await self._scribe.aclose()
             self._scribe = None
@@ -263,6 +307,8 @@ class MeetingRuntimeRegistry:
         *,
         host_inflight: int = DEFAULT_HOST_INFLIGHT,
         close_config: CloseConfig | None = None,
+        stt_refresh_fn: Callable[[], Awaitable[None]] = _noop_refresh,
+        stt_refresh_interval_s: float | None = None,
     ) -> None:
         self._db = db
         self._host_budget = HostBudget(limit=host_inflight)
@@ -271,6 +317,11 @@ class MeetingRuntimeRegistry:
         # Bound at boot; when absent, meeting end still tears the runtime down but
         # cannot produce the permanent record — so the wiring supplies it.
         self._close_config = close_config
+        # The availability-critical STT-credential refresh seam (§3.8): bound once at
+        # boot and handed to every meeting's runtime so each keeps its own in-process
+        # refresh interval alive for the life of the meeting (never the reconcile cron).
+        self._stt_refresh_fn = stt_refresh_fn
+        self._stt_refresh_interval_s = stt_refresh_interval_s
 
     def start_meeting(
         self,
@@ -294,6 +345,8 @@ class MeetingRuntimeRegistry:
             db=self._db,
             host_budget=self._host_budget,
             referent_corpus=referent_corpus,
+            stt_refresh_fn=self._stt_refresh_fn,
+            stt_refresh_interval_s=self._stt_refresh_interval_s,
         )
         runtime.start()
         self._runtimes[header.meeting_id] = runtime
