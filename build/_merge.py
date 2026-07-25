@@ -52,6 +52,17 @@ def main() -> None:
             # else external_input / endpoint / dangling → not a build-order dep
         n["depends_on"] = sorted(set(deps) - {n["id"]})
 
+    # ── complete depends_on from consumes: every consumed interface's producer node is a real
+    #    build dependency (makes the DAG fully explicit + robust to reorder; wiring-closure already
+    #    guarantees this is acyclic, so no cycle can be introduced).
+    for n in nodes:
+        deps = set(n["depends_on"])
+        for c in n.get("consumes", []):
+            p = producer.get(c)
+            if p and p != n["id"]:
+                deps.add(p)
+        n["depends_on"] = sorted(deps)
+
     # ── topological sort (Kahn, stable by original index) so depends_on is backward-only
     idx = {n["id"]: i for i, n in enumerate(nodes)}
     indeg = {n["id"]: len(n["depends_on"]) for n in nodes}

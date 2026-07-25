@@ -92,3 +92,61 @@ Format:
 - Decision: fold it into `foundation.observability-floor` — the reconcile sweep it already owns is extended to delete tenant Postgres rows + GCS prefixes on offboarding (add its criterion_ids there if any surface at HALT 1). Kept minimal; no separate node.
 - Rationale: it is one more sweep behavior on an existing owner, not a new seam; a standalone node would over-fragment the reconcile responsibility. The isolation triad + object-versioned GCS make the deletion boundary well-defined.
 - Nodes affected: `foundation.observability-floor` (reconcile scope extended; criterion_ids appended if/when sealed).
+
+---
+# Integration-mechanics audit — cross-node decisions pinned (before build)
+
+These are choices ≥2 build-new nodes depend on. Pinned here (the shared reference builders read)
+so the pieces cohere instead of diverging. All resolved from CANONICAL/product-intent.
+
+## D-013  cost `projected-hours` computation  [technical]
+Computed at harness join from the Recall meeting duration (default 2h if unknown at claim),
+persisted in `operation_runs.progress`; soft=0.8×, hard=1.0× (D-004). Owner: `orchestrator.cost-circuit-breaker`; read by `scribe.cost-telemetry`, `workroom.cost-latency`.
+
+## D-014  model-seat → behavior/disposition mapping  [technical]
+SCRIBE→coalescer · SCRIBE_CLOSE→close-pass · GATE→name-gate · QUALITY_GATE→quality-gate (sampled) + a QUALITY_ESCALATION (Sonnet) on grounded=false · ANSWER→answer-question · ORCHESTRATOR→all other wake-behaviors · WORKROOM→non-build dispositions · BIG_BUILD→build-planning disposition. Owner: `orchestrator.behaviors-dir` + `workroom.session-per-task`.
+
+## D-015  per-behavior curated tool subsets  [technical]
+answer-question = code_intel(get_dependents/who_writes/list_entry_points/grep/read/batch_read) + speak/send_chat/dispatch_workroom · catchup = speak/send_chat only · surface-risk = grep/read/get_dependents + speak · propose-action = dispatch_workroom only. Never the union (CANONICAL §10.5). Owner: `orchestrator.behaviors-dir`.
+
+## D-016  BehaviorConfig field set  [technical]
+`{tools:list[str], model:str, role:str, max_turns:int=1, rules:list[str]=[], inputs:list[str]=[]}` — the single typed constant shape. Owner: `libs/agentkit` (`foundation.agentchunk-behavior`); imported by orchestrator + workroom (never redefined).
+
+## D-017  sandbox ToolReceipt shape  [technical]
+`{command_id, tool_name, argv:list[str], exit_code:int, stdout_ref, stderr_ref, artifact_hashes:dict[str,str], duration_secs, timestamp}` — host-observed, written to a meeting-scoped GCS prefix. Owner: `workroom.sandbox-receipts`; read by `workroom.verify-gate` (the evidence gate matches receipt→plan step).
+
+## D-018  tool-error return contract (Hard Rule 6)  [technical]
+`metadata["error"] = {code, message, context?}`; every handler wraps `except Exception → is_error:true`, never raises. Owner: `libs/agentkit.tools` (`foundation.agentchunk-behavior`); every tool node conforms.
+
+## D-019  RenderFrameType taxonomy  [technical]
+`Literal["init","working","progress","result","error","input_request","speaking","idle"]`; each ChannelAction maps to a frame transition. Owner: `experience.contract-registry`; consumed by projector + tile.
+
+## D-020  quality-gate sample rate  [technical]
+`QUALITY_GATE_SAMPLE_RATE=0.1` in `config/defaults.toml` (env override); always-check {decision:final, irreversible, contradicts} regardless of sampling. Owner: `scribe.quality-gate` + `foundation.config-secrets`.
+
+## D-021  cache TTLs → config  [technical]
+`config/defaults.toml`: orchestrator wake prefix 3600s (1h, load-bearing for sporadic wakes), scribe prefix 300s (5m); env override. Owner: `foundation.config-secrets`; read by `orchestrator.wake-cache-verify` + scribe.
+
+## D-022  extended-thinking policy  [technical]
+ON only for the Workroom build-planning disposition (Opus, budget ≤10% of MAX_OUTPUT_TOKENS; reduce to ≤2k or disable if a structured output >4k tokens to avoid mid-object truncation). OFF for every orchestrator wake-behavior + workroom critic/verifier/quick. Owner: `orchestrator.provider-seam` + `workroom.session-per-task`.
+
+## D-023  behavior-firing mechanism  [technical]
+INFERENCE from tool-use — NO `fire_behavior()` dispatch, NO `if event→action`. Behaviors are prompt mental-models; the first significant tool-use determines the active behavior (config-not-code). Owner: `orchestrator.behavior-runner` + `wake-turn`.
+
+## D-024  delivery-verb API surface  [technical]
+`speak(text)`, `send_chat(text, dm=False)`, `show_screen(artifact)` are SDK tools mounted ONLY in wake-behaviors (the sole delivery authority); the Workroom does NOT mount them (it returns an Envelope; Proxy delivers). Owner: `orchestrator.behaviors-dir`; backed by transport verbs.
+
+## D-025  projector chunk→frame mapping  [technical]
+TEXT→accumulate speaking-frame (TTS deltas per msg_id) · TOOL_USE→"working: <tool>" tile line · structured TOOL_RESULT→canvas artifact · error TOOL_RESULT→error line · RESULT→deliver (speak if still-relevant else chat) + done · ERROR→error line. Owner: `experience.channel-projector`.
+
+## D-026  Bundle.transcript_tail: str vs list[str]  [technical — CONFIRM at HALT, like D-004]
+CANONICAL §11.5 says `transcript_tail: str`; the built code has `list[str]`. Decision: align to CANONICAL (`str`). CONFIRM: docs 00-03 are built + passing with `list[str]`; if a sealed doc00 test locks the list shape, this is a founder-gated sealed-test contradiction, not an auto-fix. Owner: `foundation.contracts-registry`.
+
+## D-027  Envelope.question field  [technical]
+Add `question: str | None = None` (D-005) so a `needs_clarification` Envelope carries the one question (X confirmed it does not exist yet). Owner: `foundation.contracts-registry` (fix); produced by `workroom.envelope`.
+
+## D-028  behavior names = internal V0 slugs  [technical — was flagged product; V0 default]
+Behavior/disposition names are internal implementation identifiers (refactorable), NOT a stability/public-API contract in V0. Revisit only if/when they become user-facing (analytics/saved prefs). Owner: `orchestrator.conversational-behaviors`.
+
+## D-029  no feature_flags table in V0  [settled by CANONICAL]
+CANONICAL §12.12 + Doc00 §15: V0 has ZERO runtime flags — plain env vars, one config per deployment. No `feature_flags` table now; add only at a real per-tenant need (Expansion). Not founder-gated.

@@ -33,7 +33,7 @@
       "id": "foundation.contracts-registry",
       "title": "Typed contracts + import-time closed registry",
       "region": "00-FOUNDATION",
-      "disposition": "verify",
+      "disposition": "fix",
       "status": "pending",
       "spec_refs": [
         "00-FOUNDATION.md#2",
@@ -74,7 +74,7 @@
         "AC-REG-005"
       ],
       "intent": "Realizes the seam spine: every 04<->05 and 03->04 wire shape is a Pydantic model in libs/contracts (Bundle, Envelope, NoteOp, Readiness, ChannelReport, material-change events) and a ProxyMessage self-registers on definition so assert_registry_closed() proves the MessageType enum and CHANNEL_REGISTRY are set-equal \u2014 the spec's 'a produced-but-unconsumed field is a build error, not a style choice' (\u00a72/\u00a712) made structural, not a manual audit. Signal-surface events stay out of the client registry per CANONICAL \u00a711.8.",
-      "definition_of_done": "Every contract model has EXACTLY its canonical field/member set (Bundle notes_ref:UUID handle; EnvelopeStatus 5-member; NoteOp {add,patch,close}; Readiness minus 'mapping'; dm_available:bool; material-change 7 kinds), every id is UUID / free-text bounded / selector Literal, and assert_registry_closed() passes on the consistent registry AND raises on an injected orphan. NOT done if a field set drifts, 'verified'/'draft' appear as status values, or the closure is only asserted at boot but not exposed to CI.",
+      "definition_of_done": "Every contract model has EXACTLY its canonical field/member set (Bundle notes_ref:UUID handle; EnvelopeStatus 5-member; NoteOp {add,patch,close}; Readiness minus 'mapping'; dm_available:bool; material-change 7 kinds), every id is UUID / free-text bounded / selector Literal, and assert_registry_closed() passes on the consistent registry AND raises on an injected orphan. NOT done if a field set drifts, 'verified'/'draft' appear as status values, or the closure is only asserted at boot but not exposed to CI. FIX (integration audit): add `question: str|None=None` to Envelope (D-027, needs_clarification carries the one question); align Bundle.transcript_tail to CANONICAL \u00a711.5 `str` (D-026 \u2014 confirm no sealed doc00 test locks list[str]).",
       "consumes": [],
       "exposes": [
         "contracts.Bundle",
@@ -762,7 +762,8 @@
       "exposes": [],
       "depends_on": [
         "foundation.config-secrets",
-        "foundation.substrate-runtime"
+        "foundation.substrate-runtime",
+        "foundation.substrate-schema"
       ],
       "integration_point": "services/harness/src/harness/server.py (FastAPI lifespan) + settings.py + meetings.py + session.py",
       "acceptance": "WHEN the server boots THE SYSTEM SHALL validate all required keys at import, run the lifespan in the exact order (tracing -> pool -> facade -> provisioner_ready -> boot reaper -> routers), and mount routers only after the reaper has interrupted orphaned running rows.",
@@ -1010,7 +1011,8 @@
       ],
       "depends_on": [
         "foundation.hosting-deployables",
-        "foundation.substrate-runtime"
+        "foundation.substrate-runtime",
+        "foundation.substrate-schema"
       ],
       "integration_point": "libs/ops/src/ops/logging.py + sentry.py + telemetry.py + affinity.py + agentkit tracing.py + deploy/harden.sh + infra/snapshots.tf",
       "acceptance": "WHEN a read/log/error path over clone content carrying a source-sentinel runs and a tile WS reconnects to a non-owner instance THE SYSTEM SHALL keep the sentinel out of logs/Sentry/artifacts and route the reconnect to the operation_runs claim owner (never random LB).",
@@ -1104,10 +1106,12 @@
         "draft.accepted"
       ],
       "depends_on": [
+        "foundation.contracts-registry",
         "foundation.db-layer",
         "foundation.observability-floor",
         "foundation.seam-external-dispatch",
-        "foundation.substrate-runtime"
+        "foundation.substrate-runtime",
+        "foundation.substrate-schema"
       ],
       "integration_point": "libs/ops/src/lint/naming.py + capability.py + services/harness accept_route.py + budget.py + CLAUDE.md (constitution); read-path redaction (redaction.py) owned by foundation.tenant-crypto-isolation, tool telemetry (telemetry.py) by foundation.observability-floor",
       "acceptance": "WHEN a transcript line carrying an injected instruction is traced to any outward side-effect and a cross-tenant accept is attempted THE SYSTEM SHALL show no side-effect reachable without a human click, treat the injection as fenced data, and refuse the cross-tenant/unauthenticated accept \u2014 while the naming lint flags any internal name in a user-visible string.",
@@ -1338,7 +1342,9 @@
       "exposes": [
         "codeintel.connect"
       ],
-      "depends_on": [],
+      "depends_on": [
+        "foundation.seam-external-dispatch"
+      ],
       "integration_point": "services/code_intel/src/code_intel/repo_provider.py (RepoProvider.perform_operation / read_file / _mint_token, Nango seam)",
       "acceptance": "WHEN a GitHub App installation completes THE SYSTEM SHALL have requested exactly {contents:read, metadata:read}, minted the token per-operation via Nango without caching or logging it, and routed every git-host op through RepoProvider.",
       "acceptance_cmd": "tests/code_intel -k 'M1 or repo_provider or nango or scope'",
@@ -1398,7 +1404,8 @@
         "codeintel.snapshot"
       ],
       "depends_on": [
-        "codeintel.connect"
+        "codeintel.connect",
+        "foundation.seam-external-dispatch"
       ],
       "integration_point": "services/code_intel/src/code_intel/cloner.py (Cloner.clone / pull_delta); paths under services/code_intel/src/code_intel/paths.py",
       "acceptance": "WHEN a repo is connected THE SYSTEM SHALL clone it blobless (above threshold) into the per-tenant encrypted volume, never execute repo code, never push to origin, and delta-pull on subsequent pushes with git blame intact.",
@@ -1539,6 +1546,7 @@
         "codeintel.graph"
       ],
       "depends_on": [
+        "codeintel.clone",
         "codeintel.exclusions"
       ],
       "integration_point": "services/code_intel/src/code_intel/graph_builder.py (GraphBuilder.build); langs.py (tree-sitter); graph.py (PageRank/adjacency); graph_store.py (per-repo SQLite); orm.py (table nodes/tiers)",
@@ -1641,7 +1649,9 @@
         "codeintel.lookup_referent"
       ],
       "depends_on": [
-        "codeintel.substrate_graph"
+        "codeintel.clone",
+        "codeintel.substrate_graph",
+        "foundation.tenant-crypto-isolation"
       ],
       "integration_point": "services/code_intel/src/code_intel/mcp_server.py (CodeIntelMCPServer + MCPServerFactory + the 8 @tool handlers); results.py result shapes; sandbox.py manifest",
       "acceptance": "WHEN the in-meeting agent calls a code_intel tool THE SYSTEM SHALL mint a fresh per-query server over the immutable graph and return file:line leads with correct honesty tags (resolved on tier-1 ORM, lower-bound elsewhere, never a silent wrong-exact), the mutable/LSP tools staying sandbox-exclusive.",
@@ -1859,6 +1869,7 @@
         "codeintel.freshness"
       ],
       "depends_on": [
+        "codeintel.clone",
         "codeintel.mcp_tools",
         "codeintel.substrate_graph"
       ],
@@ -1933,7 +1944,9 @@
         "codeintel.find_references"
       ],
       "depends_on": [
-        "codeintel.mcp_tools"
+        "codeintel.clone",
+        "codeintel.mcp_tools",
+        "codeintel.substrate_graph"
       ],
       "integration_point": "services/code_intel/src/code_intel/warm_resolver.py (PythonSymbolResolver / MultiLangResolver \u2014 references/restart); mcp_server.find_references (_probe_lsp / _grep_refs fallback)",
       "acceptance": "WHEN find_references is called THE SYSTEM SHALL resolve exact references via the warm host-side LSP tagged 'resolved', or on timeout/unsupported fall back to grep tagged 'lower-bound' (restarting a hung server), labeling uninstalled-dep references 'external-references-not-resolved' and never running in the sandbox.",
@@ -2062,7 +2075,8 @@
       "exposes": [],
       "depends_on": [
         "codeintel.clone",
-        "codeintel.mcp_tools"
+        "codeintel.mcp_tools",
+        "codeintel.substrate_graph"
       ],
       "integration_point": "services/code_intel/src/code_intel/meeting.py (MeetingSession.tool_call cache key \u2014 add tenant_id); mcp_server.CodeIntelMCPServer.for_tenant / tenant_id scoping; crypto.py per-tenant volume",
       "acceptance": "WHEN two tenants issue an identical (tool, args) call under the same meeting server THE SYSTEM SHALL return each tenant only its own result by keying the per-meeting cache on tenant_id, and no graph query or path-traversal arg SHALL ever surface another tenant's data.",
@@ -2134,7 +2148,10 @@
         "transport.join_consent",
         "transport.signal_carrier"
       ],
-      "depends_on": [],
+      "depends_on": [
+        "foundation.seam-external-dispatch",
+        "foundation.substrate-schema"
+      ],
       "integration_point": "services/transport/src/transport/join.py (JoinSession) wired into meeting_runtime harness startup; JoinSession.can_observe injected into transport/hearing.py HearingStage(can_observe=...) at wire-up",
       "acceptance": "WHEN a meeting link (or calendar invite) is handed to the harness THE SYSTEM SHALL launch a Recall bot with no host install, post+pin the consent notice as the first observable action, and open observation only after the notice posts, within 10s.",
       "acceptance_cmd": "tests/doc02/test_m1_join.py tests/doc02/test_m1_invite_launches_real_bot.py",
@@ -2205,6 +2222,7 @@
         "transport.meeting_end"
       ],
       "depends_on": [
+        "foundation.substrate-schema",
         "transport.join-consent"
       ],
       "integration_point": "services/transport/src/transport/events.py (WebhookProcessor) drained by the meeting_runtime harness webhook endpoint over libs/db webhook_events",
@@ -2429,6 +2447,8 @@
         "transport.speaking"
       ],
       "depends_on": [
+        "foundation.agentchunk-behavior",
+        "foundation.seam-external-dispatch",
         "transport.turn-barge-in"
       ],
       "integration_point": "services/transport/src/transport/speak.py (SpeakOrchestrator) composing transport/turn.py TurnController; post_copy wired to the chat broadcast channel by the harness",
@@ -2503,6 +2523,7 @@
         "transport.channel_report"
       ],
       "depends_on": [
+        "foundation.seam-external-dispatch",
         "transport.join-consent"
       ],
       "integration_point": "services/transport/src/transport/chat.py (ChatChannel) wired to Doc 04 ask_sink + Doc 04/06 degrade_hook by the harness; broadcast seam feeds SpeakOrchestrator.post_copy",
@@ -2571,6 +2592,7 @@
         "transport.show_screen"
       ],
       "depends_on": [
+        "transport.join-consent",
         "transport.speak"
       ],
       "integration_point": "services/transport/src/transport/canvas.py (CanvasSurface / CanvasRegistry) streaming via the OutputMediaSink; Doc 08 renders the frame descriptors into pixels",
@@ -2648,6 +2670,7 @@
         "transport.channel_report"
       ],
       "depends_on": [
+        "foundation.substrate-schema",
         "transport.events-roster",
         "transport.hear-transcript",
         "transport.speak"
@@ -2737,11 +2760,13 @@
         "transport.channel_report"
       ],
       "depends_on": [
+        "foundation.seam-external-dispatch",
         "transport.canvas",
         "transport.chat",
         "transport.events-roster",
         "transport.failure",
         "transport.hear-transcript",
+        "transport.join-consent",
         "transport.speak",
         "transport.turn-barge-in"
       ],
@@ -2821,6 +2846,8 @@
         "transport.show_screen"
       ],
       "depends_on": [
+        "foundation.agentchunk-behavior",
+        "foundation.seam-external-dispatch",
         "transport.canvas",
         "transport.chat",
         "transport.seam-carrier",
@@ -2907,7 +2934,10 @@
       "exposes": [
         "scribe.windows"
       ],
-      "depends_on": [],
+      "depends_on": [
+        "transport.chat",
+        "transport.hear-transcript"
+      ],
       "integration_point": "services/scribe/src/scribe/coalescer.py \u2014 fed by services/harness/src/harness/scribe_runtime.py:_pump_transcripts (carrier.subscribe \u2192 coalescer.feed \u2192 asyncio.Queue)",
       "acceptance": "WHEN the Doc 02 transcript stream delivers speaker turns, pauses, an over-cap run, same-span chat, and silence THE SYSTEM SHALL emit exactly one correctly-attributed, in-order window per natural boundary (turn/pause/cap), fold same-span chat into its window, and emit nothing during silence \u2014 within the 45s/1,200-token cap.",
       "acceptance_cmd": "services/scribe/tests -k coalescer",
@@ -2959,7 +2989,8 @@
         "scribe.windows"
       ],
       "depends_on": [
-        "scribe.coalescer"
+        "scribe.coalescer",
+        "transport.chat"
       ],
       "integration_point": "services/harness/src/harness/scribe_runtime.py:_pump_transcripts (ChatMessage branch: ts_s = pending.start_s or 0.0; coalescer.push_chat) + coalescer.drain_trailing_chat sweep on MeetingEnd",
       "acceptance": "WHEN a transport ChatMessage (no timestamp field) arrives mid-stream or after the last window THE SYSTEM SHALL synthesize a ts_s from the current stream position and fold the chat into the covering window (or sweep it onto the last window at flush) \u2014 never dropped, never mis-ordered against interleaved transcript words.",
@@ -3166,6 +3197,7 @@
         "scribe.delta"
       ],
       "depends_on": [
+        "foundation.seam-external-dispatch",
         "scribe.prefix-tool",
         "scribe.schema"
       ],
@@ -3275,6 +3307,7 @@
         "scribe.notes_object"
       ],
       "depends_on": [
+        "foundation.substrate-schema",
         "scribe.call-parse",
         "scribe.coalescer"
       ],
@@ -3398,6 +3431,7 @@
       ],
       "exposes": [],
       "depends_on": [
+        "foundation.seam-external-dispatch",
         "scribe.call-parse",
         "scribe.pipeline-apply"
       ],
@@ -3460,6 +3494,7 @@
       ],
       "exposes": [],
       "depends_on": [
+        "codeintel.mcp_tools",
         "scribe.pipeline-apply"
       ],
       "integration_point": "services/scribe/src/scribe/referent.py (lookup_referent, ReferentCorpus); bound into the applier at harness scribe_runtime.build_real_seams._bind_referents / _canonical_row",
@@ -3520,6 +3555,7 @@
         "scribe.material_events"
       ],
       "depends_on": [
+        "foundation.contracts-registry",
         "scribe.pipeline-apply"
       ],
       "integration_point": "services/scribe/src/scribe/events.py (material-change emit, MaterialChangeKind, deterministic chat-record formatter); consumed by Doc 04 orchestrator",
@@ -3672,6 +3708,7 @@
         "scribe.notes_object"
       ],
       "depends_on": [
+        "foundation.substrate-schema",
         "scribe.pipeline-apply"
       ],
       "integration_point": "services/scribe/src/scribe/notes_artifact.py (write_finalized_notes, NotesGenerationConflictError, list/read_notes_version); note_deltas/transcript_segments repos in libs/db; reap_orphaned_meetings on harness boot",
@@ -3744,6 +3781,7 @@
         "notes.finalized"
       ],
       "depends_on": [
+        "foundation.tenant-crypto-isolation",
         "scribe.pipeline-apply",
         "scribe.store"
       ],
@@ -3815,6 +3853,7 @@
         "scribe.cost"
       ],
       "depends_on": [
+        "foundation.substrate-schema",
         "scribe.call-parse"
       ],
       "integration_point": "services/scribe/src/scribe/cost.py (record_scribe_cost / record_scribe_cost_from_usage, Haiku rate card, cache-split UPSERT); fed to Doc 04 check_meeting_budget; bound via harness scribe_runtime.build_real_seams._on_usage",
@@ -3909,9 +3948,13 @@
         "notes.finalized"
       ],
       "depends_on": [
+        "foundation.seam-external-dispatch",
+        "foundation.substrate-schema",
         "scribe.cost-telemetry",
         "scribe.cross-service-reader",
-        "scribe.store"
+        "scribe.pipeline-apply",
+        "scribe.store",
+        "transport.events-roster"
       ],
       "integration_point": "services/scribe/src/scribe/close.py (run_close_pass, reduce_close, fetch_gap_pending_spans, anthropic_structured_caller); wired by services/harness/src/harness/scribe_runtime.py:run_meeting_close (the ONE production caller) on the meeting-end path",
       "acceptance": "WHEN Doc 02 signals meeting-end THE SYSTEM SHALL run one Sonnet generateStructured pass reducing the folded ledger + only the gap/pending backfill into the final notes, then render markdown \u2192 GCS create-only (if_generation_match=0) \u2192 post the chat link \u2192 tear down, in that order, on a single meeting-close operation_runs row.",
@@ -3959,7 +4002,10 @@
       "exposes": [
         "workroom.isolation_triad"
       ],
-      "depends_on": [],
+      "depends_on": [
+        "foundation.ci-guards",
+        "foundation.config-secrets"
+      ],
       "integration_point": "services/workroom/src/workroom/agent_config.py \u2014 delete the read-only-tools stub; rebuild as workroom_options()/SDK_LOCAL_TOOLS feeding every query() call site",
       "acceptance": "WHEN a Workroom query() is constructed THE SYSTEM SHALL apply strict_mcp_config=True + setting_sources=[] + a computed built-in allow-list of [] + the SDK_LOCAL_TOOLS block-list so no host built-in and no discovered connector is reachable",
       "acceptance_cmd": "services/workroom/tests -k isolation_triad",
@@ -4008,7 +4054,9 @@
       "exposes": [
         "workroom.sandbox"
       ],
-      "depends_on": [],
+      "depends_on": [
+        "foundation.substrate-runtime"
+      ],
       "integration_point": "libs/ops/src/ops/sandbox_provider.py (provision/destroy/health_check/pre_provision) + libs/ops/src/ops/sandbox.py (provision_sandbox per-sandbox secret) \u2014 mounted by the Workroom session wiring",
       "acceptance": "WHEN a meeting is created THE SYSTEM SHALL pre-provision exactly one sandbox with a freshly-minted distinct HS256 secret and never draw from a warm idle pool nor cold-boot mid-meeting",
       "acceptance_cmd": "libs/ops/tests -k sandbox_provider or sandbox_provision",
@@ -4198,6 +4246,8 @@
         "workroom.disposition"
       ],
       "depends_on": [
+        "codeintel.mcp_tools",
+        "foundation.config-secrets",
         "workroom.sandbox-tools",
         "workroom.sdk-isolation-triad"
       ],
@@ -4253,6 +4303,10 @@
         "workroom.session"
       ],
       "depends_on": [
+        "codeintel.clone",
+        "foundation.config-secrets",
+        "foundation.contracts-registry",
+        "foundation.substrate-schema",
         "workroom.disposition-prompt",
         "workroom.sandbox-tools"
       ],
@@ -4300,6 +4354,7 @@
         "workroom.envelope"
       ],
       "depends_on": [
+        "foundation.agentchunk-behavior",
         "workroom.session-per-task"
       ],
       "integration_point": "services/workroom/src/workroom/envelope.py \u2014 build contracts.Envelope from the query() result + emit ProgressEvent at each tool boundary; returned to Doc 04's bundle_dispatch",
@@ -4352,7 +4407,11 @@
         "workroom.plan"
       ],
       "depends_on": [
-        "workroom.envelope"
+        "codeintel.mcp_tools",
+        "foundation.config-secrets",
+        "foundation.tenant-crypto-isolation",
+        "workroom.envelope",
+        "workroom.session-per-task"
       ],
       "integration_point": "services/workroom/src/workroom/big_build.py \u2014 the plan turn + plan persistence + the fresh-context plan critic",
       "acceptance": "WHEN the engine judges a task large THE SYSTEM SHALL produce a repo-persisted AC-tagged multi-file plan (files/done-when/verify/order), post it to chat, and run a fresh-context critic that can amend it",
@@ -4404,7 +4463,10 @@
         "workroom.build_result"
       ],
       "depends_on": [
-        "workroom.plan-step"
+        "foundation.agentchunk-behavior",
+        "foundation.config-secrets",
+        "workroom.plan-step",
+        "workroom.sandbox-tools"
       ],
       "integration_point": "services/workroom/src/workroom/big_build.py \u2014 the resumed-session subtask executor (checkpoint \u2192 git read-back \u2192 publish-or-fail)",
       "acceptance": "WHEN a large build runs THE SYSTEM SHALL execute subtasks sequentially in one resumed session, each git-committed + read back from git + published-or-failed, marking done ONLY off the read-back git commits",
@@ -4453,6 +4515,9 @@
       ],
       "exposes": [],
       "depends_on": [
+        "foundation.config-secrets",
+        "transport.chat",
+        "workroom.plan-step",
         "workroom.sequential-build"
       ],
       "integration_point": "services/workroom/src/workroom/big_build.py \u2014 the gated-replan turn + correction-into-plan rewrite + no-progress detector",
@@ -4504,6 +4569,8 @@
         "workroom.verify_gate"
       ],
       "depends_on": [
+        "codeintel.mcp_tools",
+        "foundation.config-secrets",
         "workroom.sandbox-receipts",
         "workroom.sequential-build"
       ],
@@ -4559,6 +4626,8 @@
         "draft.accepted"
       ],
       "depends_on": [
+        "codeintel.clone",
+        "foundation.substrate-schema",
         "workroom.disposition-prompt",
         "workroom.verify-gate"
       ],
@@ -4609,6 +4678,7 @@
       ],
       "exposes": [],
       "depends_on": [
+        "foundation.substrate-schema",
         "workroom.propose-change"
       ],
       "integration_point": "services/workroom/src/workroom/objectstore.py (put/get durable store) + services/workroom/src/workroom/drafts.py (accept_draft / accept_code_change_draft)",
@@ -4655,6 +4725,7 @@
       ],
       "exposes": [],
       "depends_on": [
+        "foundation.substrate-schema",
         "workroom.envelope"
       ],
       "integration_point": "services/workroom/src/workroom/recovery.py \u2014 should_restart / recover_task over operation_runs (operation_type='workroom:<id>')",
@@ -4702,6 +4773,8 @@
       ],
       "exposes": [],
       "depends_on": [
+        "foundation.contracts-registry",
+        "foundation.substrate-runtime",
         "workroom.session-per-task"
       ],
       "integration_point": "services/workroom/src/workroom/session.py \u2014 persist the SDK session id + call the imported resume_with_fallback(session_id, history_fn=rebuild_from_bundle); wire the imported AbortRegistry",
@@ -4750,6 +4823,8 @@
       ],
       "exposes": [],
       "depends_on": [
+        "foundation.config-secrets",
+        "transport.hear-transcript",
         "workroom.propose-change",
         "workroom.sdk-isolation-triad"
       ],
@@ -4803,6 +4878,8 @@
       ],
       "exposes": [],
       "depends_on": [
+        "foundation.config-secrets",
+        "foundation.substrate-schema",
         "workroom.sandbox-provision-verify",
         "workroom.session-per-task"
       ],
@@ -4855,7 +4932,11 @@
       "exposes": [
         "orchestrator.provider_seam"
       ],
-      "depends_on": [],
+      "depends_on": [
+        "foundation.agentchunk-behavior",
+        "foundation.ci-guards",
+        "foundation.config-secrets"
+      ],
       "integration_point": "new services/harness/src/harness/provider.py (the Claude AgentProvider + pick_provider) feeding libs/agentkit BehaviorRunner",
       "acceptance": "WHEN a synthetic Claude SDK stream is fed through the Claude provider THE SYSTEM SHALL yield normalized AgentChunk variants with correct metadata and log [CRITICAL] if a non-MCP built-in tool fires in sandbox mode.",
       "acceptance_cmd": "services/harness/tests -k provider_seam or agentchunk_mapping",
@@ -4901,6 +4982,7 @@
         "agentkit.stream_deltas"
       ],
       "depends_on": [
+        "foundation.agentchunk-behavior",
         "orchestrator.provider-seam"
       ],
       "integration_point": "libs/agentkit/src/agentkit/deltas.py (verified as the sole delta site consumed by execution.py)",
@@ -4949,6 +5031,9 @@
         "agentkit.BehaviorRunner"
       ],
       "depends_on": [
+        "foundation.agentchunk-behavior",
+        "foundation.config-secrets",
+        "foundation.substrate-schema",
         "orchestrator.provider-seam",
         "orchestrator.stream-deltas-verify"
       ],
@@ -5000,6 +5085,9 @@
         "orchestrator.behaviors"
       ],
       "depends_on": [
+        "codeintel.mcp_tools",
+        "foundation.agentchunk-behavior",
+        "foundation.config-secrets",
         "orchestrator.behavior-runner"
       ],
       "integration_point": "new services/harness/src/harness/behaviors/ (answer_question.py, catchup.py, surface_risk.py, propose_action.py, __init__.py) + a build-time manifest emitter",
@@ -5049,7 +5137,8 @@
         "agentkit.wake_cache"
       ],
       "depends_on": [
-        "orchestrator.behavior-runner"
+        "orchestrator.behavior-runner",
+        "scribe.pipeline-apply"
       ],
       "integration_point": "libs/agentkit/src/agentkit/wake_cache.py (verified against the harness wake-turn assembly)",
       "acceptance": "WHEN the wake prefix is built THE SYSTEM SHALL place a 1-hour-TTL cache_control breakpoint at the end of the stable prefix with the volatile event tail after it.",
@@ -5098,8 +5187,11 @@
         "orchestrator.wake_turn"
       ],
       "depends_on": [
+        "foundation.agentchunk-behavior",
         "orchestrator.behaviors-dir",
-        "orchestrator.wake-cache-verify"
+        "orchestrator.provider-seam",
+        "orchestrator.wake-cache-verify",
+        "scribe.pipeline-apply"
       ],
       "integration_point": "services/harness/src/harness/wake.py + services/harness/src/harness/orchestrator.py (rebuilt from placeholder fa\u00e7ades to the real seam-driven wake turn)",
       "acceptance": "WHEN a wake event + state digest is delivered THE SYSTEM SHALL take one agent turn that emits tool calls chosen entirely by model judgment, with the transcript treated as untrusted data and no situation-conditional code branch.",
@@ -5147,7 +5239,10 @@
         "orchestrator.name_gate"
       ],
       "depends_on": [
-        "orchestrator.wake-turn"
+        "orchestrator.provider-seam",
+        "orchestrator.wake-turn",
+        "transport.chat",
+        "transport.hear-transcript"
       ],
       "integration_point": "new services/harness/src/harness/name_gate.py (subscribed to the SignalCarrier transcript/chat feeds)",
       "acceptance": "WHEN 'Proxy, would renaming chargeCard break anything?' is spoken THE SYSTEM SHALL confirm the address via one disambiguation call and wake Proxy; WHEN 'the proxy server config' is spoken THE SYSTEM SHALL NOT wake.",
@@ -5194,7 +5289,9 @@
         "orchestrator.ack_reflex"
       ],
       "depends_on": [
-        "orchestrator.name-gate"
+        "orchestrator.name-gate",
+        "transport.speak",
+        "transport.turn-barge-in"
       ],
       "integration_point": "new services/harness/src/harness/reflex.py (ack + boundary gating + barge-in abort, driven by the SignalCarrier boundary/barge-in signals)",
       "acceptance": "WHEN a confirmed address lands THE SYSTEM SHALL emit the canned 'on it' ack within 0.5s (FIFO-honest if busy) without a model turn; WHEN a human starts speaking THE SYSTEM SHALL stop Proxy's voice within 200ms.",
@@ -5245,7 +5342,10 @@
         "orchestrator.direct_answer"
       ],
       "depends_on": [
-        "orchestrator.wake-turn"
+        "codeintel.mcp_tools",
+        "orchestrator.behaviors-dir",
+        "orchestrator.wake-turn",
+        "transport.speak"
       ],
       "integration_point": "services/harness/src/harness/direct_answer.py (the host-side re-export of code_intel.direct_answer, mounted into the answer-question wake turn)",
       "acceptance": "WHEN a simple grounded lookup is addressed to Proxy THE SYSTEM SHALL answer it in the wake turn via the host-side code_intel API with a cited file:line, no E2B and no workroom, within the shallow SLO.",
@@ -5301,7 +5401,13 @@
         "contracts.Bundle"
       ],
       "depends_on": [
-        "orchestrator.direct-answer-path"
+        "foundation.substrate-schema",
+        "orchestrator.direct-answer-path",
+        "orchestrator.wake-turn",
+        "transport.canvas",
+        "transport.chat",
+        "transport.speak",
+        "workroom.envelope"
       ],
       "integration_point": "new services/harness/src/harness/dispatch.py (bundle assembly + asyncio.create_task done-callback re-wake, invoked by the wake turn's dispatch_workroom tool)",
       "acceptance": "WHEN real work is asked THE SYSTEM SHALL assemble a Bundle with a notes_ref (never the notes object) and a task_id, dispatch it as an asyncio task, and re-wake Proxy on the Envelope's completion callback to present the result.",
@@ -5358,8 +5464,16 @@
         "orchestrator.run_loop"
       ],
       "depends_on": [
+        "foundation.substrate-runtime",
+        "foundation.substrate-schema",
         "orchestrator.ack-reflex",
-        "orchestrator.bundle-dispatch"
+        "orchestrator.bundle-dispatch",
+        "orchestrator.wake-turn",
+        "scribe.event-emitter",
+        "transport.chat",
+        "transport.events-roster",
+        "transport.join-consent",
+        "transport.turn-barge-in"
       ],
       "integration_point": "new services/harness/src/harness/run_loop.py wired into services/harness/src/harness/meeting_runtime.py (the per-meeting assembly)",
       "acceptance": "WHEN any signal (ask/workroom-done/heartbeat/boundary/control/cost/anomaly) arrives THE SYSTEM SHALL enqueue it and route it through the loop to a wake turn or reflex, with standing pipes forwarding continuously and every side-effect gated on is_owner \u2014 no bus, no per-event code branch.",
@@ -5412,7 +5526,10 @@
         "scribe.note_deltas"
       ],
       "depends_on": [
-        "orchestrator.run-loop"
+        "orchestrator.run-loop",
+        "scribe.event-emitter",
+        "transport.hear-transcript",
+        "transport.join-consent"
       ],
       "integration_point": "services/harness/src/harness/scribe_runtime.py + services/harness/src/harness/stt.py (join-time pipe wiring, driven from webhooks.py in_call/call_ended)",
       "acceptance": "WHEN a bot enters the room (Recall in_call) THE SYSTEM SHALL wire the standing pipes as pure forwarding and start the Scribe serial consumer, and keep STT credentials fresh on an in-process interval \u2014 all with zero agent calls.",
@@ -5461,8 +5578,13 @@
       ],
       "exposes": [],
       "depends_on": [
+        "foundation.substrate-runtime",
+        "orchestrator.bundle-dispatch",
         "orchestrator.run-loop",
-        "orchestrator.standing-pipes"
+        "orchestrator.standing-pipes",
+        "orchestrator.wake-turn",
+        "scribe.pipeline-apply",
+        "transport.join-consent"
       ],
       "integration_point": "services/harness/src/harness/meeting_runtime.py \u2014 the per-meeting asyncio entry that assembles + runs the runtime",
       "acceptance": "WHEN a Recall in_call webhook arrives THE SYSTEM SHALL atomically claim the meeting, assemble + wire the per-meeting harness once, and run the asyncio event loop to close",
@@ -5515,6 +5637,9 @@
         "ops.affinity"
       ],
       "depends_on": [
+        "foundation.observability-floor",
+        "foundation.substrate-runtime",
+        "foundation.substrate-schema",
         "orchestrator.run-loop"
       ],
       "integration_point": "libs/ops/src/ops/claim.py + libs/ops/src/ops/affinity.py (verified against the harness join/reclaim path)",
@@ -5566,6 +5691,8 @@
         "orchestrator.close"
       ],
       "depends_on": [
+        "foundation.substrate-runtime",
+        "foundation.substrate-schema",
         "orchestrator.claim-fence-affinity-verify"
       ],
       "integration_point": "services/harness/src/harness/heartbeat.py (demoted to auxiliary) + services/harness/src/harness/recovery.py, over libs/ops/operation_run.py as the fence",
@@ -5619,7 +5746,12 @@
         "ops.resume_with_fallback"
       ],
       "depends_on": [
-        "orchestrator.heartbeat-fence"
+        "foundation.agentchunk-behavior",
+        "foundation.substrate-runtime",
+        "foundation.substrate-schema",
+        "orchestrator.heartbeat-fence",
+        "orchestrator.provider-seam",
+        "scribe.event-emitter"
       ],
       "integration_point": "libs/agentkit/src/agentkit/resume.py (pin the 6-arg signature) + services/harness/src/harness/session.py wiring (session_id persist/resume + transcript-plane history_fn)",
       "acceptance": "WHEN a wake lands on a different instance after a recycle and resume fails with a stale-session marker THE SYSTEM SHALL rebuild from Doc 03's transcript plane, emit a 'session restored' notice, and retry without resume \u2014 never silent amnesia, never resurrecting an aborted build.",
@@ -5670,7 +5802,12 @@
         "orchestrator.cost_breaker"
       ],
       "depends_on": [
-        "orchestrator.session-durability"
+        "foundation.agentchunk-behavior",
+        "foundation.db-layer",
+        "foundation.substrate-schema",
+        "orchestrator.bundle-dispatch",
+        "orchestrator.session-durability",
+        "scribe.cost-telemetry"
       ],
       "integration_point": "libs/ops/src/ops/cost.py (replace the $1.5/$3.0 constants with 0.8/1.0 \u00d7 projected-hours) wired into services/harness/src/harness/budget.py",
       "acceptance": "WHEN listening spend crosses 0.8 \u00d7 projected-hours THE SYSTEM SHALL degrade (Orchestrator\u2192Haiku, widen Scribe, proactive off) with a spoken disclosure, and at 1.0 \u00d7 projected-hours go notes-only \u2014 reading the persisted meter that survives a recycle, never a silent cliff.",
@@ -5720,7 +5857,9 @@
         "ops.AbortRegistry"
       ],
       "depends_on": [
-        "orchestrator.cost-circuit-breaker"
+        "foundation.substrate-runtime",
+        "orchestrator.cost-circuit-breaker",
+        "transport.turn-barge-in"
       ],
       "integration_point": "libs/agentkit/src/agentkit/abort.py (verified against the harness wake/dispatch/close abort wiring)",
       "acceptance": "WHEN 'Proxy, quiet' or meeting-end fires THE SYSTEM SHALL abort the addressed (or all) in-flight model loops finally, so no aborted build is ever resurrected by resume or JSON-retry.",
@@ -5769,6 +5908,8 @@
         "ops.sandbox_provider"
       ],
       "depends_on": [
+        "foundation.substrate-runtime",
+        "foundation.substrate-schema",
         "orchestrator.abort-discipline-verify"
       ],
       "integration_point": "libs/ops/src/ops/reconcile.py + libs/ops/src/ops/sandbox_provider.py + libs/ops/src/ops/sandbox.py, entrypoint services/harness/src/control_plane/internal.py",
@@ -5824,7 +5965,10 @@
         "draft.accepted"
       ],
       "depends_on": [
-        "orchestrator.reconcile-sandbox-verify"
+        "foundation.substrate-schema",
+        "orchestrator.reconcile-sandbox-verify",
+        "scribe.pipeline-apply",
+        "transport.chat"
       ],
       "integration_point": "services/harness/src/harness/accept_route.py + services/harness/src/control_plane/accept.py + services/harness/src/control_plane/authz.py (the POST /m/{id}/drafts/{id}/accept route)",
       "acceptance": "WHEN a tenant member accepts a persisted core notes-edit draft THE SYSTEM SHALL apply the notes edit and flip the row to applied idempotently; WHEN the draft is a code-change THE SYSTEM SHALL record approval and expose the bundle without pushing; a cross-tenant or bad-CSRF accept SHALL be rejected.",
@@ -5883,7 +6027,14 @@
         "notes.finalized"
       ],
       "depends_on": [
-        "orchestrator.accept-handler"
+        "foundation.substrate-runtime",
+        "foundation.substrate-schema",
+        "orchestrator.accept-handler",
+        "orchestrator.heartbeat-fence",
+        "orchestrator.run-loop",
+        "scribe.close-pass",
+        "transport.chat",
+        "transport.events-roster"
       ],
       "integration_point": "services/harness/src/harness/close.py wired into the run loop's meeting-end path (meeting_runtime aclose)",
       "acceptance": "WHEN the meeting-end signal arrives THE SYSTEM SHALL run the ordered close as a meeting-close operation_runs row (idempotent, predicate=notes.md exists) \u2014 freeze, close pass, destroy sandbox, complete the harness row, tear down pipes last \u2014 leaving the notes posted and staged drafts durable.",
@@ -5941,7 +6092,11 @@
         "meeting_home.rendered"
       ],
       "depends_on": [
-        "orchestrator.ordered-close"
+        "foundation.config-secrets",
+        "foundation.seam-external-dispatch",
+        "foundation.substrate-schema",
+        "orchestrator.ordered-close",
+        "transport.join-consent"
       ],
       "integration_point": "services/harness/src/harness/{server.py,settings.py,emit.py,meetings.py,webhooks.py,__init__.py} + services/harness/src/control_plane/{app.py,webhooks.py,__init__.py}",
       "acceptance": "WHEN the harness boots THE SYSTEM SHALL run the ordered fail-fast lifecycle (routers after the reaper) and crash at boot on a missing hard-gate key; WHEN a harness is fenced out THE SYSTEM SHALL let no EMIT_FRONTIER verb reach the wire; WHEN a Recall webhook lands THE SYSTEM SHALL durably persist then 200 then drain idempotently.",
@@ -6085,7 +6240,8 @@
         "experience.render_frames"
       ],
       "depends_on": [
-        "experience.contract-registry"
+        "experience.contract-registry",
+        "foundation.contracts-registry"
       ],
       "integration_point": "libs/contracts/src/contracts/channel.py (new module imported by libs.contracts __init__ so subclass registration fires)",
       "acceptance": "WHEN a ChannelAction is validated with a non-UUID meeting_id, an arg over 2000 chars, or a surface/action outside the closed Literal THE SYSTEM SHALL raise a ValidationError before any handler or DB lookup runs.",
@@ -6133,7 +6289,8 @@
         "experience.ui_manifest"
       ],
       "depends_on": [
-        "experience.contract-registry"
+        "experience.contract-registry",
+        "foundation.contracts-registry"
       ],
       "integration_point": "libs/contracts/src/contracts/capabilities.py (typed source) + a build step that writes the UI label manifest consumed by apps/connect + apps/tile",
       "acceptance": "WHEN the UI manifest is generated from CAPABILITIES THE SYSTEM SHALL emit only {id,label,output,surfaces} per capability and never a service: or backend renderer field, and no runtime GET /capabilities endpoint SHALL exist.",
@@ -6234,7 +6391,8 @@
       ],
       "depends_on": [
         "experience.capabilities-catalog",
-        "experience.pydantic-channel-actions"
+        "experience.pydantic-channel-actions",
+        "foundation.substrate-schema"
       ],
       "integration_point": "libs/http/src/http/dispatch.py (rebuild the funnel) + libs/http/src/http/gateway.py (new: authorize_upgrade before the 101) + libs/http/src/http/handlers/channel_action.py (new: the one inbound handler)",
       "acceptance": "WHEN an inbound channel_action carries a foreign/absent meeting_id, an unregistered type, an oversized body, or a smuggled entity id THE SYSTEM SHALL refuse with a generic error and route nothing, and WHEN it is well-formed and owned THE SYSTEM SHALL validate-once, isolate, then invoke exactly one handler.",
@@ -6288,7 +6446,9 @@
         "experience.projector"
       ],
       "depends_on": [
-        "experience.pydantic-channel-actions"
+        "experience.pydantic-channel-actions",
+        "foundation.agentchunk-behavior",
+        "transport.canvas"
       ],
       "integration_point": "services/transport/src/transport/projector.py (new) + services/transport/src/transport/carrier.py (drive the projector over the delta stream)",
       "acceptance": "WHEN the projector receives a delta-stream AgentChunk THE SYSTEM SHALL emit a registered render frame ONLY for a TOOL_USE (delivery\u2192channel frame, work\u2192tile line) or a structured TOOL_RESULT (canvas), forward chunk.text as-is without re-accumulation, and project nothing for raw TEXT.",
@@ -6387,7 +6547,8 @@
       ],
       "exposes": [],
       "depends_on": [
-        "experience.http-registry"
+        "experience.http-registry",
+        "foundation.substrate-schema"
       ],
       "integration_point": "libs/http/src/http/webhook.py (new verifier) wired into services/harness/src/control_plane/webhooks.py (before the durable INSERT)",
       "acceptance": "WHEN a POST /webhooks/recall arrives with a missing or mismatched x-recall-signature THE SYSTEM SHALL reject it 401 via constant-time compare before any row lands, and WHEN the signature is valid THE SYSTEM SHALL proceed to the durable insert-then-200 intake.",
@@ -6478,6 +6639,7 @@
         "connect.rendered"
       ],
       "depends_on": [
+        "codeintel.coverage_readiness",
         "experience.capabilities-catalog",
         "experience.http-registry"
       ],
@@ -6528,7 +6690,10 @@
       "exposes": [
         "experience.notes_template"
       ],
-      "depends_on": [],
+      "depends_on": [
+        "foundation.tenant-crypto-isolation",
+        "scribe.pipeline-apply"
+      ],
       "integration_point": "services/scribe/src/scribe/close.py (extend render_markdown to the \u00a72.6 structure) \u2014 rendered by the /m/{meeting_id} home",
       "acceptance": "WHEN the notes object is rendered THE SYSTEM SHALL produce the exact \u00a72.6 structure including attendees, a worst-news-first five-line summary, decisions with the moment they landed, a 'what Proxy did' section with per-item receipts, and a raw-transcript pointer.",
       "acceptance_cmd": "services/scribe -k 'notes_template or notes_structure or worst_news_first or what_proxy_did or attendees'",
@@ -6582,7 +6747,9 @@
       "depends_on": [
         "experience.capability-token-read",
         "experience.http-registry",
-        "experience.notes-file-template"
+        "experience.notes-file-template",
+        "foundation.substrate-schema",
+        "foundation.tenant-crypto-isolation"
       ],
       "integration_point": "services/harness/src/control_plane/meeting_home.py (new: GET /m/{meeting_id}) + apps/connect (the /m/ page) \u2014 mounted on control_plane/app.py",
       "acceptance": "WHEN a signed-in tenant member opens GET /m/{meeting_id} THE SYSTEM SHALL render the \u00a72.6 notes + that meeting's staged-draft cards; WHEN a capability token is presented THE SYSTEM SHALL render notes only with no drafts; WHEN neither authorizes the meeting THE SYSTEM SHALL return Not found.",
@@ -6639,7 +6806,10 @@
         "draft.accepted"
       ],
       "depends_on": [
-        "experience.meeting-home-page"
+        "experience.http-registry",
+        "experience.meeting-home-page",
+        "foundation.substrate-schema",
+        "orchestrator.accept-handler"
       ],
       "integration_point": "services/harness/src/control_plane/accept.py (fix into the two protected routes) + services/harness/src/control_plane/meeting_home.py \u2014 mounted on control_plane/app.py",
       "acceptance": "WHEN a tenant member POSTs a valid CSRF accept for a draft in their meeting THE SYSTEM SHALL idempotently apply via Doc 04's accept handler and audit it; WHEN the request lacks CSRF, crosses a tenant, or presents a capability token THE SYSTEM SHALL refuse.",
@@ -6691,7 +6861,9 @@
         "experience.tile"
       ],
       "depends_on": [
-        "experience.channel-projector"
+        "experience.channel-projector",
+        "experience.pydantic-channel-actions",
+        "transport.canvas"
       ],
       "integration_point": "apps/tile/* (Vite canvas app) \u2014 rendered into the call via Doc 02's Output Media; consumes tile.state render frames over the meeting-scoped render WS",
       "acceptance": "WHEN a system event fires (session live, name detected, progress envelope, turn boundary, mute/speaking) THE SYSTEM SHALL drive the corresponding \u00a72.2 tile state, carry its substance in speech/chat too, and render no state that lacks a real driving event.",
@@ -6742,7 +6914,10 @@
       ],
       "exposes": [],
       "depends_on": [
-        "experience.channel-projector"
+        "experience.channel-projector",
+        "experience.pydantic-channel-actions",
+        "foundation.agentchunk-behavior",
+        "scribe.pipeline-apply"
       ],
       "integration_point": "services/transport/src/transport/chat.py (formatters) + a harness formatter keyed on committed note_deltas \u2014 emits NoteLine/DraftCard frames via the projector",
       "acceptance": "WHEN a note_delta is committed THE SYSTEM SHALL deterministically emit the matching decision/action chat line (honoring the session disable, never a wake), and WHEN a staged draft or a cross-time contradiction is present THE SYSTEM SHALL render the draft card (with the /m/ link + Envelope.draft_id) or the reconciliation card.",
@@ -6793,7 +6968,8 @@
       "exposes": [],
       "depends_on": [
         "experience.channel-projector",
-        "experience.pydantic-channel-actions"
+        "experience.pydantic-channel-actions",
+        "foundation.agentchunk-behavior"
       ],
       "integration_point": "libs/contracts/src/contracts/registry.py (assert_fields_consumed already present) + a CI test that populates produced/consumed from the real models",
       "acceptance": "WHEN a contract field is produced by one side and consumed by neither THE SYSTEM SHALL fail the CI build and name the orphan field (signal.field produced but never consumed).",
@@ -7248,6 +7424,7 @@
       ],
       "depends_on": [
         "experience.draft-accept-reject-routes",
+        "foundation.contracts-registry",
         "foundation.substrate-schema",
         "orchestrator.accept-handler",
         "orchestrator.bundle-dispatch",
@@ -7615,11 +7792,27 @@
         "draft.accepted"
       ],
       "depends_on": [
+        "codeintel.coverage_readiness",
+        "codeintel.mcp_tools",
+        "experience.draft-accept-reject-routes",
+        "foundation.db-layer",
+        "foundation.substrate-runtime",
+        "foundation.substrate-schema",
         "journey.s1-happy-arc",
         "journey.s2-dep-graph-blast-radius",
         "journey.s3-staged-draft-accept",
         "journey.s5-recycle-survives",
-        "journey.s7-cost-circuit-breaker"
+        "journey.s7-cost-circuit-breaker",
+        "orchestrator.accept-handler",
+        "orchestrator.bundle-dispatch",
+        "orchestrator.direct-answer-path",
+        "orchestrator.wake-turn",
+        "scribe.close-pass",
+        "transport.hear-transcript",
+        "transport.speak",
+        "workroom.envelope",
+        "workroom.propose-change",
+        "workroom.verify-gate"
       ],
       "integration_point": "tests/e2e/test_demo_arc.py driving the single continuous whole-product narrative",
       "acceptance": "WHEN the full demo arc is run as one continuous session THE SYSTEM SHALL connect\u2192ready\u2192answer two grounded questions\u2192produce a verified needs_review draft\u2192survive one recycle\u2192stay in cost envelope\u2192persist notes+draft\u2192apply a post-call human accept, with every law observed.",

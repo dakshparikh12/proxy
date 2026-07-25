@@ -1,10 +1,10 @@
 # Chain summary — the whole-product build plan (128 nodes)
 
-Completeness-verified by 4 independent fresh-context audits (lifecycle · spec+CANONICAL · 25 enterprise scenarios · deploy/operate), all closed to zero real gaps. Tier A CLOSED, 0 dead-code orphans, 72 scenarios.
+**57 verify · 13 fix · 3 rebuild · 55 build-new.** Verified by 7 fresh-context audits (spec-coverage ×3, lifecycle, enterprise scenarios ×72, deploy, integration-mechanics ×3) — all closed. Tier A CLOSED, 0 dead-code, depends_on fully explicit, 29 decisions pinned in decisions.md.
 
 
-## doc00 FOUNDATION — 18 nodes  (verify:15, fix:2, build-new:1)
-- ✅ verify · `foundation.contracts-registry` — Typed contracts + import-time closed registry
+## doc00 FOUNDATION — 18 nodes  (fix:3, verify:14, build-new:1)
+- 🔧 fix · `foundation.contracts-registry` — Typed contracts + import-time closed registry
 - ✅ verify · `foundation.agentchunk-behavior` — AgentChunk union + stream_deltas + BehaviorRunner + never-throw tools
 - ✅ verify · `foundation.repo-structure` — uv-workspace monorepo skeleton (src-layout, three deployables shape)
 - ✅ verify · `foundation.substrate-schema` — The broker-free durable substrate — schema (operation_runs, cost, drafts, identity, transcript)
