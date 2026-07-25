@@ -375,3 +375,38 @@ def test_sidecar_wire_contract_is_declared_for_the_deploy_bake() -> None:
     }
     # The Node sidecar is baked into the E2B template — a deploy residual, not a Python port.
     assert c["runtime"] == "node" and c["deploy_artifact"] is True
+
+
+# ── the integration seam: advertised MCP tools ↔ wire contract ↔ real handlers ──
+
+
+def test_advertised_tools_wire_contract_and_handlers_are_in_lockstep() -> None:
+    """THE integration proof (workroom.sandbox-tools ↔ workroom.sandbox_transport): the
+    tools ADVERTISED to the SDK (``READ_TOOLS + WRITE_TOOLS`` as ``mcp__code__*``), the
+    ``SIDECAR_WIRE_CONTRACT["tools"]`` the deploy bake is checked against, and the ACTUAL
+    handler methods on :class:`SandboxToolset` are all the SAME exactly-8 set. No tool can
+    be advertised without a handler, baked without being advertised, or drift — one source
+    of truth (§3.5 / DoD: exactly 8 tools callable through the sidecar)."""
+    from workroom.sandbox_tools import SANDBOX_TOOL_NAMES, SandboxToolset
+    from workroom.sandbox_transport import READ_TOOLS, SIDECAR_WIRE_CONTRACT, WRITE_TOOLS
+
+    advertised = {t.removeprefix("mcp__code__") for t in (*READ_TOOLS, *WRITE_TOOLS)}
+    handlers = {n for n in SANDBOX_TOOL_NAMES if hasattr(SandboxToolset, f"_tool_{n}")}
+    assert len(SANDBOX_TOOL_NAMES) == 8, "the sandbox toolset must be EXACTLY 8 tools"
+    assert advertised == set(SANDBOX_TOOL_NAMES), "advertised MCP tools must match the 8-tool set"
+    assert set(SIDECAR_WIRE_CONTRACT["tools"]) == set(SANDBOX_TOOL_NAMES), (
+        "the sidecar wire contract's tools must match the 8-tool set (single source of truth)"
+    )
+    assert handlers == set(SANDBOX_TOOL_NAMES), "every advertised tool must have a real handler"
+
+
+def test_ast_grep_is_a_write_tool_blocked_for_readonly() -> None:
+    """``ast_grep`` is a WRITE tool (structural rewrite) → in ``WRITE_TOOLS``, advertised
+    only for the worker (readwrite) disposition and BLOCKED via ``disallowed_tools`` for a
+    read-only disposition (§3.5 / CANONICAL §11.11 — a write tool in the write partition)."""
+    from workroom.sandbox_transport import WRITE_TOOLS, get_agent_tool_config
+
+    assert "mcp__code__ast_grep" in WRITE_TOOLS
+    ro = get_agent_tool_config(_provision("m-astgrep-ro"), access="readonly")
+    assert "mcp__code__ast_grep" not in ro.allowed_tools
+    assert "mcp__code__ast_grep" in ro.disallowed_tools

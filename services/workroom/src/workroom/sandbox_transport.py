@@ -59,6 +59,11 @@ from libs.ops import sandbox_provider
 
 from .agent_config import WORKROOM_SYSTEM_PREFIX, workroom_options
 
+# The 8 tool NAMES are owned by the tool-handler module (workroom.sandbox-tools); the
+# transport imports them so the advertised MCP tools, the wire contract, and the actual
+# handlers can NEVER drift out of lockstep (a single source of truth for the 8-tool set).
+from .sandbox_tools import SANDBOX_TOOL_NAMES
+
 # ── The per-disposition curated sandbox tool subsets (§3.5 / CANONICAL §10.5) ──
 # Tool-selection accuracy degrades with every extra advertised tool, so a disposition
 # advertises a CURATED subset — never the union. The read subset is always advertised;
@@ -103,11 +108,10 @@ SIDECAR_WIRE_CONTRACT: dict[str, Any] = {
     "health": "unauth GET /health -> code_hash + clone status",
     # 8 sandbox tools: 7 core + ast_grep (§3.5). Each with symlink-aware validate_path
     # + atomic writes; run_command/write_file/edit_file/ast_grep emit host-observed
-    # receipts ({command_id, argv, exit_code, stdout_ref, artifact_hashes}).
-    "tools": [
-        "run_command", "read_file", "list_files", "write_file",
-        "edit_file", "grep", "glob", "ast_grep",
-    ],
+    # receipts ({command_id, argv, exit_code, stdout_ref, artifact_hashes}). The set is
+    # imported from the tool-handler module so the wire contract, the advertised MCP tools
+    # (READ_TOOLS + WRITE_TOOLS), and the real handlers stay in lockstep — one source.
+    "tools": list(SANDBOX_TOOL_NAMES),
     # A Node sidecar baked into the E2B template image — NOT a Python port (CANONICAL §8).
     "runtime": "node",
     "deploy_artifact": True,
