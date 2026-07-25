@@ -27,6 +27,7 @@ from scribe.pipeline import HostBudget
 from scribe.prefix import MeetingHeader
 from scribe.referent import ReferentCorpus
 
+from .run_loop import MeetingEvent, RunLoop, StandingPipe
 from .scribe_runtime import (
     CloseConfig,
     ScribeRuntimeHandle,
@@ -66,8 +67,10 @@ class MeetingRuntime:
     db: Any
     host_budget: HostBudget
     referent_corpus: ReferentCorpus | None = None
+    operation_handle: Any = None
     _scribe: ScribeRuntimeHandle | None = field(default=None, init=False)
     _hearing: Any = field(default=None, init=False)
+    _run_loop: RunLoop | None = field(default=None, init=False)
 
     def start(self) -> ScribeRuntimeHandle:
         """Launch the live notes engine on this meeting's carrier (idempotent).
@@ -105,6 +108,92 @@ class MeetingRuntime:
         if self._hearing is None:
             self.start()
         await self._hearing.ingest_wire_transcript(msg)
+
+    # ── the orchestrator run loop — THE per-meeting asyncio spine (§3.2, D-008) ──
+    @property
+    def run_loop(self) -> RunLoop | None:
+        """The per-meeting :class:`~harness.run_loop.RunLoop`, once built (§3.2)."""
+        return self._run_loop
+
+    def build_run_loop(
+        self,
+        *,
+        wake_turn: Any = None,
+        addressed: Any = None,
+        max_in_flight: int = 5,
+    ) -> RunLoop:
+        """Construct (once) this meeting's run loop — the RUN block of §3's diagram.
+
+        The loop's single delivery seam is the gated :class:`~harness.emit.Emitter`
+        bound to this meeting's ``operation_runs`` handle (§3.7 fencing): every
+        wake-turn side-effect reads ``is_owner`` live, so a fenced-out harness (a
+        replacement re-claimed the meeting) reaches the wire zero times. ``wake_turn``
+        is the ONE generic judgment entry (the model); ``addressed`` is the
+        mechanical front-gate verdict (the name-gate). Both are injectable so the
+        spine assembles before the SDK session/name-gate are wired in later steps.
+        """
+        if self._run_loop is None:
+            emitter = None
+            if self.operation_handle is not None:
+                from .emit import Emitter
+
+                emitter = Emitter(handle=self.operation_handle)
+            self._run_loop = RunLoop(
+                wake_turn=wake_turn,
+                addressed=addressed,
+                emitter=emitter,
+                max_in_flight=max_in_flight,
+            )
+        return self._run_loop
+
+    def wire_orchestrator_pipe(self) -> StandingPipe:
+        """Wire (synchronously) the transport→orchestrator standing pipe (§3.2).
+
+        Subscribing to the carrier is done HERE, synchronously, so the pipe is
+        registered as a subscriber the instant this returns — before any signal is
+        emitted. (A carrier subscription registered lazily inside the pump task
+        would miss signals that raced ahead of the task's first scheduling.) The
+        pipe forwards **every** emitted signal onto the run loop's ONE queue as a
+        :class:`~harness.run_loop.MeetingEvent` and routes each THROUGH the loop —
+        PURE forwarding, no decision, no branch, no agent (the routing IS the wake
+        turn). Builds a default (silent) loop if none was wired.
+        """
+        loop = self._run_loop if self._run_loop is not None else self.build_run_loop()
+
+        async def _route(signal: Any) -> None:
+            # The ask id keys in-flight bookkeeping (dedupe/attach, correction-inject,
+            # detach): a spoken/typed line carries one; ambient signals do not.
+            ask_id = self._ask_id_for(signal)
+            await loop.route(MeetingEvent(payload=signal, ask_id=ask_id))
+
+        # subscribe() registers this consumer's queue synchronously (no await),
+        # so the pipe is live before run_orchestrator_loop is even scheduled.
+        return StandingPipe(source=self.carrier.subscribe(), sink=_route)
+
+    async def run_orchestrator_loop(self) -> None:
+        """Run the transport→orchestrator standing pipe until the carrier closes (§3.2).
+
+        The RUN-block spine for one meeting: it wires the standing pipe (if not
+        already) and forwards carrier signals onto the run loop, routing each
+        through the loop. Runs until meeting end closes the carrier and drains the
+        subscriber. A silent meeting is just this pipe forwarding ambient signals
+        while the loop makes zero wake turns.
+        """
+        pipe = self.wire_orchestrator_pipe()
+        await pipe.run()
+
+    @staticmethod
+    def _ask_id_for(signal: Any) -> str | None:
+        """The in-flight ask id for a signal — the verbatim ask text, else None.
+
+        Pure bookkeeping (§3.15): a spoken transcript / chat line carries its words
+        as the ask identity so a duplicate of an in-flight ask attaches to it; an
+        ambient signal (boundary, speaking, roster, heartbeat) has none. This reads
+        a structural attribute — it is NOT a per-type dispatch branch (the routing
+        decision stays the front-gate verdict inside the loop).
+        """
+        words = getattr(signal, "words", None) or getattr(signal, "message", None)
+        return str(words) if isinstance(words, str) and words else None
 
     async def _drain(self) -> None:
         """Signal meeting end onto the carrier, then wait for the consumer to drain (bounded).
