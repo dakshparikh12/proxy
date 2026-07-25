@@ -696,7 +696,7 @@
     "title": "Ordered fail-fast boot lifespan + provisioner_ready + EPIPE tolerance + parallel shutdown",
     "region": "00-FOUNDATION",
     "disposition": "verify",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "00-FOUNDATION.md#6",
       "00-FOUNDATION.md#5.7"
@@ -1183,7 +1183,7 @@
     "title": "FIX: webhook_events schema drift \u2014 add provider/sha/received_at + status CHECK",
     "region": "00-FOUNDATION",
     "disposition": "fix",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "00-FOUNDATION.md#5.6",
       "CANONICAL-DECISIONS.md#12.10"
@@ -1231,7 +1231,7 @@
     "title": "BUILD-NEW: AST guard forbidding raw vendor clients outside libs/http",
     "region": "00-FOUNDATION",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "00-FOUNDATION.md#2",
       "00-FOUNDATION.md#14",

@@ -726,7 +726,7 @@
       "title": "Ordered fail-fast boot lifespan + provisioner_ready + EPIPE tolerance + parallel shutdown",
       "region": "00-FOUNDATION",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "00-FOUNDATION.md#6",
         "00-FOUNDATION.md#5.7"
@@ -1218,7 +1218,7 @@
       "title": "FIX: webhook_events schema drift \u2014 add provider/sha/received_at + status CHECK",
       "region": "00-FOUNDATION",
       "disposition": "fix",
-      "status": "built",
+      "status": "verified",
       "spec_refs": [
         "00-FOUNDATION.md#5.6",
         "CANONICAL-DECISIONS.md#12.10"
@@ -1266,7 +1266,7 @@
       "title": "BUILD-NEW: AST guard forbidding raw vendor clients outside libs/http",
       "region": "00-FOUNDATION",
       "disposition": "build-new",
-      "status": "built",
+      "status": "verified",
       "spec_refs": [
         "00-FOUNDATION.md#2",
         "00-FOUNDATION.md#14",
@@ -2051,7 +2051,7 @@
       "title": "Tenant isolation \u2014 graph + volume + tenant-scoped cache key (FIX)",
       "region": "01-CODE-INTELLIGENCE",
       "disposition": "fix",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "01-CODE-INTELLIGENCE.md#3.2",
         "01-CODE-INTELLIGENCE.md#4-security",
@@ -2107,7 +2107,7 @@
       "title": "Join + consent hard-gate + fail-closed bot resolution",
       "region": "02-VOICE-TRANSPORT",
       "disposition": "fix",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "product/v0-spec/02-VOICE-TRANSPORT.md#3.1",
         "product/v0-spec/02-VOICE-TRANSPORT.md#3.9-1",
@@ -2887,7 +2887,7 @@
       "title": "Coalescer \u2014 cut natural Scribe windows (turn/pause/cap, VAD-gated, chat-merged, serial-ordered)",
       "region": "03-MEETING-UNDERSTANDING",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "03-MEETING-UNDERSTANDING.md#3.1",
         "03-MEETING-UNDERSTANDING.md#4 (tunable defaults: window 30-60s/turn, cap 45s/~1200 tokens)"

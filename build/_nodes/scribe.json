@@ -4,7 +4,7 @@
     "title": "Coalescer \u2014 cut natural Scribe windows (turn/pause/cap, VAD-gated, chat-merged, serial-ordered)",
     "region": "03-MEETING-UNDERSTANDING",
     "disposition": "verify",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "03-MEETING-UNDERSTANDING.md#3.1",
       "03-MEETING-UNDERSTANDING.md#4 (tunable defaults: window 30-60s/turn, cap 45s/~1200 tokens)"

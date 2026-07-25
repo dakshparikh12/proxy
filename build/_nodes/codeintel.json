@@ -732,7 +732,7 @@
     "title": "Tenant isolation \u2014 graph + volume + tenant-scoped cache key (FIX)",
     "region": "01-CODE-INTELLIGENCE",
     "disposition": "fix",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "01-CODE-INTELLIGENCE.md#3.2",
       "01-CODE-INTELLIGENCE.md#4-security",
