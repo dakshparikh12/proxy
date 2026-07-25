@@ -27,11 +27,19 @@ from libs.db import Database, repos
 
 from .claim import claim_meeting
 
-# Listening-breaker cap basis — fractions of the listening baseline SLA, applied
-# to the LISTENING subset only (transport + Scribe + orch-idle), per A-006. Task
-# / E2B / Opus spend never trips this breaker.
-_LISTENING_SOFT_CAP_USD = 1.5
-_LISTENING_HARD_CAP_USD = 3.0
+# Listening-breaker cap basis (CANONICAL §12.7 / D-004): the soft/hard caps are
+# NOT fixed dollar constants — they are fractions of the meeting's PROJECTED HOURS,
+# applied to the LISTENING subset only (transport + Scribe + orch-idle), per A-006.
+# Task / E2B / Opus spend never trips this breaker. soft = 0.8 × projected-hours,
+# hard = 1.0 × projected-hours (the SLA line). projected-hours (D-013) is computed
+# at harness join from the Recall meeting duration (default 2h if unknown at claim)
+# and persisted in operation_runs.progress; a MeetingCost carries it as a field.
+_LISTENING_SOFT_CAP_FRACTION = 0.8
+_LISTENING_HARD_CAP_FRACTION = 1.0
+
+# Default projected meeting duration (hours) when the real duration is unknown at
+# claim time — CANONICAL §12.7 / D-013. Two hours of listening baseline.
+_DEFAULT_PROJECTED_HOURS = 2.0
 
 # The listening roles whose spend accrues to the baseline, not the task budget.
 _LISTENING_ROLES = frozenset({"scribe", "orchestrator_idle", "orch_idle", "transport"})
@@ -74,6 +82,11 @@ class MeetingCost:
     transport_usd: float = 0.0
     e2b_usd: float = 0.0
     transport_rate_per_hour: float = 0.0
+    # Projected meeting duration in hours (D-013) — the caps are 0.8/1.0 × this,
+    # NOT fixed dollar constants (CANONICAL §12.7). Defaults to 2h when the real
+    # Recall duration is unknown at claim; the harness overwrites it from the
+    # persisted operation_runs.progress on join / re-claim.
+    projected_hours: float = _DEFAULT_PROJECTED_HOURS
 
     # Live split accumulators (never positional — they are derived, not snapshot).
     _listening_model_usd: float = field(default=0.0, init=False)
@@ -123,12 +136,26 @@ class MeetingCost:
     def remaining_task_budget_usd(self) -> float | None:
         return self._task_budget_remaining_usd
 
+    # ── the listening caps: 0.8/1.0 × projected-hours (CANONICAL §12.7 / D-004) ──
+    def listening_soft_cap_usd(self) -> float:
+        """Soft cap = 0.8 × projected-hours (degrade → Haiku + widen Scribe)."""
+        return _LISTENING_SOFT_CAP_FRACTION * self.projected_hours
+
+    def listening_hard_cap_usd(self) -> float:
+        """Hard cap = 1.0 × projected-hours — the SLA line (→ notes-only)."""
+        return _LISTENING_HARD_CAP_FRACTION * self.projected_hours
+
     def check_meeting_budget(self) -> BudgetBreaker:
-        """Return the full three-meter sum; the breaker state reads the listening subset only."""
+        """Return the full three-meter sum; the breaker state reads the listening subset only.
+
+        The soft/hard caps are 0.8/1.0 × projected-hours (CANONICAL §12.7 / D-004),
+        not fixed dollar constants — a longer meeting earns a proportionally higher
+        listening envelope before the breaker degrades / goes notes-only.
+        """
         baseline = self.listening_baseline_usd()
-        if baseline > _LISTENING_HARD_CAP_USD:
+        if baseline > self.listening_hard_cap_usd():
             state = "notes_only"
-        elif baseline > _LISTENING_SOFT_CAP_USD:
+        elif baseline > self.listening_soft_cap_usd():
             state = "degrade"
         else:
             state = "normal"
