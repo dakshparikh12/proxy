@@ -49,6 +49,7 @@ mapping (from the real dataclasses):
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 from collections.abc import AsyncIterator, Iterable, Iterator
@@ -386,6 +387,19 @@ def build_sdk_options(prompt: str, query: ProviderQuery) -> ClaudeAgentOptions:
 QueryFn = Callable[..., AsyncIterator[Any]]
 
 
+def _is_aborted(abort: Any) -> bool:
+    """True iff the turn's abort handle has fired (§3.11).
+
+    The handle is duck-typed on its ``.aborted`` flag — an ``agentkit.AbortController``
+    (the §3.11 primitive) or any object exposing ``.aborted`` (the wake ``_Abort``
+    handle). ``None`` (no abort threaded) is never aborted. Kept tolerant so a bad
+    handle can never crash the model loop — it simply reads as not-aborted.
+    """
+    if abort is None:
+        return False
+    return bool(getattr(abort, "aborted", False))
+
+
 class ClaudeAgentProvider:
     """A *dumb* Claude provider: translates native SDK events → ``AgentChunk`` and
     re-throws nothing in-band. A transport fault becomes a terminal ``ERROR`` chunk
@@ -412,15 +426,39 @@ class ClaudeAgentProvider:
         Yields the six canonical variants; the ``[CRITICAL]`` tripwire fires on any host
         built-in TOOL_USE while sandboxed; a transport blow-up terminates the stream with
         an ``ERROR`` chunk (never an in-band raise).
+
+        **Abort halts the MODEL loop (§3.11).** When the turn's ``AbortController`` fires
+        (``query.abort.aborted``), the ``async for message`` loop is BROKEN — the SDK
+        subprocess is stopped rather than left to run to ``maxTurns`` (default 1000),
+        which is the runaway-spend / "Proxy, quiet" fix. This is a hard halt of the loop,
+        not merely ignoring the result after the stream drains.
         """
         options = build_sdk_options(prompt, query)
+        abort = query.abort
+        # An abort already fired before the first pull → never start the model loop.
+        if _is_aborted(abort):
+            return
+        stream = self._query_fn(prompt=prompt, options=options)
         try:
-            async for message in self._query_fn(prompt=prompt, options=options):
+            async for message in stream:
+                # Poll the abort handle every pull: a "Proxy, quiet" / meeting-end /
+                # timeout mid-run halts the loop HERE, before the next model turn.
+                if _is_aborted(abort):
+                    break
                 for chunk in map_sdk_message(message):
                     check_critical_tripwire(chunk, sandbox_mode=self._sandbox_mode)
                     yield chunk
+                    if _is_aborted(abort):
+                        break
         except Exception as exc:  # noqa: BLE001 — re-throw nothing in-band; ERROR on the stream
             yield AgentChunk(type="ERROR", text="", metadata={"message": str(exc)})
+        finally:
+            # Close the underlying async generator so the SDK subprocess is torn down
+            # on an abort-break (not left running); tolerate a non-generator query_fn.
+            aclose = getattr(stream, "aclose", None)
+            if aclose is not None:
+                with contextlib.suppress(Exception):
+                    await aclose()
 
 
 def register_claude_provider() -> ClaudeAgentProvider:

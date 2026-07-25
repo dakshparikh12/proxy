@@ -8,6 +8,7 @@ import os as _os
 # importable modules. Mirrors the proven ``libs.ops`` / ``libs.http`` pattern.
 __path__ = [*__path__, _os.path.join(_os.path.dirname(__file__), "src", "agentkit")]
 
+from .src.agentkit import AbortController as AbortController
 from .src.agentkit import AbortRegistry as AbortRegistry
 from .src.agentkit import Behavior as Behavior
 from .src.agentkit import BehaviorConfig as BehaviorConfig
@@ -28,6 +29,7 @@ from .src.agentkit import thinking_policy as thinking_policy
 from .src.agentkit import with_proxy_guardrails as with_proxy_guardrails
 
 __all__ = [
+    "AbortController",
     "AbortRegistry",
     "Behavior",
     "BehaviorConfig",

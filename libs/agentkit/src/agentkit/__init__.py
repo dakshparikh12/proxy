@@ -1,6 +1,7 @@
 """libs.agentkit — provider seam: behavior runner, delta-izer, abort/resume."""
 from __future__ import annotations
 
+from .abort import AbortController as AbortController
 from .abort import AbortRegistry as AbortRegistry
 from .config import Behavior as Behavior
 from .config import BehaviorConfig as BehaviorConfig
@@ -21,6 +22,7 @@ from .provider import thinking_policy as thinking_policy
 from .resume import resume_with_fallback as resume_with_fallback
 
 __all__ = [
+    "AbortController",
     "AbortRegistry",
     "Behavior",
     "BehaviorConfig",
