@@ -60,9 +60,19 @@ def _apply_notes_edit(conn: Any, *, meeting_id: Any, draft_id: Any, content: str
 
     The notes object is the deterministic left-fold of the append-only
     ``note_deltas`` ledger (§3.3); applying a notes-edit is a ``patch`` append
-    keyed by the draft id so a replay is a silent no-op on the ledger's UNIQUE
-    INDEX (belt-and-suspenders behind the route's own idempotency ledger). The
-    payload carries the accepted edit body verbatim.
+    keyed by the draft id (``entry_id = 'draft:<id>'``). The accept is guarded
+    against double-apply UPSTREAM of this write — the route's in-memory ledger and,
+    post-restart, the durable ``staged_drafts`` row-status belt (``status IN
+    ('applied','rejected')`` in :func:`apply_accepted_draft`) short-circuit before a
+    second append ever reaches here — so this append runs at most once per draft.
+
+    The ``ON CONFLICT ... DO NOTHING`` clause is a harmless best-effort tail: the
+    §3.3 UNIQUE INDEX is ``(meeting_id, window_start_s, entry_id, op)`` and this row
+    carries ``window_start_s = NULL``, which Postgres treats as DISTINCT (the index
+    is not declared ``NULLS NOT DISTINCT``), so the clause does NOT itself dedupe a
+    NULL-window append — it is NOT the idempotency guard. The durable witness against
+    a double-apply is the row-status belt above, which the tests exercise directly.
+    The payload carries the accepted edit body verbatim.
     """
     payload = json.dumps({"text": content, "source": "accept-handler"})
     conn.execute(

@@ -24,13 +24,16 @@ ASGI response. Registering these routes here closes the DOC03-CSREAD mount gap
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from starlette.requests import Request
 from starlette.responses import Response
 
 from libs.db import Database
 from libs.ops import run_reconcile_sweep
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
 INTERNAL_RECONCILE_PATH = "/internal/reconcile"
 INTERNAL_NOTES_PATH = "/internal/notes/{meeting_id}"
@@ -87,7 +90,7 @@ def _to_response(reader_response: Any) -> Response:
     )
 
 
-def install_internal_notes_route(app: Any) -> None:
+def install_internal_notes_route(app: "FastAPI") -> None:
     """Mount GET /internal/notes/{meeting_id} — token-gated, outside the auth wall.
 
     Alongside /internal/reconcile in the /internal route group. Folds note_deltas
@@ -109,7 +112,7 @@ def install_internal_notes_route(app: Any) -> None:
         return _to_response(resp)
 
 
-def install_m_surface_route(app: Any) -> None:
+def install_m_surface_route(app: "FastAPI") -> None:
     """Mount GET /m/{meeting_id} — the authenticated user surface (CANONICAL §12.9).
 
     BEHIND the auth wall (a valid signed session is required) but reads the SAME
@@ -142,7 +145,7 @@ def install_internal_routes(app: Any) -> None:
     install_m_surface_route(app)
 
 
-def install_internal_reconcile_route(app: Any) -> None:
+def install_internal_reconcile_route(app: "FastAPI") -> None:
     """Mount POST /internal/reconcile — token-gated, outside the auth wall.
 
     Wraps the existing :func:`handle_internal_reconcile` (its token/idempotency

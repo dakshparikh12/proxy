@@ -23,10 +23,13 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import accept as _accept
 from . import authz as _authz
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
 # Idempotency ledger: (meeting, draft, key) -> the first apply's AcceptResponse fields.
 # The same key replays the FIRST result and never re-runs the apply (§3.16.1, §12.9).
@@ -156,13 +159,18 @@ class _AuthzedRequest:
         self.csrf_valid = csrf_valid
 
 
-def install_accept_route(app: Any) -> None:
+def install_accept_route(app: "FastAPI") -> None:
     """Mount POST /m/{meeting_id}/drafts/{draft_id}/accept BEHIND the auth wall.
 
     The route resolves the durable connection off ``app.state.db`` (a missing handle
     is an honest 503, never a fabricated 200), derives the principal + tenant from the
     signed session server-side, checks the CSRF header, and delegates to
     :func:`handle_accept`. The response status is the handler's status verbatim.
+
+    ``app`` is the concrete :class:`fastapi.FastAPI` ``create_app`` builds; the
+    annotation gives ``app.post`` a typed signature so the route decorator is a
+    typed decorator under ``mypy --strict`` (an ``app: Any`` would make the mounted
+    handler untyped — ``[untyped-decorator]``).
     """
     from starlette.requests import Request
     from starlette.responses import JSONResponse, Response
