@@ -188,3 +188,15 @@ class BoundaryGatedAck:
         cooperative abort path, so no second buffer defeats the sub-200ms cut.
         """
         await self._controller.barge_in()
+
+    async def quiet(self, task_key: str | None = None) -> None:
+        """"Proxy, quiet" (and meeting-end barge-in): cut speech AND halt the model loop.
+
+        The speech cut is the same sub-200ms turn-core path (never replaced); this ADDS
+        the §3.11 model-loop kill — the addressed in-flight wake's controller (keyed
+        ``meeting_id|ask_id`` in ``task_key``, from the run loop's in-flight bookkeeping)
+        is cancelled on the shared :class:`~agentkit.abort.AbortRegistry`, so the model
+        loop halts, not just the mouth (fault F-CTRL-QUIET-IGNORED). Reuses the turn-core's
+        :meth:`~transport.turn.TurnController.quiet` — the reflex owns no second stop path.
+        """
+        await self._controller.quiet(task_key)

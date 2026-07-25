@@ -228,6 +228,22 @@ class TurnController:
         if self._state is TurnState.SPEAKING:
             self._state = TurnState.IDLE
 
+    async def quiet(self, task_key: str | None = None) -> None:
+        """"Proxy, quiet" / meeting-end barge-in: cut speech AND cancel the model loop (§3.11).
+
+        The speech cut is the sub-200ms path (:meth:`barge_in`) — kept intact, never
+        replaced. This ADDS the §3.11 model-loop kill: the addressed in-flight wake's
+        :class:`~agentkit.abort.AbortRegistry` controller (keyed ``meeting_id|ask_id`` in
+        ``task_key``) is cancelled so the MODEL loop halts, not just the speech. Without
+        this, "Proxy, quiet" stopped the mouth while the model ran on to
+        ``maxTurns=1000`` (fault F-CTRL-QUIET-IGNORED). ``task_key`` None cuts speech only
+        (a quiet with no addressed in-flight turn — still a valid stop)."""
+        await self.barge_in()  # the intact <200ms speech cut (TTS abort + flush)
+        if task_key is not None:
+            # ADD the model-loop cancel on the SAME registry (the ONE §11.9 home) — the
+            # controller keyed meeting_id|ask_id is aborted so the provider breaks its loop.
+            self._abort.cancel(task_key)
+
     async def hard_mute(self) -> None:
         """Kill in-flight TTS and enter silent mode; only a re-invite lifts it (AC-TURN-12..14)."""
         await self._stop_current()

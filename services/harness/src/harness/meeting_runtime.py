@@ -24,6 +24,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from agentkit.abort import AbortRegistry
 from scribe.pipeline import HostBudget
 from scribe.prefix import MeetingHeader
 from scribe.referent import ReferentCorpus
@@ -70,6 +71,10 @@ class MeetingRuntime:
     host_budget: HostBudget
     referent_corpus: ReferentCorpus | None = None
     operation_handle: Any = None
+    # The ONE abort registry (§11.9) this meeting's run loop mints per-wake controllers
+    # through, shared with the registry so meeting-end / "Proxy, quiet" reach the LIVE
+    # controllers. Defaults to a fresh one so a standalone runtime still wires cleanly.
+    abort_registry: Any = None
     # The availability-critical STT-credential refresh seam (§3.8): its cadence and the
     # bound refresh callable, threaded from the registry. The loop runs on its OWN
     # in-process asyncio interval (below) — never the scale-to-zero reconcile cron.
@@ -174,11 +179,18 @@ class MeetingRuntime:
                 from .emit import Emitter
 
                 emitter = Emitter(handle=self.operation_handle)
+            # Share the meeting's ONE abort registry (§11.9) with the run loop so the
+            # controller a wake mints (``registry.make(meeting_id|ask_id)``) is the SAME
+            # handle meeting-end (``cancel_meeting``) and "Proxy, quiet" (``cancel``) reach.
+            if self.abort_registry is None:
+                self.abort_registry = AbortRegistry()
             self._run_loop = RunLoop(
                 wake_turn=wake_turn,
                 addressed=addressed,
                 emitter=emitter,
                 max_in_flight=max_in_flight,
+                registry=self.abort_registry,
+                meeting_id=self.header.meeting_id,
             )
         return self._run_loop
 
@@ -369,10 +381,16 @@ class MeetingRuntimeRegistry:
         close_config: CloseConfig | None = None,
         stt_refresh_fn: Callable[[], Awaitable[None]] = _noop_refresh,
         stt_refresh_interval_s: float | None = None,
+        abort_registry: AbortRegistry | None = None,
     ) -> None:
         self._db = db
         self._host_budget = HostBudget(limit=host_inflight)
         self._runtimes: dict[str, MeetingRuntime] = {}
+        # The ONE abort registry (§11.9) shared across every meeting's run loop, so
+        # ``end_meeting`` can ``cancel_meeting`` every in-flight model-loop controller of
+        # a meeting (AC-CTRL-012). One registry for all meetings is safe: keys are scoped
+        # ``meeting_id|task_id``, so ``cancel_meeting`` never touches a sibling meeting.
+        self._abort_registry = abort_registry if abort_registry is not None else AbortRegistry()
         # The close-pass vendor edges (GCS bucket + chat poster + Sonnet caller).
         # Bound at boot; when absent, meeting end still tears the runtime down but
         # cannot produce the permanent record — so the wiring supplies it.
@@ -407,6 +425,7 @@ class MeetingRuntimeRegistry:
             referent_corpus=referent_corpus,
             stt_refresh_fn=self._stt_refresh_fn,
             stt_refresh_interval_s=self._stt_refresh_interval_s,
+            abort_registry=self._abort_registry,
         )
         runtime.start()
         self._runtimes[header.meeting_id] = runtime
@@ -434,6 +453,13 @@ class MeetingRuntimeRegistry:
         runtime = self._runtimes.pop(meeting_id, None)
         if runtime is None:
             return
+        # AC-CTRL-012: abort every in-flight model-loop controller of THIS meeting FIRST
+        # (§3.11 "meeting-end → cancel everything"). A wake/dispatch still mid-run when the
+        # meeting ends is cooperatively halted (the provider breaks its SDK loop) so no
+        # model loop survives meeting end burning budget. Scoped ``meeting_id|task_id`` so a
+        # sibling meeting is untouched (isolation). Done before the ordered close below —
+        # it neither reorders nor blocks freeze→close-pass→destroy→complete-row→teardown.
+        self._abort_registry.cancel_meeting(meeting_id)
         try:
             if self._close_config is not None:
                 # The §3.16 ordered close over Doc 03's close pass: freeze (drain) →

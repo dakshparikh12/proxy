@@ -45,10 +45,13 @@ re-claimed the meeting → ``is_owner`` False) reaches the wire **zero** times.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+from agentkit.abort import KEY_SEP, AbortRegistry
 
 from .emit import Emitter
 
@@ -60,6 +63,14 @@ DEFAULT_MAX_IN_FLIGHT: int = 5
 #: runs longer than this is detached ("I'll have it in a moment") and its
 #: completion re-wakes Proxy, so the loop never blocks on a long turn.
 DEFAULT_DETACH_AFTER_S: float = 2.0
+
+#: The per-task HARD timeout (§3.11 "a hard per-task timeout … Orchestrator answer
+#: ~4–5s") — RESCALED to seconds for the interactive loop (not the SDK's 5-min).
+#: A wake that overruns this bound has its :class:`AbortController` fired: a stalled
+#: meeting is worse than a dropped note. This is the answer-turn bound; a Scribe/
+#: dispatch turn passes its own (~3–4s) via ``wake_timeout_s``. Distinct from the
+#: detach threshold (~2s) — detach hands control back, the timeout ABORTS the turn.
+DEFAULT_WAKE_TIMEOUT_S: float = 4.0
 
 #: The injected clock/predicate/callback seam types — all default to sensible
 #: real implementations so the loop runs live, but each is injectable so the
@@ -87,6 +98,12 @@ class MeetingEvent:
     ask_id: str | None = None
     arrived_at: float | None = None
     emitter: Emitter | None = None
+    #: The live model-loop :class:`~agentkit.abort.AbortController` for THIS wake (§3.11).
+    #: The loop mints it via ``registry.make(meeting_id|ask_id)`` and threads it here so
+    #: the wake turn passes the REAL controller down the seam (the provider polls
+    #: ``.aborted`` to break its SDK loop) — never the bare ``_Abort()`` that never fires.
+    #: ``None`` on an ambient event that never wakes Proxy.
+    abort: Any = None
     _inject: Callable[[str], Any] | None = field(default=None, repr=False)
 
     def on_inject(self, channel: Callable[[str], Any]) -> None:
@@ -175,6 +192,9 @@ class RunLoop:
         clock: Clock | None = None,
         detach_after_s: float = DEFAULT_DETACH_AFTER_S,
         on_rewake: Callable[[str], Any] | None = None,
+        registry: AbortRegistry | None = None,
+        meeting_id: str = "",
+        wake_timeout_s: float = DEFAULT_WAKE_TIMEOUT_S,
     ) -> None:
         if not (3 <= max_in_flight <= 5):
             raise ValueError(
@@ -190,6 +210,19 @@ class RunLoop:
         self._clock: Clock = clock or time.monotonic
         self._detach_after_s = detach_after_s
         self._on_rewake = on_rewake
+        # The ONE abort registry (§11.9) — imported, never redefined. The loop mints a
+        # per-wake AbortController through it (``registry.make(meeting_id|ask_id)``) and
+        # threads it into the wake turn, so meeting-end / "Proxy, quiet" / the per-task
+        # timeout can halt the LIVE model loop. Defaults to a fresh one so the spine runs
+        # standalone; the meeting runtime passes its shared registry so end/quiet reach here.
+        self._abort_registry: AbortRegistry = registry if registry is not None else AbortRegistry()
+        self._meeting_id = meeting_id
+        # The per-task hard timeout (§3.11) — a wake past this bound has its controller
+        # aborted (a stalled meeting is worse than a dropped note). Non-positive disables.
+        self._wake_timeout_s = wake_timeout_s
+        # ask_id → the registry key of its live controller, so the barge-in / "Proxy,
+        # quiet" path can cancel the addressed in-flight model loop by ask_id (§3.11).
+        self._task_keys: dict[str, str] = {}
         # Plain in-flight bookkeeping (§3.15) — a task list, nothing more.
         self._in_flight: dict[str, _InFlight] = {}
         self._detached: dict[str, _InFlight] = {}
@@ -232,8 +265,29 @@ class RunLoop:
             await self.route(event)
             self.queue.task_done()
 
+    # ── the abort registry — the ONE §11.9 home, threaded into every wake ────
+    @property
+    def abort_registry(self) -> AbortRegistry:
+        """The shared abort registry the loop mints per-wake controllers through (§3.11)."""
+        return self._abort_registry
+
+    def cancel_ask(self, ask_id: str) -> bool:
+        """Abort the in-flight model loop for one ask (barge-in / "Proxy, quiet", §3.11).
+
+        The transport barge-in path calls this in ADDITION to the sub-200ms TTS speech
+        cut: it cancels the addressed ask's live :class:`AbortController` so the MODEL
+        loop halts (not just the speech). Returns True iff a live controller was cancelled
+        for that ask; a no-op (False) if the ask has no in-flight turn. The speech cut is
+        the transport turn-core's job and is never touched here — this ADDS the model kill.
+        """
+        key = self._task_keys.get(ask_id)
+        if key is None:
+            return False
+        self._abort_registry.cancel(key)
+        return True
+
     # ── the ONE routing entry — the routing IS the wake turn (§3.2) ──────────
-    async def route(self, event: MeetingEvent) -> bool:
+    async def route(self, event: MeetingEvent, *, force_new: bool = False) -> bool:
         """Route ONE event through the loop: a wake turn, or folded into state.
 
         This is the whole loop body, and it holds exactly one code decision — the
@@ -242,6 +296,11 @@ class RunLoop:
         generic wake turn (the model's judgment); an un-addressed event is folded
         into the state digest with no agent call. Returns True iff a wake turn was
         run or attached (the event drew Proxy's judgment), False if it was ambient.
+
+        ``force_new`` forces a FRESH judgment-moment even for an ask already in flight:
+        it mints a new controller via ``registry.make`` (preempting the stale one, §3.11)
+        rather than attaching — the harness sets it when a re-ask supersedes the prior
+        turn. The default (attach a duplicate, §3.15) is unchanged.
         """
         self.events_routed += 1
         if event.emitter is None:
@@ -249,9 +308,9 @@ class RunLoop:
         if not self._addressed(event):
             # Ambient signal — pure state, no agent (the silent-meeting path).
             return False
-        return await self._wake(event)
+        return await self._wake(event, force_new=force_new)
 
-    async def _wake(self, event: MeetingEvent) -> bool:
+    async def _wake(self, event: MeetingEvent, *, force_new: bool = False) -> bool:
         """Run (or attach/inject) the ONE generic wake turn for an addressed event.
 
         In-flight bookkeeping (§3.15), all plain state:
@@ -271,12 +330,26 @@ class RunLoop:
         detached, and a completion callback re-wakes Proxy when the turn finally ends.
         """
         ask_id = event.ask_id
-        # Duplicate of an in-flight ask → ATTACH rather than spawn (§3.15).
-        if ask_id is not None and ask_id in self._in_flight:
+        # Duplicate of an in-flight ask → ATTACH rather than spawn (§3.15) — UNLESS the
+        # caller forces a fresh judgment-moment (a re-ask that supersedes the stale turn),
+        # which preempts via make() below rather than attaching.
+        if ask_id is not None and ask_id in self._in_flight and not force_new:
             return True  # attached to the already-running turn
         record = _InFlight(ask_id=ask_id or "", event=event)
         if ask_id is not None:
             self._in_flight[ask_id] = record
+
+        # Mint the LIVE model-loop controller for this wake through the ONE registry
+        # (§3.11 / §11.9): keyed ``meeting_id|ask_id``, ``make()`` preempts any stale
+        # controller for that key (a fresh judgment-moment cancels the superseded turn so
+        # it stops burning budget). Threaded onto the event so the wake turn passes the
+        # REAL controller down the seam — the provider polls ``.aborted`` to break its SDK
+        # loop — never the bare ``_Abort()`` that never fires. ``cancel_ask`` (barge-in /
+        # "Proxy, quiet") and the meeting-end ``cancel_meeting`` both reach THIS controller.
+        key = self._controller_key(ask_id)
+        event.abort = self._abort_registry.make(key)
+        if ask_id is not None:
+            self._task_keys[ask_id] = key
 
         # The turn runs in its OWN task; it acquires the [3–5] slot inside the task
         # and holds it for as long as it runs — a detached turn keeps its slot while
@@ -296,6 +369,7 @@ class RunLoop:
             # because it is ALREADY complete its detach and re-wake coincide here.
             if ask_id is not None:
                 self._in_flight.pop(ask_id, None)
+                self._task_keys.pop(ask_id, None)  # the finished turn's controller retires
                 if record.detached:
                     self._record_detached(ask_id, record)
                     self._rewake(ask_id)
@@ -315,6 +389,14 @@ class RunLoop:
         turn.add_done_callback(_completed)
         return True
 
+    def _controller_key(self, ask_id: str | None) -> str:
+        """The registry key ``meeting_id|ask_id`` for a wake's controller (§3.11).
+
+        Splitting on :data:`~agentkit.abort.KEY_SEP` is how ``cancel_meeting`` scopes to
+        one meeting, so the key ALWAYS carries the meeting id even for an ask-less wake
+        (keyed ``meeting_id|`` — still cancelled by the meeting, never by a sibling)."""
+        return f"{self._meeting_id}{KEY_SEP}{ask_id or ''}"
+
     async def _run_turn(self, event: MeetingEvent, record: _InFlight) -> None:
         """Run the ONE generic wake turn under the ``[3–5]`` semaphore (§3.15).
 
@@ -323,16 +405,46 @@ class RunLoop:
         slot until it truly finishes — the bound counts in-flight turns, detached or
         not. Records the injected-clock elapsed so a turn that ran past the threshold
         (even if it returned fast on the real clock) is marked detached.
+
+        The wake is guarded by the per-task HARD timeout (§3.11): a WATCHDOG fires the
+        turn's :class:`AbortController` once the ``wake_timeout_s`` bound elapses (a
+        stalled meeting is worse than a dropped note). The abort is cooperative — the
+        provider polls ``.aborted`` and breaks its SDK loop — so the turn unwinds on its
+        OWN once aborted; the watchdog never cancels or re-runs it, so the turn runs
+        EXACTLY ONCE (the timeout is FINAL — an aborted turn is never retried, §3.11).
         """
         async with self._sem:  # the [3–5] bound on concurrent wake turns
             started = self._clock()
             self.wake_turns_run += 1
             digest = self._state_digest()
+            watchdog = self._start_timeout_watchdog(event)
             try:
                 await self._wake_turn(event, digest)
             finally:
+                if watchdog is not None:
+                    watchdog.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await watchdog
                 if self._clock() - started > self._detach_after_s:
                     record.detached = True
+
+    def _start_timeout_watchdog(self, event: MeetingEvent) -> "asyncio.Task[None] | None":
+        """Arm the per-task hard-timeout WATCHDOG for a wake (§3.11), or None if disabled.
+
+        The watchdog sleeps the ``wake_timeout_s`` bound then fires the wake's controller
+        abort — it does NOT cancel the turn's task, so a cooperative turn unwinds on its
+        own (the model loop polls ``.aborted``) and runs exactly once. Cancelled the instant
+        the turn returns under the bound (the fast path never fires the abort)."""
+        if not (self._wake_timeout_s and self._wake_timeout_s > 0) or event.abort is None:
+            return None
+
+        async def _fire() -> None:
+            await asyncio.sleep(self._wake_timeout_s)
+            # The hard bound elapsed: fire the abort so the model loop halts (final).
+            if event.abort is not None:
+                event.abort.abort()
+
+        return asyncio.ensure_future(_fire())
 
     def _record_detached(self, ask_id: str, record: _InFlight) -> None:
         """Record an ask as detached (``was_detached`` True) — no re-wake here (§3.15).
@@ -359,6 +471,7 @@ class RunLoop:
         """
         if ask_id is not None:
             self._in_flight.pop(ask_id, None)
+            self._task_keys.pop(ask_id, None)  # the finished turn's controller retires
             self._rewake(ask_id)
         if not turn.cancelled():
             turn.result()  # re-raise a genuine failure (never swallow it)
@@ -404,6 +517,7 @@ async def _noop_wake(event: MeetingEvent, digest: dict[str, Any]) -> None:
 __all__ = [
     "DEFAULT_DETACH_AFTER_S",
     "DEFAULT_MAX_IN_FLIGHT",
+    "DEFAULT_WAKE_TIMEOUT_S",
     "MeetingEvent",
     "RunLoop",
     "StandingPipe",
