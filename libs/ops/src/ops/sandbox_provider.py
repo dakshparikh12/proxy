@@ -20,9 +20,19 @@ from typing import Any
 
 from libs.db import sandbox_timeout_s, sandbox_ttl_s
 
+from . import sandbox as _sandbox
+
 # Alive-state registry: sandbox id -> alive?. A destroyed sandbox reads back
 # not-alive; an unknown id defaults to alive (the historical health_check True).
 _ALIVE: dict[str, bool] = {}
+
+# The host-kept sandbox → per-sandbox JWT secret map (§3.5 / CANONICAL §12.9).
+# Each live sandbox has its OWN random HS256 secret; the host (never the sandbox)
+# owns this map. There is deliberately NO fleet-shared secret constant: untrusted
+# in-sandbox repo code that exfiltrated a shared secret could forge a token
+# accepted by ANOTHER sandbox, so the map is per-sandbox-id and the secret dies
+# with the sandbox on destroy.
+_SECRET_BY_SANDBOX: dict[str, str] = {}
 
 # The live-sandbox view the TTL reconcile cron reconciles against — there is NO
 # sandbox registry TABLE (no warm pool, no FSM per §6); this is the in-process
@@ -48,18 +58,30 @@ def _key(handle_or_id: Any) -> str:
 
 @dataclass(frozen=True)
 class SandboxHandle:
-    """An opaque reference to a live E2B sandbox and its timeout backstop.
+    """An opaque reference to a live E2B sandbox, its per-sandbox JWT secret, and
+    its timeout backstop.
 
     Awaitable so ``await provision(...)`` yields the handle itself; also usable
-    directly (``provision(...).id``) on the synchronous path.
+    directly (``provision(...).id``) on the synchronous path. ``jwt_secret`` is the
+    DISTINCT random HS256 secret minted for THIS sandbox at provision (§3.5); the
+    host keeps the authoritative sandbox→secret map (``secret_for``), the handle
+    carries a copy for the token_provider that signs this sandbox's JWTs.
     """
 
     id: str
     meeting_id: str
     timeout_s: int
+    jwt_secret: str = ""
+    tenant: str = ""
 
     @property
     def sandbox_id(self) -> str:  # back-compat alias for the historical field
+        return self.id
+
+    @property
+    def session_id(self) -> str:
+        """The per-sandbox claim id (§3.5) — the decoded JWT ``session_id`` must
+        equal ``env.SESSION_ID`` in-sandbox; the sandbox id is that unique claim."""
         return self.id
 
     def __await__(self) -> Generator[Any, None, SandboxHandle]:
@@ -86,13 +108,30 @@ class SandboxHealth:
 
 
 class _AsyncNone:
-    """An awaitable that is a no-op when awaited (destroy's async return)."""
+    """An awaitable that is a no-op when awaited (destroy's async return).
+
+    When ``coro`` is supplied (a real backend kill), awaiting runs it; the sync
+    path (``destroy(sb.id)`` never awaited) simply drops it — the host-side
+    bookkeeping already ran synchronously in ``destroy`` before this was returned.
+    """
+
+    def __init__(self, coro: Any = None) -> None:
+        self._coro = coro
 
     def __await__(self) -> Generator[Any, None, None]:
-        async def _none() -> None:
+        async def _run() -> None:
+            if self._coro is not None:
+                await self._coro
             return None
 
-        return _none().__await__()
+        return _run().__await__()
+
+    def __del__(self) -> None:  # never warn on a dropped, never-awaited backend coro
+        coro = getattr(self, "_coro", None)
+        if coro is not None:
+            close = getattr(coro, "close", None)
+            if close is not None:
+                close()
 
 
 def verbs() -> set[str]:
@@ -100,37 +139,74 @@ def verbs() -> set[str]:
     return {"provision", "destroy", "health_check"}
 
 
-def provision(*, meeting_id: str, timeout_s: int | None = None) -> SandboxHandle:
-    """Idempotent: create the sandbox with an E2B timeout backstop.
+def provision(
+    *, meeting_id: str, tenant: str = "", timeout_s: int | None = None
+) -> SandboxHandle:
+    """Idempotent: create the sandbox with an E2B timeout backstop AND its own
+    distinct random per-sandbox JWT secret (§3.5 / CANONICAL §12.9).
 
     ``timeout_s`` is the E2B-native auto-kill backstop — the sandbox self-expires
     even if every other bound (explicit destroy, TTL reconcile) is missed. The
     returned handle is awaitable for the async boundary. Idempotent per
     ``meeting_id`` (§3.9): the sandbox id is deterministic (``sbx-<meeting_id>``),
-    so a repeat provision for a still-live meeting returns the EXISTING handle and
-    never a second sandbox — the load-bearing assumption that keeps the whole
-    lifecycle broker-free.
+    so a repeat provision for a still-live meeting returns the EXISTING handle —
+    with its ALREADY-MINTED secret unchanged — and never a second sandbox nor a
+    fresh secret (the load-bearing assumption that keeps the whole lifecycle
+    broker-free). A cold (or re-provisioned-after-destroy) meeting mints a FRESH
+    distinct secret via ``ops.sandbox.provision_sandbox`` so no two sandboxes ever
+    share one.
     """
     existing = _LIVE_BY_MEETING.get(meeting_id)
     if existing is not None and _ALIVE.get(existing.id, False):
         return existing  # a live sandbox already exists → return it (no re-provision)
     backstop = int(timeout_s) if timeout_s is not None else sandbox_timeout_s()
     sandbox_id = f"sbx-{meeting_id}"
+    # Mint the DISTINCT random per-sandbox HS256 secret (the §3.5 primitive). A new
+    # secret on every cold provision → two provisions never share a secret.
+    minted = _sandbox.provision_sandbox(tenant=tenant, meeting_id=meeting_id)
+    jwt_secret = minted.jwt_secret
+    _SECRET_BY_SANDBOX[sandbox_id] = jwt_secret  # host keeps the sandbox→secret map
     _ALIVE[sandbox_id] = True
-    handle = SandboxHandle(id=sandbox_id, meeting_id=meeting_id, timeout_s=backstop)
+    handle = SandboxHandle(
+        id=sandbox_id,
+        meeting_id=meeting_id,
+        timeout_s=backstop,
+        jwt_secret=jwt_secret,
+        tenant=tenant,
+    )
     _LIVE_BY_MEETING[meeting_id] = handle
     _PROVISIONED_AT[meeting_id] = time.monotonic()
     _ENDED_MEETINGS.discard(meeting_id)  # a fresh provision un-ends a re-joined meeting
     return handle
 
 
-def destroy(handle: SandboxHandle | Any) -> _AsyncNone:
-    """Idempotent: tear the sandbox down (a no-op if already gone; tolerates 404)."""
-    _ALIVE[_key(handle)] = False
+def secret_for(sandbox_id_or_handle: Any) -> str | None:
+    """The host-side lookup into the sandbox→secret map (§3.5).
+
+    Returns this sandbox's per-sandbox JWT secret, or ``None`` if the host holds no
+    secret for it (a destroyed / never-provisioned sandbox). The token_provider
+    signs a sandbox's JWTs with THIS secret; a token minted for one sandbox can
+    never verify against another's secret.
+    """
+    return _SECRET_BY_SANDBOX.get(_key(sandbox_id_or_handle))
+
+
+def destroy(handle: SandboxHandle | Any, *, backend: Any = None) -> _AsyncNone:
+    """Idempotent: tear the sandbox down (a no-op if already gone; tolerates 404).
+
+    The per-sandbox secret is dropped from the host map on destroy so it can never
+    be reused. When a real E2B ``backend`` is injected, the kill is issued through
+    the ``call_external`` seam and tolerates an already-killed sandbox (404 → ok).
+    """
+    sandbox_id = _key(handle)
+    _ALIVE[sandbox_id] = False
+    _SECRET_BY_SANDBOX.pop(sandbox_id, None)  # the secret dies with the sandbox
     meeting_id = getattr(handle, "meeting_id", None)
     if meeting_id is not None:
         _LIVE_BY_MEETING.pop(meeting_id, None)
         _PROVISIONED_AT.pop(meeting_id, None)
+    if backend is not None:
+        return _AsyncNone(coro=_backend_kill(backend, sandbox_id))
     return _AsyncNone()
 
 
@@ -140,9 +216,144 @@ def health_check(handle: SandboxHandle | Any) -> SandboxHealth:
 
 
 async def pre_provision(*, join_event: dict[str, Any]) -> SandboxHandle:
-    """Pre-provision on a creation/join event (never from a warm idle pool)."""
+    """Pre-provision on a creation/join event (never from a warm idle pool).
+
+    This is the §3.9 meeting-creation trigger: exactly ONE sandbox for the meeting
+    the event names, spun WHEN the meeting is created/joined — not held in a
+    standing keepalive pool and never cold-booted mid-meeting.
+    """
     meeting_id = str(join_event.get("meeting_id", ""))
-    return await provision(meeting_id=meeting_id)
+    tenant = str(join_event.get("tenant", ""))
+    return await provision(meeting_id=meeting_id, tenant=tenant)
+
+
+# ── The real E2B backend seam (lazy, behind call_external, honest-degrade) ────
+#
+# The E2B wire surface confirmed against LIVE E2B docs (CANONICAL §11.10):
+#   AsyncSandbox.create(template=, timeout=<seconds>, envs=<dict>, metadata=<dict>)
+#   instance .kill() / .set_timeout(<seconds>) / .is_running()
+#   classmethods AsyncSandbox.connect(sandbox_id) / AsyncSandbox.list()
+# `envs` is where the per-sandbox JWT_SECRET + SESSION_ID (the claim id) go (§3.5).
+# The real AsyncSandbox is constructed ONLY in libs/http (the call_external home);
+# THIS module never imports e2b. The RESIDUAL that cannot be produced in-session —
+# the E2B template BAKE (the Node workspace-mcp-server sidecar + ast-grep baked
+# into the template image) and LIVE sandbox execution — is a DEPLOY artifact
+# (Phase-3 / founder infra), flagged, not faked.
+
+E2B_TEMPLATE = "proxy-workroom"  # the baked template id (bake = deploy residual)
+
+
+class _RealE2BBackend:
+    """The live E2B backend — issues every op through the ``call_external`` seam.
+
+    Constructed lazily and only when a live provision runs; imports of the E2B SDK
+    happen inside ``libs/http.e2b_sandbox_class`` (the sole raw-client home), never
+    here. Absent the ``e2b`` package this raises ``ImportError`` at first use — the
+    caller degrades honestly to the in-process substrate view.
+    """
+
+    def __init__(self) -> None:
+        self._by_id: dict[str, Any] = {}  # sandbox_id -> live AsyncSandbox instance
+
+    async def create(
+        self, *, sandbox_id: str, template: str, timeout: int, envs: dict[str, str], metadata: dict[str, str]
+    ) -> str:
+        from libs.http.src.http import external as _http
+
+        cls = _http.e2b_sandbox_class()  # ImportError here iff e2b absent (honest)
+        outcome = await _http.call_external(
+            lambda: cls.create(template=template, timeout=timeout, envs=envs, metadata=metadata),
+            service="e2b",
+        )
+        instance = outcome.value
+        self._by_id[sandbox_id] = instance
+        return str(getattr(instance, "sandbox_id", sandbox_id))
+
+    async def kill(self, *, sandbox_id: str) -> None:
+        from libs.http.src.http import external as _http
+
+        instance = self._by_id.pop(sandbox_id, None)
+        if instance is None:
+            return  # already gone (404 → idempotent no-op)
+        await _http.call_external(lambda: instance.kill(), service="e2b")
+
+    async def set_timeout(self, *, sandbox_id: str, timeout: int) -> None:
+        from libs.http.src.http import external as _http
+
+        instance = self._by_id.get(sandbox_id)
+        if instance is None:
+            return
+        await _http.call_external(lambda: instance.set_timeout(timeout), service="e2b")
+
+    async def is_running(self, *, sandbox_id: str) -> bool:
+        from libs.http.src.http import external as _http
+
+        instance = self._by_id.get(sandbox_id)
+        if instance is None:
+            return False
+        outcome = await _http.call_external(lambda: instance.is_running(), service="e2b")
+        return bool(outcome.value)
+
+
+async def provision_async(
+    *, meeting_id: str, tenant: str = "", timeout_s: int | None = None, backend: Any = None
+) -> SandboxHandle:
+    """Provision AND drive the real (or fake) E2B backend to create the sandbox.
+
+    The host-side bookkeeping + per-sandbox secret mint is the same idempotent
+    ``provision`` verb. When a ``backend`` is injected (the live E2B backend, or a
+    test fake), the sandbox is created THROUGH it — passing the per-sandbox
+    ``JWT_SECRET`` + ``SESSION_ID`` (the claim id) into the sandbox ``envs`` (§3.5).
+    A re-provision of a still-live meeting is idempotent: it returns the existing
+    handle and does NOT re-create the sandbox.
+    """
+    pre_existing = _LIVE_BY_MEETING.get(meeting_id)
+    already_live = pre_existing is not None and _ALIVE.get(pre_existing.id, False)
+    handle = provision(meeting_id=meeting_id, tenant=tenant, timeout_s=timeout_s)
+    if already_live:
+        return handle  # idempotent: no second create on the backend
+    if backend is not None:
+        envs = {
+            "JWT_SECRET": handle.jwt_secret,   # this sandbox's own secret (§3.5)
+            "SESSION_ID": handle.session_id,   # the per-sandbox claim id (§3.5)
+            "TENANT": tenant,                  # isolation-triad tenant tag
+        }
+        await backend.create(
+            sandbox_id=handle.id,
+            template=E2B_TEMPLATE,
+            timeout=handle.timeout_s,
+            envs=envs,
+            metadata={"meeting_id": meeting_id, "tenant": tenant},
+        )
+    return handle
+
+
+async def heartbeat_bump(handle: SandboxHandle, *, backend: Any = None, timeout_s: int | None = None) -> None:
+    """The §3.9 heartbeat activity-bump: extend the sandbox timeout so a
+    silently-thinking build's sandbox is NOT reaped by the E2B timeout backstop.
+
+    Idempotent + safe to call on a bump cadence; a no-op when the sandbox is gone.
+    Runs through the backend's ``set_timeout`` (behind ``call_external``).
+    """
+    if not _ALIVE.get(handle.id, False):
+        return
+    extend_to = int(timeout_s) if timeout_s is not None else handle.timeout_s
+    if backend is not None:
+        await backend.set_timeout(sandbox_id=handle.id, timeout=extend_to)
+
+
+async def _backend_kill(backend: Any, sandbox_id: str) -> None:
+    """Await the backend kill (idempotent; tolerates an already-gone sandbox)."""
+    await backend.kill(sandbox_id=sandbox_id)
+
+
+def _reset_for_test() -> None:
+    """Clear ALL in-process provider state (test isolation — no cross-test warm state)."""
+    _ALIVE.clear()
+    _SECRET_BY_SANDBOX.clear()
+    _LIVE_BY_MEETING.clear()
+    _PROVISIONED_AT.clear()
+    _ENDED_MEETINGS.clear()
 
 
 async def ensure_running(

@@ -8,6 +8,7 @@ broker and no in-memory cross-process lock.
 from __future__ import annotations
 
 from . import check_secret_bindings as check_secret_bindings
+from . import sandbox as sandbox
 from . import sandbox_provider as sandbox_provider
 from .affinity import route_to_owner as route_to_owner
 from .claim import (
@@ -73,6 +74,7 @@ __all__ = [
     "RepoProvider",
     "route_to_owner",
     "run_reconcile_sweep",
+    "sandbox",
     "sandbox_provider",
     "sweep_stale_on_read",
     "with_meeting_lock",

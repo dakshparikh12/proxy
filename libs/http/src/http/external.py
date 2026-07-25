@@ -104,3 +104,28 @@ def gcs_bucket(bucket_name: str) -> Any:
     from google.cloud import storage  # lazy: GCS SDK only when a real bucket is needed
 
     return storage.Client().bucket(bucket_name)
+
+
+def e2b_sandbox_class() -> Any:
+    """The ONLY reference to the raw E2B ``AsyncSandbox`` class in the product.
+
+    The E2B SDK is imported lazily HERE (never at import/boot time) so a host that
+    only needs the ``call_external`` seam — or that runs the whole Workroom against
+    an in-process fake — does not drag in the ``e2b`` package, and boot stays
+    offline. The wire surface confirmed against live E2B docs (CANONICAL §11.10):
+    ``AsyncSandbox.create(template=..., timeout=<seconds>, envs=<dict>, metadata=...)``,
+    instance ``.kill()`` / ``.set_timeout(seconds)`` / ``.is_running()`` and the
+    classmethods ``AsyncSandbox.connect(sandbox_id)`` / ``AsyncSandbox.list()``.
+
+    This is the sole legitimate home for the raw E2B client construction; no
+    product module outside ``libs/http`` may import ``e2b``. Raises ``ImportError``
+    (honest degrade) when the package is absent — the caller decides whether that
+    is fatal (a live deploy) or a no-op (a fake-backed test path).
+    """
+    # lazy: E2B SDK only when a real sandbox is provisioned. e2b is a DEPLOY-time
+    # dependency (the template bake) and is deliberately absent from the offline
+    # dev/test env — mypy cannot see its stub, so the import is scoped-ignored here
+    # (the sole raw-client home; no product module outside libs/http imports e2b).
+    from e2b import AsyncSandbox  # type: ignore[import-not-found]
+
+    return AsyncSandbox

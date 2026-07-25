@@ -4037,7 +4037,7 @@
       "title": "Verify per-meeting E2B sandbox provision + per-sandbox JWT secret",
       "region": "05-WORKROOM",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "05-WORKROOM.md#3.9",
         "05-WORKROOM.md#3.1",
