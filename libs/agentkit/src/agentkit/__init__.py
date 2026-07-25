@@ -8,9 +8,12 @@ from .config import BehaviorConfig as BehaviorConfig
 from .config import get_behavior as get_behavior
 from .config import register as register
 from .deltas import stream_deltas as stream_deltas
+from .execution import INJECTION_GUARDRAIL_MARK as INJECTION_GUARDRAIL_MARK
 from .execution import BehaviorRunner as BehaviorRunner
+from .execution import injection_guardrail_suffix as injection_guardrail_suffix
 from .execution import render_prompt as render_prompt
 from .execution import render_role as render_role
+from .execution import with_injection_guardrail as with_injection_guardrail
 from .execution import with_proxy_guardrails as with_proxy_guardrails
 from .provider import Provider as Provider
 from .provider import ProviderError as ProviderError
@@ -22,6 +25,7 @@ from .provider import thinking_policy as thinking_policy
 from .resume import resume_with_fallback as resume_with_fallback
 
 __all__ = [
+    "INJECTION_GUARDRAIL_MARK",
     "AbortController",
     "AbortRegistry",
     "Behavior",
@@ -32,6 +36,7 @@ __all__ = [
     "ProviderQuery",
     "compute_builtin_tools",
     "get_behavior",
+    "injection_guardrail_suffix",
     "pick_provider",
     "register",
     "register_provider",
@@ -40,5 +45,6 @@ __all__ = [
     "resume_with_fallback",
     "stream_deltas",
     "thinking_policy",
+    "with_injection_guardrail",
     "with_proxy_guardrails",
 ]

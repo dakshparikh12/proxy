@@ -68,9 +68,9 @@ from contracts import AgentChunk, Bundle, EnvelopeStatus
 # ``verifier`` disposition is read + map + run_command ONLY — NO write/edit/ast_grep/
 # propose_change (a verifier never edits what it grades, §3.7).
 from .agent_config import (
-    WORKROOM_SYSTEM_PREFIX,
     disposition_role,
     disposition_tool_policy,
+    guardrailed_system_prefix,
 )
 
 # The §1.2 status/verification mapping — the ONE owner (never re-implemented; ``verified``/
@@ -460,7 +460,7 @@ class VerifyGate:
         return ProviderQuery(
             model=model,
             allowed_tools=tuple(policy.allowed_tools),
-            system_prompt=WORKROOM_SYSTEM_PREFIX,
+            system_prompt=guardrailed_system_prefix(),  # injection guardrail appended LAST (§3.10)
             max_turns=6,  # the critic RE-RUNS the evidence itself (a few run_command turns)
             tools=(),  # computed built-in allow-list: [] in sandbox mode (§3.4)
             strict_mcp_config=True,  # triad

@@ -256,13 +256,34 @@ class _RealE2BBackend:
         self._by_id: dict[str, Any] = {}  # sandbox_id -> live AsyncSandbox instance
 
     async def create(
-        self, *, sandbox_id: str, template: str, timeout: int, envs: dict[str, str], metadata: dict[str, str]
+        self,
+        *,
+        sandbox_id: str,
+        template: str,
+        timeout: int,
+        envs: dict[str, str],
+        metadata: dict[str, str],
+        network: dict[str, Any] | None = None,
     ) -> str:
         from libs.http.src.http import external as _http
 
         cls = _http.e2b_sandbox_class()  # ImportError here iff e2b absent (honest)
+        # The egress ``network=`` kwarg (default-DENY + curated allow-list, §3.10) rides the
+        # real create so a non-allowlisted host is unreachable — it is NOT discarded (which
+        # would inherit E2B's default-ALLOW outbound). The EXACT live E2B network wire SHAPE
+        # (``network={denyOut,allowOut}`` vs. an alternate) is a Phase-3 real-infra item to
+        # confirm against LIVE E2B docs when the sandbox is stood up (CANONICAL §11.10 — wire
+        # shapes are NOT doc-pinned as verified); the host-side threading is what lands here.
+        create_kwargs: dict[str, Any] = {
+            "template": template,
+            "timeout": timeout,
+            "envs": envs,
+            "metadata": metadata,
+        }
+        if network is not None:
+            create_kwargs["network"] = network
         outcome = await _http.call_external(
-            lambda: cls.create(template=template, timeout=timeout, envs=envs, metadata=metadata),
+            lambda: cls.create(**create_kwargs),
             service="e2b",
         )
         instance = outcome.value
@@ -295,17 +316,89 @@ class _RealE2BBackend:
         return bool(outcome.value)
 
 
+# ── The §3.10 safety-wiring seams the live provision consumes (holes 1/2) ─────
+# The curated allow-list env + the egress default-DENY network policy are OWNED by the
+# workroom.safety-wiring node (``workroom.agent_config`` — the canonical curator). ops sits
+# BELOW workroom in the layer graph, so this module never imports it at module load. Instead
+# the two safety seams are INJECTABLE into ``provision_async`` (``env_curator`` /
+# ``network_kwarg``), and the DEFAULTS resolve the workroom curator via a function-local lazy
+# import at call time (no module-load cycle — both modules are loaded by the time a provision
+# runs). If workroom is genuinely not importable, the ops-level fallbacks still (a) curate the
+# env down to an allow-list — never a leaking literal — and (b) DEFAULT-DENY egress. The
+# sandbox is thus NEVER created with a leaked host secret or E2B's default-ALLOW outbound.
+
+# The ops-level env allow-list fallback — used only if the workroom curator is unreachable.
+# It is still an ALLOW-list (name the safe keys), never a deny-list, so an unknown host key
+# can never leak in through the fallback.
+_OPS_ENV_ALLOWLIST_FALLBACK: frozenset[str] = frozenset({
+    "JWT_SECRET", "SESSION_ID", "TENANT",
+    "PATH", "HOME", "LANG", "LC_ALL", "TZ", "TERM", "PYTHONUNBUFFERED",
+})
+
+
+def _default_env_curator(source_env: Any = None) -> dict[str, str]:
+    """The default sandbox-env curator: the workroom safety-wiring allow-list (§3.10).
+
+    Lazily resolves ``workroom.agent_config.get_sandbox_sdk_env`` (the ONE canonical curator)
+    so ops never imports a service at module load. On ImportError (workroom absent) it falls
+    back to an ops-level ALLOW-list over ``os.environ`` — still an allow-list, never a literal
+    and never a deny-list, so no host secret can leak through the degrade path.
+    """
+    try:
+        from workroom.agent_config import get_sandbox_sdk_env  # lazy: no module-load cycle
+    except Exception:  # pragma: no cover - honest degrade if workroom is unreachable
+        import os
+
+        src = dict(source_env) if source_env is not None else dict(os.environ)
+        return {k: v for k, v in src.items() if k in _OPS_ENV_ALLOWLIST_FALLBACK}
+    curated: dict[str, str] = get_sandbox_sdk_env(source_env)
+    return curated
+
+
+def _default_network_kwarg() -> dict[str, Any]:
+    """The default egress ``network=`` create-kwarg: default-DENY + the curated allow-list.
+
+    Lazily resolves the workroom safety-wiring policy (``get_sandbox_network_policy`` →
+    ``render_e2b_network_kwarg``). On ImportError it falls back to a deny-ALL-outbound base
+    (empty allow-list) — the SAFE default: a non-allowlisted host is unreachable, never
+    E2B's default-ALLOW. (The live E2B network wire SHAPE is a Phase-3 confirm-at-build item,
+    CANONICAL §11.10 — never doc-pinned as verified.)
+    """
+    try:
+        from workroom.agent_config import (  # lazy: no module-load cycle
+            get_sandbox_network_policy,
+            render_e2b_network_kwarg,
+        )
+    except Exception:  # pragma: no cover - honest degrade if workroom is unreachable
+        return {"denyOut": ["all"], "allowOut": []}
+    kwarg: dict[str, Any] = render_e2b_network_kwarg(get_sandbox_network_policy())
+    return kwarg
+
+
 async def provision_async(
-    *, meeting_id: str, tenant: str = "", timeout_s: int | None = None, backend: Any = None
+    *,
+    meeting_id: str,
+    tenant: str = "",
+    timeout_s: int | None = None,
+    backend: Any = None,
+    env_curator: Any = None,
+    network_kwarg: Any = None,
 ) -> SandboxHandle:
     """Provision AND drive the real (or fake) E2B backend to create the sandbox.
 
     The host-side bookkeeping + per-sandbox secret mint is the same idempotent
     ``provision`` verb. When a ``backend`` is injected (the live E2B backend, or a
-    test fake), the sandbox is created THROUGH it — passing the per-sandbox
-    ``JWT_SECRET`` + ``SESSION_ID`` (the claim id) into the sandbox ``envs`` (§3.5).
-    A re-provision of a still-live meeting is idempotent: it returns the existing
-    handle and does NOT re-create the sandbox.
+    test fake), the sandbox is created THROUGH it — passing the CURATED allow-list
+    ``envs`` (§3.10) plus the per-sandbox ``JWT_SECRET`` + ``SESSION_ID`` (the claim
+    id, §3.5), AND the egress default-DENY ``network=`` policy so a non-allowlisted
+    host is unreachable. A re-provision of a still-live meeting is idempotent: it
+    returns the existing handle and does NOT re-create the sandbox.
+
+    ``env_curator`` / ``network_kwarg`` are the injectable §3.10 safety seams (the
+    workroom.safety-wiring node owns them). They default to the workroom curator
+    (resolved lazily, layer-clean) — so the curated allow-list env and the
+    default-DENY egress policy are what the REAL create receives, never a leaking
+    literal or E2B's default-ALLOW outbound.
     """
     pre_existing = _LIVE_BY_MEETING.get(meeting_id)
     already_live = pre_existing is not None and _ALIVE.get(pre_existing.id, False)
@@ -313,29 +406,32 @@ async def provision_async(
     if already_live:
         return handle  # idempotent: no second create on the backend
     if backend is not None:
-        # The env crossing into the sandbox is a CURATED ALLOW-LIST (§3.10 safety wiring):
-        # ONLY the scoped short-lived per-job token + its claim id + the tenant tag — never a
-        # host secret. This bare set is exactly the allow-list shape
-        # ``workroom.agent_config.get_sandbox_sdk_env`` (the canonical curator, the
-        # workroom.safety-wiring node) produces; it is NOT imported here to keep ops below
-        # workroom in the layer graph (no circular import), and it is verified
-        # allow-list-conformant + curator-idempotent by tests/doc05/test_safety_wiring.py.
-        # The EGRESS default-deny network policy (``get_sandbox_network_policy`` →
-        # ``render_e2b_network_kwarg`` → the E2B ``create(network={denyOut:[all], allowOut})``
-        # kwarg) is a FLAGGED Phase-3 residual: e2b is absent + config frozen, so the
-        # ``network=`` wiring into the real ``AsyncSandbox.create`` lands with the live bake,
-        # never faked here.
-        envs = {
-            "JWT_SECRET": handle.jwt_secret,   # this sandbox's own secret (§3.5)
-            "SESSION_ID": handle.session_id,   # the per-sandbox claim id (§3.5)
-            "TENANT": tenant,                  # isolation-triad tenant tag
-        }
+        # The env crossing into the sandbox is the CURATED ALLOW-LIST (§3.10 safety wiring),
+        # produced by the workroom curator (get_sandbox_sdk_env) — NOT a hardcoded literal:
+        # every host secret NOT on the allow-list is dropped, so a live long-lived secret can
+        # never reach the untrusted-code-adjacent sandbox; only the scoped short-lived per-job
+        # token belongs there. We then PIN the per-sandbox identity (this sandbox's own secret
+        # + its claim id + the tenant tag, §3.5) over the curated base so the sidecar's JWT
+        # gate has exactly THIS sandbox's credentials, independent of what the process env held.
+        curator = env_curator if env_curator is not None else _default_env_curator
+        envs = dict(curator())
+        envs["JWT_SECRET"] = handle.jwt_secret   # this sandbox's own secret (§3.5)
+        envs["SESSION_ID"] = handle.session_id   # the per-sandbox claim id (§3.5)
+        envs["TENANT"] = tenant                  # isolation-triad tenant tag
+        # The egress default-DENY policy (deny all outbound + only the curated allow-list) is
+        # THREADED into the real create so a non-allowlisted host is unreachable — never
+        # discarded (which would inherit E2B's default-ALLOW). The real e2b wire arg stays
+        # behind call_external in libs/http; confirming the live network SHAPE is a Phase-3
+        # real-infra item (CANONICAL §11.10 — not doc-pinned as verified).
+        net = network_kwarg if network_kwarg is not None else _default_network_kwarg
+        network = net()
         await backend.create(
             sandbox_id=handle.id,
             template=E2B_TEMPLATE,
             timeout=handle.timeout_s,
             envs=envs,
             metadata={"meeting_id": meeting_id, "tenant": tenant},
+            network=network,
         )
     return handle
 

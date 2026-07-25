@@ -98,7 +98,7 @@ from contracts import AgentChunk, Bundle, Envelope
 from .agent_config import (
     SDK_LOCAL_TOOLS,
     WORKROOM_CACHE_TTL_SECONDS,
-    WORKROOM_SYSTEM_PREFIX,
+    guardrailed_system_prefix,
 )
 
 # The ONE output contract + tool-boundary progress (the workroom.envelope node, §3.12):
@@ -265,10 +265,14 @@ class SessionDriver:
 
     @staticmethod
     def stable_prefix() -> str:
-        """The stable Workroom system prefix — the prompt-cache breakpoint carries the
-        1-hour TTL (§3.9). Identical across every task in a meeting → a cache HIT after the
-        first task, so a new task pays only its volatile bundle."""
-        return WORKROOM_SYSTEM_PREFIX
+        """The stable Workroom system prefix WITH the injection guardrail appended LAST (§3.10) —
+        the prompt-cache breakpoint carries the 1-hour TTL (§3.9). Identical across every task in
+        a meeting → a cache HIT after the first task, so a new task pays only its volatile bundle.
+
+        The injection guardrail rides the END of the cached system prompt so the untrusted
+        transcript (which lands in the per-task USER prompt after it) can never lift the final
+        authoritative guardrail — every live query on this driver carries it (§3.10, hole-3 fix)."""
+        return guardrailed_system_prefix()
 
     # -- the one public entry point the dispatch invokes ----------------------
 

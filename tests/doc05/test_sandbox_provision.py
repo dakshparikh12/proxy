@@ -182,6 +182,137 @@ def test_provision_drives_injected_backend_through_call_external() -> None:
     assert fake.went_through_call_external is True, "the backend create bypassed call_external"
 
 
+# ── §3.10 safety wiring is LIVE on the real provision path (holes 1/2/6) ─────
+# These oracles run the REAL ``provision_async`` (not a helper in isolation) and prove the
+# computed egress default-DENY policy AND the curated allow-list env are what the sandbox
+# create call actually RECEIVES — a regression that discards either (E2B's default-ALLOW
+# outbound, or a hardcoded env literal that leaks a host secret) fails here.
+
+def test_provision_async_threads_egress_default_deny_into_create() -> None:
+    """The computed egress policy (default-DENY + the curated allow-list) RIDES the real
+    ``create`` call — it is NOT discarded so the sandbox inherits E2B's default-ALLOW.
+
+    Proves hole #1 is closed on the LIVE path: the fake backend asserts it received
+    ``network={"denyOut":["all"], "allowOut":[...]}`` (deny-all base + curated allow-list),
+    so a non-allowlisted host is unreachable. The real e2b wire arg stays behind
+    ``call_external`` (Phase-3 residual); the HOST threading it is proven here.
+    """
+    from tests.doc05.fakes import FakeE2BBackend
+
+    fake = FakeE2BBackend()
+    h = asyncio.run(sandbox_provider.provision_async(meeting_id="m-egress", tenant="acme", backend=fake))
+    network = fake.create_network[h.id]
+    assert network is not None, (
+        "the egress policy was DISCARDED — the sandbox create got no network= kwarg, so it "
+        "inherits E2B's default-ALLOW outbound (hole #1)"
+    )
+    # Default-DENY base: deny ALL outbound first (the allTraffic selector).
+    assert network["denyOut"] == ["all"], "egress must default-DENY (deny all outbound first)"
+    # Then allow ONLY the curated allow-list — a non-allowlisted host is unreachable.
+    assert isinstance(network["allowOut"], list) and network["allowOut"], (
+        "the curated allow-list must ride the create call"
+    )
+    assert "evil.example.com" not in network["allowOut"]
+    assert "0.0.0.0/0" not in network["allowOut"], "an allow-all CIDR would defeat default-deny"
+
+
+def test_provision_async_egress_matches_the_workroom_curator() -> None:
+    """The network= kwarg the create receives is EXACTLY what the workroom safety-wiring
+    curator produces — the ONE owner of the policy, not a divergent re-derivation."""
+    from workroom.agent_config import get_sandbox_network_policy, render_e2b_network_kwarg
+
+    from tests.doc05.fakes import FakeE2BBackend
+
+    expected = render_e2b_network_kwarg(get_sandbox_network_policy())
+    fake = FakeE2BBackend()
+    h = asyncio.run(sandbox_provider.provision_async(meeting_id="m-egress2", tenant="acme", backend=fake))
+    assert fake.create_network[h.id] == expected, (
+        "the create's network= kwarg diverged from the canonical safety-wiring curator"
+    )
+
+
+def test_provision_async_env_is_the_curated_allowlist_not_a_literal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The env crossing into the sandbox is produced by ``get_sandbox_sdk_env`` on the LIVE
+    ``provision_async`` path — NOT a hardcoded literal that would leak a host secret.
+
+    Proves hole #2 is closed: a live long-lived host secret present in the process at
+    provision time (DATABASE_URL / RECALL_API_KEY) is DROPPED by the curator, and the
+    scoped per-job token (JWT_SECRET + the SESSION_ID claim) + tenant tag survive. Testing
+    ``provision_async`` itself (not the curator in isolation) is what closes the hole — a
+    literal ``envs = {...}`` would still pass a curator-only test but fail THIS one.
+    """
+    from workroom.agent_config import SANDBOX_ENV_ALLOWLIST
+
+    from tests.doc05.fakes import FakeE2BBackend
+
+    # A host process carrying live long-lived secrets at provision time.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db/main")
+    monkeypatch.setenv("RECALL_API_KEY", "rk-live-should-not-leak")
+    monkeypatch.setenv("GCS_BUCKET", "proxy-prod")
+    # A BENIGN allow-listed operational key the curator (reading os.environ) MUST carry
+    # through, but a hardcoded ``envs = {JWT_SECRET, SESSION_ID, TENANT}`` literal never
+    # would. This is the signal that distinguishes "curator ran" from "literal leaked back".
+    monkeypatch.setenv("PYTHONUNBUFFERED", "1")
+
+    fake = FakeE2BBackend()
+    h = asyncio.run(sandbox_provider.provision_async(meeting_id="m-env", tenant="acme", backend=fake))
+    envs = fake.create_envs[h.id]
+    # The host secrets are GONE (they are not on the allow-list) — an allow-list, not a literal.
+    for leaked in ("DATABASE_URL", "RECALL_API_KEY", "GCS_BUCKET"):
+        assert leaked not in envs, f"host secret {leaked!r} leaked into the sandbox env (hole #2)"
+    # Every surviving key is allow-listed — the curator produced this env, not a literal.
+    for key in envs:
+        assert key in SANDBOX_ENV_ALLOWLIST, f"{key!r} crossed into the sandbox but is not allow-listed"
+    # The scoped per-job token + claim id + tenant tag are the ones that DO belong there (§3.5).
+    assert envs["JWT_SECRET"] == h.jwt_secret, "the per-sandbox secret must cross into the sandbox"
+    assert envs["SESSION_ID"] == h.session_id, "the per-sandbox claim id must cross into the sandbox"
+    assert envs["TENANT"] == "acme", "the isolation-triad tenant tag must cross into the sandbox"
+    # The benign allow-listed operational key from the real process env crossed through — a
+    # hardcoded literal would have dropped it, so this proves the CURATOR ran (hole #2 closed).
+    assert envs.get("PYTHONUNBUFFERED") == "1", (
+        "the env is a hardcoded literal, not the curated allow-list over the process env "
+        "(get_sandbox_sdk_env was not invoked on the real provision path — hole #2)"
+    )
+
+
+def test_provision_async_curator_is_injectable_and_still_used(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A caller MAY inject the env curator / network policy (the layer-clean seam), and when
+    it does, THAT curator's output is what rides the create — the ops layer never bypasses it."""
+    from tests.doc05.fakes import FakeE2BBackend
+
+    calls: dict[str, int] = {"env": 0, "net": 0}
+
+    def _curator(source_env=None):  # type: ignore[no-untyped-def]
+        calls["env"] += 1
+        # A benign allow-listed key ONLY the curator supplies — proves the curator's output
+        # rode the create. (JWT_SECRET/SESSION_ID/TENANT are pinned to the per-sandbox
+        # identity AFTER the curator, so they are never taken from the curator's return.)
+        return {"PYTHONUNBUFFERED": "1", "JWT_SECRET": "curator-should-be-overridden"}
+
+    def _network():  # type: ignore[no-untyped-def]
+        calls["net"] += 1
+        return {"denyOut": ["all"], "allowOut": ["mirror.internal"]}
+
+    fake = FakeE2BBackend()
+    h = asyncio.run(
+        sandbox_provider.provision_async(
+            meeting_id="m-inj", tenant="t", backend=fake,
+            env_curator=_curator, network_kwarg=_network,
+        )
+    )
+    assert calls["env"] == 1 and calls["net"] == 1, "the injected curator/policy were not used"
+    # The curator's benign key crossed through — its output was used, not bypassed.
+    assert fake.create_envs[h.id]["PYTHONUNBUFFERED"] == "1"
+    # The per-sandbox identity is PINNED over the curator (this sandbox's REAL secret must
+    # cross, never a curator-supplied placeholder) — the security-correct precedence.
+    assert fake.create_envs[h.id]["JWT_SECRET"] == h.jwt_secret
+    assert fake.create_network[h.id] == {"denyOut": ["all"], "allowOut": ["mirror.internal"]}
+
+
 def test_heartbeat_activity_bump_extends_timeout_anti_reap() -> None:
     """The heartbeat activity-bump extends the sandbox timeout so a silently-thinking
     build's sandbox is NOT reaped (§3.9). It runs through the backend's set_timeout.

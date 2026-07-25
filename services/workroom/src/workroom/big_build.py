@@ -41,7 +41,7 @@ as the **first, read-only SDK turn** and becomes durable, amendable editable sta
 
 **Reuse, never redefine (the mandate):** the tool policy + isolation triad + seat resolution
 come from :mod:`workroom.agent_config` (``disposition_tool_policy`` / ``seat_for_disposition`` /
-``disposition_role`` / ``WORKROOM_SYSTEM_PREFIX``); the model table + output clamp from
+``disposition_role`` / ``guardrailed_system_prefix``); the model table + output clamp from
 :mod:`llm.routing`; the thinking policy from :func:`agentkit.thinking_policy`; the provider
 seam + ``stream_deltas`` + ``ProviderError`` from :mod:`agentkit`; the contract types from
 :mod:`contracts`. The plan-turn ``query`` object is the imported ``agentkit.ProviderQuery`` —
@@ -80,9 +80,9 @@ from contracts import AgentChunk, Bundle
 # The isolation-triad-carrying tool policy + seat/role resolution + the cached stable prefix —
 # imported from the ONE owner, never redefined here (the §3.2/§3.4/§10.5 invariants).
 from .agent_config import (
-    WORKROOM_SYSTEM_PREFIX,
     disposition_role,
     disposition_tool_policy,
+    guardrailed_system_prefix,
     seat_for_disposition,
 )
 
@@ -571,7 +571,7 @@ class BigBuildPlanner:
         return ProviderQuery(
             model=model,
             allowed_tools=tuple(policy.allowed_tools),
-            system_prompt=WORKROOM_SYSTEM_PREFIX,
+            system_prompt=guardrailed_system_prefix(),  # injection guardrail appended LAST (§3.10)
             max_turns=max_turns,
             tools=(),                       # computed built-in allow-list: [] in sandbox mode (§3.4)
             strict_mcp_config=True,         # triad
@@ -1173,7 +1173,7 @@ class BigBuildExecutor:
         return ProviderQuery(
             model=model,
             allowed_tools=(),               # NO tools — a pure "is the rest still right?" turn (§3.6.3)
-            system_prompt=WORKROOM_SYSTEM_PREFIX,
+            system_prompt=guardrailed_system_prefix(),  # injection guardrail appended LAST (§3.10)
             max_turns=1,                    # max_turns:1 (§3.6.3)
             tools=(),                       # computed built-in allow-list: [] in sandbox mode (§3.4)
             strict_mcp_config=True,         # triad
@@ -1293,7 +1293,7 @@ class BigBuildExecutor:
         return ProviderQuery(
             model=model,
             allowed_tools=tuple(policy.allowed_tools),
-            system_prompt=WORKROOM_SYSTEM_PREFIX,
+            system_prompt=guardrailed_system_prefix(),  # injection guardrail appended LAST (§3.10)
             max_turns=self._worker_max_turns,
             tools=(),                       # computed built-in allow-list: [] in sandbox mode (§3.4)
             strict_mcp_config=True,         # triad

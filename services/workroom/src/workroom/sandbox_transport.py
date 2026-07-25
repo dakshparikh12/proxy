@@ -85,7 +85,7 @@ from llm.routing import model_for
 from libs.db import sandbox_jwt_refresh_margin_s, sandbox_jwt_ttl_s, sandbox_mcp_port
 from libs.ops import sandbox_provider
 
-from .agent_config import WORKROOM_SYSTEM_PREFIX, workroom_options
+from .agent_config import guardrailed_system_prefix, workroom_options
 
 # The 8 tool NAMES are owned by the tool-handler module (workroom.sandbox-tools); the
 # transport imports them so the advertised MCP tools, the wire contract, and the actual
@@ -442,7 +442,11 @@ def get_agent_tool_config(
         disallowed_extra = list(WRITE_TOOLS)
 
     options = workroom_options(
-        system_prompt=system_prompt if system_prompt is not None else WORKROOM_SYSTEM_PREFIX,
+        # The injection guardrail rides the END of the system prompt on EVERY query (§3.10,
+        # hole-3 fix): a caller-supplied prompt is used as-is (the session driver already
+        # appends the guardrail via ``stable_prefix``); the fallback is the GUARDRAILED prefix,
+        # never the bare one — so no sandbox query is ever built without the injection guardrail.
+        system_prompt=system_prompt if system_prompt is not None else guardrailed_system_prefix(),
         allowed_tools=allowed_tools,
         mcp_servers=mcp_servers,
         model=model,

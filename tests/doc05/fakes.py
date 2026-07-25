@@ -130,6 +130,12 @@ class FakeE2BBackend:
     def __init__(self) -> None:
         self.created: list[str] = []
         self.create_envs: dict[str, dict[str, str]] = {}
+        # The egress network= kwarg the sandbox was actually created with (§3.10). The
+        # real ``AsyncSandbox.create`` wire arg lives behind ``call_external`` in libs/http
+        # and stays a Phase-3 residual; this fake proves the host THREADED the computed
+        # default-DENY policy into the create call (a non-allowlisted host is unreachable),
+        # rather than discarding it and inheriting E2B's default-ALLOW outbound.
+        self.create_network: dict[str, dict[str, Any] | None] = {}
         self.killed: list[str] = []
         self.timeouts_set: dict[str, list[int]] = {}
         self.alive: dict[str, bool] = {}
@@ -149,12 +155,23 @@ class FakeE2BBackend:
         return ExternalCallOutcome(value=value, attempts=1, total_cost_usd=unit_cost_usd)
 
     async def create(
-        self, *, sandbox_id: str, template: str, timeout: int, envs: dict[str, str], metadata: dict[str, str]
+        self,
+        *,
+        sandbox_id: str,
+        template: str,
+        timeout: int,
+        envs: dict[str, str],
+        metadata: dict[str, str],
+        network: dict[str, Any] | None = None,
     ) -> str:
         # Route the create through call_external, exactly as the real backend does.
+        # ``network`` is the confirmed-live E2B egress kwarg the host threads in (§3.10);
+        # the fake records it so a test can prove default-DENY + the curated allow-list
+        # actually rode the create call (not the discarded default-ALLOW).
         async def _raw() -> str:
             self.created.append(sandbox_id)
             self.create_envs[sandbox_id] = dict(envs)
+            self.create_network[sandbox_id] = dict(network) if network is not None else None
             self.timeouts_set.setdefault(sandbox_id, []).append(int(timeout))
             self.alive[sandbox_id] = True
             return sandbox_id

@@ -217,10 +217,19 @@ def test_stable_prefix_cache_ttl_is_one_hour_not_the_sdk_default() -> None:
 def test_the_cache_breakpoint_sits_on_the_stable_prefix() -> None:
     """The breakpoint is on the STABLE Workroom prefix (disposition prompt), not the volatile
     per-task bundle. ``SessionDriver.stable_prefix`` IS that prefix; it opens with the verbatim
-    §2.2 disposition instruction and carries no per-task volatile content."""
+    §2.2 disposition instruction and carries no per-task volatile content.
+
+    The stable prefix now carries the §3.10 injection guardrail appended LAST (the guardrail is
+    stable — identical every task — so it belongs INSIDE the cached prefix, riding every query).
+    It is still the bare disposition prefix + the (stable) guardrail; no volatile content."""
     prefix = SessionDriver.stable_prefix()
-    assert prefix == agent_config.WORKROOM_SYSTEM_PREFIX
+    # The cached prefix = the stable disposition prefix WITH the stable injection guardrail last.
+    assert prefix == agent_config.guardrailed_system_prefix()
+    assert prefix.startswith(agent_config.WORKROOM_SYSTEM_PREFIX)
     assert prefix.startswith(agent_config.DISPOSITION_OPENER)
+    # The guardrail is the final authoritative segment of the (stable) cached prefix (§3.10);
+    # the guardrail marker sits AFTER the base prefix, so it is genuinely appended last.
+    assert prefix.rfind(agent_config.GUARDRAIL_MARK) > len(agent_config.WORKROOM_SYSTEM_PREFIX) - 1
     # Volatile per-task markers must NOT be in the cached prefix (they ride the prompt after it).
     assert "TRANSCRIPT TAIL" not in prefix
     assert "Task id" not in prefix

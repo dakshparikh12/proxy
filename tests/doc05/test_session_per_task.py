@@ -292,12 +292,20 @@ def test_new_task_pays_only_its_bundle_cached_prefix_hits() -> None:
 def test_stable_prefix_carries_the_one_hour_cache_ttl() -> None:
     """DoD #2 (invariant): the 1-hour-TTL prompt cache sits on the STABLE prefix, not
     the SDK 5-min default — the prefix is warm across a whole meeting-hour (§3.9)."""
-    from workroom.agent_config import WORKROOM_CACHE_TTL_SECONDS, WORKROOM_SYSTEM_PREFIX
+    from workroom.agent_config import (
+        GUARDRAIL_MARK,
+        WORKROOM_CACHE_TTL_SECONDS,
+        WORKROOM_SYSTEM_PREFIX,
+        guardrailed_system_prefix,
+    )
     from workroom.session import SessionDriver, stable_prefix_cache_ttl_seconds
 
-    # The driver's stable prefix IS the cacheable Workroom system prefix, at the 1-hr TTL.
+    # The driver's stable prefix IS the cacheable Workroom system prefix (now WITH the stable
+    # §3.10 injection guardrail appended LAST — it rides every query), at the 1-hr TTL.
     assert stable_prefix_cache_ttl_seconds() == WORKROOM_CACHE_TTL_SECONDS == 3600
-    assert SessionDriver.stable_prefix() == WORKROOM_SYSTEM_PREFIX
+    assert SessionDriver.stable_prefix() == guardrailed_system_prefix()
+    assert SessionDriver.stable_prefix().startswith(WORKROOM_SYSTEM_PREFIX)
+    assert GUARDRAIL_MARK in SessionDriver.stable_prefix()  # the guardrail rides the cached prefix
     # Not the SDK 5-minute default.
     assert stable_prefix_cache_ttl_seconds() != 300
 
