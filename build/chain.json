@@ -4806,7 +4806,7 @@
       "title": "Safety: egress-deny, curated env, injection guardrails",
       "region": "05-WORKROOM",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "05-WORKROOM.md#3.10",
         "05-WORKROOM.md#2.5",
