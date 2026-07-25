@@ -1,6 +1,7 @@
 """libs.contracts — all wire types shared across services (single home)."""
 from __future__ import annotations
 
+from . import channel as channel  # noqa: F401 — import fires §4.2/§4.5 model registration
 from .bundle import Bundle as Bundle
 from .capabilities import (
     CAPABILITIES as CAPABILITIES,
@@ -13,6 +14,42 @@ from .capabilities import (
 )
 from .capabilities import (
     OutputKind as OutputKind,
+)
+from .channel import (
+    ActionSurface as ActionSurface,
+)
+from .channel import (
+    CanvasPatch as CanvasPatch,
+)
+from .channel import (
+    ChannelAction as ChannelAction,
+)
+from .channel import (
+    DraftCard as DraftCard,
+)
+from .channel import (
+    NoteLine as NoteLine,
+)
+from .channel import (
+    ResponseChunk as ResponseChunk,
+)
+from .channel import (
+    ResponseEnd as ResponseEnd,
+)
+from .channel import (
+    ResponseStart as ResponseStart,
+)
+from .channel import (
+    Surface as Surface,
+)
+from .channel import (
+    TileState as TileState,
+)
+from .channel import (
+    ToolStart as ToolStart,
+)
+from .channel import (
+    VoiceSpeak as VoiceSpeak,
 )
 from .channels import ChannelReport as ChannelReport
 from .chunks import (
@@ -88,10 +125,23 @@ __all__ = [
     "AGENT_CHUNK_METADATA_KEYS",
     "CAPABILITIES",
     "Action",
-    "Capability",
-    "OutputKind",
     "AgentChunk",
     "Bundle",
+    "Capability",
+    "OutputKind",
+    "ActionSurface",
+    "CanvasPatch",
+    "ChannelAction",
+    "DraftCard",
+    "NoteLine",
+    "ResponseChunk",
+    "ResponseEnd",
+    "ResponseStart",
+    "Surface",
+    "TileState",
+    "ToolStart",
+    "VoiceSpeak",
+    "channel",
     "CHANNEL_REGISTRY",
     "INBOUND",
     "MESSAGE_HANDLERS",

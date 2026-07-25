@@ -30,10 +30,9 @@ into the client registry fails it.
 from __future__ import annotations
 
 import enum
-from typing import Any, Callable, Literal, get_args
-from uuid import UUID
+from typing import Any, Callable, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 # type-string -> ProxyMessage subclass. Populated by ``__pydantic_init_subclass__``.
 CHANNEL_REGISTRY: dict[str, type["ProxyMessage"]] = {}
@@ -97,81 +96,13 @@ class ProxyMessage(BaseModel):
         CHANNEL_REGISTRY[key] = cls
 
 
-# ── inbound: the generic surface-carrying family (§4.4; tile is never its origin) ──
-class ChannelActionMessage(ProxyMessage):
-    """A human voice/chat command over the WS — the sole inbound client type (§4.4)."""
-
-    type: Literal["channel_action"] = "channel_action"
-    action: str = Field(max_length=64)  # the generic surface verb (ask/mute/stop/…)
-    text: str | None = Field(default=None, max_length=8000)  # optional free-text payload
-
-
-# ── outbound: the streamed render frames (§4.5) the projector renders to surfaces ──
-class ResponseStartMessage(ProxyMessage):
-    """Open a streamed response on a surface (§4.5)."""
-
-    type: Literal["response.start"] = "response.start"
-    response_id: UUID
-
-
-class ResponseChunkMessage(ProxyMessage):
-    """A ``send_chat()`` delivery-tool delta → chat (§4.5)."""
-
-    type: Literal["response.chunk"] = "response.chunk"
-    response_id: UUID
-    text: str = Field(max_length=8000)
-
-
-class ResponseEndMessage(ProxyMessage):
-    """Close a streamed response (§4.5)."""
-
-    type: Literal["response.end"] = "response.end"
-    response_id: UUID
-
-
-class VoiceSpeakMessage(ProxyMessage):
-    """A ``speak()`` delivery-tool text delta → TTS (§4.5; never a bare ``speak`` dict)."""
-
-    type: Literal["voice.speak"] = "voice.speak"
-    text: str = Field(max_length=8000)
-
-
-class CanvasPatchMessage(ProxyMessage):
-    """A structured TOOL_RESULT / ``show_screen()`` render → canvas/screen (§4.5)."""
-
-    type: Literal["canvas.patch"] = "canvas.patch"
-    patch: str = Field(max_length=100_000)  # the structured render payload (JSON string)
-
-
-class ToolStartMessage(ProxyMessage):
-    """A work-tool TOOL_USE → tile "working…" line (§4.5)."""
-
-    type: Literal["tool.start"] = "tool.start"
-    tool_name: str = Field(max_length=120)
-
-
-class TileStateMessage(ProxyMessage):
-    """The tile lifecycle frame (§4.5): listening/working/has-something/speaking/muted/checking."""
-
-    type: Literal["tile.state"] = "tile.state"
-    state: Literal[
-        "listening", "working", "has-something", "speaking", "muted", "checking"
-    ]
-
-
-class NoteLineMessage(ProxyMessage):
-    """A decision/action/correction chat line (§2.4 #3,#4)."""
-
-    type: Literal["note.line"] = "note.line"
-    text: str = Field(max_length=2000)
-
-
-class DraftCardMessage(ProxyMessage):
-    """A staged-draft card (§2.4 #8) — links to the ``/m/`` accept route, never a raw URI."""
-
-    type: Literal["draft.card"] = "draft.card"
-    draft_id: UUID
-    summary: str = Field(max_length=2000)
+# ── the message BODIES live in ``channel.py`` (§4.2/§4.5), not here ────────────
+# ``registry.py`` owns only the machinery — the ``MessageType`` enum, the
+# ``ProxyMessage`` base, the closure, and the produce/consume maps. The concrete
+# models (``ChannelAction`` + the render frames) are defined in ``contracts.channel``
+# so a shared type is described ONCE, in one place (CANONICAL §11.5). ``contracts``'s
+# ``__init__`` imports that module, firing ``__pydantic_init_subclass__`` on each
+# model and populating ``CHANNEL_REGISTRY`` before ``assert_registry_closed`` runs.
 
 
 # ── the produce/consume graph, made into three declared maps (CANONICAL §12.12) ──
@@ -220,12 +151,14 @@ def register_producer(message_type: MessageType, producer: str) -> None:
         bucket.append(producer)
 
 
-def _default_channel_action_handler(message: ChannelActionMessage) -> ChannelActionMessage:
+def _default_channel_action_handler(message: ProxyMessage) -> ProxyMessage:
     """The default in-registry dispatch handler for the sole inbound type.
 
-    Guarantees ``channel_action`` is always handled (closure stays green) even
-    before a service wires a richer handler. The live dispatch funnel (§4.3) may
-    re-bind this via :func:`register_handler` with the same-or-explicit callable.
+    Typed against the ``ProxyMessage`` base (the concrete ``ChannelAction`` body lives
+    in ``contracts.channel`` — importing it here would be circular). Guarantees
+    ``channel_action`` is always handled (closure stays green) even before a service
+    wires a richer handler. The live dispatch funnel (§4.3) may re-bind this via
+    :func:`register_handler` with the same-or-explicit callable.
     """
     return message
 

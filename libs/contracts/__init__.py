@@ -28,16 +28,28 @@ from .src.contracts import (
     SIGNAL_SURFACE_EVENTS as SIGNAL_SURFACE_EVENTS,
 )
 from .src.contracts import (
+    ActionSurface as ActionSurface,
+)
+from .src.contracts import (
     AgentChunk as AgentChunk,
 )
 from .src.contracts import (
     Bundle as Bundle,
 )
 from .src.contracts import (
+    CanvasPatch as CanvasPatch,
+)
+from .src.contracts import (
+    ChannelAction as ChannelAction,
+)
+from .src.contracts import (
     ChannelReport as ChannelReport,
 )
 from .src.contracts import (
     ChunkType as ChunkType,
+)
+from .src.contracts import (
+    DraftCard as DraftCard,
 )
 from .src.contracts import (
     Envelope as Envelope,
@@ -55,6 +67,9 @@ from .src.contracts import (
     NoteDelta as NoteDelta,
 )
 from .src.contracts import (
+    NoteLine as NoteLine,
+)
+from .src.contracts import (
     NoteOp as NoteOp,
 )
 from .src.contracts import (
@@ -70,11 +85,33 @@ from .src.contracts import (
     ReadinessReport as ReadinessReport,
 )
 from .src.contracts import (
+    ResponseChunk as ResponseChunk,
+)
+from .src.contracts import (
+    ResponseEnd as ResponseEnd,
+)
+from .src.contracts import (
+    ResponseStart as ResponseStart,
+)
+from .src.contracts import (
+    Surface as Surface,
+)
+from .src.contracts import (
+    TileState as TileState,
+)
+from .src.contracts import (
+    ToolStart as ToolStart,
+)
+from .src.contracts import (
+    VoiceSpeak as VoiceSpeak,
+)
+from .src.contracts import (
     assert_fields_consumed as assert_fields_consumed,
 )
 from .src.contracts import (
     assert_registry_closed as assert_registry_closed,
 )
+from .src.contracts import channel as channel  # re-export the §4.2/§4.5 model module
 from .src.contracts import (
     register_handler as register_handler,
 )
@@ -90,8 +127,21 @@ from .src.contracts import (
 
 __all__ = [
     "AGENT_CHUNK_METADATA_KEYS",
+    "ActionSurface",
     "AgentChunk",
     "Bundle",
+    "CanvasPatch",
+    "ChannelAction",
+    "DraftCard",
+    "NoteLine",
+    "ResponseChunk",
+    "ResponseEnd",
+    "ResponseStart",
+    "Surface",
+    "TileState",
+    "ToolStart",
+    "VoiceSpeak",
+    "channel",
     "CHANNEL_REGISTRY",
     "INBOUND",
     "MESSAGE_HANDLERS",
