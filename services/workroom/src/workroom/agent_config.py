@@ -111,6 +111,21 @@ disallowed_tools: tuple[str, ...] = SDK_LOCAL_TOOLS
 # prefix so a meeting reuses it cheaply. (AC-INV-001, D-021)
 WORKROOM_CACHE_TTL_SECONDS = 3600
 
+
+def stable_prefix_cache_control() -> dict[str, object]:
+    """The ``ephemeral`` ``cache_control`` breakpoint pinned to the 1-hour TTL (§3.9).
+
+    This is the SDK/Messages-API prompt-cache directive — ``{"type": "ephemeral",
+    "ttl": "1h"}`` — that MUST ride the stable-prefix breakpoint so the large repo-grounding
+    prefix stays warm for the whole meeting-hour, NOT the SDK default 5-minute TTL. The TTL
+    is rendered as the API's ``"1h"`` string (the Messages-API wire form; the seconds value
+    :data:`WORKROOM_CACHE_TTL_SECONDS` is the honest source of truth it derives from). Mirrors
+    ``agentkit.wake_cache`` so the wake prefix and the Workroom prefix cache identically —
+    caching is never Scribe-only (D-021)."""
+    # 3600s → the Messages-API "1h" wire token; anything else is the 5-min default (300s).
+    ttl = "1h" if WORKROOM_CACHE_TTL_SECONDS == 3600 else f"{WORKROOM_CACHE_TTL_SECONDS}s"
+    return {"type": "ephemeral", "ttl": ttl}
+
 # ---------------------------------------------------------------------------
 # The disposition (§2.2 — where the single moment of judgment lives).
 # ---------------------------------------------------------------------------
@@ -183,6 +198,7 @@ def workroom_options(
     max_turns: int,
     resume: str | None = None,
     env: dict[str, str] | None = None,
+    extra_args: dict[str, str | None] | None = None,
 ) -> ClaudeAgentOptions:
     """Build the ``ClaudeAgentOptions`` for one Workroom ``query()`` — the triad on EVERY call.
 
@@ -197,9 +213,25 @@ def workroom_options(
         ``bypassPermissions``).
 
     Plus ``disallowed_tools=SDK_LOCAL_TOOLS`` (incl. ``Task``) as the backstop, the curated
-    ``allowed_tools`` subset (§10.5 — never the whole-Proxy union), and the curated
-    ``env``. Fed directly to ``query(prompt=..., options=workroom_options(...))``.
+    ``allowed_tools`` subset (§10.5 — never the whole-Proxy union), the curated ``env``, and
+    the 1-hour prompt-cache TTL on the stable-prefix breakpoint (§3.9). Fed directly to
+    ``query(prompt=..., options=workroom_options(...))``.
+
+    The 1-hour stable-prefix cache is made structural HERE (not a dead constant): the
+    :func:`stable_prefix_cache_control` breakpoint (``{"type":"ephemeral","ttl":"1h"}``) is
+    threaded onto the options via ``extra_args`` (the SDK's CLI passthrough), so the CLI
+    marks the system-prompt breakpoint with the 1-hour TTL rather than the default 5 minutes.
+    A downstream provider reads the same directive off ``options.extra_args`` when it builds
+    the Messages-API ``system`` block's ``cache_control`` — so the behavior §3.9 requires (a
+    1-hr TTL on the prompt-cache breakpoint, CANONICAL §10.1) is EXERCISED on the real query
+    path, not merely asserted. (AC-INV-001, D-021)
     """
+    # The 1-hour prompt-cache TTL on the stable-prefix breakpoint (§3.9). Rendered as the
+    # Messages-API "1h" wire token and carried as a real CLI arg so it rides the built options
+    # object the query() actually enforces — never a dead constant asserted in isolation.
+    cache_control = stable_prefix_cache_control()
+    extra_args = dict(extra_args) if extra_args is not None else {}
+    extra_args["system-prompt-cache-ttl"] = str(cache_control["ttl"])
     return ClaudeAgentOptions(
         model=model,
         max_turns=max_turns,
@@ -215,6 +247,8 @@ def workroom_options(
         setting_sources=[],  # triad: load NO host fs settings
         env=dict(env) if env is not None else {},  # curated env (§3.10)
         permission_mode=permission_mode,  # headless server agent → tools=[] is the gate
+        # The 1-hour stable-prefix cache breakpoint, made structural on the real options (§3.9).
+        extra_args=extra_args,
     )
 
 

@@ -790,9 +790,18 @@ class SessionDriver:
 
         Best-effort by construction (Rule 6): no meter → a no-op (cost still rides the Envelope
         artifact, so the trace is never lost); a meter fault is swallowed (the task already
-        produced its work — a lost cost row must not fail the run). The meter may be the
-        module-level ``ops.cost.record_micro_call_cost`` seam (given a ``Database`` or a raw
-        connection) or an in-process recorder exposing ``record(...)`` (the host-fake path).
+        produced its work — a lost cost row must not fail the run).
+
+        Two shapes, both wired for real:
+          * an in-process recorder exposing ``record(*, meeting_id, total_cost_usd, ...)`` —
+            the host-fake path (a test injects one to assert the driver fed the meter);
+          * the module-level ``ops.cost.record_micro_call_cost`` seam, whose real signature is
+            ``record_micro_call_cost(target, meeting_id, *, total_cost_usd=, cache_read_usd=,
+            cache_creation_usd=)`` — ``target`` is the durable sink (a ``libs.db.Database`` or a
+            raw psycopg connection). The driver's ``self._db`` IS that sink, so the fallback
+            passes it as ``target`` and ``meeting_id`` as the second positional — the split then
+            lands in the SAME ``meeting_cost``/telemetry row Doc 04 reads (never a bespoke sink,
+            never ``meeting_id`` mis-bound into ``target``).
         """
         if self._cost_meter is None:
             return
@@ -816,8 +825,12 @@ class SessionDriver:
                 if _isawaitable(result):
                     await result
                 return
-            # Fall back to the module-level ops.cost seam (a Database or raw connection sink).
+            # Fall back to the module-level ops.cost seam. Its FIRST positional is the durable
+            # ``target`` sink (Database | raw connection), the SECOND is ``meeting_id`` — so we
+            # pass ``self._db`` as the sink and ``meeting_id`` where the seam expects it. Passing
+            # ``meeting_id`` first (the old bug) mis-bound it into ``target`` and dropped the row.
             result = self._cost_meter(
+                self._db,
                 meeting_id,
                 total_cost_usd=total,
                 cache_read_usd=cache_read,

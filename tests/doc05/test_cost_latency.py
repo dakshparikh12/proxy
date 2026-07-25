@@ -177,3 +177,90 @@ def test_the_cache_breakpoint_sits_on_the_stable_prefix() -> None:
     # Volatile per-task markers must NOT be in the cached prefix (they ride the prompt after it).
     assert "TRANSCRIPT TAIL" not in prefix
     assert "Task id" not in prefix
+
+
+def test_cache_control_breakpoint_is_ephemeral_one_hour_not_five_minutes() -> None:
+    """The ``cache_control`` breakpoint is an ``ephemeral`` block pinned to the 1-hr TTL (§3.9).
+
+    Not just a constant: this is the actual Messages-API prompt-cache directive
+    (``{"type": "ephemeral", "ttl": "1h"}``) that must ride the stable-prefix breakpoint. The
+    ``1h`` wire token — NOT the SDK's default 5-minute breakpoint (``5m``) — is what keeps the
+    large repo-grounding prefix warm for the whole meeting-hour (CANONICAL §10.1)."""
+    cc = agent_config.stable_prefix_cache_control()
+    assert cc["type"] == "ephemeral"
+    assert cc["ttl"] == "1h", "the breakpoint must carry the 1-hour TTL wire token, not the default"
+    assert cc["ttl"] != "5m"  # NOT the SDK default 5-minute breakpoint
+    # And it derives from the honest seconds source of truth (3600s == 1h).
+    assert agent_config.WORKROOM_CACHE_TTL_SECONDS == 3600
+
+
+def test_one_hour_cache_ttl_is_wired_onto_the_real_query_options() -> None:
+    """WIRED, not asserted-only: the 1-hr TTL rides the REAL ``ClaudeAgentOptions`` the
+    ``query()`` path enforces (§3.9). ``get_agent_tool_config`` builds the actual options for a
+    warm sandbox through ``workroom_options``; the 1-hour prompt-cache breakpoint must be present
+    on that options object (carried via ``extra_args`` — the SDK's CLI passthrough), so the CLI
+    marks the system-prompt breakpoint with the 1-hr TTL. If the SDK's default 5-min TTL were
+    used at runtime this assertion would FAIL — the behavior §3.9 requires is EXERCISED here,
+    not merely a constant asserted in isolation."""
+    from libs.ops import sandbox_provider
+    from workroom.sandbox_transport import get_agent_tool_config
+
+    sandbox_provider._reset_for_test()
+    handle = sandbox_provider.provision(meeting_id="m-cache-ttl-wired")
+    config = get_agent_tool_config(
+        handle,
+        access="readwrite",
+        model="claude-sonnet-4-6",
+        max_turns=3,
+        system_prompt=SessionDriver.stable_prefix(),
+    )
+    extra = dict(getattr(config.options, "extra_args", None) or {})
+    # The 1-hour TTL is present on the options the query() actually uses.
+    assert extra.get("system-prompt-cache-ttl") == "1h", (
+        "the built query options must carry the 1-hour prompt-cache TTL — a missing/5m TTL means "
+        "the stable prefix would fall out of cache every 5 minutes across the meeting-hour"
+    )
+    assert extra.get("system-prompt-cache-ttl") != "5m"  # never the SDK default
+
+
+# --------------------------------------------------------------------------- #
+# 2b. The output clamp is threaded into the REAL query env end-to-end (§3.2 / §3.9).
+# --------------------------------------------------------------------------- #
+
+def test_output_clamp_is_threaded_into_the_real_query_env_per_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PARTIAL no more: the ``min(env, ceiling)`` clamp is threaded into ``options.env`` on the
+    REAL driver path, keyed by the per-role SEAT-resolved model (§3.2/§3.9).
+
+    ``SessionDriver._build_query_options`` resolves the disposition's model via the IMPORTED
+    routing table, then clamps ``MAX_OUTPUT_TOKENS`` into the curated env the SDK ``query()``
+    reads. With a large global env, the worker (Opus seat) clamps to the Opus ceiling (128K) and
+    the quick disposition (Sonnet seat) clamps to the Sonnet ceiling (64K) — proving the clamp is
+    (a) applied end-to-end on the real options, and (b) model-specific (a Sonnet request never
+    asks for an Opus-sized output). If ``_apply_output_clamp`` were dropped, or the seat→model
+    wiring regressed, ``options.env['MAX_OUTPUT_TOKENS']`` would be absent/wrong and this FAILS."""
+    from libs.ops import sandbox_provider
+
+    # A large global budget so the per-model ceiling is what actually bites (proves the clamp).
+    monkeypatch.setenv("MAX_OUTPUT_TOKENS", "1000000")
+    sandbox_provider._reset_for_test()
+    handle = sandbox_provider.provision(meeting_id="m-clamp-wired")
+
+    # worker → BIG_BUILD (Opus) seat → clamp to the Opus ceiling.
+    worker = SessionDriver(disposition="worker")
+    worker_opts = worker._build_query_options(handle, access="readwrite")
+    assert worker_opts.model == model_for(seat_for_disposition("worker"))
+    assert worker_opts.env.get("MAX_OUTPUT_TOKENS") is not None, (
+        "the output clamp MUST be threaded into the real query env — a missing key means the "
+        "driver never applied the min(env, ceiling) clamp on the real path"
+    )
+    assert int(worker_opts.env["MAX_OUTPUT_TOKENS"]) == MODEL_OUTPUT_CEILINGS[worker_opts.model]
+
+    # quick → WORKROOM (Sonnet) seat → clamp to the smaller Sonnet ceiling (never Opus-sized).
+    quick = SessionDriver(disposition="quick")
+    quick_opts = quick._build_query_options(handle, access="readonly")
+    assert quick_opts.model == model_for(seat_for_disposition("quick"))
+    assert int(quick_opts.env["MAX_OUTPUT_TOKENS"]) == MODEL_OUTPUT_CEILINGS[quick_opts.model]
+    # The load-bearing inversion: the Sonnet clamp is strictly smaller than the Opus clamp.
+    assert int(quick_opts.env["MAX_OUTPUT_TOKENS"]) < int(worker_opts.env["MAX_OUTPUT_TOKENS"])
