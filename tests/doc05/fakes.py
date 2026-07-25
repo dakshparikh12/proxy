@@ -25,6 +25,100 @@ import jwt as _jwt
 from libs.http.external import ExternalCallOutcome
 
 
+class FakeSandboxFilesystem:
+    """An in-process stand-in for the E2B sandbox filesystem read-back path.
+
+    Mirrors the confirmed live wire (CANONICAL §11.10): ``sandbox.files.read(path,
+    format="bytes") -> bytearray`` and ``files.write(path, data)``. It is the ONLY
+    channel the host trusts for a file's LANDED bytes: the host-side receipt capture
+    reads a touched file back through :meth:`read_bytes` and hashes THOSE bytes
+    itself, so a tool that CLAIMS a different hash is structurally ignored. A file the
+    tool claims it touched but never actually wrote is simply absent → ``read_bytes``
+    returns ``None`` (the host records an empty hash, never crashes).
+    """
+
+    def __init__(self) -> None:
+        self._files: dict[str, bytes] = {}
+
+    def write(self, path: str, data: bytes) -> None:
+        """Land ``data`` at ``path`` inside the (fake) sandbox — the real write effect."""
+        self._files[path] = bytes(data)
+
+    async def read_bytes(self, path: str) -> bytes | None:
+        """Read a landed file back as raw bytes (E2B ``files.read(path, format='bytes')``).
+
+        Returns ``None`` when the file never landed — so the host's capture records an
+        empty hash for a claimed-but-absent artifact rather than raising (Rule 6)."""
+        data = self._files.get(path)
+        return None if data is None else bytes(data)
+
+
+class FakeToolSidecar:
+    """An in-process stand-in for the E2B-baked sidecar's ``tools/result`` return.
+
+    In production a tool runs INSIDE the sandbox and its ``tools/result`` returns to the
+    host over HTTP; this fake produces the SAME structured result payload the host-side
+    receipt capture consumes. The load-bearing feature is ``lying_claim``: a
+    model/sidecar-supplied narration (``text``, or a claimed ``exit_code`` / claimed
+    ``artifact_hashes``) planted ALONGSIDE the real captured stream, so a test can prove
+    the host capture reads only the REAL stream fields (the kernel exit status + the
+    landed bytes) and NEVER the lying claim (§3.5 / §3.7② / CANONICAL §12.4).
+
+    The structured result shape (what the host trusts): ``captured`` — the real captured
+    stream the sidecar observed on the host boundary (``argv`` / ``exit_code`` / ``stdout``
+    for run_command; ``touched`` paths for a write). ``claim`` — the untrusted
+    model-facing narration the host must IGNORE.
+    """
+
+    def __init__(self, *, fs: FakeSandboxFilesystem) -> None:
+        self._fs = fs
+
+    async def run_command(
+        self,
+        *,
+        argv: list[str],
+        exit_code: int,
+        stdout: bytes,
+        lying_claim: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return the structured ``tools/result`` for a run_command — the REAL captured
+        ``argv`` / ``exit_code`` / ``stdout`` bytes, plus an optional lying ``claim``."""
+        return {
+            "tool": "run_command",
+            "captured": {"argv": list(argv), "exit_code": int(exit_code), "stdout": bytes(stdout)},
+            "claim": dict(lying_claim or {}),
+        }
+
+    async def write_file(
+        self,
+        *,
+        path: str,
+        content: bytes,
+        tool: str = "write_file",
+        landed: bool = True,
+        lying_claim: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return the structured ``tools/result`` for a write/edit/ast_grep.
+
+        When ``landed`` (the default), the bytes are ACTUALLY written into the fake
+        sandbox fs so the host can read them back and hash them; ``landed=False`` models a
+        tool that CLAIMS a file was touched but never wrote it (the host then records an
+        empty hash for that path, never crashes). ``lying_claim`` plants an untrusted
+        claimed ``artifact_hashes`` the host must ignore."""
+        if landed:
+            self._fs.write(path, content)
+        return {
+            "tool": tool,
+            "captured": {"touched": [path], "exit_code": 0},
+            "claim": dict(lying_claim or {}),
+        }
+
+    async def read_file(self, *, path: str, content: bytes) -> dict[str, Any]:
+        """Return the structured ``tools/result`` for a read-only tool — touches nothing,
+        so the host produces NO effect-receipt."""
+        return {"tool": "read_file", "captured": {"content": bytes(content)}, "claim": {}}
+
+
 class FakeE2BBackend:
     """A fake E2B backend with the shape ``sandbox_provider`` drives.
 

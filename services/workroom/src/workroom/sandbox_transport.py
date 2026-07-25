@@ -24,6 +24,22 @@ source is not in this repo). Its exact wire contract is pinned here in
 below IS proven on the real host code path against an in-process fake sidecar that
 verifies exactly as the baked Node sidecar must.
 
+**Host-side receipt capture (§3.5 / §3.7② / D-017 — the workroom.sandbox-receipts
+node).** In production a tool runs INSIDE the sandbox and its ``tools/result`` returns
+to the host over HTTP — so a compromised sidecar, or a model narrating a fake result,
+could CLAIM ``exit_code: 0`` and a passing artifact hash. The wall against that is
+here: :class:`HostReceiptCapture` builds the ``{command_id, argv, exit_code,
+stdout_ref, artifact_hashes}`` receipt from the **REAL captured stream the sidecar
+returns** (the kernel exit status + the actual stdout bytes) — NEVER from the model's
+text — and **re-hashes the landed file itself on the host** (reading it back through
+the transport's ``files.read(path, format="bytes")`` path), so a claimed hash that
+disagrees with the landed bytes is structurally ignored. ``stdout_ref`` is a handle
+into :class:`HostReceiptStore` — a host store of the REAL captured stream bytes, not a
+truncated model summary. This is the deterministic offline half of
+[[offline-and-live-for-every-change]]: the receipt is the only thing the §3.7②
+evidence gate checks a claimed pass against, so the model can never narrate exit 0
+into a check that never ran.
+
 **Confirmed live wire shapes (CANONICAL §11.10, pinned at build):**
   * Claude Agent SDK HTTP MCP config = ``{type:"http", url, headers}``; the extra key
     ``alwaysLoad: true`` (camelCase; Claude Code v2.1.121+) makes startup WAIT for
@@ -48,7 +64,10 @@ token minted for meeting A gets 403 against meeting B (per-sandbox secret + clai
 """
 from __future__ import annotations
 
+import hashlib
 import time
+import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -84,6 +103,156 @@ WRITE_TOOLS: tuple[str, ...] = (
 )
 
 Access = Literal["readonly", "readwrite"]
+
+
+# ── Host-side receipt capture (§3.5 / §3.7② / D-017) ─────────────────────────
+#
+# The effect-emitting tools — the ONLY ones that produce a host-observed receipt the
+# §3.7② evidence gate reads. run_command produces {argv, exit_code, stdout_ref}; the
+# three write tools produce {artifact_hashes over the landed bytes}. Every OTHER tool
+# (read_file/list_files/grep/glob) touches nothing → no effect-receipt.
+_RUN_COMMAND = "run_command"
+_WRITE_TOOLS_BARE: frozenset[str] = frozenset({"write_file", "edit_file", "ast_grep"})
+_EFFECT_TOOLS: frozenset[str] = frozenset({_RUN_COMMAND}) | _WRITE_TOOLS_BARE
+
+# The host-side read-back path for a landed file: E2B ``files.read(path, format="bytes")``
+# (confirmed live, CANONICAL §11.10) returns the LANDED bytes so the host hashes them
+# itself. A reader may return ``None`` for a file that never landed (the host records an
+# empty hash, never raises).
+FileReader = Callable[[str], Awaitable[bytes | None]]
+
+
+def _sha256(data: bytes) -> str:
+    """The host artifact digest — computed on the host over the landed bytes, never claimed."""
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+class HostReceiptStore:
+    """A host-side, content-addressed store of the REAL captured tool streams (§3.5).
+
+    ``stdout_ref`` in a receipt is a HANDLE into this store, not an inline blob and never a
+    truncated model summary: :meth:`put_stream` stores the full captured stdout bytes and
+    returns a ref that embeds their sha256 (content-addressed → tamper-evident, and an
+    identical stream de-dupes to the same ref); :meth:`get_stream` returns the exact bytes
+    back. The named risk this closes: ``stdout_ref`` must reference the real captured
+    stream, so the store holds the verbatim bytes the sidecar captured on the host boundary.
+    """
+
+    def __init__(self) -> None:
+        self._streams: dict[str, bytes] = {}
+
+    def put_stream(self, data: bytes) -> str:
+        """Store the REAL captured stream bytes; return a content-addressed ``stdout_ref``."""
+        blob = bytes(data)
+        ref = "stream:" + hashlib.sha256(blob).hexdigest()
+        self._streams[ref] = blob  # verbatim — the full stream, never a summary
+        return ref
+
+    def get_stream(self, ref: str) -> bytes | None:
+        """Fetch the exact captured bytes a ``stdout_ref`` points at (``None`` if unknown)."""
+        return self._streams.get(ref)
+
+
+class HostReceiptCapture:
+    """Builds a host-observed :data:`ToolReceipt` from a tool's real ``tools/result`` (§3.5).
+
+    THE wall against a lying model/sidecar (the node's DoD): every receipt field is derived
+    from the REAL captured stream — never the model's text.
+
+      * ``argv`` / ``exit_code`` come from the sidecar's structured ``captured`` block (the
+        real argv the shell ran + the real kernel exit status), NOT any ``claim`` narration.
+      * ``stdout_ref`` is a handle into :class:`HostReceiptStore` holding the verbatim
+        captured stdout bytes — a truncated model summary can never masquerade as the stream.
+      * ``artifact_hashes`` are computed ON THE HOST: for each touched path the host reads
+        the LANDED file back through :attr:`file_reader` (E2B ``files.read(path,
+        format="bytes")``) and hashes THOSE bytes — a claimed hash that disagrees with the
+        landed bytes is structurally ignored. A file that never landed → an empty hash
+        (the gate then finds no match and FAILs the pass), never a crash (Rule 6).
+
+    ``command_id`` is host-minted (a fresh id per capture), so even the id can't be forged
+    from the tool payload. The receipt shape is exactly what §3.7②'s ``evidence_backed``
+    reads: ``argv`` (joined to key the verify command), ``exit_code``, and ``artifact_hashes``
+    as a ``list[{path, sha256}]``.
+    """
+
+    def __init__(self, *, file_reader: FileReader | None = None) -> None:
+        self.store = HostReceiptStore()
+        self._file_reader = file_reader
+
+    async def capture(
+        self, *, tool: str, args: dict[str, Any], result: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Capture a host-observed receipt for one ``tools/result`` (``None`` for read-only).
+
+        Only the effect-emitting tools (run_command + write/edit/ast_grep) produce a receipt
+        — a read-only tool touched nothing, so there is nothing for the gate to check. The
+        ``result`` is the sidecar's structured payload; only its ``captured`` block is
+        trusted (the real stream), never its ``claim`` (the untrusted model narration)."""
+        if tool not in _EFFECT_TOOLS:
+            return None
+        captured = result.get("captured") or {}
+        if tool == _RUN_COMMAND:
+            return self._run_command_receipt(captured)
+        return await self._write_receipt(tool, args, captured)
+
+    def _run_command_receipt(self, captured: dict[str, Any]) -> dict[str, Any]:
+        """Build a run_command receipt from the REAL captured argv/exit_code/stdout stream."""
+        # The real argv the shell ran and the real kernel exit status — from the captured
+        # block only. stdout is the verbatim captured stream → stored, referenced by handle.
+        argv = list(captured.get("argv") or [])
+        exit_code = int(captured.get("exit_code", -1))
+        stdout = captured.get("stdout") or b""
+        if isinstance(stdout, str):
+            stdout = stdout.encode("utf-8")
+        stdout_ref = self.store.put_stream(bytes(stdout))
+        return {
+            "command_id": uuid.uuid4().hex,
+            "argv": argv,
+            "exit_code": exit_code,
+            "stdout_ref": stdout_ref,
+            "artifact_hashes": [],
+            "tool": _RUN_COMMAND,
+        }
+
+    async def _write_receipt(
+        self, tool: str, args: dict[str, Any], captured: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Build a write/edit/ast_grep receipt — artifact_hashes the HOST computes itself.
+
+        For each touched path the host reads the LANDED file back and hashes those bytes,
+        so the receipt reflects what actually landed — never the tool's claimed hash. An
+        unreadable/never-landed file yields an empty hash (Rule 6: no crash)."""
+        touched = list(captured.get("touched") or [])
+        if not touched:
+            # Fall back to the path arg so a receipt always names the file it claims to touch.
+            path_arg = args.get("path")
+            if isinstance(path_arg, str) and path_arg:
+                touched = [path_arg]
+        artifact_hashes: list[dict[str, str]] = []
+        for path in touched:
+            artifact_hashes.append({"path": path, "sha256": await self._host_hash(path)})
+        return {
+            "command_id": uuid.uuid4().hex,
+            "argv": [],
+            "exit_code": int(captured.get("exit_code", 0)),
+            "stdout_ref": "",
+            "artifact_hashes": artifact_hashes,
+            "tool": tool,
+        }
+
+    async def _host_hash(self, path: str) -> str:
+        """Read the landed file back through the transport and hash it ON THE HOST.
+
+        Returns the sha256 of the landed bytes, or ``""`` when the host cannot read the
+        file back (no reader wired, the file never landed, or a read error) — an honest
+        empty hash the gate treats as 'no matching artifact', never a raised exception."""
+        if self._file_reader is None:
+            return ""
+        try:
+            data = await self._file_reader(path)
+        except Exception:  # noqa: BLE001 - Rule 6: capture never throws (a partial receipt beats a crash)
+            return ""
+        return "" if data is None else _sha256(bytes(data))
 
 
 # ── The wire contract the baked Node sidecar MUST honor (the deploy residual) ──
