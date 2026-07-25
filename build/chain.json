@@ -1217,7 +1217,7 @@
       "title": "FIX: webhook_events schema drift \u2014 add provider/sha/received_at + status CHECK",
       "region": "00-FOUNDATION",
       "disposition": "fix",
-      "status": "pending",
+      "status": "built",
       "spec_refs": [
         "00-FOUNDATION.md#5.6",
         "CANONICAL-DECISIONS.md#12.10"
