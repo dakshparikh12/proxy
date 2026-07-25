@@ -500,7 +500,7 @@
     "title": "The run loop \u2014 the asyncio event queue that is the missing spine",
     "region": "04-ORCHESTRATOR",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "04-ORCHESTRATOR.md#3",
       "04-ORCHESTRATOR.md#3.2",
@@ -871,7 +871,7 @@
     "title": "AbortController discipline \u2014 abort-is-final (verify)",
     "region": "04-ORCHESTRATOR",
     "disposition": "verify",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "04-ORCHESTRATOR.md#3.11",
       "CANONICAL-DECISIONS.md#11.9"
