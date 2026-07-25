@@ -394,7 +394,7 @@
     "title": "Plan artifact (first turn) + plan-verify critic pass",
     "region": "05-WORKROOM",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "05-WORKROOM.md#2.3",
       "05-WORKROOM.md#3.6-1",
@@ -444,7 +444,7 @@
     "title": "Sequential subtasks: checkpoint + git read-back + publish-or-fail",
     "region": "05-WORKROOM",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "05-WORKROOM.md#3.6-2",
       "05-WORKROOM.md#3.6-4",
@@ -496,7 +496,7 @@
     "title": "Gated replan + correction-into-the-plan + no-progress detection",
     "region": "05-WORKROOM",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "05-WORKROOM.md#3.6-3",
       "05-WORKROOM.md#2.3-4",
@@ -545,7 +545,7 @@
     "title": "One fresh-context verifier + deterministic receipt evidence gate + hard gate",
     "region": "05-WORKROOM",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "05-WORKROOM.md#3.7-1",
       "05-WORKROOM.md#3.7-2",
@@ -599,7 +599,7 @@
     "title": "Multi-file propose_change host-side MCP \u2192 staged_drafts",
     "region": "05-WORKROOM",
     "disposition": "fix",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "05-WORKROOM.md#3.8",
       "05-WORKROOM.md#2.5-1",
@@ -656,7 +656,7 @@
     "title": "Verify drafts persist durably + human-accept after teardown",
     "region": "05-WORKROOM",
     "disposition": "verify",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "05-WORKROOM.md#3.8",
       "05-WORKROOM.md#3.13-step-6",
