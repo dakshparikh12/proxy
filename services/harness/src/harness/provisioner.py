@@ -25,11 +25,12 @@ Recall ``in_call`` webhook it:
 
 4. **Survives a recycle** — when the owning instance dies its heartbeat goes stale, the
    reaper (§3.8) flips the row off ``running``, the partial index frees, and a
-   REPLACEMENT provisioner handed the same webhook **re-claims** the meeting and
-   **resumes** it via the two-tier session-durability replay
-   (``libs.agentkit.resume_with_fallback``, the pinned §3.5 seam). The media session
+   REPLACEMENT provisioner handed the same webhook **re-claims** the meeting. It then
+   **confirms the transcript plane is reachable** so the first wake after the swap
+   replays from it via the pinned §3.5 seam (``libs.agentkit.resume_with_fallback``,
+   fired inside :meth:`~harness.wake_turn.WakeTurn.run`, not here). The media session
    cannot be resumed (restart-not-resume, §3.10) but Proxy's judgment history is
-   rebuilt from Doc 03's transcript plane so the room stays coherent.
+   rebuilt from Doc 03's transcript plane on that first wake so the room stays coherent.
 
 The provisioner does NOT redefine the claim, the run loop, the assembly, or the resume
 fallback — it is the thin entry that wires those built pieces into a live meeting.
@@ -63,9 +64,9 @@ class ProvisionOutcome:
 
     ``claimed`` is the load-bearing bit: True iff THIS instance won the atomic claim and
     opened the harness; False iff a concurrent/existing harness already owns the meeting
-    (this instance backed off). ``resumed`` records that a re-claim rebuilt Proxy's
-    context via the §3.5 replay. ``ran_to_end`` is set by :func:`run_meeting_until_end`
-    when the loop ran to the meeting-end signal (vs a timeout).
+    (this instance backed off). ``resumed`` records that a re-claim confirmed Doc 03's
+    transcript plane is reachable for the first-wake §3.5 replay. ``ran_to_end`` is set by
+    :func:`run_meeting_until_end` when the loop ran to the meeting-end signal (vs a timeout).
     """
 
     claimed: bool
@@ -106,10 +107,11 @@ async def provision_meeting(
     duplicate join, or an already-running harness) it returns ``claimed=False`` and opens
     NO second runtime — one harness per meeting.
 
-    ``resume=True`` marks a REPLACEMENT re-claim after a recycle: the win rebuilds Proxy's
-    session context via the two-tier §3.5 replay (``resume_with_fallback``) so the room
-    stays coherent across the instance swap. A non-``in_call`` event, or an unresolvable
-    bot, is a safe no-op (``claimed=False``) — never a raise on the webhook path.
+    ``resume=True`` marks a REPLACEMENT re-claim after a recycle: the win confirms Doc 03's
+    transcript plane is reachable so the first wake after the swap replays from it via the
+    §3.5 ``resume_with_fallback`` seam (which fires in :meth:`WakeTurn.run`, not here),
+    keeping the room coherent across the instance swap. A non-``in_call`` event, or an
+    unresolvable bot, is a safe no-op (``claimed=False``) — never a raise on the webhook path.
     """
     if _event_name(payload) not in _IN_CALL_EVENTS:
         return ProvisionOutcome(claimed=False)
@@ -142,9 +144,10 @@ async def provision_meeting(
     handle = OperationHandle(db, run_id, meeting_id, MEETING_HARNESS_OP)
     resumed = False
     if resume:
-        # A replacement re-claim after a recycle: rebuild Proxy's SDK context from Doc
-        # 03's transcript plane via the pinned §3.5 two-tier replay before the loop runs,
-        # so the room stays coherent across the instance swap (restart-not-resume, §3.10).
+        # A replacement re-claim after a recycle: confirm Doc 03's transcript plane is
+        # reachable before the loop runs, so the first wake replays Proxy's context from
+        # it via the §3.5 seam (fired in WakeTurn.run) and the room stays coherent across
+        # the instance swap (restart-not-resume, §3.10).
         resumed = await _resume_session(db, meeting_id, history_fn=history_fn)
 
     _assemble_runtime(payload, resolved, db=db, registry=registry, handle=handle)
@@ -196,17 +199,16 @@ def _assemble_runtime(
 async def _resume_session(
     db: Database, meeting_id: str, *, history_fn: Any = None
 ) -> bool:
-    """Rebuild Proxy's session context on a recycle re-claim (§3.5 Tier-2 replay).
+    """Confirm the transcript plane is reachable for the first-wake replay (§3.5).
 
     The replacement instance's SDK session is empty; the durable meeting history lives in
-    Doc 03's Postgres transcript plane. This confirms that history is reachable via the
-    pinned ``resume_with_fallback`` seam so the first wake after the swap replays from it
-    (emitting the user-visible "session restored" notice) rather than forgetting the
-    meeting. Returns True iff the durable history plane was read for the resume.
+    Doc 03's Postgres transcript plane. This does NOT itself replay — the §3.5
+    ``resume_with_fallback`` seam fires on the first wake inside
+    :meth:`~harness.wake_turn.WakeTurn.run` (rebuild from the transcript-plane
+    ``history_fn``, emit the "session restored" notice, retry without resume). Here we only
+    confirm that durable history plane is reachable at re-claim time, so the re-claim can
+    honestly report a resumable meeting. Returns True iff the transcript plane was read.
     """
-    # Import lazily so the provisioner imports without agentkit's provider resolved.
-    from libs.agentkit import resume_with_fallback  # noqa: F401  (pinned single-def seam)
-
     async def _default_history() -> Any:
         # Doc 03's transcript plane (the single durable meeting-history source, §3.5):
         # the folded ``note_deltas`` are the durable meeting history a resumed session

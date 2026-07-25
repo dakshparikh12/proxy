@@ -244,6 +244,18 @@ async def _real_provisioner_ready(app: Any) -> None:
     app.state.meeting_runtimes = MeetingRuntimeRegistry(
         app.state.db, close_config=close_config
     )
+    # Wire the meeting_runtime deployable's provisioner seam so the webhook drain turns a
+    # Recall in_call into a RUNNING, atomically-claimed meeting on the real path (§3.6/§3.2).
+    # make_provision_launcher's ``launch`` routes an in_call THROUGH the provisioner (atomic
+    # claim + one-scope assembly + loop launch) instead of the Scribe-only start; the drain
+    # loop below is the ONE production caller that keeps this seam live, not a test-only path.
+    from services.harness.src.harness.provisioner import make_provision_launcher
+
+    app.state.meeting_tasks = set()
+    app.state.provision_launch = make_provision_launcher(
+        app.state.db, app.state.meeting_runtimes, tasks=app.state.meeting_tasks
+    )
+    _start_webhook_drain(app)
     set_provisioner_ready(gate)
 
 
@@ -311,6 +323,46 @@ def _build_close_config(db: Any) -> Any | None:
         bucket_name=bucket_name,
         post_chat_link=_post_chat_link,
     )
+
+
+# The interval between periodic webhook drains (an in_call that raced boot, or a
+# redelivery, is picked up within this window). unit: seconds.
+WEBHOOK_DRAIN_INTERVAL_S: float = 2.0
+
+
+async def _drain_webhooks_forever(app: Any) -> None:
+    """Boot + periodically drain pending webhooks through the provisioner seam.
+
+    This is the ONE production caller of ``drain_pending_webhooks`` on the meeting_runtime
+    deployable: it drains once immediately (catching an in_call durably landed before boot
+    finished) and then on ``WEBHOOK_DRAIN_INTERVAL_S`` forever, routing each in_call THROUGH
+    ``app.state.provision_launch`` (atomic claim + one-scope assembly + loop launch, §3.6/§3.2)
+    so the provisioner is live on the real path — not a test-only island. A drain fault is
+    logged and the loop continues (a poison row never stalls the whole queue).
+    """
+    from services.harness.src.harness.webhooks import drain_pending_webhooks
+
+    while True:
+        try:
+            await drain_pending_webhooks(
+                app.state.db,
+                registry=app.state.meeting_runtimes,
+                launch=app.state.provision_launch,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a drain fault must never kill the loop
+            _log.error("webhook_drain_error", error=str(exc))
+        await asyncio.sleep(WEBHOOK_DRAIN_INTERVAL_S)
+
+
+def _start_webhook_drain(app: Any) -> None:
+    """Launch the periodic webhook-drain loop as a supervised background task.
+
+    Stashes the task on ``app.state.webhook_drain_task`` so ``_shutdown_real`` can cancel it
+    on teardown; a strong reference on ``app.state`` keeps it from being GC'd mid-flight.
+    """
+    app.state.webhook_drain_task = asyncio.ensure_future(_drain_webhooks_forever(app))
 
 
 async def _real_reaper(app: Any) -> None:
@@ -408,6 +460,13 @@ def lifespan_trace() -> list[str]:
 
 async def _shutdown_real(app: Any) -> None:
     """Best-effort parallel teardown of the real startup resources."""
+    drain_task = getattr(app.state, "webhook_drain_task", None)
+    if drain_task is not None:
+        drain_task.cancel()
+        import contextlib
+
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await drain_task
     db = getattr(app.state, "db", None)
     if db is not None:
         await db.close()
