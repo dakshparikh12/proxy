@@ -244,6 +244,62 @@ class Plan:
             ]
         return Plan(units=units, session_id=self.session_id, ask=self.ask)
 
+    def apply_correction(self, correction: dict[str, Any]) -> Plan:
+        """Land a mid-run human correction INTO the live plan (§2.3.1 / §3.6.3) — ID-PRESERVING.
+
+        A correction names a ``target`` unit (by id, else by title match) and REWRITES its
+        outcome fields (``done_when`` / ``verify`` / ``title`` / ``serves`` / ``files``) in
+        place. Every unit keeps its id and its position — the correction changes ONE unit's
+        outcome, it NEVER drops, duplicates, reorders, or restarts (the SDK's crude native
+        mid-turn interrupt-string is deliberately NOT used; the plan artifact is the truth).
+
+        A correction naming no known unit is a no-op (best-effort — never crashes the run).
+        Returns a NEW Plan so the pre-correction plan stays inspectable.
+        """
+        target = str(correction.get("target") or correction.get("id") or correction.get("unit") or "")
+        if not target:
+            return self
+        # Match by id first (the ID-preserving anchor), else by exact title (§3.6.3 title match).
+        idx = next((i for i, u in enumerate(self.units) if u.id == target), None)
+        if idx is None:
+            idx = next((i for i, u in enumerate(self.units) if u.title == target), None)
+        if idx is None:
+            return self  # no such unit — best-effort no-op (never a crash)
+        old = self.units[idx]
+        files_raw = correction.get("files")
+        files = (
+            tuple(str(f) for f in files_raw)
+            if isinstance(files_raw, list) and files_raw
+            else old.files
+        )
+        rewritten = PlanUnit(
+            id=old.id,                                              # ID-PRESERVING — never changes
+            title=str(correction.get("title", old.title)),
+            serves=str(correction.get("serves", old.serves)),
+            files=files,
+            done_when=str(correction.get("done_when", old.done_when)),
+            verify=str(correction.get("verify", old.verify)),
+            order=old.order,                                        # position preserved — no reorder
+        )
+        units = list(self.units)
+        units[idx] = rewritten
+        return Plan(units=units, session_id=self.session_id, ask=self.ask)
+
+    def cap_remaining(self, *, done_ids: set[str], remaining_cap: int) -> Plan:
+        """Clamp the REMAINING (not-yet-finished) units to ``remaining_cap`` (§3.6.3 — cap 8).
+
+        A replan that would leave more than ``remaining_cap`` not-yet-done units is truncated
+        to the first ``remaining_cap`` remaining (in order); finished units are always kept.
+        ID-preserving by construction (it only DROPS surplus tail units, never renames)."""
+        finished = [u for u in self.units if u.id in done_ids]
+        remaining = [u for u in self.units if u.id not in done_ids]
+        if len(remaining) <= remaining_cap:
+            return self
+        kept = finished + remaining[:remaining_cap]
+        # Preserve relative order (finished-then-remaining is already order-sorted upstream).
+        kept.sort(key=lambda u: u.order)
+        return Plan(units=kept, session_id=self.session_id, ask=self.ask)
+
 
 # The prompt the plan turn hands the model (the disposition prompt is the cached SYSTEM prefix;
 # this is the volatile per-task instruction after the breakpoint, §3.9). It names the exact
@@ -761,6 +817,64 @@ _SUBTASK_INSTRUCTION = (
     "Verify: {verify}"
 )
 
+# ── the gated-replan turn + no-progress detector constants/helpers (§3.6.3 / §3.3⑦) ──
+
+# The gated replan fires ONLY on a plan of ≥3 steps (§3.6.3 — cheap self-scaling reserved for
+# real multi-step plans; a 1-2 unit plan never runs the "is the rest still right?" turn).
+_GATED_REPLAN_MIN_STEPS = 3
+
+# The no-progress detection window: the action-effect signature is compared against the last
+# N turns (§3.3⑦ "output-hash/action-effect similarity over last N turns"). A small window
+# catches a spinning loop fast while never false-tripping on legitimately distinct progress.
+_EFFECT_WINDOW = 4
+
+
+def _effect_signature(commits: list[dict[str, str]]) -> str:
+    """The host-observed action-effect signature for one subtask turn (§3.3⑦).
+
+    Keyed on the read-back commits' SUBJECTS — the model's ACTION as landed in git (never its
+    prose narration, never the raw SHA which changes every commit, and deliberately NOT the
+    nominal unit id: a loop is the model doing the SAME thing turn after turn regardless of
+    which step it claims to be on). A turn whose action matches a recent turn's produces the
+    SAME signature → a loop, not progress. Distinct real work yields a distinct subject → a
+    distinct signature (so legitimately-progressing work never false-trips, §3.3⑦ risk)."""
+    import hashlib
+
+    subjects = "\n".join(sorted(str(c.get("subject", "")) for c in commits))
+    return hashlib.sha256(subjects.encode()).hexdigest()
+
+
+def _render_replan_prompt(plan: Plan) -> str:
+    """The ``max_turns:1`` no-tools replan prompt (§3.6.3): "given what you just did, is the
+    rest still right?". Hands the current plan and asks for an ID-preserving amendment."""
+    return (
+        "You appear to be making no progress. Given what you just did, is the rest of this "
+        "plan still right? Return ONLY a JSON object "
+        '{"add": [<new units>], "remove": [<ids>], "reorder": [<ids>]} — preserve subtask ids '
+        "(match by id/title); empty lists if the plan is fine. Each added unit has "
+        '"id","title","serves","files","done_when","verify","order".\n'
+        f"PLAN:\n{json.dumps([u.to_dict() for u in plan.units], indent=2)}"
+    )
+
+
+def _parse_replan_amendment(text: str) -> dict[str, Any] | None:
+    """Parse the replan's amendment JSON object (best-effort — parse fail keeps the plan)."""
+    stripped = text.strip()
+    if not stripped:
+        return None
+    start, end = stripped.find("{"), stripped.rfind("}")
+    candidates = [stripped]
+    if start != -1 and end != -1 and end > start:
+        candidates.append(stripped[start : end + 1])
+    for cand in candidates:
+        try:
+            parsed = json.loads(cand)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
 
 class SubtaskFailure(RuntimeError):
     """An honest per-subtask failure (Rule 6 / §3.3) — a read-back-empty commit or a publish
@@ -804,6 +918,11 @@ class BigBuildExecutor:
         abort_registry: AbortRegistry | None = None,
         worker_max_turns: int = 6,
         staging_destination: str = "staging",
+        corrections: Any = None,
+        replan_provider: Any = None,
+        replan_cap: int = 2,
+        remaining_cap: int = 8,
+        loop_retry_cap: int = 2,
     ) -> None:
         self._provider = provider
         self._sandbox = sandbox
@@ -816,6 +935,20 @@ class BigBuildExecutor:
         # bounded unit of work with an explicit STOP).
         self._worker_max_turns = worker_max_turns
         self._staging_destination = staging_destination
+        # The mid-run correction source (§2.3.1) — drained before each remaining unit; a
+        # correction rewrites the live plan's target unit ID-preservingly (no restart).
+        self._corrections = corrections
+        # The gated-replan turn provider (§3.6.3) — the max_turns:1, no-tools "is the rest still
+        # right?" turn that fires on a detected loop. None → a default registry provider is used.
+        self._replan_provider = replan_provider
+        # Bounded replan ≤2 (§3.3⑦ / D-006 replan cap [2]): a looping unit gets at most this many
+        # replan attempts before the build stops with an honest partial (never a deadlock).
+        self._replan_cap = max(0, int(replan_cap))
+        # The gated-replan remaining-units cap (§3.6.3 / §3.15 tunable [8]).
+        self._remaining_cap = max(1, int(remaining_cap))
+        # Per-unit no-progress retries before a replan fires: how many identical-effect turns on
+        # ONE unit count as a loop (kept tight so the loop is caught fast, never a deadlock).
+        self._loop_retry_cap = max(1, int(loop_retry_cap))
 
     # -- the public entry point: run (and resume) the sequential build --------
 
@@ -824,11 +957,24 @@ class BigBuildExecutor:
 
         Loads the plan + session id + any existing checkpoints from the SAME ``operation_runs``
         row (the durable substrate). Iterates the units IN ORDER, SKIPPING units already
-        checkpointed (a mid-crash resume never redoes finished units). Per remaining unit: one
-        resumed ``query()`` → read the checkpoint back from git → publish-or-fail → persist the
-        checkpoint. Stops at the first failing unit with an honest ``failed`` result (never a
-        silent green). Never raises (Rule 6) — a provider/publish/read-back fault becomes a
-        ``failed`` BuildResult persisted into the same row.
+        checkpointed (a mid-crash resume never redoes finished units). Per remaining unit:
+
+          1. **Correction-into-the-plan (§2.3.1 / §3.6.3).** Drain any mid-run human
+             corrections into the LIVE plan FIRST — a correction rewrites the target unit's
+             outcome ID-preservingly, so the corrected unit builds with the new done-when; NO
+             restart, finished units are untouched.
+          2. one resumed ``query()`` → read the checkpoint back from git (never off narration).
+          3. **No-progress detection (§3.3⑦).** Compute the turn's action-effect signature; if
+             it matches the last N turns (a spinning loop), do NOT checkpoint — fire a
+             ``max_turns:1`` no-tools **gated replan** (§3.6.3, ID-preserving, capped at 8
+             remaining) and re-attempt, BOUNDED by the replan cap (≤2). At the cap the build
+             STOPS with an honest ``partial`` + the receipts so far — never a deadlock, never a
+             silent claim of done.
+          4. else publish-or-fail → persist the checkpoint → advance.
+
+        Stops at the first failing unit with an honest ``failed`` result (never a silent
+        green). Never raises (Rule 6) — a provider/publish/read-back fault becomes a ``failed``
+        BuildResult persisted into the same row.
         """
         meeting_id = str(bundle.notes_ref)
         controller = self._abort_registry.make(f"{meeting_id}|{bundle.task_id}")
@@ -840,49 +986,65 @@ class BigBuildExecutor:
             return result
 
         done = await self._load_checkpoints(run_id)
-        done_ids = [cp.unit_id for cp in done]
+        done_ids = {cp.unit_id for cp in done}
         checkpoints: list[SubtaskCheckpoint] = list(done)
+        # The action-effect similarity window (§3.3⑦) + the bounded-replan counter (≤2).
+        recent_effects: list[str] = []
+        replan_count = 0
 
-        for unit in plan.units:
+        idx = 0
+        while idx < len(plan.units):
+            unit = plan.units[idx]
             if unit.id in done_ids:
+                idx += 1
                 continue  # a finished unit — resume SKIPS it, never redoes it (§3.6.2)
+
+            # (1) Land any mid-run corrections INTO the live plan BEFORE this unit runs — a
+            # correction rewrites the target unit's outcome ID-preservingly (no restart). Only
+            # not-yet-finished units are affected; a correction on a finished unit is inert.
+            plan = await self._apply_pending_corrections(plan, run_id, done_ids=done_ids)
+            unit = plan.units[idx]  # re-read: this unit may have just been corrected
+
             try:
-                cp = await self._run_one_subtask(unit, session_id, controller)
+                commits = await self._run_subtask_turn(unit, session_id, controller)
             except SubtaskFailure as exc:
-                # An honest per-subtask failure (no read-back commit, or publish threw). Stop
-                # here — never march past a failed unit, never silent-green (§3.6.2).
-                result = BuildResult(
-                    status="failed",
-                    units_done=[cp.unit_id for cp in checkpoints],
-                    checkpoints=[cp.to_dict() for cp in checkpoints],
-                    failed_unit=exc.unit_id,
-                    reason=exc.reason,
-                )
-                await self._persist_build(run_id, result)
-                return result
+                return await self._fail(run_id, checkpoints, exc.unit_id, exc.reason)
             except ProviderError as exc:
-                result = BuildResult(
-                    status="failed",
-                    units_done=[cp.unit_id for cp in checkpoints],
-                    checkpoints=[cp.to_dict() for cp in checkpoints],
-                    failed_unit=unit.id,
-                    reason=f"provider error on {unit.id}: {exc}",
-                )
-                await self._persist_build(run_id, result)
-                return result
+                return await self._fail(run_id, checkpoints, unit.id, f"provider error on {unit.id}: {exc}")
             except Exception as exc:  # noqa: BLE001 - Rule 6: a sandbox/crash fault fails honestly
-                result = BuildResult(
-                    status="failed",
-                    units_done=[cp.unit_id for cp in checkpoints],
-                    checkpoints=[cp.to_dict() for cp in checkpoints],
-                    failed_unit=unit.id,
-                    reason=f"{type(exc).__name__} on {unit.id}: {exc}",
-                )
-                await self._persist_build(run_id, result)
-                return result
+                return await self._fail(run_id, checkpoints, unit.id, f"{type(exc).__name__} on {unit.id}: {exc}")
+
+            # (3) No-progress detection: does this turn's effect repeat the recent window?
+            effect = _effect_signature(commits)
+            if effect in recent_effects:
+                # A loop — this unit isn't making distinct progress. Bounded replan (≤2).
+                if replan_count >= self._replan_cap:
+                    return await self._partial(
+                        run_id,
+                        checkpoints,
+                        reason=(
+                            f"no progress on {unit.id} after {replan_count} replan(s) "
+                            f"(cap {self._replan_cap}) — honest partial with receipts so far"
+                        ),
+                    )
+                replan_count += 1
+                plan = await self._gated_replan(plan, run_id, session_id, done_ids=done_ids)
+                if idx >= len(plan.units) or plan.units[idx].id != unit.id:
+                    # The replan dropped/reordered this unit — re-anchor at the first unfinished.
+                    idx = next((j for j, u in enumerate(plan.units) if u.id not in done_ids), len(plan.units))
+                continue  # re-attempt (loop) without advancing — bounded by the replan cap
+
+            # (4) Real progress → publish-or-fail → checkpoint → advance.
+            try:
+                cp = await self._publish_checkpoint(unit, commits)
+            except SubtaskFailure as exc:
+                return await self._fail(run_id, checkpoints, exc.unit_id, exc.reason)
             checkpoints.append(cp)
-            # Durably checkpoint per unit IMMEDIATELY (§3.6.2) — the resume-skip source of truth.
+            done_ids.add(unit.id)
+            recent_effects.append(effect)
+            del recent_effects[:-_EFFECT_WINDOW]  # keep only the last N turns' signatures
             await self._persist_checkpoints(run_id, checkpoints, status="running")
+            idx += 1
 
         result = BuildResult(
             status="done",
@@ -892,19 +1054,150 @@ class BigBuildExecutor:
         await self._persist_build(run_id, result)
         return result
 
+    async def _fail(
+        self, run_id: Any, checkpoints: list[SubtaskCheckpoint], failed_unit: str, reason: str
+    ) -> BuildResult:
+        """Build + persist an honest ``failed`` result (never a silent green, §3.6.2)."""
+        result = BuildResult(
+            status="failed",
+            units_done=[cp.unit_id for cp in checkpoints],
+            checkpoints=[cp.to_dict() for cp in checkpoints],
+            failed_unit=failed_unit,
+            reason=reason,
+        )
+        await self._persist_build(run_id, result)
+        return result
+
+    async def _partial(
+        self, run_id: Any, checkpoints: list[SubtaskCheckpoint], *, reason: str
+    ) -> BuildResult:
+        """Build + persist an honest ``partial`` result at the replan cap (§3.3⑦ / §3.13-step-9).
+
+        A task forced into a loop stops here — with the RECEIPTS so far (the real checkpoints)
+        and the reason spoken plainly (Law 2). Never a deadlock (the loop is bounded by the
+        replan cap), never a silent claim of done (the status is ``partial``, not ``done``)."""
+        result = BuildResult(
+            status="partial",
+            units_done=[cp.unit_id for cp in checkpoints],
+            checkpoints=[cp.to_dict() for cp in checkpoints],
+            reason=reason,
+        )
+        await self._persist_build(run_id, result)
+        return result
+
+    # -- correction-into-the-plan (§2.3.1) + the gated-replan turn (§3.6.3) ----
+
+    async def _apply_pending_corrections(
+        self, plan: Plan, run_id: Any, *, done_ids: set[str]
+    ) -> Plan:
+        """Drain mid-run corrections and land them INTO the live plan (§2.3.1) — NO restart.
+
+        Each correction rewrites its target unit's outcome ID-preservingly; a correction on an
+        already-finished unit is inert (finished units are immutable — no restart). The amended
+        plan persists back to the durable row so the corrected unit builds with the new
+        outcome. Best-effort (Rule 6): a correction-source fault never crashes the build."""
+        if self._corrections is None:
+            return plan
+        drain = getattr(self._corrections, "drain", None)
+        if drain is None:
+            return plan
+        import contextlib
+
+        pending: list[dict[str, Any]] = []
+        with contextlib.suppress(Exception):
+            pending = list(await drain() or [])
+        changed = False
+        for correction in pending:
+            target = str(
+                correction.get("target") or correction.get("id") or correction.get("unit") or ""
+            )
+            if target in done_ids:
+                continue  # a finished unit is immutable — a correction never restarts it
+            amended = plan.apply_correction(correction)
+            if amended is not plan:
+                plan = amended
+                changed = True
+        if changed:
+            await self._persist_plan(run_id, plan)
+        return plan
+
+    async def _gated_replan(
+        self, plan: Plan, run_id: Any, session_id: str | None, *, done_ids: set[str]
+    ) -> Plan:
+        """The ``max_turns:1``, no-tools gated-replan turn (§3.6.3) — "is the rest still right?".
+
+        Fires ONLY when the plan has ≥3 steps (cheap self-scaling reserved for real multi-step
+        plans). ID-PRESERVING (title/id match) and CAPPED at 8 remaining; best-effort (parse
+        fail → keep the existing plan). The amended plan persists back to the durable row. This
+        is the same amendment shape the plan critic uses — never a native SDK interrupt."""
+        if len(plan.units) < _GATED_REPLAN_MIN_STEPS:
+            return plan  # gated on plan ≥3 steps (§3.6.3)
+        amendment = await self._drive_replan_query(plan, session_id)
+        if amendment:
+            plan = plan.amend(amendment)  # ID-preserving add/remove/reorder
+        # CAP at 8 REMAINING (§3.6.3) regardless of what the replan asked for.
+        plan = plan.cap_remaining(done_ids=done_ids, remaining_cap=self._remaining_cap)
+        await self._persist_plan(run_id, plan)
+        return plan
+
+    async def _drive_replan_query(self, plan: Plan, session_id: str | None) -> dict[str, Any] | None:
+        """Drive the ``max_turns:1`` no-tools replan query(); parse its amendment (best-effort).
+
+        The options are the read-only, NO-TOOLS replan shape (a pure judgment turn — "is the
+        rest still right?", §3.6.3), resuming the plan session. A fault or a non-parsing verdict
+        keeps the existing plan (§3.6.3 "parse fail → keep the existing plan"), never crashes."""
+        options = self._build_replan_options(session_id)
+        provider = self._replan_provider if self._replan_provider is not None else self._provider_for(options)
+        if provider is None:
+            return None
+        prompt = _render_replan_prompt(plan)
+        text_parts: list[str] = []
+        import contextlib
+
+        with contextlib.suppress(ProviderError):
+            async for chunk in stream_deltas(provider.stream(prompt, options)):
+                if chunk.type == "ERROR":
+                    return None  # a replan fault keeps the existing plan (§3.6.3), never crashes
+                if chunk.type == "TEXT" and chunk.text:
+                    text_parts.append(chunk.text)
+        return _parse_replan_amendment("".join(text_parts))
+
+    def _build_replan_options(self, session_id: str | None) -> ProviderQuery:
+        """Build the ``max_turns:1``, NO-TOOLS replan ``ProviderQuery`` (§3.6.3).
+
+        A pure judgment turn — no tools (``allowed_tools=()`` and ``tools=()``), max_turns:1,
+        the same triad markers every Workroom query carries, resuming the plan session on the
+        ``plan`` seat (Sonnet-class, cheap judgment, §3.2)."""
+        model = self._model_for("plan")
+        enabled, budget = thinking_policy(model, disposition_role("plan"))
+        return ProviderQuery(
+            model=model,
+            allowed_tools=(),               # NO tools — a pure "is the rest still right?" turn (§3.6.3)
+            system_prompt=WORKROOM_SYSTEM_PREFIX,
+            max_turns=1,                    # max_turns:1 (§3.6.3)
+            tools=(),                       # computed built-in allow-list: [] in sandbox mode (§3.4)
+            strict_mcp_config=True,         # triad
+            setting_sources=(),             # triad
+            thinking_enabled=enabled,
+            thinking_budget_tokens=budget,
+            resume=session_id,              # same plan conversation (§3.6.2)
+        )
+
     # -- one subtask: resumed query() → git read-back → publish-or-fail -------
 
-    async def _run_one_subtask(
+    async def _run_subtask_turn(
         self, unit: PlanUnit, session_id: str | None, controller: AbortController
-    ) -> SubtaskCheckpoint:
-        """Run ONE unit as a resumed ``query()``, read its checkpoint back from git, publish-
-        or-fail (§3.6.2). Marks done ONLY off the READ-BACK commits — never off narration.
+    ) -> list[dict[str, str]]:
+        """Run ONE unit as a resumed ``query()`` and READ THE CHECKPOINT BACK from git (§3.6.2).
+
+        Steps 1-3 of the subtask contract — the turn + the read-back, WITHOUT publishing (the
+        no-progress detector decides progress-vs-loop from these read-back commits BEFORE a
+        spinning turn is ever published/checkpointed):
 
         1. capture ``HEAD`` before the turn;
         2. drive the resumed worker ``query()`` (tight max_turns + STOP);
         3. read ``head_before..HEAD`` for the commits it ACTUALLY created — an EMPTY range
-           (the model narrated work it never committed) is a :class:`SubtaskFailure`;
-        4. publish-or-fail — a publish that THROWS fails the subtask (never silent-green).
+           (the model narrated work it never committed) is a :class:`SubtaskFailure`.
         """
         if self._sandbox is None:
             raise SubtaskFailure(unit.id, "no sandbox git surface wired")
@@ -922,7 +1215,15 @@ class BigBuildExecutor:
                 f"no commit read back from git for {unit.id} "
                 "(head_before..HEAD empty) — refusing to mark done off narration",
             )
-        # (4) publish-or-fail — a publish throw FAILS the subtask, it never reports success.
+        return commits
+
+    async def _publish_checkpoint(
+        self, unit: PlanUnit, commits: list[dict[str, str]]
+    ) -> SubtaskCheckpoint:
+        """Step 4: publish-or-fail → checkpoint (§3.6.2). A publish that THROWS FAILS the
+        subtask (never silent-green). Only reached for a unit that made REAL progress."""
+        if self._sandbox is None:
+            raise SubtaskFailure(unit.id, "no sandbox git surface wired")
         try:
             await self._sandbox.publish(
                 unit_id=unit.id, commits=commits, destination=self._staging_destination
@@ -1093,7 +1394,15 @@ class BigBuildExecutor:
                 return progress if isinstance(progress, dict) else json.loads(progress)
         return {}
 
-    # -- persist the checkpoints + terminal build result (SAME row, §12.10) ---
+    # -- persist the (corrected/replanned) plan + checkpoints + result (SAME row) ---
+
+    async def _persist_plan(self, run_id: Any, plan: Plan) -> None:
+        """Persist the LIVE (corrected/replanned) plan into the SAME row's ``progress.plan``.
+
+        A correction or a gated replan rewrites the live plan artifact (§2.3.1 / §3.6.3) — this
+        writes it back to the durable substrate so the corrected outcome survives a resume and
+        is reproducible (:meth:`Plan.from_persisted`). Best-effort (Rule 6)."""
+        await self._merge_progress(run_id, {"plan": plan.to_persisted()})
 
     async def _persist_checkpoints(
         self, run_id: Any, checkpoints: list[SubtaskCheckpoint], *, status: str
