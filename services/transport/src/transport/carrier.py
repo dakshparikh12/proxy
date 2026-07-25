@@ -9,9 +9,30 @@ fan-out — the only carrier primitive on the emit path.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
+from typing import Any
 
+from libs.contracts import AgentChunk
+
+from .projector import carry_turn as _carry_turn
 from .signals import Signal
+
+
+async def drive_projector(
+    conn: Any,
+    deltas: AsyncIterator[AgentChunk] | Iterable[AgentChunk],
+    meeting: Any,
+) -> None:
+    """Drive the pure-rendering projector over the SAME delta stream (§4.5).
+
+    The carrier's render leg: it feeds the ``BehaviorRunner.run`` delta stream
+    (``stream_deltas`` applied ONCE upstream, CANONICAL §11.3 — NEVER re-wrapped here)
+    straight into :func:`transport.projector.carry_turn`, which emits
+    ``ResponseStart`` → projected frames → ``ResponseEnd`` with the ordering law +
+    readyState guard. Kept a thin delegation so the projector owns the mapping and the
+    carrier owns only the in-process drive.
+    """
+    await _carry_turn(conn, deltas, meeting)
 
 
 class SignalCarrier:

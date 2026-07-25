@@ -6,7 +6,7 @@ no bus/broker/wire, no ``libs/transport``: Recall owns transport, this is the th
 from __future__ import annotations
 
 from .boundary import BoundaryDecision, BoundarySource, SmartTurnBoundary, resolve_boundary_source
-from .carrier import SignalCarrier
+from .carrier import SignalCarrier, drive_projector
 from .consent import consent_notice, notice_is_valid
 from .events import (
     DurableStore,
@@ -20,6 +20,7 @@ from .external import CallExternal
 from .fakes import FakeOutputMediaSink, FakeTTS
 from .join import Action, ConsentGate, JoinResult, JoinSession, JoinSource, JoinState
 from .media import AudioChunk, CanvasFrame
+from .projector import ChannelProjector, carry_turn
 from .recall import RecallTransport
 from .resolution import MeetingRef, MeetingResolver, UnknownBotError, resolve_meeting
 from .seams import OutputMediaSink, STTProvider, TransportProvider, TTSProvider
@@ -61,8 +62,11 @@ __all__ = [
     "CallExternal",
     "CanvasFrame",
     "CartesiaTTS",
+    "ChannelProjector",
     "ChannelReportSignal",
     "ConsentGate",
+    "carry_turn",
+    "drive_projector",
     "ChatMessage",
     "EMITTED_SIGNAL_NAMES",
     "FakeOutputMediaSink",
