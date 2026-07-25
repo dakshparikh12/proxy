@@ -44,6 +44,11 @@ BOOT_TRACE: list[str] = []
 # Hard-exit backstop window: bounds graceful shutdown inside Cloud Run's SIGTERM
 # grace period. unit: seconds.
 SHUTDOWN_GRACE_S: float = 25.0
+# Routine MIG-drain grace window: how long a draining meeting_runtime instance
+# waits for its in-flight meetings to finish before it exits. The GCE MIG gives
+# real grace (minutes, not Cloud Run's 10s SIGTERM — §6 lines 37/97), so this is
+# generous. Env override ``DRAIN_GRACE_S`` for ops tuning. unit: seconds.
+DRAIN_GRACE_S: float = float(os.environ.get("DRAIN_GRACE_S", "300"))
 # Flush delay before a genuinely-unknown fault crashes the process (lets trace
 # spans/logs flush). unit: seconds.
 CRASH_FLUSH_DELAY_S: float = 0.05
@@ -174,6 +179,130 @@ def install_signal_handlers(
 
 
 # ---------------------------------------------------------------------------
+# Routine MIG-drain: the ``draining`` state + /readiness probe + finish-in-flight
+#
+# Distinct from the §5 heartbeat/reclaim exception (defense-in-depth for a rare
+# HARD drain): this is the ROUTINE path a GCE MIG uses when it recycles a
+# meeting_runtime/code_intel instance. On SIGTERM we set ``draining`` (so the MIG
+# stops routing new meetings via the 503 /readiness probe), let the in-flight
+# meetings finish within a real grace window, then exit cleanly.
+# ---------------------------------------------------------------------------
+
+def init_drain_state(app: Any) -> None:
+    """Initialise the routine-drain state on ``app.state`` (ready, no in-flight)."""
+    app.state.draining = False
+    if getattr(app.state, "meeting_tasks", None) is None:
+        app.state.meeting_tasks = set()
+
+
+def is_draining(app: Any) -> bool:
+    """True once the instance has begun a routine MIG drain."""
+    return bool(getattr(app.state, "draining", False))
+
+
+def set_draining(app: Any, value: bool = True) -> None:
+    """Set the ``draining`` flag (the /readiness probe reads it to answer 503/200)."""
+    app.state.draining = bool(value)
+
+
+def register_inflight(app: Any, task: Any) -> None:
+    """Track an in-flight meeting task so a routine drain can wait for it to finish."""
+    if getattr(app.state, "meeting_tasks", None) is None:
+        app.state.meeting_tasks = set()
+    app.state.meeting_tasks.add(task)
+    # A finished task drops itself so the in-flight set never leaks completed meetings.
+    task.add_done_callback(lambda t: app.state.meeting_tasks.discard(t))
+
+
+def _inflight_tasks(app: Any) -> list[Any]:
+    """The still-running in-flight meeting tasks (completed ones are pruned)."""
+    tasks = getattr(app.state, "meeting_tasks", None) or set()
+    return [t for t in tasks if not t.done()]
+
+
+async def begin_drain(
+    app: Any,
+    *,
+    grace_s: float | None = None,
+    exit_fn: Callable[..., Any] = os._exit,
+) -> None:
+    """Run the ROUTINE MIG-drain: set ``draining`` → let in-flight meetings finish → exit.
+
+    1. Flip ``draining`` so every subsequent /readiness probe answers 503 and the MIG
+       stops routing new meetings to this instance.
+    2. Wait — bounded by ``grace_s`` — for the in-flight meeting tasks to finish
+       naturally (a live meeting is allowed to wrap up; it is NOT cut off mid-flight —
+       that hard-reclaim story is the §5 heartbeat exception, not this routine path).
+    3. Exit cleanly via ``exit_fn`` (default ``os._exit(0)``). The grace bound means an
+       overrunning meeting can never wedge the drain open forever.
+    """
+    set_draining(app, True)
+    grace = DRAIN_GRACE_S if grace_s is None else grace_s
+    pending = _inflight_tasks(app)
+    if pending:
+        # Wait for the in-flight meetings, bounded by the grace window. Never
+        # cancel them here — a routine drain lets a live meeting finish; the
+        # grace bound + the exit backstop cap the wait.
+        try:
+            await asyncio.wait(pending, timeout=grace)
+        except asyncio.CancelledError:  # pragma: no cover - drain task itself cancelled
+            raise
+    exit_fn(0)
+
+
+def install_drain_signal_handler(
+    loop: Any, on_drain: Callable[[], Any]
+) -> None:
+    """Register the routine MIG-drain path on SIGTERM (the signal a GCE MIG sends on drain).
+
+    SIGTERM is the drain signal for the ``meeting_runtime``/``code_intel`` GCE-MIG
+    deployables; it triggers ``begin_drain`` (set draining → finish in-flight → exit).
+    SIGINT stays on the interactive parallel-shutdown path (``install_signal_handlers``).
+    """
+    loop.add_signal_handler(signal.SIGTERM, on_drain)
+
+
+def readiness_status(app: Any) -> tuple[int, str]:
+    """The (http_status, state) a /readiness probe reports: 503 while draining, else 200."""
+    if is_draining(app):
+        return 503, "draining"
+    return 200, "ready"
+
+
+def install_readiness_route(app: Any) -> None:
+    """Mount GET /readiness on a FastAPI ``app`` (503 while draining, 200 otherwise).
+
+    Registered via ``add_api_route`` (not the ``@app.get`` decorator, so a typed
+    handler over an ``Any``-typed app stays strict-clean). The probe is the MIG's
+    routing signal, so it mounts OUTSIDE the auth wall (unauthenticated readiness).
+    """
+    from fastapi.responses import JSONResponse
+
+    init_drain_state(app)
+
+    async def readiness() -> JSONResponse:
+        status, state = readiness_status(app)
+        return JSONResponse({"status": state}, status_code=status)
+
+    app.add_api_route("/readiness", readiness, methods=["GET"])
+
+
+def build_meeting_runtime_readiness_app() -> Any:
+    """Build the minimal meeting_runtime ASGI app exposing GET /readiness.
+
+    The meeting_runtime deployable's readiness surface: a FastAPI app carrying the
+    ``draining`` state + the /readiness probe the GCE MIG polls. In the full harness
+    boot this route is mounted (via ``install_readiness_route``) onto the same app the
+    routers mount on; this builder is the standalone surface the drain lifecycle owns.
+    """
+    from fastapi import FastAPI
+
+    app = FastAPI(title="proxy-meeting-runtime")
+    install_readiness_route(app)
+    return app
+
+
+# ---------------------------------------------------------------------------
 # The ordered boot sequence (single source of truth for both paths)
 # ---------------------------------------------------------------------------
 
@@ -252,6 +381,9 @@ async def _real_provisioner_ready(app: Any) -> None:
     from services.harness.src.harness.provisioner import make_provision_launcher
 
     app.state.meeting_tasks = set()
+    # The routine MIG-drain state rides the SAME in-flight meeting-task set the
+    # provisioner launches into, so ``begin_drain`` waits on the real live meetings.
+    init_drain_state(app)
     app.state.provision_launch = make_provision_launcher(
         app.state.db, app.state.meeting_runtimes, tasks=app.state.meeting_tasks
     )
@@ -388,8 +520,12 @@ def _mount_routers(app: Any) -> None:
     """Mount routers LAST, behind the auth wall + the single libs/http dispatch funnel.
 
     The concrete FastAPI routers are assembled in later docs; the ordering gate
-    (routers strictly after the reaper) is owned here.
+    (routers strictly after the reaper) is owned here. The unauthenticated GET
+    /readiness probe (the MIG's routing signal — 503 while draining) mounts here too,
+    OUTSIDE the auth wall, strictly after the reaper alongside the routers.
     """
+    if hasattr(app, "get"):
+        install_readiness_route(app)
     app.state.routers_mounted = True
 
 

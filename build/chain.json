@@ -767,7 +767,7 @@
       ],
       "integration_point": "services/harness/src/harness/server.py (FastAPI lifespan) + settings.py + meetings.py + session.py",
       "acceptance": "WHEN the server boots THE SYSTEM SHALL validate all required keys at import, run the lifespan in the exact order (tracing -> pool -> facade -> provisioner_ready -> boot reaper -> routers), and mount routers only after the reaper has interrupted orphaned running rows.",
-      "acceptance_cmd": "tests/doc00/test_m04_boot.py ; tests/doc00/test_m03_sub.py -k 'sub_031 or sub_032'",
+      "acceptance_cmd": "tests/doc00/test_m04_boot.py ; tests/doc00/test_m04_drain_readiness.py ; tests/doc00/test_m03_sub.py -k 'sub_031 or sub_032'",
       "evidence_class": "[integration]",
       "journeys_now_live": [
         "J-09-S5-recycle-survives"
@@ -777,7 +777,8 @@
         "services/harness/src/harness/settings.py",
         "services/harness/src/harness/session.py",
         "services/harness/src/harness/meetings.py",
-        "services/harness/src/harness/recovery.py"
+        "services/harness/src/harness/recovery.py",
+        "services/code_intel/src/code_intel/readiness_app.py"
       ],
       "invariants": [
         "fail loud at boot, not on first use \u2014 a missing required key is a startup crash",
