@@ -846,7 +846,7 @@
     "title": "Cost & latency: preflight, per-role models, caching, honest ceilings",
     "region": "05-WORKROOM",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "05-WORKROOM.md#3.9",
       "05-WORKROOM.md#3.2",
