@@ -69,3 +69,6 @@ slices/
 .testmondata*
 .superpowers/
 build/observability.env
+
+# deepeval judge telemetry cache (created at eval time)
+.deepeval/
