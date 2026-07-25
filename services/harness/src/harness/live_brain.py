@@ -52,7 +52,12 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from libs.contracts import AgentChunk
+from libs.contracts import (
+    CanvasPatch,
+    ProxyMessage,
+    ResponseChunk,
+    VoiceSpeak,
+)
 
 from . import behaviors
 from .name_gate import NameGate
@@ -214,48 +219,63 @@ def make_wake_adapter(
     It (1) reads the verbatim ask off the event payload, (2) selects the wake-behavior by
     name (§3.4 / D-023), (3) runs the real :meth:`WakeTurn.wake` — threading the LIVE
     controller ``event.abort`` (the one the loop minted) all the way to the provider, which
-    polls ``.aborted`` to break its SDK loop (§3.11) — and (4) emits the turn's spoken
-    result THROUGH the runtime's gated emitter (is_owner fencing, §3.7): a fenced-out
-    harness reaches the wire zero times. The situation→action mapping stays in the model's
-    turn — this adapter owns only the plumbing (Law 4).
+    polls ``.aborted`` to break its SDK loop (§3.11) — and (4) drives the **pure-rendering
+    channel projector** (``transport.projector.ChannelProjector``, Doc 08 §4.5) over that
+    delta stream and emits each projected render frame THROUGH the runtime's gated emitter
+    (is_owner fencing, §3.7): a fenced-out harness reaches the wire zero times.
+
+    The projector is the SOLE renderer on this live path — the same pure mapping the
+    transport carrier drives — so the live product obeys the projector's own rendering law:
+    only an explicit delivery tool (``speak`` / ``send_chat`` / ``show_screen``) reaches a
+    human, and raw ``TEXT`` (the model's reasoning) / ``INIT`` / ``RESULT`` / ``ERROR``
+    project NOTHING (CANONICAL §12.3 — the wake-turn delivery tools are the sole delivery
+    authority; there is no bare-TEXT speak). The situation→action mapping stays in the
+    model's turn — this adapter owns only the plumbing (Law 4).
     """
+    from transport.projector import ChannelProjector
+
     selector = select if select is not None else select_behavior
 
     async def _wake(event: MeetingEvent, digest: dict[str, Any]) -> None:
         text, speaker = _event_text(event.payload)
         behavior = selector(text)
         wake_event = WakeEvent(text=text, speaker=speaker)
-        spoken: list[str] = []
+        projector = ChannelProjector()
+        emitter = event.emitter
         # Thread the LIVE controller (event.abort) DOWN to the provider — it polls
         # ``.aborted`` and breaks its SDK loop on quiet / meeting-end / timeout (§3.11).
+        # Each chunk is projected ONCE (the delta stream is already ``stream_deltas``
+        # output — the projector NEVER re-runs it, CANONICAL §11.3) and every render frame
+        # is dispatched to its gated emit-frontier verb the instant it is produced, so a
+        # streamed answer reaches the surfaces as it arrives (not batched at turn end).
         async for chunk in wake_turn.wake(
             wake_event, read_notes=True, abort=event.abort, behavior=behavior
         ):
-            said = _speak_text(chunk)
-            if said:
-                spoken.append(said)
-        emitter = event.emitter
-        if emitter is not None:
-            for said in spoken:
-                emitter.speak(said)  # gated on is_owner (§3.7) — a zombie emits nothing
+            if emitter is None:
+                continue
+            for frame in projector.project(chunk):
+                _emit_frame(emitter, frame)  # gated on is_owner (§3.7) — a zombie emits nothing
 
     return _wake
 
 
-def _speak_text(chunk: AgentChunk) -> str | None:
-    """The spoken text a ``TOOL_USE`` speak / a ``TEXT`` chunk carries, else ``None``.
+def _emit_frame(emitter: Any, frame: ProxyMessage) -> None:
+    """Dispatch ONE projected render frame to its gated emit-frontier verb (§12.3 / §3.7).
 
-    A ``speak`` tool call is the turn's product (§3.4); its ``input.text`` is what reaches
-    the mouth. A bare ``TEXT`` chunk is the streamed answer. Nothing else is spoken.
+    The projector chose the channel by mapping the model's delivery-tool call; this routes
+    the frame to the matching gated verb (``speak`` / ``send_chat`` / ``show_screen``) —
+    the SOLE outward delivery authority, each fenced on ``is_owner``. A non-delivery render
+    frame (e.g. a ``ToolStart`` tile "working…" line) is a status render with no delivery
+    verb on this seam; it is skipped here (the tile surface is driven by the render carrier,
+    not the emit frontier). The frame's own payload is passed so the wire carries the exact
+    delivered text/artifact the projector rendered — never a re-derived string.
     """
-    if chunk.type == "TOOL_USE" and chunk.metadata.get("name") == "speak":
-        text = chunk.metadata.get("input", {}) or {}
-        if isinstance(text, dict):
-            said = text.get("text")
-            return str(said) if said else None
-    if chunk.type == "TEXT" and chunk.text:
-        return chunk.text
-    return None
+    if isinstance(frame, VoiceSpeak):
+        emitter.speak(frame.text)
+    elif isinstance(frame, ResponseChunk):
+        emitter.send_chat(frame.chunk)
+    elif isinstance(frame, CanvasPatch):
+        emitter.show_screen(frame.patch)
 
 
 @dataclass
