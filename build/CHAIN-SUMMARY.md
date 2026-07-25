@@ -1,9 +1,9 @@
-# Chain summary — the whole-product build plan (HALT 1 review)
+# Chain summary — the whole-product build plan (128 nodes)
 
-**127 nodes** across 8 docs. Disposition: run each node's real test on real data → green+reviewer-OK = done, else make it green. `verify`=keep existing code if it re-proves; `fix`=targeted defect; `rebuild`=rip+rebuild the wrong code; `build-new`=greenfield.
+Completeness-verified by 4 independent fresh-context audits (lifecycle · spec+CANONICAL · 25 enterprise scenarios · deploy/operate), all closed to zero real gaps. Tier A CLOSED, 0 dead-code orphans, 72 scenarios.
 
 
-## doc00 FOUNDATION — 18 nodes  (verify:16, fix:1, build-new:1)
+## doc00 FOUNDATION — 18 nodes  (verify:15, fix:2, build-new:1)
 - ✅ verify · `foundation.contracts-registry` — Typed contracts + import-time closed registry
 - ✅ verify · `foundation.agentchunk-behavior` — AgentChunk union + stream_deltas + BehaviorRunner + never-throw tools
 - ✅ verify · `foundation.repo-structure` — uv-workspace monorepo skeleton (src-layout, three deployables shape)
@@ -15,7 +15,7 @@
 - ✅ verify · `foundation.tenant-crypto-isolation` — Per-tenant envelope-key crypto isolation + crypto-shred offboarding
 - ✅ verify · `foundation.boot-lifecycle` — Ordered fail-fast boot lifespan + provisioner_ready + EPIPE tolerance + parallel shutdown
 - ✅ verify · `foundation.iac` — Terraform IaC — modules/envs, promote discipline, prevent_destroy, least-privilege
-- ✅ verify · `foundation.docker-migrate` — Multi-stage uv Dockerfiles, non-root+HOME, self-migrate with advisory-lock retry
+- 🔧 fix · `foundation.docker-migrate` — Multi-stage uv Dockerfiles, non-root+HOME, self-migrate with advisory-lock retry
 - ✅ verify · `foundation.seam-external-dispatch` — The call_external seam + the dispatch funnel + internal API surface
 - ✅ verify · `foundation.observability-floor` — Observability + operational floor — logs, Sentry, cost telemetry, Langfuse scaffold, hardening, affinity
 - ✅ verify · `foundation.invariants-guards` — Consolidated invariants + constitution — cost meters, lethal-trifecta, safety floor, naming lint
@@ -65,7 +65,7 @@
 - ✅ verify · `scribe.cost-telemetry` — Per-call cost telemetry — Haiku rate card, cache-split write-through to meeting_cost, cache-hit ratio proves the breakpoint
 - ✅ verify · `scribe.close-pass` — Close pass — Sonnet generateStructured over folded ledger + gap/pending backfill → markdown → GCS create-only → chat link → teardown
 
-## doc04 ORCHESTRATOR — 23 nodes  (build-new:14, verify:7, fix:2)
+## doc04 ORCHESTRATOR — 24 nodes  (build-new:15, verify:7, fix:2)
 - 🏗️ build-new · `orchestrator.provider-seam` — Provider seam + AgentChunk normalization + [CRITICAL] tripwire
 - ✅ verify · `orchestrator.stream-deltas-verify` — stream_deltas one-arg delta computer (verify)
 - ✅ verify · `orchestrator.behavior-runner` — BehaviorRunner wired to the provider seam + cost/error boundary (verify+extend)
@@ -78,6 +78,7 @@
 - 🏗️ build-new · `orchestrator.bundle-dispatch` — Workroom dispatch — bundle assembly (ask + notes_ref + tail) + completion-callback wake
 - 🏗️ build-new · `orchestrator.run-loop` — The run loop — the asyncio event queue that is the missing spine
 - 🏗️ build-new · `orchestrator.standing-pipes` — Standing pipes wiring + STT credential refresh loop (join-time plumbing)
+- 🏗️ build-new · `orchestrator.meeting-runtime-provisioner` — Per-meeting runtime provisioner + harness assembly
 - ✅ verify · `orchestrator.claim-fence-affinity-verify` — Atomic-claim ownership + affinity primitives (verify)
 - 🔧 fix · `orchestrator.heartbeat-fence` — Heartbeat canonicalization — operation_runs fence, not Healthchecks (fix)
 - 🏗️ build-new · `orchestrator.session-durability` — Two-tier session durability — session_id resume + stale-session replay

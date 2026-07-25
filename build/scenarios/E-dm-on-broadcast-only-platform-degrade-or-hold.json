@@ -1,0 +1,18 @@
+{
+  "id": "E-dm-on-broadcast-only-platform-degrade-or-hold",
+  "kind": "edge",
+  "spec_refs": [
+    "02-VOICE-TRANSPORT.md#3.4",
+    "09-VERIFICATION.md#3"
+  ],
+  "given": "Proxy is in a meeting on a platform whose real chat capability is broadcast-only (dm_available=False read from the actual platform capability, never a constant).",
+  "when": "Doc 04 asks the transport to DM a single participant a private detail line.",
+  "then": "Because dm_available is False, the DM mechanically degrades to the upstream broadcast-or-hold hook rather than leaking the private line to the whole room \u2014 nothing is dropped and nothing private is broadcast.",
+  "touches_nodes": [
+    "transport.chat",
+    "transport.seam-carrier",
+    "transport.cost-xcut",
+    "journey.s1-happy-arc"
+  ],
+  "journey_id": "J-09-S1-happy-arc"
+}

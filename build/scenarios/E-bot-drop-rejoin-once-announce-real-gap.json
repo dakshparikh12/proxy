@@ -1,0 +1,19 @@
+{
+  "id": "E-bot-drop-rejoin-once-announce-real-gap",
+  "kind": "negative",
+  "spec_refs": [
+    "02-VOICE-TRANSPORT.md#3.7",
+    "09-VERIFICATION.md#3"
+  ],
+  "given": "Proxy's Recall bot is dropped from the meeting for 45 seconds by a transient network fault.",
+  "when": "The bot drops and the transport attempts recovery.",
+  "then": "It auto-rejoins exactly once and, on rejoin, announces the real [dropped, rejoined] interval plainly (the chat copy byte-equal to the spoken line, never padded/shrunk/presented as continuous); a second drop yields an honest terminal stop, not an infinite rejoin loop.",
+  "touches_nodes": [
+    "transport.failure",
+    "transport.events-roster",
+    "transport.speak",
+    "transport.cost-xcut",
+    "journey.s8-honest-failure"
+  ],
+  "journey_id": "J-09-S8-honest-failure"
+}

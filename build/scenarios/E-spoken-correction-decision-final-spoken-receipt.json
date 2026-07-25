@@ -1,0 +1,21 @@
+{
+  "id": "E-spoken-correction-decision-final-spoken-receipt",
+  "kind": "edge",
+  "spec_refs": [
+    "03-MEETING-UNDERSTANDING.md#3.6",
+    "03-MEETING-UNDERSTANDING.md#3.2.1",
+    "08-EXPERIENCE.md#2.4"
+  ],
+  "given": "The notes hold a forming decision 'ship Monday'; anyone in the room can fix the record live.",
+  "when": "'Proxy, we decided Friday, not Monday \u2014 that's final' is spoken.",
+  "then": "The correction applies as an immediate attributed superseded-not-erased patch (old value kept), the correction requires corrector identity + timestamp (else AttributionError before any write), and because it sets Decision.status=final the notes-injection gate ALSO emits a one-line spoken receipt (audible confirm) \u2014 while ordinary firmness bumps stay silent-immediate.",
+  "touches_nodes": [
+    "scribe.corrections",
+    "scribe.schema",
+    "scribe.pipeline-apply",
+    "experience.chat-formatters",
+    "orchestrator.wake-turn",
+    "journey.s1-happy-arc"
+  ],
+  "journey_id": "J-09-S1-happy-arc"
+}

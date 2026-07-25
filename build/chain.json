@@ -754,7 +754,7 @@
         "AC-SUB-032"
       ],
       "intent": "Realizes \u00a76 'fail loud at boot, not on first use': pydantic-settings validates the full required-key set at import (missing key => startup crash naming it); the ordered lifespan is init tracing -> open asyncpg pool -> construct Database facade -> provisioner_ready async gate -> boot-time stale-row reaper -> mount routers last (so a join can't race an unwired provisioner and no request sees a stale-running row); EPIPE from a crashed SDK subprocess is swallowed+recovered while unknown exceptions crash after a flush; shutdown gathers flush_tracing/db.close/bot.leave_all/server.shutdown in parallel with a backstop; the \u00a75.7 sign-in/binding flow (users row + signed session cookie + resolve_session; meetings row bound to tenant/repo/pinned_sha + recall_bot_id round-trip) is wired.",
-      "definition_of_done": "A missing required key crashes at import naming the key; the recorded lifespan step order equals the canonical sequence with routers mounted last; a join awaits provisioner_ready; the boot reaper interrupts orphans before router mount; BrokenPipeError is swallowed+recovered and an unknown exception crashes after a flush; shutdown runs the four tasks concurrently with a hard-exit backstop; all three SDK auth modes are documented+resolvable; resolve_session returns {user_id,tenant_id} and the invite binds a meetings row + round-trips recall_bot_id. NOT done if a required key fails lazily or routers mount before the reaper.",
+      "definition_of_done": "A missing required key crashes at import naming the key; the recorded lifespan step order equals the canonical sequence with routers mounted last; a join awaits provisioner_ready; the boot reaper interrupts orphans before router mount; BrokenPipeError is swallowed+recovered and an unknown exception crashes after a flush; shutdown runs the four tasks concurrently with a hard-exit backstop; all three SDK auth modes are documented+resolvable; resolve_session returns {user_id,tenant_id} and the invite binds a meetings row + round-trips recall_bot_id. NOT done if a required key fails lazily or routers mount before the reaper. Additionally: graceful shutdown honors MIG drain (SIGTERM \u2192 set draining, let in-flight meetings finish within the grace window, then exit \u2014 the routine path, distinct from the heartbeat-reclaim exception) and a /readiness probe on meeting_runtime + code_intel returns 503 while draining.",
       "consumes": [
         "substrate.operation_runs",
         "ops.check_secret_bindings"
@@ -815,7 +815,7 @@
         "AC-IAC-006"
       ],
       "intent": "Realizes \u00a78 the Terraform layout and cross-cutting discipline: modules/{bootstrap,platform} + envs/{dev,prod}/{bootstrap,platform} applied bootstrap->platform; dev auto-deploys on a Cloud Build trigger while prod is promote-based (Artifact Registry immutable tag + a promote job, no direct prod push); prevent_destroy on every data-bearing resource; Terraform owns the service shell (Cloud Run template ignore_changes'd) while the deploy script owns image/env/secrets; least-privilege service-account-per-role; the customer-platform per-customer-GCP-project module is recorded but instantiates nothing.",
-      "definition_of_done": "infra/modules/{bootstrap,platform} + infra/envs/{dev,prod}/{bootstrap,platform} exist with the documented bootstrap->platform apply order; dev auto-deploys on a trigger and prod is promote-only with no direct-push path; prevent_destroy is set on the specs bucket, both SQL DBs, credential-key random_ids, and the project lien; the Cloud Run template is ignore_changes'd so promote/CI own runtime config; each role has its own least-privilege SA; customer-platform is named but instantiates zero resources. NOT done if a data resource lacks prevent_destroy or a direct prod-push path exists.",
+      "definition_of_done": "infra/modules/{bootstrap,platform} + infra/envs/{dev,prod}/{bootstrap,platform} exist with the documented bootstrap->platform apply order; dev auto-deploys on a trigger and prod is promote-only with no direct-push path; prevent_destroy is set on the specs bucket, both SQL DBs, credential-key random_ids, and the project lien; the Cloud Run template is ignore_changes'd so promote/CI own runtime config; each role has its own least-privilege SA; customer-platform is named but instantiates zero resources. NOT done if a data resource lacks prevent_destroy or a direct prod-push path exists. Additionally: prod-promote discipline: images are promoted from Artifact Registry to prod by pinned digest (a promote step), not direct pushes; `ignore_changes=[template]` means deploy owns the image, and promotion is repeatable + logged.",
       "consumes": [],
       "exposes": [],
       "depends_on": [
@@ -855,7 +855,7 @@
       "id": "foundation.docker-migrate",
       "title": "Multi-stage uv Dockerfiles, non-root+HOME, self-migrate with advisory-lock retry",
       "region": "00-FOUNDATION",
-      "disposition": "verify",
+      "disposition": "fix",
       "status": "pending",
       "spec_refs": [
         "00-FOUNDATION.md#9",
@@ -875,7 +875,7 @@
         "AC-DOCK-004"
       ],
       "intent": "Realizes \u00a79 the Dockerfile: a multi-stage uv build (builder runs uv sync --frozen --no-dev --package <svc> for a self-contained image), a non-root uid-1001 appuser with HOME set (the Claude Agent SDK writes to $HOME), the migrate-retry CMD that lets Alembic + an env.py pg_advisory_lock serialize N parallel container boots (losers retry 30x5s then exec the server), and the SANDBOX_IMAGE_HASH LABEL pinning the app release to its matching warm-sandbox base image fail-closed.",
-      "definition_of_done": "Each service Dockerfile is multi-stage with `uv sync --frozen --no-dev --package <svc>`; the runtime stage sets USER appuser (uid 1001) and ENV HOME; the CMD runs `until alembic upgrade head; ...` and env.py wraps the upgrade in pg_advisory_lock so exactly one container migrates at a time under a parallel-boot race; the image carries a proxy.sandbox-image-hash LABEL and a mismatched app/sandbox pair fails closed. NOT done if the sync is non-frozen, the image runs as root or without HOME, or migrations race without the advisory lock.",
+      "definition_of_done": "Each service Dockerfile is multi-stage with `uv sync --frozen --no-dev --package <svc>`; the runtime stage sets USER appuser (uid 1001) and ENV HOME; the CMD runs `until alembic upgrade head; ...` and env.py wraps the upgrade in pg_advisory_lock so exactly one container migrates at a time under a parallel-boot race; the image carries a proxy.sandbox-image-hash LABEL and a mismatched app/sandbox pair fails closed. NOT done if the sync is non-frozen, the image runs as root or without HOME, or migrations race without the advisory lock. Additionally: ALL THREE Dockerfiles (control_plane, meeting_runtime, code_intel) carry: non-root user + ENV HOME (the SDK writes to $HOME); a self-migrate CMD (`alembic upgrade head` retry-loop + the advisory-lock in env.py) so parallel boots don't race; and the ARG/LABEL SANDBOX_IMAGE_HASH tying the app release to its warm E2B base image (\u00a79).",
       "consumes": [],
       "exposes": [],
       "depends_on": [
@@ -4097,7 +4097,7 @@
       "requirement_ids": [],
       "criterion_ids": [],
       "intent": "Realizes the \u00a73.5 sandbox toolbelt: read_file (offset/limit), list_files (glob), grep (regex, 100-match cap + totalMatches), glob (paginated), run_command (the shell workhorse \u2014 ls/grep/git/pytest/npm, output auto-truncated head-200+tail-300, 5-min default timeout), write_file, edit_file (unique-match string replace, replace_all opt), and ast_grep (structural syntax-aware search/refactor over the baked ast-grep binary via the same atomic-write path \u2014 CANONICAL \u00a711.11: WIRE it, don't cut it). Every tool is symlink-aware validate_path (reject null bytes \u2192 realpath \u2192 re-check against allowed roots \u2192 for a not-yet-existing file walk up to nearest existing ancestor) and atomic writes (wx exclusive-create for new, temp-file+rename for overwrite \u2192 no TOCTOU/partial writes), with full tools/call + tools/result journaling (100 KB cap) that IS part of Doc 07's trace.",
-      "definition_of_done": "All 8 tools callable through the sidecar; a path-traversal / symlink-escape attempt is rejected by validate_path; a write is atomic (no partial file on failure); run_command truncates output and returns exit codes; ast_grep performs a structural rewrite. NOT done if any tool skips validate_path, if writes are non-atomic, if the count is not exactly 8, or if journaling is absent.",
+      "definition_of_done": "All 8 tools callable through the sidecar; a path-traversal / symlink-escape attempt is rejected by validate_path; a write is atomic (no partial file on failure); run_command truncates output and returns exit codes; ast_grep performs a structural rewrite. NOT done if any tool skips validate_path, if writes are non-atomic, if the count is not exactly 8, or if journaling is absent. Additionally: Hard Rule 6 \u2014 every tool handler wraps errors and NEVER throws: an uncaught exception cannot kill the loop; all tool results are try/except-wrapped, logged, and returned as is_error:true (Doc 05 \u00a73.3).",
       "consumes": [
         "workroom.sandbox_transport"
       ],
@@ -5401,7 +5401,7 @@
       "requirement_ids": [],
       "criterion_ids": [],
       "intent": "Realizes the standing-pipes half of \u00a72/\u00a73 (plumbing, wired once at join, run continuously, cost nothing, no agent): audio\u2192STT\u2192the transcript feed, transcript\u2192the Scribe, Scribe\u2192material-change events\u2192(judge, V1-dormant), component heartbeats \u2014 the session's nervous system on the ONE in-process SignalCarrier (meeting_runtime already assembles the carrier\u2194Scribe wiring). The availability-critical STT-credential refresh (stt.py) stays on its OWN in-process interval (\u00a73.8 split), NOT the scale-to-zero reconcile cron, because a live meeting provably has a warm instance. These are constant connections, not judgment moments.",
-      "definition_of_done": "DONE: at join the harness wires audio\u2192STT\u2192transcript\u2192Scribe and Scribe material-events onto the SignalCarrier as pure forwarding with zero agent calls, and the STT credential refresh runs on its own in-process interval (not the reconcile cron). The scribe_runtime serial consumer starts on the Recall in_call callback and stops on call_ended. NOT done: routing a standing pipe through a wake turn, or putting the availability-critical STT loop on the scale-to-zero cron.",
+      "definition_of_done": "DONE: at join the harness wires audio\u2192STT\u2192transcript\u2192Scribe and Scribe material-events onto the SignalCarrier as pure forwarding with zero agent calls, and the STT credential refresh runs on its own in-process interval (not the reconcile cron). The scribe_runtime serial consumer starts on the Recall in_call callback and stops on call_ended. NOT done: routing a standing pipe through a wake turn, or putting the availability-critical STT loop on the scale-to-zero cron. Additionally: the standing pipes (audio\u2192STT\u2192transcript; transcript\u2192Scribe\u2192material-events; heartbeat\u2192fence) are subscribed ONCE at join, forward continuously on their own asyncio task(s) separate from the run-loop event queue with ZERO agent calls, on the STT-credential refresh interval (\u00a73.8); testable: subscription count == 1, a 1-hour silent meeting keeps pipes flowing with zero agent calls.",
       "consumes": [
         "transport.signal_carrier",
         "transport.transcript",
@@ -5434,6 +5434,59 @@
         "the STT loop dying silently and degrading transcription mid-meeting"
       ],
       "human_gated": false
+    },
+    {
+      "id": "orchestrator.meeting-runtime-provisioner",
+      "title": "Per-meeting runtime provisioner + harness assembly",
+      "region": "04-ORCHESTRATOR",
+      "disposition": "build-new",
+      "spec_refs": [
+        "04-ORCHESTRATOR.md#3.2",
+        "04-ORCHESTRATOR.md#3.6",
+        "CANONICAL-DECISIONS.md#12.1"
+      ],
+      "requirement_ids": [],
+      "criterion_ids": [],
+      "intent": "On a Recall in_call webhook, atomically claim the operation_runs row (ops.claim_meeting), instantiate the per-meeting harness \u2014 transport + scribe + orchestrator + the workroom host-shell in ONE in-process asyncio scope \u2014 wire the SignalCarrier ONCE at join to all subscribers, and launch asyncio.run(the run-loop) to run the meeting to close. This is the entry-point that turns the built pieces into a running meeting; on pod recycle a fresh harness re-claims and resumes.",
+      "definition_of_done": "An in_call webhook triggers the provisioner to atomically claim the meeting via ops.claim_meeting; the harness instantiates all four subsystems in a single scope; the SignalCarrier is subscribed ONCE at join (not re-wired per event); asyncio.run() starts the event loop; the meeting runs until the meeting_end webhook or timeout; a recycle kills this task and the next harness re-claims + resumes via ops.resume_with_fallback. NOT done if the loop is never launched from the webhook, the carrier is re-wired per-event, or the claim is not atomic.",
+      "consumes": [
+        "recall.webhook",
+        "ops.claim_meeting",
+        "ops.resume_with_fallback",
+        "transport.signal_carrier",
+        "transport.join_consent",
+        "scribe.note_deltas",
+        "orchestrator.wake_turn",
+        "orchestrator.bundle_dispatch"
+      ],
+      "exposes": [],
+      "depends_on": [
+        "orchestrator.run-loop",
+        "orchestrator.standing-pipes"
+      ],
+      "integration_point": "services/harness/src/harness/meeting_runtime.py \u2014 the per-meeting asyncio entry that assembles + runs the runtime",
+      "acceptance": "WHEN a Recall in_call webhook arrives THE SYSTEM SHALL atomically claim the meeting, assemble + wire the per-meeting harness once, and run the asyncio event loop to close",
+      "acceptance_cmd": "tests/doc04/e2e/test_meeting_runtime_provisioner.py",
+      "evidence_class": "integration",
+      "journeys_now_live": [
+        "J-09-S1-happy-arc",
+        "J-09-S5-recycle-survives",
+        "J-09-S6-concurrency"
+      ],
+      "codebase_anchors": [
+        "services/harness/src/harness/meeting_runtime.py"
+      ],
+      "invariants": [
+        "operation_runs atomic claim (one harness per meeting)",
+        "SignalCarrier wired once at join",
+        "is_owner fencing gates every emit"
+      ],
+      "risks": [
+        "assembly order: carrier must be wired before subscribers",
+        "recycle re-claim race"
+      ],
+      "human_gated": false,
+      "status": "pending"
     },
     {
       "id": "orchestrator.claim-fence-affinity-verify",

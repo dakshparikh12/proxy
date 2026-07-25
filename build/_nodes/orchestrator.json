@@ -570,7 +570,7 @@
     "requirement_ids": [],
     "criterion_ids": [],
     "intent": "Realizes the standing-pipes half of \u00a72/\u00a73 (plumbing, wired once at join, run continuously, cost nothing, no agent): audio\u2192STT\u2192the transcript feed, transcript\u2192the Scribe, Scribe\u2192material-change events\u2192(judge, V1-dormant), component heartbeats \u2014 the session's nervous system on the ONE in-process SignalCarrier (meeting_runtime already assembles the carrier\u2194Scribe wiring). The availability-critical STT-credential refresh (stt.py) stays on its OWN in-process interval (\u00a73.8 split), NOT the scale-to-zero reconcile cron, because a live meeting provably has a warm instance. These are constant connections, not judgment moments.",
-    "definition_of_done": "DONE: at join the harness wires audio\u2192STT\u2192transcript\u2192Scribe and Scribe material-events onto the SignalCarrier as pure forwarding with zero agent calls, and the STT credential refresh runs on its own in-process interval (not the reconcile cron). The scribe_runtime serial consumer starts on the Recall in_call callback and stops on call_ended. NOT done: routing a standing pipe through a wake turn, or putting the availability-critical STT loop on the scale-to-zero cron.",
+    "definition_of_done": "DONE: at join the harness wires audio\u2192STT\u2192transcript\u2192Scribe and Scribe material-events onto the SignalCarrier as pure forwarding with zero agent calls, and the STT credential refresh runs on its own in-process interval (not the reconcile cron). The scribe_runtime serial consumer starts on the Recall in_call callback and stops on call_ended. NOT done: routing a standing pipe through a wake turn, or putting the availability-critical STT loop on the scale-to-zero cron. Additionally: the standing pipes (audio\u2192STT\u2192transcript; transcript\u2192Scribe\u2192material-events; heartbeat\u2192fence) are subscribed ONCE at join, forward continuously on their own asyncio task(s) separate from the run-loop event queue with ZERO agent calls, on the STT-credential refresh interval (\u00a73.8); testable: subscription count == 1, a 1-hour silent meeting keeps pipes flowing with zero agent calls.",
     "consumes": [
       "transport.signal_carrier",
       "transport.transcript",
@@ -603,6 +603,30 @@
       "the STT loop dying silently and degrading transcription mid-meeting"
     ],
     "human_gated": false
+  },
+  {
+    "id": "orchestrator.meeting-runtime-provisioner",
+    "title": "Per-meeting runtime provisioner + harness assembly",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "build-new",
+    "spec_refs": ["04-ORCHESTRATOR.md#3.2","04-ORCHESTRATOR.md#3.6","CANONICAL-DECISIONS.md#12.1"],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "On a Recall in_call webhook, atomically claim the operation_runs row (ops.claim_meeting), instantiate the per-meeting harness — transport + scribe + orchestrator + the workroom host-shell in ONE in-process asyncio scope — wire the SignalCarrier ONCE at join to all subscribers, and launch asyncio.run(the run-loop) to run the meeting to close. This is the entry-point that turns the built pieces into a running meeting; on pod recycle a fresh harness re-claims and resumes.",
+    "definition_of_done": "An in_call webhook triggers the provisioner to atomically claim the meeting via ops.claim_meeting; the harness instantiates all four subsystems in a single scope; the SignalCarrier is subscribed ONCE at join (not re-wired per event); asyncio.run() starts the event loop; the meeting runs until the meeting_end webhook or timeout; a recycle kills this task and the next harness re-claims + resumes via ops.resume_with_fallback. NOT done if the loop is never launched from the webhook, the carrier is re-wired per-event, or the claim is not atomic.",
+    "consumes": ["recall.webhook","ops.claim_meeting","ops.resume_with_fallback","transport.signal_carrier","transport.join_consent","scribe.note_deltas","orchestrator.wake_turn","orchestrator.bundle_dispatch"],
+    "exposes": [],
+    "depends_on": ["orchestrator.run-loop","orchestrator.standing-pipes"],
+    "integration_point": "services/harness/src/harness/meeting_runtime.py — the per-meeting asyncio entry that assembles + runs the runtime",
+    "acceptance": "WHEN a Recall in_call webhook arrives THE SYSTEM SHALL atomically claim the meeting, assemble + wire the per-meeting harness once, and run the asyncio event loop to close",
+    "acceptance_cmd": "tests/doc04/e2e/test_meeting_runtime_provisioner.py",
+    "evidence_class": "integration",
+    "journeys_now_live": ["J-09-S1-happy-arc","J-09-S5-recycle-survives","J-09-S6-concurrency"],
+    "codebase_anchors": ["services/harness/src/harness/meeting_runtime.py"],
+    "invariants": ["operation_runs atomic claim (one harness per meeting)","SignalCarrier wired once at join","is_owner fencing gates every emit"],
+    "risks": ["assembly order: carrier must be wired before subscribers","recycle re-claim race"],
+    "human_gated": false,
+    "status": "pending"
   },
   {
     "id": "orchestrator.claim-fence-affinity-verify",

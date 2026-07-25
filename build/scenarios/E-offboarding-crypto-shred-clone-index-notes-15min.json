@@ -1,0 +1,20 @@
+{
+  "id": "E-offboarding-crypto-shred-clone-index-notes-15min",
+  "kind": "cross-feature",
+  "spec_refs": [
+    "00-FOUNDATION.md#15",
+    "01-CODE-INTELLIGENCE.md#3.6",
+    "09-VERIFICATION.md#3"
+  ],
+  "given": "A tenant offboards / uninstalls the GitHub App; their clone, per-repo index/graph, notes, and rows live under a per-tenant envelope key.",
+  "when": "The uninstall is processed.",
+  "then": "The tenant's envelope key is destroyed (crypto-shred bounded to that tenant), the reconcile sweep deletes their Postgres rows + GCS prefixes, and code_intel hard-deletes the clone+index+graph within 15 minutes \u2014 tenant B stays fully readable, tenant A's ciphertext is unrecoverable.",
+  "touches_nodes": [
+    "foundation.tenant-crypto-isolation",
+    "codeintel.freshness",
+    "orchestrator.reconcile-sandbox-verify",
+    "foundation.substrate-runtime",
+    "journey.s9-tenant-isolation"
+  ],
+  "journey_id": "J-09-S9-tenant-isolation"
+}

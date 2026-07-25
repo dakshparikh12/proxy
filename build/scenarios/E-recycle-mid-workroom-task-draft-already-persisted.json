@@ -1,0 +1,22 @@
+{
+  "id": "E-recycle-mid-workroom-task-draft-already-persisted",
+  "kind": "cross-feature",
+  "spec_refs": [
+    "05-WORKROOM.md#3.1",
+    "04-ORCHESTRATOR.md#3.7",
+    "09-VERIFICATION.md#3"
+  ],
+  "given": "A Workroom task (operation_type='workroom:<id>') is mid-flight; it has already persisted a staged_drafts row + GCS bundle before the orchestrator is recycled.",
+  "when": "The orchestrator is killed and a replacement re-claims the meeting.",
+  "then": "The recovery SQL completion check sees result_ref already points at the deliverable, so the coarse workroom:<id> unit is NOT re-run (idempotent restart-unless-deliverable); the staged draft survives the kill and remains acceptable post-call, and abort-is-final still holds for any killed build.",
+  "touches_nodes": [
+    "workroom.task-durability",
+    "workroom.drafts-persist-verify",
+    "orchestrator.heartbeat-fence",
+    "orchestrator.claim-fence-affinity-verify",
+    "workroom.session-resume",
+    "journey.s5-recycle-survives",
+    "journey.cost-drafts-persist"
+  ],
+  "journey_id": "J-09-S5-recycle-survives"
+}

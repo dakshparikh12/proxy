@@ -1,0 +1,21 @@
+{
+  "id": "E-vp-capability-token-read-only-notes-no-drafts-no-other-meeting",
+  "kind": "cross-feature",
+  "spec_refs": [
+    "08-EXPERIENCE.md#2.8",
+    "02-VOICE-TRANSPORT.md#-",
+    "09-VERIFICATION.md#3"
+  ],
+  "given": "After a meeting, a tenant member forwards the notes link to a VP who is not in the meeting and not signed in, via a signed short-TTL meeting-scoped capability token.",
+  "when": "The VP opens GET /m/{meeting_id} presenting the capability token, then tries the same token against a different meeting_id and against a draft-accept route.",
+  "then": "The dual-mode read renders notes ONLY (no staged-draft cards) for the valid same-meeting token; the token is refused for the other meeting_id and for any action other than notes:read (draft accept refused) \u2014 read-only, meeting-scoped, revocable.",
+  "touches_nodes": [
+    "experience.capability-token-read",
+    "experience.meeting-home-page",
+    "experience.notes-file-template",
+    "scribe.cross-service-reader",
+    "experience.draft-accept-reject-routes",
+    "journey.s3-staged-draft-accept"
+  ],
+  "journey_id": "J-09-S3-staged-draft-accept"
+}

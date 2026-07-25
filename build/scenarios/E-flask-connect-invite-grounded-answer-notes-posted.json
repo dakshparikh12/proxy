@@ -1,0 +1,25 @@
+{
+  "id": "E-flask-connect-invite-grounded-answer-notes-posted",
+  "kind": "journey",
+  "spec_refs": [
+    "09-VERIFICATION.md#3",
+    "01-CODE-INTELLIGENCE.md#3.7",
+    "02-VOICE-TRANSPORT.md#3.1",
+    "03-MEETING-UNDERSTANDING.md#3.7"
+  ],
+  "given": "A team connects the pallets/flask repo via the GitHub App; the connect page renders the five readiness states and reaches ready with an honest coverage number.",
+  "when": "Proxy is invited to a meeting, posts the consent notice as its first observable action, and is asked 'Proxy, where's the request dispatch entry point?'",
+  "then": "Proxy answers with a real file:line citation within the shallow SLO, and when the meeting ends a \u00a72.6 notes file (attendees, worst-news-first summary, what-Proxy-did + receipts) is written to GCS create-only and its link posted in chat before teardown.",
+  "touches_nodes": [
+    "experience.connect-page",
+    "codeintel.coverage_readiness",
+    "transport.join-consent",
+    "orchestrator.direct-answer-path",
+    "codeintel.direct_answer",
+    "scribe.close-pass",
+    "experience.notes-file-template",
+    "orchestrator.ordered-close",
+    "journey.s1-happy-arc"
+  ],
+  "journey_id": "J-09-S1-happy-arc"
+}

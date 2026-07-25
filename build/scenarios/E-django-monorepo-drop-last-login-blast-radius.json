@@ -1,0 +1,24 @@
+{
+  "id": "E-django-monorepo-drop-last-login-blast-radius",
+  "kind": "cross-feature",
+  "spec_refs": [
+    "09-VERIFICATION.md#3",
+    "01-CODE-INTELLIGENCE.md#3.4",
+    "01-CODE-INTELLIGENCE.md#3.5",
+    "01-CODE-INTELLIGENCE.md#3.7"
+  ],
+  "given": "A 600k-LOC Django monorepo (Sentry-scale, tier-1 Django ORM) is connected; the code_intel index reached ready with an honest coverage number and the dep/call graph + table nodes are built.",
+  "when": "In an architecture review someone asks out loud 'Proxy, what breaks if we drop users.last_login?'",
+  "then": "The name-gate confirms the address, Proxy direct-answers in the wake turn via get_dependents/who_writes/shares_table over the table::users graph node in ~1 tool call, returns file:line leads tagged 'resolved' (tier-1 Django ORM), and states the honest coverage tail ('over the 96% indexed; 3 vendored modules not indexed') instead of implying a total.",
+  "touches_nodes": [
+    "codeintel.connect",
+    "codeintel.substrate_graph",
+    "codeintel.mcp_tools",
+    "codeintel.coverage_readiness",
+    "codeintel.direct_answer",
+    "orchestrator.name-gate",
+    "orchestrator.direct-answer-path",
+    "journey.s2-dep-graph-blast-radius"
+  ],
+  "journey_id": "J-09-S2-dep-graph-blast-radius"
+}

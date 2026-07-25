@@ -1,0 +1,20 @@
+{
+  "id": "E-index-not-ready-gaps-honest-no-silent-join",
+  "kind": "negative",
+  "spec_refs": [
+    "01-CODE-INTELLIGENCE.md#3.7",
+    "09-VERIFICATION.md#3",
+    "08-EXPERIENCE.md#-"
+  ],
+  "given": "A large repo is mid-index: some files failed to parse and the graph smoke check hasn't passed, so Readiness is not_ready with named gaps.",
+  "when": "Someone tries to bring Proxy into a meeting and asks a code question before the index is ready.",
+  "then": "The connect page renders the not_ready terminal state naming the gaps (never a silent partial join), and if asked in-meeting Proxy says what it cannot see (Law 1, grounded-or-silent) rather than giving a confident wrong answer.",
+  "touches_nodes": [
+    "codeintel.coverage_readiness",
+    "codeintel.pipeline_orchestration",
+    "experience.connect-page",
+    "orchestrator.direct-answer-path",
+    "journey.s8-honest-failure"
+  ],
+  "journey_id": "J-09-S8-honest-failure"
+}

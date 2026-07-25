@@ -1,0 +1,20 @@
+{
+  "id": "E-forged-recall-webhook-hmac-reject-before-row-lands",
+  "kind": "negative",
+  "spec_refs": [
+    "08-EXPERIENCE.md#4.6",
+    "02-VOICE-TRANSPORT.md#3.1",
+    "09-VERIFICATION.md#3"
+  ],
+  "given": "The public POST /webhooks/recall route is exempt from the auth wall but must prove the caller.",
+  "when": "An attacker POSTs a crafted meeting-end webhook with a missing/mismatched x-recall-signature.",
+  "then": "verify_recall_signature constant-time-compares the raw body against the secret and rejects 401 BEFORE any webhook_events row lands; a valid signature proceeds to the durable insert-then-200-then-idempotent-drain intake, so no forged event can trigger a close or roster change.",
+  "touches_nodes": [
+    "experience.hmac-webhook-verify",
+    "transport.events-roster",
+    "foundation.webhook-events-schema-fix",
+    "orchestrator.boot-lifecycle-verify",
+    "journey.s9-tenant-isolation"
+  ],
+  "journey_id": "J-09-S9-tenant-isolation"
+}

@@ -1,0 +1,19 @@
+{
+  "id": "E-find-references-uninstalled-deps-external-label",
+  "kind": "edge",
+  "spec_refs": [
+    "01-CODE-INTELLIGENCE.md#3.5",
+    "09-VERIFICATION.md#3"
+  ],
+  "given": "A connected Python service references a third-party library that is not vendored/installed in the clone; the warm host-side LSP is up.",
+  "when": "'Proxy, find all references to Session.commit' is asked, spanning both in-repo call sites and calls into the uninstalled dependency.",
+  "then": "In-repo references resolve via the warm LSP tagged 'resolved'; references into the uninstalled dep are labeled 'external-references-not-resolved' (a distinct label, never dropped, never conflated with the grep lower-bound); on an LSP timeout it falls back to grep tagged 'lower-bound' and restarts a hung server.",
+  "touches_nodes": [
+    "codeintel.precise_nav",
+    "codeintel.mcp_tools",
+    "codeintel.direct_answer",
+    "orchestrator.direct-answer-path",
+    "journey.s8-honest-failure"
+  ],
+  "journey_id": "J-09-S8-honest-failure"
+}

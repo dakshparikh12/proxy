@@ -1,0 +1,19 @@
+{
+  "id": "E-sandbox-tool-path-traversal-symlink-escape-refused",
+  "kind": "negative",
+  "spec_refs": [
+    "05-WORKROOM.md#3.5",
+    "09-VERIFICATION.md#3"
+  ],
+  "given": "A Workroom worker runs inside a per-meeting E2B sandbox with the 8-tool belt gated by a per-sandbox JWT.",
+  "when": "A transcript-injected instruction coaxes a write_file/edit_file targeting '../../etc/passwd' via a symlink, and a token minted for meeting A is replayed against meeting B's sidecar.",
+  "then": "validate_path rejects null bytes, realpaths, and re-checks against allowed roots (traversal/symlink escape refused with an atomic-write-or-nothing guarantee), and the sidecar returns 403 for the cross-meeting token (session_id claim != env.SESSION_ID) \u2014 the effect never lands.",
+  "touches_nodes": [
+    "workroom.sandbox-tools",
+    "workroom.sandbox-sidecar",
+    "workroom.sandbox-provision-verify",
+    "workroom.safety-wiring",
+    "journey.s9-tenant-isolation"
+  ],
+  "journey_id": "J-09-S9-tenant-isolation"
+}

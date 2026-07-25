@@ -724,7 +724,7 @@
       "AC-SUB-032"
     ],
     "intent": "Realizes \u00a76 'fail loud at boot, not on first use': pydantic-settings validates the full required-key set at import (missing key => startup crash naming it); the ordered lifespan is init tracing -> open asyncpg pool -> construct Database facade -> provisioner_ready async gate -> boot-time stale-row reaper -> mount routers last (so a join can't race an unwired provisioner and no request sees a stale-running row); EPIPE from a crashed SDK subprocess is swallowed+recovered while unknown exceptions crash after a flush; shutdown gathers flush_tracing/db.close/bot.leave_all/server.shutdown in parallel with a backstop; the \u00a75.7 sign-in/binding flow (users row + signed session cookie + resolve_session; meetings row bound to tenant/repo/pinned_sha + recall_bot_id round-trip) is wired.",
-    "definition_of_done": "A missing required key crashes at import naming the key; the recorded lifespan step order equals the canonical sequence with routers mounted last; a join awaits provisioner_ready; the boot reaper interrupts orphans before router mount; BrokenPipeError is swallowed+recovered and an unknown exception crashes after a flush; shutdown runs the four tasks concurrently with a hard-exit backstop; all three SDK auth modes are documented+resolvable; resolve_session returns {user_id,tenant_id} and the invite binds a meetings row + round-trips recall_bot_id. NOT done if a required key fails lazily or routers mount before the reaper.",
+    "definition_of_done": "A missing required key crashes at import naming the key; the recorded lifespan step order equals the canonical sequence with routers mounted last; a join awaits provisioner_ready; the boot reaper interrupts orphans before router mount; BrokenPipeError is swallowed+recovered and an unknown exception crashes after a flush; shutdown runs the four tasks concurrently with a hard-exit backstop; all three SDK auth modes are documented+resolvable; resolve_session returns {user_id,tenant_id} and the invite binds a meetings row + round-trips recall_bot_id. NOT done if a required key fails lazily or routers mount before the reaper. Additionally: graceful shutdown honors MIG drain (SIGTERM → set draining, let in-flight meetings finish within the grace window, then exit — the routine path, distinct from the heartbeat-reclaim exception) and a /readiness probe on meeting_runtime + code_intel returns 503 while draining.",
     "consumes": [
       "substrate.operation_runs",
       "ops.check_secret_bindings"
@@ -785,7 +785,7 @@
       "AC-IAC-006"
     ],
     "intent": "Realizes \u00a78 the Terraform layout and cross-cutting discipline: modules/{bootstrap,platform} + envs/{dev,prod}/{bootstrap,platform} applied bootstrap->platform; dev auto-deploys on a Cloud Build trigger while prod is promote-based (Artifact Registry immutable tag + a promote job, no direct prod push); prevent_destroy on every data-bearing resource; Terraform owns the service shell (Cloud Run template ignore_changes'd) while the deploy script owns image/env/secrets; least-privilege service-account-per-role; the customer-platform per-customer-GCP-project module is recorded but instantiates nothing.",
-    "definition_of_done": "infra/modules/{bootstrap,platform} + infra/envs/{dev,prod}/{bootstrap,platform} exist with the documented bootstrap->platform apply order; dev auto-deploys on a trigger and prod is promote-only with no direct-push path; prevent_destroy is set on the specs bucket, both SQL DBs, credential-key random_ids, and the project lien; the Cloud Run template is ignore_changes'd so promote/CI own runtime config; each role has its own least-privilege SA; customer-platform is named but instantiates zero resources. NOT done if a data resource lacks prevent_destroy or a direct prod-push path exists.",
+    "definition_of_done": "infra/modules/{bootstrap,platform} + infra/envs/{dev,prod}/{bootstrap,platform} exist with the documented bootstrap->platform apply order; dev auto-deploys on a trigger and prod is promote-only with no direct-push path; prevent_destroy is set on the specs bucket, both SQL DBs, credential-key random_ids, and the project lien; the Cloud Run template is ignore_changes'd so promote/CI own runtime config; each role has its own least-privilege SA; customer-platform is named but instantiates zero resources. NOT done if a data resource lacks prevent_destroy or a direct prod-push path exists. Additionally: prod-promote discipline: images are promoted from Artifact Registry to prod by pinned digest (a promote step), not direct pushes; `ignore_changes=[template]` means deploy owns the image, and promotion is repeatable + logged.",
     "consumes": [],
     "exposes": [],
     "depends_on": [
@@ -898,7 +898,7 @@
     "id": "foundation.docker-migrate",
     "title": "Multi-stage uv Dockerfiles, non-root+HOME, self-migrate with advisory-lock retry",
     "region": "00-FOUNDATION",
-    "disposition": "verify",
+    "disposition": "fix",
     "status": "pending",
     "spec_refs": [
       "00-FOUNDATION.md#9",
@@ -918,7 +918,7 @@
       "AC-DOCK-004"
     ],
     "intent": "Realizes \u00a79 the Dockerfile: a multi-stage uv build (builder runs uv sync --frozen --no-dev --package <svc> for a self-contained image), a non-root uid-1001 appuser with HOME set (the Claude Agent SDK writes to $HOME), the migrate-retry CMD that lets Alembic + an env.py pg_advisory_lock serialize N parallel container boots (losers retry 30x5s then exec the server), and the SANDBOX_IMAGE_HASH LABEL pinning the app release to its matching warm-sandbox base image fail-closed.",
-    "definition_of_done": "Each service Dockerfile is multi-stage with `uv sync --frozen --no-dev --package <svc>`; the runtime stage sets USER appuser (uid 1001) and ENV HOME; the CMD runs `until alembic upgrade head; ...` and env.py wraps the upgrade in pg_advisory_lock so exactly one container migrates at a time under a parallel-boot race; the image carries a proxy.sandbox-image-hash LABEL and a mismatched app/sandbox pair fails closed. NOT done if the sync is non-frozen, the image runs as root or without HOME, or migrations race without the advisory lock.",
+    "definition_of_done": "Each service Dockerfile is multi-stage with `uv sync --frozen --no-dev --package <svc>`; the runtime stage sets USER appuser (uid 1001) and ENV HOME; the CMD runs `until alembic upgrade head; ...` and env.py wraps the upgrade in pg_advisory_lock so exactly one container migrates at a time under a parallel-boot race; the image carries a proxy.sandbox-image-hash LABEL and a mismatched app/sandbox pair fails closed. NOT done if the sync is non-frozen, the image runs as root or without HOME, or migrations race without the advisory lock. Additionally: ALL THREE Dockerfiles (control_plane, meeting_runtime, code_intel) carry: non-root user + ENV HOME (the SDK writes to $HOME); a self-migrate CMD (`alembic upgrade head` retry-loop + the advisory-lock in env.py) so parallel boots don't race; and the ARG/LABEL SANDBOX_IMAGE_HASH tying the app release to its warm E2B base image (§9).",
     "consumes": [],
     "exposes": [],
     "depends_on": [
