@@ -150,3 +150,7 @@ Behavior/disposition names are internal implementation identifiers (refactorable
 
 ## D-029  no feature_flags table in V0  [settled by CANONICAL]
 CANONICAL §12.12 + Doc00 §15: V0 has ZERO runtime flags — plain env vars, one config per deployment. No `feature_flags` table now; add only at a real per-tenant need (Expansion). Not founder-gated.
+
+## D-026 APPLIED · D-027 REVERSED  (build-wave correction, verified)
+- **D-026 (Bundle.transcript_tail list[str]→str): APPLIED + verified.** CANONICAL §11.5 = str; consumers (orchestrator.py:34/64) + tests already assume str; no sealed test locks the type. 35 contract tests green on real DB.
+- **D-027 (add Envelope.question): REVERSED — it was a misreading.** Sealed AC-CMP-012 (blocking, extra_fields:0) + sealed test_cmp_012 + CANONICAL §11.5 lock Envelope to EXACTLY 8 fields, no `question`; D-027's cited authority §1.2 defines only the EnvelopeStatus enum. RESOLUTION: `needs_clarification` carries its question in the existing `detail` field — NO new field. Any node referencing Envelope.question (workroom.envelope) rides `detail`. foundation.contracts-registry: transcript_tail fixed, no Envelope change → node done.
