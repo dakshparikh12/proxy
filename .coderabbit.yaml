@@ -1,0 +1,9 @@
+# CodeRabbit review config for the proxy build (per-region PRs)
+reviews:
+  profile: assertive
+  request_changes_workflow: true
+  path_instructions:
+    - path: "services/**"
+      instructions: "Enforce: the 5 laws (grounded-or-silent, never-overstate, human-control, dynamic, talk-and-glance); every external call via libs/http.call_external; tool handlers never throw; no user-visible internal names (Orchestrator/Scribe/workroom); isolation triad on every SDK query(); no raw vendor client outside libs/http."
+    - path: "migrations/**"
+      instructions: "Migrations are append-only; never edit a shipped migration; status columns need CHECK domains."

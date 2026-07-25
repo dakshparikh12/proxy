@@ -143,3 +143,14 @@ completeness gap — fix it and re-verify the affected node. Return in exactly o
   `EXTRACTION_COUNT_HALT` · destructive/prod migration · prod deploy · genuine `SPEC_BLOCKED`.
 - Env hygiene: never bare `uv sync` (use `uv sync --all-packages` + pinned tools); venv stays off
   iCloud; `-p no:testmon` is set globally; run pytest via `.venv/bin/python -m`, never `uv run`.
+
+---
+## PHASE 2 execution enhancements (efficiency · accuracy · no-gaps)
+- **Wave-parallelism (safe only):** batch nodes whose `depends_on` are all `verified`. VERIFY-disposition nodes (read-only, no mutation) + build nodes with DISJOINT file sets run in parallel (container-isolated); nodes sharing an `integration_point` stay sequential. The 00–03 verify sweep is one wave.
+- **Tiered verification:** routine node = 1 fresh read-only reviewer. HIGH-STAKES nodes (any `human_gated`; isolation-triad; accept-handler; tenant isolation; meeting-runtime-provisioner; cost-breaker; lethal-trifecta paths) get a 2nd ADVERSARIAL verifier that tries to REFUTE the pass — both must clear.
+- **Real-data eval at build time:** `[eval]/[latency]` nodes run deepeval ≥ baseline on real/held-out data inside VERIFY — not deferred to Phase 3.
+- **Verify the negatives + pinned contracts:** the reviewer checks each node's "NOT done if…" clauses AND conformance to `decisions.md` (D-013..D-029 shapes/conventions).
+- **Region-boundary smoke:** after each doc's nodes verify, run the reachable journeys + scenarios on real infra; a regression blocks advancing to the next region.
+- **Observability ON** for the whole run (`observability.md`); the anti-drift assertions fire live.
+- **Prod-ready bar:** a node is done ONLY when its real path RAN on real data AND its output was INSPECTED (not just "tests green") AND the fresh reviewer(s) cleared it. Never advance on a flag alone.
+- **No waste:** `BLOCKED` after N identical failures → diagnose → continue on independent nodes; no hard time budgets; no silent stalls.
