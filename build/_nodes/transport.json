@@ -147,7 +147,7 @@
     "title": "Hearing: per-speaker audio \u2192 speaker-attributed transcript fan-out (BYOK passthrough)",
     "region": "02-VOICE-TRANSPORT",
     "disposition": "verify",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "product/v0-spec/02-VOICE-TRANSPORT.md#3.2",
       "product/v0-spec/02-VOICE-TRANSPORT.md#3.9-3",
@@ -218,7 +218,7 @@
     "title": "Turn-taking: Silero-VAD barge-in + AAI end_of_turn boundary + hard-mute",
     "region": "02-VOICE-TRANSPORT",
     "disposition": "verify",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "product/v0-spec/02-VOICE-TRANSPORT.md#3.6",
       "product/v0-spec/02-VOICE-TRANSPORT.md#3.9-7",
@@ -594,7 +594,7 @@
     "title": "Provider seams + in-process carrier + signal-surface completeness + platform matrix",
     "region": "02-VOICE-TRANSPORT",
     "disposition": "verify",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "product/v0-spec/02-VOICE-TRANSPORT.md#3.8",
       "product/v0-spec/02-VOICE-TRANSPORT.md#3.10",
@@ -693,7 +693,7 @@
     "title": "Delivery verbs + cross-cutting guards (never-throw, naming, secrets, seam, SLO homing) + cost accrual",
     "region": "02-VOICE-TRANSPORT",
     "disposition": "verify",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "product/v0-spec/02-VOICE-TRANSPORT.md#4",
       "product/v0-spec/CANONICAL-DECISIONS.md#12.8-latency-slo",
