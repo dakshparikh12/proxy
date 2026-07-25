@@ -26,15 +26,27 @@ from agentkit import Behavior
 
 from .answer_question import ANSWER_QUESTION
 from .catchup import CATCHUP
+from .conversational import (
+    CAPABILITY_ANSWER,
+    CATCH_ME_UP,
+    CONVERSATIONAL_BEHAVIORS,
+    DRY_RUN,
+    SHOW_YOUR_WORK,
+    WHERE_ARE_WE,
+    capabilities_catalog,
+)
 from .propose_action import PROPOSE_ACTION
 from .surface_risk import SURFACE_RISK
 
 # The wake-behaviors, in declaration order. Adding a behavior appends one constant.
+# The Doc 08 §2.4 conversational behaviors (catch-me-up / where-are-we / dry-run /
+# show-your-work / capability-answer) ride the same machinery — one tuple, no branch.
 _BEHAVIORS: tuple[Behavior, ...] = (
     ANSWER_QUESTION,
     CATCHUP,
     SURFACE_RISK,
     PROPOSE_ACTION,
+    *CONVERSATIONAL_BEHAVIORS,
 )
 
 # The name→Behavior registry the runner is handed (selecting a name IS the branch).
@@ -82,11 +94,18 @@ def write_capability_manifest(path: str | Path) -> Path:
 
 __all__ = [
     "ANSWER_QUESTION",
+    "CAPABILITY_ANSWER",
     "CATCHUP",
+    "CATCH_ME_UP",
+    "CONVERSATIONAL_BEHAVIORS",
+    "DRY_RUN",
     "PROPOSE_ACTION",
     "REGISTRY",
+    "SHOW_YOUR_WORK",
     "SURFACE_RISK",
+    "WHERE_ARE_WE",
     "all_behaviors",
+    "capabilities_catalog",
     "capability_manifest",
     "get_behavior",
     "write_capability_manifest",
