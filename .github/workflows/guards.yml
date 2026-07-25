@@ -70,6 +70,13 @@ jobs:
       - name: check-sdk-isolation-triad
         run: python -m ops.check_sdk_isolation_triad --require SDK_LOCAL_TOOLS --every query-call
 
+      # check-call-external: AST scan asserting the §14 single-seam invariant —
+      # EVERY raw vendor-client construction (AsyncAnthropic/httpx/GCS/Recall/STT)
+      # lives in the libs/http call_external seam and nowhere else. Fails loud,
+      # naming the offending file:line. Guard parity: same hook in pre-commit.
+      - name: check-call-external
+        run: python -m ops.check_call_external
+
       # banned-strings: enumerated dead tokens must never be reintroduced. The scan is
       # AST-based (ops.check_banned_strings) so it flags real usage, not the docstrings
       # that legitimately say "we do NOT use X". Banned set (kept visible for review):

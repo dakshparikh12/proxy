@@ -32,6 +32,15 @@ repos:
         language: system
         pass_filenames: false
 
+      # check-call-external: the §14 single-seam invariant — every raw vendor-client
+      # construction (AsyncAnthropic/httpx/GCS/Recall/STT) lives ONLY in the libs/http
+      # call_external seam. Same guard runs in CI (guard parity).
+      - id: check-call-external
+        name: check-call-external
+        entry: python -m ops.check_call_external
+        language: system
+        pass_filenames: false
+
       # banned-strings: enumerated dead tokens must never reappear. (Note: the
       # revived per-meeting GCE-MIG runtime term is intentionally NOT banned.)
       - id: banned-strings

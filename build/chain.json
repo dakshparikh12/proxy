@@ -1265,7 +1265,7 @@
       "title": "BUILD-NEW: AST guard forbidding raw vendor clients outside libs/http",
       "region": "00-FOUNDATION",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "built",
       "spec_refs": [
         "00-FOUNDATION.md#2",
         "00-FOUNDATION.md#14",
@@ -1291,7 +1291,7 @@
       ],
       "integration_point": "libs/ops/src/ops/check_call_external.py (NEW, mirrors libs/ops/src/ops/check_sdk_isolation_triad.py owned by foundation.ci-guards; scans over libs/http/src/http/external.py owned by foundation.seam-external-dispatch) wired into .github/workflows/guards.yml + .pre-commit-config.yaml",
       "acceptance": "WHEN a raw vendor client (AsyncAnthropic/httpx/GCS/Recall/STT) is constructed outside libs/http THE SYSTEM SHALL exit non-zero naming the offending file:line in both pre-commit and CI, and pass honestly on the current tree where every raw client lives in libs/http/external.py.",
-      "acceptance_cmd": "tests/doc00/test_m12_con.py -k 'con_004 or call_external_guard' ; tests/doc00/test_m00_cmp.py -k cmp_010",
+      "acceptance_cmd": "tests/doc00/test_m12_con.py tests/doc00/test_call_external_guard.py -k 'con_004 or call_external_guard' ; tests/doc00/test_m00_cmp.py -k cmp_010",
       "evidence_class": "[static]",
       "journeys_now_live": [],
       "codebase_anchors": [
