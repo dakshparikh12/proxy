@@ -9,8 +9,17 @@ as the **first, read-only SDK turn** and becomes durable, amendable editable sta
      4-5 unit JSON array, ordered setup→core→integration→testing, **each unit tagged with the
      AC it serves AND carrying files-to-touch + done-when + verify line + order** ("mirror the
      AC into the step" — verifiability designed in at plan time, §3.14). Targeted extended
-     thinking rides THIS turn only (D-022), its budget **capped safely below MAX_OUTPUT_TOKENS**
-     so the plan JSON always finishes (platform N3). A non-parsing emission gets **ONE**
+     thinking is OFFERED to this turn (and ONLY this turn) via the shared ``thinking_policy``
+     (D-022): the plan is the one deliberate ``plan-artifact`` role that the policy will grant
+     thinking to — **but only on an Opus-tier model**. On the DEFAULT plan seat
+     (``WORKROOM`` → ``claude-sonnet-4-6``, §3.2) ``thinking_policy`` returns
+     ``enabled=False, budget=0`` — extended thinking is OFF, and the plan JSON always finishes
+     because there is no thinking preamble that could truncate it (platform N3). If the plan
+     seat is env-overridden to an Opus-tier model (``PROXY_MODEL_WORKROOM``), the SAME policy
+     turns thinking ON with its budget **capped below MAX_OUTPUT_TOKENS** so it still can't
+     truncate the JSON. Either way this module NEVER decides thinking itself — it passes through
+     exactly what ``thinking_policy`` returns for the resolved seat (Law: never overstate;
+     situation→action lives in the shared policy, not here). A non-parsing emission gets **ONE**
      ``max_turns:1`` "return ONLY the JSON array" retry — then it fails honestly, never loops.
 
   2. **Persist tied to the ``operation_runs`` row (§3.1 / §3.6.1).** The plan is persisted into
@@ -48,6 +57,7 @@ kill the loop blind; the sink writes / chat post are best-effort.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -77,6 +87,9 @@ from .agent_config import (
 # covered end-to-end (§11.11) — the options it hands the provider carry the real triad.
 SDK_LOCAL_TOOLS = disposition_tool_policy("plan").disallowed_tools
 permission_mode: str = "bypassPermissions"
+
+# A lost durable persist must be SPOKEN, never black-holed (Law 2: failures spoken plainly).
+_LOG = logging.getLogger("workroom.big_build")
 
 
 class PlanError(RuntimeError):
@@ -280,10 +293,13 @@ class BigBuildPlanner:
         """Run the first, read-only plan turn → a persisted, chat-posted, AC-tagged plan.
 
         The disposition is ``plan`` (read + map tools ONLY — never a write/propose_change tool,
-        §3.5). Targeted extended thinking rides this turn, its budget capped below
-        MAX_OUTPUT_TOKENS (§3.6.1 / N3). Captures the SDK ``session_id`` and persists it +
-        the plan into the SAME ``operation_runs`` row immediately; posts the plan to chat.
-        Raises :class:`PlanError` (never an uncaught SDK exception) on an unrecoverable fault.
+        §3.5). Extended thinking is whatever the shared ``thinking_policy`` grants the resolved
+        plan seat: OFF on the default Sonnet ``WORKROOM`` seat (``enabled=False, budget=0``), ON
+        only if the seat is env-overridden to an Opus-tier model — and then capped below
+        MAX_OUTPUT_TOKENS by that policy (§3.6.1 / N3). Captures the SDK ``session_id`` and
+        persists it + the plan into the SAME ``operation_runs`` row immediately; posts the plan
+        to chat. Raises :class:`PlanError` (never an uncaught SDK exception) on an unrecoverable
+        fault.
         """
         units, session_id = await self._run_plan_turn(bundle)
         plan = Plan(units=units, session_id=session_id, ask=bundle.ask)
@@ -476,12 +492,18 @@ class BigBuildPlanner:
 
         The curated tool subset + the structural block-list come from the ONE owner
         (``disposition_tool_policy``); the model from the imported seat table; the thinking
-        budget from the shared ``thinking_policy`` (capped below MAX_OUTPUT_TOKENS by that
-        function, D-022). ``tools=()`` is the computed built-in allow-list — [] in sandbox mode
-        (the real gate that keeps host built-ins off).
+        decision from the shared ``thinking_policy`` (D-022). That policy grants thinking ONLY
+        to the deliberate ``plan-artifact`` role AND ONLY on an Opus-tier model, capping the
+        budget below MAX_OUTPUT_TOKENS when it does; on the default Sonnet plan seat it returns
+        ``(False, 0)``. This module passes that decision through verbatim — it never overrides
+        it. ``tools=()`` is the computed built-in allow-list — [] in sandbox mode (the real gate
+        that keeps host built-ins off).
         """
         policy = disposition_tool_policy(disposition)
         model = self._model_for(disposition)
+        # The seat-accurate thinking decision (D-022): passed through as-is, never overridden.
+        # On the default Sonnet plan seat this is (False, 0) — thinking OFF; only an Opus-tier
+        # seat clears the policy, and then the budget is capped below MAX_OUTPUT_TOKENS.
         enabled, budget = thinking_policy(model, disposition_role(disposition))
         return ProviderQuery(
             model=model,
@@ -491,8 +513,8 @@ class BigBuildPlanner:
             tools=(),                       # computed built-in allow-list: [] in sandbox mode (§3.4)
             strict_mcp_config=True,         # triad
             setting_sources=(),             # triad
-            thinking_enabled=enabled,       # extended thinking ON only for the plan turn (D-022)
-            thinking_budget_tokens=budget,  # capped below MAX_OUTPUT_TOKENS (§3.6.1 / N3)
+            thinking_enabled=enabled,       # from thinking_policy: OFF on Sonnet, ON only on Opus (D-022)
+            thinking_budget_tokens=budget,  # 0 when OFF; capped below MAX_OUTPUT_TOKENS when ON (§3.6.1/N3)
         )
 
     def _model_for(self, disposition: str) -> str:
@@ -553,12 +575,16 @@ class BigBuildPlanner:
     async def _merge_progress_db(self, run_id: Any, patch: dict[str, Any]) -> None:
         """Merge ``patch`` into ``operation_runs.progress`` on the durable Postgres substrate.
 
-        A single jsonb-merge UPDATE on the row keyed by ``id`` (never a new column/table).
-        Best-effort — a merge fault is swallowed (the plan already exists in memory; a lost
-        persist degrades, it must not crash the run, Rule 6)."""
-        import contextlib
+        A single jsonb-merge UPDATE on the row keyed by ``id`` (never a new column/table) —
+        the plan reconstitutes from this durable row (:meth:`Plan.from_persisted`), so this IS
+        the "reproducibly persisted" path the DoD names when a real ``Database`` is wired.
 
-        with contextlib.suppress(Exception):
+        Best-effort by construction (Rule 6): a persist fault must NOT crash the run (the plan
+        already exists in memory and is still returned to the caller). But a lost durable persist
+        is a real degradation — it is LOGGED, never silently swallowed (Law 2: failures spoken
+        plainly). The narrow ``except`` covers the acquire + execute so a pool/SQL/type fault
+        degrades loudly instead of black-holing."""
+        try:
             async with self._db.acquire() as conn:
                 await conn.execute(
                     "UPDATE operation_runs "
@@ -567,6 +593,13 @@ class BigBuildPlanner:
                     run_id,
                     json.dumps(patch),
                 )
+        except Exception as exc:  # noqa: BLE001 - Rule 6: never crash the run; degrade loudly
+            _LOG.warning(
+                "durable progress persist FAILED for run_id=%s keys=%s: %s",
+                run_id,
+                sorted(patch),
+                exc,
+            )
 
     # -- post the plan to chat before execution (silence = go, §2.3.1) --------
 

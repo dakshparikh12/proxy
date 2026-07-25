@@ -23,8 +23,10 @@ persisted or the critic cannot amend it.
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
@@ -251,6 +253,44 @@ class FakeChat:
         self.posts.append(text)
 
 
+class _RecordingConn:
+    """An asyncpg-style connection that RECORDS the exact SQL + positional params it is handed,
+    so a test can prove the REAL durable jsonb-merge statement runs (not a fake). ``fail`` makes
+    ``execute`` raise, to prove the persist degrades loudly (logs) instead of crashing."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
+        self._fail = fail
+
+    async def execute(self, sql: str, *args: Any) -> None:
+        self.calls.append((sql, args))
+        if self._fail:
+            raise RuntimeError("simulated Postgres fault (type/SQL error)")
+
+
+class FakeDb:
+    """A ``libs.db.Database``-shaped fake exposing the SAME ``acquire()`` async-context-manager
+    the REAL durable path (:meth:`BigBuildPlanner._merge_progress_db`) drives — so the real SQL
+    statement + params are exercised end-to-end without a live Postgres. This closes the gap the
+    verifier flagged: the durable ``_merge_progress_db`` path was never run by any test."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.conn = _RecordingConn(fail=fail)
+
+    @asynccontextmanager
+    async def acquire(self) -> AsyncIterator[_RecordingConn]:
+        yield self.conn
+
+
+# ── real-DB helpers (mirror test_task_durability.py's integration block) ──────
+def _local_dsn() -> str | None:
+    for var in ("TEST_DATABASE_URL", "DATABASE_URL"):
+        dsn = os.environ.get(var, "").strip()
+        if dsn:
+            return dsn
+    return None
+
+
 def _bundle(meeting_id: uuid.UUID, ask: str, *, task_id: uuid.UUID | None = None) -> Bundle:
     return Bundle(
         ask=ask,
@@ -360,10 +400,15 @@ async def test_plan_turn_captures_and_persists_the_sdk_session_id() -> None:
 
 
 @pytest.mark.asyncio
-async def test_plan_turn_is_read_only_and_thinking_capped_below_max_output() -> None:
-    """The plan turn is READ-ONLY (no write/propose_change tools) and its extended-thinking
-    budget is capped BELOW MAX_OUTPUT_TOKENS so the plan JSON always finishes (§3.6.1 / N3)."""
-    from llm.routing import max_output_tokens_for, model_for
+async def test_plan_turn_is_read_only_and_thinking_off_on_the_real_sonnet_seat() -> None:
+    """The plan turn is READ-ONLY (no write/propose_change tools). And on the REAL default plan
+    seat (``WORKROOM`` → ``claude-sonnet-4-6``, §3.2) extended thinking is OFF with budget 0 —
+    the honest real-path fact: the plan JSON always finishes because there is no thinking
+    preamble that could truncate it (§3.6.1 / N3). This asserts the state the product actually
+    ships in; the capped-budget property when thinking IS on is proven by the sibling test that
+    drives an Opus-tier plan seat (so the assertion binds instead of skipping vacuously)."""
+    from llm.routing import model_for
+    from workroom.agent_config import seat_for_disposition
 
     store, chat = FakeStore(), FakeChat()
     run_id = str(uuid.uuid4())
@@ -384,10 +429,53 @@ async def test_plan_turn_is_read_only_and_thinking_capped_below_max_output() -> 
     ):
         assert banned not in allowed, f"plan turn must not advertise {banned}"
 
+    # The default plan seat is Sonnet-class (not Opus) — thinking_policy grants thinking only on
+    # an Opus-tier model, so on the shipped path this is UNCONDITIONALLY (False, 0). This binds:
+    # if a change ever flipped the plan seat to Opus, or made this module force thinking on, this
+    # would fail (and the sibling Opus-seat test would then own the capped-budget property).
+    assert not model_for(seat_for_disposition("plan")).startswith("claude-opus"), (
+        "the default plan seat is Sonnet-class (§3.2) — this test asserts the OFF real path"
+    )
     thinking_enabled, thinking_budget = provider.seen_thinking[0]
-    if thinking_enabled:
-        ceiling = max_output_tokens_for(model_for("BIG_BUILD"))
-        assert thinking_budget < ceiling, "thinking budget must be capped below MAX_OUTPUT_TOKENS"
+    assert thinking_enabled is False, "extended thinking is OFF on the real Sonnet plan seat"
+    assert thinking_budget == 0, "budget is 0 when thinking is off — nothing can truncate the JSON"
+
+
+@pytest.mark.asyncio
+async def test_plan_turn_thinking_capped_below_max_output_on_an_opus_plan_seat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-S6-005 core property — NON-VACUOUS. When the plan seat resolves to an Opus-tier model
+    (env override ``PROXY_MODEL_WORKROOM``, the ONE seat config surface §3.2), ``thinking_policy``
+    turns extended thinking ON for the deliberate plan turn — and its budget MUST be capped BELOW
+    MAX_OUTPUT_TOKENS so the plan JSON always finishes (§3.6.1 / N3 / D-022). This drives the REAL
+    ``_build_options`` → ``thinking_policy`` path (no fake constant); the assertion runs because
+    thinking is genuinely enabled here, so it can FAIL if the cap regressed."""
+    from llm.routing import max_output_tokens_for, model_for
+    from workroom.agent_config import seat_for_disposition
+
+    # Override the plan seat to the real Opus-tier model (env is the sanctioned per-seat config
+    # surface, §3.2) — this is what makes thinking_policy grant thinking for the plan role.
+    monkeypatch.setenv("PROXY_MODEL_WORKROOM", "claude-opus-4-8")
+    plan_model = model_for(seat_for_disposition("plan"))
+    assert plan_model.startswith("claude-opus"), "the override must resolve to an Opus-tier seat"
+
+    store, chat = FakeStore(), FakeChat()
+    run_id = str(uuid.uuid4())
+    store.claim(run_id=run_id, operation_type=f"workroom:{run_id}", progress={})
+    provider = FakePlanProvider()
+    planner = _make_planner(store, chat, provider)
+
+    await planner.plan(_bundle(uuid.uuid4(), "Build it"), run_id=run_id)
+
+    thinking_enabled, thinking_budget = provider.seen_thinking[0]
+    # Thinking is genuinely ON now — the property below is exercised, not skipped.
+    assert thinking_enabled is True, "thinking rides the plan turn on an Opus-tier plan seat"
+    assert thinking_budget > 0, "an enabled thinking turn carries a real (non-zero) budget"
+    ceiling = max_output_tokens_for(plan_model)
+    assert thinking_budget < ceiling, (
+        "thinking budget MUST be capped below MAX_OUTPUT_TOKENS so the plan JSON never truncates"
+    )
 
 
 @pytest.mark.asyncio
@@ -498,3 +586,145 @@ async def test_planner_never_throws_on_provider_error() -> None:
         await planner.plan(_bundle(uuid.uuid4(), "Build it"), run_id=run_id)
     # The failure is honest and recorded — no bespoke table, no silent success.
     assert store.tables_touched <= {"operation_runs"}
+
+
+# ── the DURABLE Postgres persistence path (the gap: _merge_progress_db) ───────
+
+
+@pytest.mark.asyncio
+async def test_durable_persist_runs_the_real_jsonb_merge_on_operation_runs() -> None:
+    """The DURABLE persistence path exercised: when a real ``Database`` (not the in-memory
+    FakeStore) is wired, ``plan()`` merges the plan into the SAME ``operation_runs`` row via the
+    REAL jsonb-merge UPDATE keyed by ``id`` (§3.1 / §12.10) — NO bespoke table. This drives
+    ``_merge_progress_db`` end-to-end (the path the verifier flagged as never-run) and asserts
+    the exact statement + params handed to the connection, so a change to the durable SQL would
+    fail. NOT done if the plan is not persisted against the durable ``operation_runs`` row."""
+    from workroom.big_build import BigBuildPlanner, Plan
+
+    run_id = str(uuid.uuid4())
+    db = FakeDb()
+    # store=None so the durable ``self._db`` merge path runs (not the FakeStore short-circuit).
+    planner = BigBuildPlanner(provider=FakePlanProvider(), store=None, chat=FakeChat(), db=db)
+
+    plan = await planner.plan(_bundle(uuid.uuid4(), "Build the limiter"), run_id=run_id)
+
+    # The session-id fire-and-forget + the plan persist both ride the durable merge → 2 UPDATEs.
+    assert len(db.conn.calls) == 2, "session-id + plan both persist via the durable jsonb merge"
+    for sql, args in db.conn.calls:
+        # The REAL statement: a single jsonb-merge UPDATE on the row keyed by id — no new table.
+        assert "UPDATE operation_runs" in sql
+        assert "progress = coalesce(progress, '{}'::jsonb) || $2::jsonb" in sql
+        assert "WHERE id = $1" in sql
+        assert "workroom_tasks" not in sql, "NO bespoke per-task table (§12.10)"
+        assert args[0] == run_id, "the merge is keyed by the SAME operation_runs row id"
+
+    # The plan patch is valid jsonb carrying the durable plan shape, and it reconstitutes.
+    plan_patch = next(
+        json.loads(args[1]) for _sql, args in db.conn.calls if "plan" in json.loads(args[1])
+    )
+    reloaded = Plan.from_persisted(plan_patch["plan"])
+    assert [u.id for u in reloaded.units] == [u.id for u in plan.units]
+    assert [u.verify for u in reloaded.units] == [u.verify for u in plan.units]
+
+
+@pytest.mark.asyncio
+async def test_durable_persist_fault_degrades_loudly_and_never_crashes(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Rule 6 + Law 2: a durable-persist fault (SQL/type error on the real substrate) must NOT
+    crash the run — the plan is still returned — but it must NOT be silently swallowed either;
+    the lost persist is LOGGED (failures spoken plainly). Before the fix ``contextlib.suppress``
+    black-holed the fault with no trace; this asserts it now degrades loudly."""
+    import logging
+
+    from workroom.big_build import BigBuildPlanner
+
+    run_id = str(uuid.uuid4())
+    db = FakeDb(fail=True)  # every durable execute() raises
+    planner = BigBuildPlanner(provider=FakePlanProvider(), store=None, chat=FakeChat(), db=db)
+
+    with caplog.at_level(logging.WARNING, logger="workroom.big_build"):
+        plan = await planner.plan(_bundle(uuid.uuid4(), "Build it"), run_id=run_id)
+
+    # The run did not crash — the plan is still produced from memory.
+    assert len(plan.units) == 4
+    # The fault was SPOKEN, not swallowed: a warning names the failed durable persist + run_id.
+    persist_warnings = [
+        r for r in caplog.records if "durable progress persist FAILED" in r.getMessage()
+    ]
+    assert persist_warnings, "a lost durable persist must be logged, never silently swallowed"
+    assert any(run_id in r.getMessage() for r in persist_warnings)
+
+
+@pytest.mark.integration
+def test_durable_plan_persist_reproducible_from_real_operation_runs_row() -> None:
+    """The plan is REPRODUCIBLY persisted against the REAL durable Postgres ``operation_runs``
+    row (§3.1 DoD: "reproducibly persisted") — the sibling to test_task_durability.py's real-PG
+    coverage, but for the PLAN artifact. Inserts a real ``workroom:<id>`` row, drives the REAL
+    ``_merge_progress_db`` jsonb merge against live PG, reads ``progress.plan`` back out of the
+    row, and reconstitutes the Plan from that durable substrate. SKIPS cleanly with no local PG."""
+    import asyncio
+
+    dsn = _local_dsn()
+    if dsn is None:
+        pytest.skip("no local Postgres (set TEST_DATABASE_URL)")
+
+    from workroom.big_build import BigBuildPlanner, Plan
+
+    async def _run() -> dict[str, Any]:
+        from libs.db import Database
+
+        db = await Database.connect(dsn)
+        try:
+            task_id = uuid.uuid4()
+            op_type = f"workroom:{task_id}"
+            async with db.acquire() as conn:
+                await conn.execute(
+                    "DELETE FROM operation_runs WHERE operation_type = $1", op_type
+                )
+                row_id = await conn.fetchval(
+                    "INSERT INTO operation_runs (scope_id, operation_type, status, progress) "
+                    "VALUES ($1, $2, 'running', $3) RETURNING id",
+                    str(task_id),
+                    op_type,
+                    json.dumps({"ask": "build the limiter"}),
+                )
+            try:
+                # store=None → the REAL durable ``_merge_progress_db`` path runs against live PG.
+                planner = BigBuildPlanner(
+                    provider=FakePlanProvider(), store=None, chat=FakeChat(), db=db
+                )
+                plan = await planner.plan(
+                    _bundle(uuid.uuid4(), "Build the limiter"), run_id=row_id
+                )
+                async with db.acquire() as conn:
+                    progress = await conn.fetchval(
+                        "SELECT progress FROM operation_runs WHERE id = $1", row_id
+                    )
+                    n = await conn.fetchval(
+                        "SELECT count(*) FROM operation_runs WHERE operation_type = $1", op_type
+                    )
+                merged = progress if isinstance(progress, dict) else json.loads(progress)
+                return {
+                    "plan_ids": [u.id for u in plan.units],
+                    "progress": merged,
+                    "rowcount": n,
+                }
+            finally:
+                async with db.acquire() as conn:
+                    await conn.execute(
+                        "DELETE FROM operation_runs WHERE operation_type = $1", op_type
+                    )
+        finally:
+            await db.close()
+
+    out = asyncio.run(_run())
+    # The plan persisted into the SAME row's progress.plan — reproducible from the durable row.
+    assert out["rowcount"] == 1, "the plan rides the ONE operation_runs row (no bespoke table)"
+    assert "plan" in out["progress"], "the plan is durably persisted in operation_runs.progress"
+    # The original ask jsonb-merged, not clobbered (coalesce(progress,'{}') || $2).
+    assert out["progress"].get("ask") == "build the limiter", "the merge preserved prior keys"
+    reloaded = Plan.from_persisted(out["progress"]["plan"])
+    assert [u.id for u in reloaded.units] == out["plan_ids"], (
+        "the plan reconstitutes reproducibly from the durable operation_runs row"
+    )
