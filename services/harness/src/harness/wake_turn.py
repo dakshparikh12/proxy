@@ -236,6 +236,7 @@ class WakeTurn:
         *,
         read_notes: bool = False,
         abort: Any = None,
+        behavior: str | None = None,
     ) -> AsyncIterator[AgentChunk]:
         """Run ONE wake: ``(event + compacted digest)`` in → tool-call stream out.
 
@@ -246,6 +247,14 @@ class WakeTurn:
         ``session_id`` is captured to :attr:`session_id`; a recycle is recovered by
         the inherited §3.5 fallback, which re-points :attr:`session_id` at the new
         session the retry establishes.
+
+        ``behavior`` selects the registered wake-behavior for THIS wake (§3.4 — "a real
+        harness may select a different registered behavior per wake"; selecting a behavior
+        by name IS the branch, D-023). Defaults to the construction-time
+        :attr:`_behavior`, so a caller that mounts one behavior for the whole session (the
+        existing callers) is unchanged; the live-brain adapter passes the per-ask
+        selection. The persistent session pointer is shared across behaviors (ONE session
+        per meeting, §3.5) — only the mounted role/tool-subset changes per wake.
         """
         self.wake_count += 1
         self._wakes_since_compaction += 1
@@ -271,11 +280,16 @@ class WakeTurn:
 
         abort_handle = abort if abort is not None else _Abort()
 
+        # The behavior mounted for THIS wake — the per-ask selection (§3.4 / D-023) when the
+        # live-brain adapter passes one, else the session default. An unknown name falls
+        # back to the default so a selection bug can never mount a missing behavior.
+        mounted = behavior if (behavior and behavior in self._registry) else self._behavior
+
         # One persistent session: resume the captured id (None on the first wake),
         # recovering a recycle via the inherited §3.5 transcript-plane replay.
         async for chunk in resume_with_fallback(
             self._runner,
-            self._behavior,
+            mounted,
             inputs,
             self.session_id,
             abort_handle,

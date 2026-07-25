@@ -96,6 +96,7 @@ async def provision_meeting(
     registry: Any,
     resume: bool = False,
     history_fn: Any = None,
+    provider: Any = None,
 ) -> ProvisionOutcome:
     """Claim + assemble the per-meeting harness from a Recall ``in_call`` webhook.
 
@@ -150,7 +151,9 @@ async def provision_meeting(
         # the instance swap (restart-not-resume, §3.10).
         resumed = await _resume_session(db, meeting_id, history_fn=history_fn)
 
-    _assemble_runtime(payload, resolved, db=db, registry=registry, handle=handle)
+    _assemble_runtime(
+        payload, resolved, db=db, registry=registry, handle=handle, provider=provider
+    )
     return ProvisionOutcome(claimed=True, run_id=run_id, resumed=resumed)
 
 
@@ -161,15 +164,21 @@ def _assemble_runtime(
     db: Database,
     registry: Any,
     handle: OperationHandle,
+    provider: Any = None,
 ) -> Any:
     """Instantiate all four subsystems in ONE scope + subscribe the carrier once.
 
     Builds the frozen §3.2 meeting header from the same webhook envelope, opens the ONE
     ``SignalCarrier``, and hands both to the registry's ``start_meeting`` — which wires
     the Scribe consumer + STT refresh on that carrier (subscribe-once at join). Then binds
-    the claimed row's fencing handle onto the runtime and builds the run loop through it
-    (so the gated emitter reads ``is_owner`` live), and wires the transport→orchestrator
-    standing pipe ONCE — the second carrier subscription, also at join, never per event.
+    the claimed row's fencing handle onto the runtime and ASSEMBLES THE REAL BRAIN through
+    :func:`~harness.live_brain.assemble_live_brain` — the run loop is built with a real
+    WakeTurn adapter (not ``_noop_wake``) + the name-gate as the ``addressed`` front gate
+    (not never-addressed), and the live barge-in seam on the SHARED abort registry (so the
+    gated emitter reads ``is_owner`` live AND "Proxy, quiet" halts the model loop). Finally
+    wires the transport→orchestrator standing pipe ONCE — the second carrier subscription,
+    also at join, never per event. ``provider`` defaults to the real Claude provider (§3.3);
+    a test injects a fake recording stub so the seam assembles with NO live Anthropic call.
     """
     from scribe.prefix import MeetingHeader
     from transport.carrier import SignalCarrier
@@ -185,10 +194,18 @@ def _assemble_runtime(
     carrier = SignalCarrier()
     # start_meeting subscribes the Scribe consumer to the carrier ONCE at join.
     runtime = registry.start_meeting(header, carrier)
-    # Bind the claimed row's fencing handle + build the run loop through it (the gated
-    # emitter reads is_owner off this handle, so a fenced-out harness emits nothing).
+    # Bind the claimed row's fencing handle so the gated emitter reads is_owner off this
+    # handle (a fenced-out harness emits nothing).
     runtime.operation_handle = handle
-    runtime.build_run_loop()
+    # Assemble the REAL brain onto the live path (§3.2/§3.11): the run loop is built with a
+    # real WakeTurn adapter (not _noop_wake) + the name-gate as the ``addressed`` front gate
+    # (not never-addressed), and the live barge-in seam is wired on the SHARED abort registry
+    # so "Proxy, quiet" halts the model loop. Redefines none of the primitives — it wires the
+    # built pieces (wake turn / name-gate / turn controller) into the loop the provisioner
+    # launches. ``provider=None`` → the real ClaudeAgentProvider (§3.3); a test injects a fake.
+    from .live_brain import assemble_live_brain
+
+    runtime.live_brain = assemble_live_brain(runtime, provider=provider)
     # Wire the transport→orchestrator standing pipe ONCE at join (the second, and last,
     # carrier subscription). subscribe() registers the consumer synchronously, so the pipe
     # is live the instant this returns — before any signal is emitted.

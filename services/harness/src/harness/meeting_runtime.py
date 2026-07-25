@@ -86,6 +86,11 @@ class MeetingRuntime:
     _stt_refresh: "asyncio.Task[None] | None" = field(default=None, init=False)
     _orchestrator_pipe: StandingPipe | None = field(default=None, init=False)
     _meeting_ended: "asyncio.Event | None" = field(default=None, init=False)
+    # The assembled live brain (wake turn + name-gate + barge-in seam), stashed by the
+    # provisioner so the live VAD "Proxy, quiet" / whisper-stop trigger reaches the
+    # §3.11 model-loop cancel. None until :func:`harness.live_brain.assemble_live_brain`
+    # wires it (a bare runtime with no brain still tears down cleanly).
+    live_brain: Any = field(default=None, init=False)
 
     def start(self) -> ScribeRuntimeHandle:
         """Launch the join-time standing-pipe plumbing on this meeting's carrier (§2/§3).
