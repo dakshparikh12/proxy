@@ -46,12 +46,14 @@ can never kill the loop (§3.3, D-018). No internal component name is user-visib
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
 import subprocess
 import tempfile
 import uuid
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -63,6 +65,17 @@ _HEAD_LINES = 200                    # head-200 on truncation (§3.5)
 _TAIL_LINES = 300                    # tail-300 on truncation (§3.5)
 _GREP_MATCH_CAP = 100                # grep returns ≤100 matches + totalMatches (§3.5)
 _GLOB_DEFAULT_LIMIT = 200            # glob page size (paginated, §3.5)
+
+# The tools/call + tools/result journal cap (§3.5): the sandbox journal — the ordered log
+# of every tool exchange that IS part of Doc 07's trace — is bounded at 100 KB. A runaway
+# tool exchange (a huge write payload, a flood of calls) can never blow it: per-entry the
+# payload is truncated, and across entries the journal is a bounded rolling window (oldest
+# dropped first). 100 KB matches the §3.5 cap and the PLATFORM-ADOPTION Cloud-Logging shape.
+JOURNAL_CAP_BYTES = 100 * 1024
+# Per-entry serialized-payload cap so ONE oversized call/result cannot itself exceed the
+# whole journal; a payload longer than this is truncated with a marker (Law 2: never hide
+# that we truncated). Half the cap leaves room for a paired call+result to co-reside.
+_JOURNAL_ENTRY_MAX_BYTES = JOURNAL_CAP_BYTES // 2
 
 # The 8 sandbox tools: 7 core + ast_grep (§3.5 / CANONICAL §11.11). The count is a DoD.
 SANDBOX_TOOL_NAMES: tuple[str, ...] = (
@@ -155,10 +168,75 @@ class SandboxToolset:
     def __init__(self, root: str | os.PathLike[str]) -> None:
         # The real (symlink-free) allowed root. Everything must resolve UNDER this.
         self._root = Path(root).resolve(strict=True)
+        # The tools/call + tools/result journal (§3.5): an ordered, 100 KB-bounded rolling
+        # window of every tool exchange, the host-observed input to Doc 07's trace. We keep
+        # the entries and a running serialized-byte total so appends are O(1) and the cap is
+        # enforced by dropping the OLDEST entries first (a bounded window, never unbounded).
+        self._journal: deque[dict[str, Any]] = deque()
+        self._journal_bytes = 0
 
     @property
     def root(self) -> Path:
         return self._root
+
+    # ─────────────────────────── the trace journal ──────────────────────────
+    def journal_entries(self) -> list[dict[str, Any]]:
+        """The ordered tools/call + tools/result journal — a copy of the live window (§3.5).
+
+        Each call appends a paired ``tools/call`` (tool name + args) and ``tools/result``
+        (is_error + payload/receipt/error), correlated by a shared ``call_id``, so Doc 07's
+        trace can reconstruct the exact tool exchange from the HOST-observed journal alone —
+        never parsed from model prose. The window is bounded to :data:`JOURNAL_CAP_BYTES`
+        (oldest dropped first), so a long run never grows the journal without bound.
+        """
+        return list(self._journal)
+
+    def journal_bytes(self) -> bytes:
+        """The journal serialized as newline-delimited JSON, bounded by the 100 KB cap.
+
+        This is the concrete on-the-wire shape the sandbox log / Doc-07 trace carries; its
+        length is the invariant the ``100 KB cap`` DoD names. It is ``<= JOURNAL_CAP_BYTES``
+        by construction (the rolling window is trimmed to the cap on every append)."""
+        return b"\n".join(json.dumps(e, ensure_ascii=False).encode("utf-8") for e in self._journal)
+
+    def _journal_entry_size(self, entry: dict[str, Any]) -> int:
+        return len(json.dumps(entry, ensure_ascii=False).encode("utf-8"))
+
+    def _journal_append(self, entry: dict[str, Any]) -> None:
+        """Append one journal record, truncating an oversized payload and trimming to the cap.
+
+        Two-layer bound so the journal can NEVER exceed 100 KB (§3.5):
+          1. **Per-entry** — if this single record serializes larger than
+             :data:`_JOURNAL_ENTRY_MAX_BYTES` (half the cap), its ``args``/``value`` payload
+             is replaced by a truncation marker (Law 2: we say we truncated, never hide it),
+             so one 200 KB write can't blow the journal by itself.
+          2. **Across entries** — after appending, drop the OLDEST entries until the running
+             serialized total is within the cap (a bounded rolling window; the tail — the
+             most-recent exchanges — always survives).
+        """
+        size = self._journal_entry_size(entry)
+        if size > _JOURNAL_ENTRY_MAX_BYTES:
+            entry = self._truncate_entry(entry)
+            size = self._journal_entry_size(entry)
+        self._journal.append(entry)
+        self._journal_bytes += size + 1  # +1 for the newline join separator
+        # Trim from the front until within the cap (never drop the entry we just added).
+        while self._journal_bytes > JOURNAL_CAP_BYTES and len(self._journal) > 1:
+            dropped = self._journal.popleft()
+            self._journal_bytes -= self._journal_entry_size(dropped) + 1
+
+    @staticmethod
+    def _truncate_entry(entry: dict[str, Any]) -> dict[str, Any]:
+        """Replace an oversized entry's heavy payload with a size-only truncation marker."""
+        slim = dict(entry)
+        for heavy in ("args", "value", "receipt", "error"):
+            if heavy in slim and slim[heavy] is not None:
+                original = json.dumps(slim[heavy], ensure_ascii=False)
+                slim[heavy] = {
+                    "_journal_truncated": True,
+                    "original_bytes": len(original.encode("utf-8")),
+                }
+        return slim
 
     # ─────────────────────────── the security core ──────────────────────────
     def validate_path(self, rel: str) -> str:
@@ -282,16 +360,49 @@ class SandboxToolset:
         never kill the agent loop (§3.3). ``hooks`` carries test-only injections
         (``_write_bytes``, ``_ast_grep_bin``) that let the atomic-write failure path and
         the ast_grep binary path be proven without a real disk-full or a real binary.
+
+        This is the single ``tools/call`` dispatch point, so it is also where the §3.5
+        **journal** is written: EVERY exchange — success, typed error, unknown tool, or a
+        never-throw caught exception — appends a paired ``tools/call`` + ``tools/result``
+        record to the 100 KB-bounded journal that IS part of Doc 07's trace. Journaling
+        wraps the whole body in its own try/finally so a journaling bug can never break the
+        never-throw guarantee (the tool result is returned even if journaling itself fails).
         """
+        call_id = uuid.uuid4().hex
+        # tools/call — recorded BEFORE dispatch so a handler that hangs/crashes still leaves
+        # a trace of what was attempted (the host-observed record, not model prose).
+        self._journal_append(
+            {"kind": "tools/call", "call_id": call_id, "tool": name, "args": dict(args or {})}
+        )
         handler: Callable[..., ToolResult] | None = getattr(self, f"_tool_{name}", None)
         if handler is None:
-            return ToolResult.fail("unknown_tool", f"unknown tool: {name!r}")
+            result = ToolResult.fail("unknown_tool", f"unknown tool: {name!r}")
+        else:
+            try:
+                result = handler(args or {}, **hooks)
+            except PathEscape as exc:
+                result = ToolResult.fail("path_escape", str(exc), path=args.get("path"))
+            except Exception as exc:  # noqa: BLE001 - Rule 6: the never-throw boundary
+                result = ToolResult.fail("tool_error", f"{type(exc).__name__}: {exc}")
+        self._journal_result(call_id, name, result)
+        return result
+
+    def _journal_result(self, call_id: str, name: str, result: ToolResult) -> None:
+        """Append the ``tools/result`` record for a completed exchange (never raises)."""
         try:
-            return handler(args or {}, **hooks)
-        except PathEscape as exc:
-            return ToolResult.fail("path_escape", str(exc), path=args.get("path"))
-        except Exception as exc:  # noqa: BLE001 - Rule 6: the never-throw boundary
-            return ToolResult.fail("tool_error", f"{type(exc).__name__}: {exc}")
+            self._journal_append(
+                {
+                    "kind": "tools/result",
+                    "call_id": call_id,
+                    "tool": name,
+                    "is_error": result.is_error,
+                    "value": result.value if not result.is_error else None,
+                    "receipt": result.receipt,
+                    "error": result.error_obj,
+                }
+            )
+        except Exception:  # noqa: BLE001 - journaling must never break the never-throw path
+            pass
 
     # ─────────────────────────── the 8 handlers ─────────────────────────────
     def _tool_read_file(self, args: dict[str, Any], **_: Any) -> ToolResult:

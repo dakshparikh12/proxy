@@ -516,3 +516,112 @@ def test_error_result_carries_structured_error_contract(toolset) -> None:  # noq
     assert res.is_error
     assert isinstance(res.error_obj, dict)
     assert "code" in res.error_obj and "message" in res.error_obj
+
+
+# --------------------------------------------------------------------------- #
+# tools/call + tools/result journaling (100 KB cap) — §3.5 (Doc 07's trace).
+# --------------------------------------------------------------------------- #
+def test_every_call_journals_tools_call_and_tools_result(toolset, root: Path) -> None:  # noqa: ANN001
+    """Every ``call()`` writes a paired ``tools/call`` + ``tools/result`` journal entry to
+    the sandbox log (§3.5) — "Full tools/call + tools/result journaling ... this IS part of
+    Doc 07's trace". NOT done if journaling is absent (DoD).
+
+    Each call appends exactly two ordered records: a ``tools/call`` (the tool name + the
+    args it was invoked with) and its matching ``tools/result`` (is_error + the payload/
+    receipt), correlated by a shared ``call_id``, so Doc 07's trace can reconstruct the
+    exact tool exchange from the host-observed journal alone (not from model prose)."""
+    (root / "seed.txt").write_text("hello\n")
+    toolset.call("read_file", {"path": "seed.txt"})
+    toolset.call("write_file", {"path": "made.txt", "content": "x"})
+
+    entries = toolset.journal_entries()
+    kinds = [e["kind"] for e in entries]
+    # Two calls -> four records, strictly interleaved call/result.
+    assert kinds == ["tools/call", "tools/result", "tools/call", "tools/result"], kinds
+
+    call0, result0, call1, result1 = entries
+    # tools/call carries the tool name + the args.
+    assert call0["kind"] == "tools/call"
+    assert call0["tool"] == "read_file"
+    assert call0["args"] == {"path": "seed.txt"}
+    # tools/result carries the outcome, correlated to its call.
+    assert result0["kind"] == "tools/result"
+    assert result0["tool"] == "read_file"
+    assert result0["call_id"] == call0["call_id"], "result must correlate to its call"
+    assert result0["is_error"] is False
+    # The second exchange is the write.
+    assert call1["tool"] == "write_file" and result1["tool"] == "write_file"
+    assert result1["call_id"] == call1["call_id"]
+    # A write's result records its host-observed receipt (the evidence-gate input).
+    assert result1.get("receipt") is not None
+
+
+def test_journal_records_errors_and_never_throw_results(toolset) -> None:  # noqa: ANN001
+    """A never-throw error result is journaled too (§3.5) — the ``tools/result`` records
+    ``is_error:true`` + the structured error, so a failed/blocked tool exchange is fully
+    traceable, not swallowed. Even an unknown tool (which never reaches a handler) is
+    journaled at the dispatch boundary."""
+    r_bad = toolset.call("read_file", {"path": "does-not-exist.txt"})
+    assert r_bad.is_error
+    r_unknown = toolset.call("nope_not_a_tool", {})
+    assert r_unknown.is_error
+
+    entries = toolset.journal_entries()
+    results = [e for e in entries if e["kind"] == "tools/result"]
+    assert results[-2]["is_error"] is True and results[-2]["tool"] == "read_file"
+    assert results[-2].get("error") and "code" in results[-2]["error"]
+    # The unknown tool is journaled at the dispatch boundary too (call + result).
+    assert results[-1]["is_error"] is True and results[-1]["tool"] == "nope_not_a_tool"
+    calls = [e for e in entries if e["kind"] == "tools/call"]
+    assert calls[-1]["tool"] == "nope_not_a_tool"
+
+
+def test_journal_is_capped_at_100kb(toolset, root: Path) -> None:  # noqa: ANN001
+    """THE journaling cap DoD: the sandbox journal is bounded at 100 KB (§3.5) — a runaway
+    tool exchange (a huge write payload, a flood of calls) can never let the journal blow
+    past the cap. We drive far more than 100 KB of tool traffic and assert the serialized
+    journal stays at/under the cap while STILL retaining the most-recent entries (a bounded
+    rolling window, oldest dropped first — never an unbounded log, never silently empty).
+
+    NOT done if journaling is absent OR unbounded (DoD: '100 KB cap')."""
+    from workroom.sandbox_tools import JOURNAL_CAP_BYTES
+
+    assert JOURNAL_CAP_BYTES == 100 * 1024, "the journal cap must be exactly 100 KB (§3.5)"
+
+    # Drive ~1 MB of tool traffic: 400 writes of a 4 KB payload each.
+    big = "Z" * 4096
+    for i in range(400):
+        res = toolset.call("write_file", {"path": f"f{i}.txt", "content": big})
+        assert not res.is_error, res.error
+
+    blob = toolset.journal_bytes()
+    assert len(blob) <= JOURNAL_CAP_BYTES, (
+        f"journal is {len(blob)} bytes, exceeds the 100 KB cap"
+    )
+    # The journal is not silently empty — it retains the most-recent exchanges.
+    entries = toolset.journal_entries()
+    assert entries, "the capped journal must still retain recent entries, not be empty"
+    # The newest write must be present (rolling window keeps the tail).
+    assert any(
+        e["kind"] == "tools/call" and e.get("args", {}).get("path") == "f399.txt"
+        for e in entries
+    ), "the most-recent call must survive the cap (oldest dropped first)"
+
+
+def test_journal_caps_a_single_oversized_entry(toolset, root: Path) -> None:  # noqa: ANN001
+    """A SINGLE tool exchange larger than the whole cap cannot blow the journal (§3.5) — the
+    per-entry payload is itself truncated so one 200 KB call/result can never exceed the
+    100 KB journal. This is the head-200+tail-300 truncation's journal-side guarantee."""
+    from workroom.sandbox_tools import JOURNAL_CAP_BYTES
+
+    # One write whose content alone is 2x the cap.
+    huge = "Q" * (200 * 1024)
+    res = toolset.call("write_file", {"path": "huge.txt", "content": huge})
+    assert not res.is_error, res.error
+    # The FILE still lands in full (journaling never corrupts the real write).
+    assert (root / "huge.txt").read_text() == huge
+
+    blob = toolset.journal_bytes()
+    assert len(blob) <= JOURNAL_CAP_BYTES, (
+        f"a single oversized entry blew the journal: {len(blob)} bytes"
+    )
