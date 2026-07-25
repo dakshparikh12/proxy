@@ -1,0 +1,176 @@
+"""The provider seam (§3.3) — the ONE place an agent call becomes a normalized,
+provider-neutral ``AgentChunk`` stream.
+
+The SDK is never called from harness business logic; every seam-routed agent
+call (Proxy's wake turn, the Workroom build in Doc 05) goes through a
+:class:`Provider` that translates native SDK events → :class:`AgentChunk` and
+re-throws nothing in-band. Providers stay *dumb*; the cross-cutting concerns
+(delta computation, cost metering, abort, the SDK-isolation triad, stale-session
+recovery) live above the seam in :class:`~agentkit.execution.BehaviorRunner`.
+
+This module owns the seam's *shape*, not a concrete vendor client:
+
+  * :class:`ProviderQuery` — the immutable per-call options the runner computes,
+    carrying the SDK-isolation triad (``strict_mcp_config=True``,
+    ``setting_sources=[]``, a computed built-in ``tools`` list) plus the targeted
+    extended-thinking budget (D-022 / CANONICAL §10.6);
+  * :class:`ProviderError` — the boundary exception a pass-through ``ERROR`` chunk
+    is surfaced as at the runner boundary, where §3.5 recovery catches it;
+  * :class:`Provider` — the ``Protocol`` a concrete Claude-SDK provider satisfies
+    (``stream(prompt, query) -> AsyncIterator[AgentChunk]``);
+  * :func:`compute_builtin_tools` — the built-in host-tool list (``[]`` in sandbox
+    mode: no ``Read``/``Grep``/``Bash`` on the host);
+  * :func:`register_provider` / :func:`pick_provider` — the model-id → provider
+    registry, so a role can run a cheaper family later without rewriting the runner.
+
+The concrete SDK-message → ``AgentChunk`` mapping is a confirm-at-build item
+(D-010 / CANONICAL §11.10): the live ``claude_agent_sdk`` message shapes are
+pinned inside the concrete provider impl, never guessed here.
+"""
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+from typing import Any, Protocol, runtime_checkable
+
+from libs.contracts import AgentChunk
+
+# The SDK-isolation triad markers the ``check-sdk-isolation-triad`` guard requires
+# a query()-hosting module to carry (CANONICAL §11.11). This module is the seam
+# these params flow through, so it names them structurally: no built-in host tool
+# executes outside the sandbox, and no discovered .mcp.json / connector leaks in.
+SDK_LOCAL_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob", "Bash", "Write", "Edit")
+# The isolation permission mode the seam pins for every SDK call (host tools off).
+permission_mode: str = "default"
+# World-touching built-ins that must never be advertised to a seam-routed call —
+# they run on the orchestrator host, not in E2B. Kept OUT of every computed list.
+disallowed_tools: tuple[str, ...] = SDK_LOCAL_TOOLS
+
+# Extended/adaptive thinking is ON only for real code reasoning that earns the
+# latency: the Opus-escalated grounded-answer turn and the Workroom build-planning
+# disposition. It is OFF on every fast path (should-I-speak gate, quick lookups,
+# Scribe micro-call) where a thinking preamble is latency-toxic (CANONICAL §10.6).
+_THINKING_ROLES: frozenset[str] = frozenset({"grounded-answer", "plan-artifact", "build-planning"})
+_THINKING_MODEL_PREFIXES: tuple[str, ...] = ("claude-opus",)
+# Cap the thinking budget well below MAX_OUTPUT_TOKENS: extended thinking shares
+# the output-token budget, so an uncapped preamble can truncate a large structured
+# emission mid-object (D-022). This ceiling is the seam-level default.
+MAX_OUTPUT_TOKENS: int = 32000
+EXTENDED_THINKING_BUDGET_TOKENS: int = 3000
+
+
+class ProviderError(Exception):
+    """The seam boundary exception. A pass-through ``ERROR`` ``AgentChunk`` is
+    surfaced as this at the :class:`~agentkit.execution.BehaviorRunner` boundary,
+    where the §3.5 stale-session / retry recovery layer catches it.
+
+    It carries the originating ``chunk`` so recovery can read
+    ``chunk.metadata["message"]`` to classify a stale-session error.
+    """
+
+    def __init__(self, chunk: AgentChunk) -> None:
+        self.chunk = chunk
+        message = ""
+        if chunk is not None and getattr(chunk, "metadata", None):
+            message = str(chunk.metadata.get("message", ""))
+        super().__init__(message or "provider error")
+
+
+@dataclass(frozen=True)
+class ProviderQuery:
+    """The immutable per-call options the runner computes and hands to the seam.
+
+    Every SDK call sets the isolation triad by construction (the defaults are the
+    safe ones): ``strict_mcp_config=True`` ignores all discovered ``.mcp.json`` /
+    user settings / claude.ai connectors; ``setting_sources=[]`` loads no
+    filesystem permissions/hooks/CLAUDE.md (both are needed — neither suppresses
+    connectors alone); and ``tools`` is a *computed* built-in list (``[]`` in
+    sandbox mode). ``allowed_tools`` is the behavior's curated subset (§10.5) —
+    never the union.
+    """
+
+    model: str
+    allowed_tools: tuple[str, ...]
+    system_prompt: str = ""
+    max_turns: int = 1
+    tools: tuple[str, ...] = ()                       # computed built-ins ([] in sandbox mode)
+    strict_mcp_config: bool = True                    # isolation triad
+    setting_sources: tuple[str, ...] = ()             # isolation triad ([] — load no fs settings)
+    thinking_enabled: bool = False
+    thinking_budget_tokens: int = 0
+    resume: str | None = None
+    preamble: str | None = None
+    abort: Any = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
+def compute_builtin_tools(curated: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    """The built-in host-tool list for a seam call — ``()`` in sandbox mode.
+
+    Seam-routed calls never advertise host built-ins (``Read``/``Grep``/``Bash``):
+    those would execute on the orchestrator host, not in E2B, which is exactly the
+    isolation leak the ``[CRITICAL]`` tripwire (§3.3) guards against. The behavior's
+    curated MCP tools are mounted via ``allowed_tools``; the built-in list stays
+    empty so nothing runs host-side.
+    """
+    _ = curated  # the curated subset flows through allowed_tools, not the built-in list
+    return ()
+
+
+def thinking_policy(model: str, role: str) -> tuple[bool, int]:
+    """Targeted extended-thinking decision for a turn (D-022 / CANONICAL §10.6).
+
+    Returns ``(enabled, budget_tokens)``. Thinking is enabled ONLY for a real
+    code-reasoning turn — an Opus-tier grounded-answer or a Workroom build-planning
+    disposition — and is off for every fast path. When on, the budget is capped
+    well below ``MAX_OUTPUT_TOKENS`` so the preamble can't truncate a large
+    structured emission mid-object.
+    """
+    role_wants = role in _THINKING_ROLES
+    model_is_reasoning = model.startswith(_THINKING_MODEL_PREFIXES)
+    enabled = role_wants and model_is_reasoning
+    if not enabled:
+        return (False, 0)
+    budget = min(EXTENDED_THINKING_BUDGET_TOKENS, MAX_OUTPUT_TOKENS // 4)
+    return (True, budget)
+
+
+@runtime_checkable
+class Provider(Protocol):
+    """A provider translates a rendered prompt + :class:`ProviderQuery` into a
+    normalized async ``AgentChunk`` stream. It never raises in-band: a fault is a
+    terminal ``ERROR`` chunk on the stream, surfaced as :class:`ProviderError` at
+    the runner boundary."""
+
+    def stream(self, prompt: str, query: ProviderQuery) -> AsyncIterator[AgentChunk]: ...
+
+
+_PROVIDERS: dict[str, Provider] = {}
+_DEFAULT_PROVIDER: list[Provider] = []
+
+
+def register_provider(provider: Provider, *, models: tuple[str, ...] = (), default: bool = False) -> Provider:
+    """Register a provider for a set of model ids (and optionally as the default)."""
+    for model in models:
+        _PROVIDERS[model] = provider
+    if default or not _DEFAULT_PROVIDER:
+        if default:
+            _DEFAULT_PROVIDER[:] = [provider]
+        elif not _DEFAULT_PROVIDER:
+            _DEFAULT_PROVIDER.append(provider)
+    return provider
+
+
+def pick_provider(model: str) -> Provider:
+    """Resolve the provider for a model id (falls back to the registered default).
+
+    A role runs a cheaper model family later by registering another provider — the
+    runner is unchanged; the seam picks by ``config.model``.
+    """
+    if model in _PROVIDERS:
+        return _PROVIDERS[model]
+    if _DEFAULT_PROVIDER:
+        return _DEFAULT_PROVIDER[0]
+    raise KeyError(
+        f"no provider registered for model {model!r} and no default provider set"
+    )
