@@ -1,9 +1,20 @@
-"""Harness liveness — a Healthchecks.io dead-man heartbeat.
+"""Auxiliary observability — the Healthchecks.io dead-man ping (NOT the fence).
 
-Each meeting-harness process pings a Healthchecks.io check URL on an interval; a
-missed ping is what alerts (the harness cannot report its own death, so an
-external dead-man switch does). The ping seam is injectable so the emit path is
-testable without a live network call.
+This ping is **auxiliary observability, not the liveness authority** (decision
+D-003). The CANONICAL liveness fence is the ``operation_runs`` fencing heartbeat
+in ``libs/ops/operation_run.py`` (spec §3.7 / CANONICAL §12.10): that heartbeat's
+``UPDATE ... WHERE status='running'`` is what proves ownership — a zero-rowcount
+beat drives ``is_owner`` False and every side-effect emit is gated on that flag
+(``harness.emit``). Crash detection is a staleness read of that same row (the
+boot bulk sweep + lazy per-read reaper), never a broker ack.
+
+The Healthchecks.io ping is a SECONDARY, external alerting signal layered on top:
+each meeting-harness process pings a check URL on an interval so a human/monitor
+is paged when the process stops pinging (the process cannot report its own death,
+so an outside dead-man switch does). It NEVER decides ownership, NEVER fences an
+emit, and is NEVER consulted as the liveness authority — treating it as the fence
+would be the split-brain D-003 forbids. The ping seam is injectable so the emit
+path is testable without a live network call.
 """
 from __future__ import annotations
 
@@ -38,8 +49,11 @@ def emit_heartbeat(
 ) -> bool:
     """Ping the Healthchecks.io check URL; return True on a successful ping.
 
-    ``ping`` is injectable (defaults to a real HTTP GET) so the heartbeat can be
-    driven deterministically in tests.
+    This is the AUXILIARY observability ping (D-003) — an external dead-man alert,
+    NOT the liveness fence. Ownership/liveness is decided solely by the
+    ``operation_runs`` fencing heartbeat (``libs/ops/operation_run.py``); this
+    function never touches that row and its result never gates an emit. ``ping``
+    is injectable (defaults to a real HTTP GET) so it is testable without network.
     """
     do_ping = ping if ping is not None else _default_ping
     resp = do_ping(check_url)
