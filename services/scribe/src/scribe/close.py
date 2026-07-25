@@ -167,7 +167,13 @@ class FinalActionItem(BaseModel):
 
 
 class FinalDecision(BaseModel):
-    text: str = Field(max_length=1000)
+    text: str = Field(max_length=1000)  # what was decided
+    # §2.6: a forwarded decision carries what/who/when AND the moment it landed.
+    # All three are OPTIONAL so a Doc-03 close object built with only ``text``
+    # still validates and renders the historical bytes (backwards-compatible).
+    owner: Optional[str] = None  # who owns / drove it
+    when: Optional[str] = None  # when it takes effect (as said, e.g. "by Fri")
+    landed_moment: Optional[str] = Field(default=None, max_length=1000)  # the moment it landed
     # A close-pass decision is DEFINITIVE — the live-tagging ``contradicts`` link
     # is resolved away here (§3.7 / AC-CLOSE-12). There is deliberately NO
     # ``contradicts`` field on the final object: an unresolved contradiction
@@ -176,6 +182,19 @@ class FinalDecision(BaseModel):
 
 class FinalOpenQuestion(BaseModel):
     text: str = Field(max_length=1000)
+
+
+class ProxyAction(BaseModel):
+    """One line of the §2.6 'what Proxy did' section — an ask handled, work
+    performed, or a draft staged — EACH carrying its receipt (Law 1: grounded or
+    silent). ``kind`` is a plain label ('ask' | 'work' | 'draft'); ``receipt`` is
+    the grounding (a ``file:line`` citation, an evidence pointer, a draft handle)
+    that lets a forwarded reader trust the claim rather than take it on faith.
+    """
+
+    kind: str = Field(max_length=32)  # 'ask' | 'work' | 'draft' (a human label)
+    text: str = Field(max_length=1000)  # what Proxy did
+    receipt: str = Field(max_length=2000)  # the grounding for this item (never empty)
 
 
 class FinalNotes(BaseModel):
@@ -188,10 +207,26 @@ class FinalNotes(BaseModel):
     record is definitive by construction.
     """
 
+    # §2.6 header — title/date/attendees. All OPTIONAL so a Doc-03 close object
+    # built with only ``summary`` renders the historical "# Meeting notes" bytes.
+    title: Optional[str] = Field(default=None, max_length=300)
+    meeting_date: Optional[str] = Field(default=None, max_length=64)
+    attendees: list[str] = Field(default_factory=list)
+
+    # §2.6 worst-news-first: any live blocker/risk LEADS the five-line summary,
+    # rendered ABOVE the happy summary line (never buried below the decisions).
+    blockers_risks: list[str] = Field(default_factory=list)
+
     summary: str = Field(max_length=20_000)
     decisions: list[FinalDecision] = Field(default_factory=list)
     action_items: list[FinalActionItem] = Field(default_factory=list)
     open_questions: list[FinalOpenQuestion] = Field(default_factory=list)
+
+    # §2.6 'what Proxy did' — each ask/work/draft with its receipt (Law 1) — and a
+    # pointer to the raw transcript. Both OPTIONAL/empty by default so the Doc-03
+    # render (which has neither) is byte-identical.
+    proxy_actions: list[ProxyAction] = Field(default_factory=list)
+    transcript_ref: Optional[str] = Field(default=None, max_length=2000)
 
     @classmethod
     def json_schema(cls) -> dict[str, Any]:
@@ -203,17 +238,67 @@ class FinalNotes(BaseModel):
         return cls.model_json_schema()
 
 
-def render_markdown(notes: FinalNotes) -> str:
-    """Render the final object through the notes template to markdown (Step 1).
+def _decision_suffix(d: FinalDecision) -> str:
+    """The who/when/moment-it-landed suffix on a §2.6 decision line.
 
-    Deterministic — no model call. This is the exact bytes written to GCS.
+    Each part is emitted ONLY when present, in a fixed order, so the render is
+    deterministic and a Doc-03 decision (``text`` only) renders as the historical
+    bare ``- <text>`` line — no fabricated who/when.
     """
-    lines: list[str] = ["# Meeting notes", "", "## Summary", "", notes.summary.strip(), ""]
+    parts: list[str] = []
+    if d.owner:
+        parts.append(f"— {d.owner.strip()}")
+    if d.when:
+        parts.append(f"({d.when.strip()})")
+    if d.landed_moment:
+        parts.append(f"— {d.landed_moment.strip()}")
+    return (" " + " ".join(parts)) if parts else ""
+
+
+def render_markdown(notes: FinalNotes) -> str:
+    """Render the final object through the §2.6 notes template to markdown (Step 1).
+
+    The designed artifact forwarded to the VP (§2.6): title/date/ATTENDEES → a
+    five-line summary with any live blocker/risk LEADING (worst news first) →
+    decisions (what/who/when + the moment it landed) → action items (who/what/when)
+    → open questions → a 'what Proxy did' section (each ask/work/draft with its
+    receipt, Law 1) → a pointer to the raw transcript.
+
+    DETERMINISTIC — no model call, no clock, no set/dict-order dependence: the same
+    ``FinalNotes`` renders byte-identical bytes every time. This is the exact bytes
+    written to GCS. Every §2.6 addition is emitted ONLY when its field is populated,
+    so a Doc-03 close object (summary/decisions/action-items/open-questions only)
+    renders the historical bytes unchanged — one renderer, single source.
+    """
+    # ── Header: title/date/attendees (§2.6) ────────────────────────────────────
+    title = (notes.title or "Meeting notes").strip()
+    lines: list[str] = [f"# {title}", ""]
+    if notes.meeting_date:
+        lines += [f"**Date:** {notes.meeting_date.strip()}", ""]
+    if notes.attendees:
+        lines += ["## Attendees", ""]
+        lines += [f"- {name.strip()}" for name in notes.attendees]
+        lines += [""]
+
+    # ── Summary — worst news FIRST: blockers/risks lead the happy summary ───────
+    lines += ["## Summary", ""]
+    if notes.blockers_risks:
+        # A live blocker/risk leads the five-line summary so a forwarded reader
+        # sees what's at stake before what went well (§2.6). Rendered ABOVE the
+        # happy summary line, never buried below the decisions.
+        for risk in notes.blockers_risks:
+            lines.append(f"- ⚠️ {risk.strip()}")
+        lines.append("")
+    lines += [notes.summary.strip(), ""]
+
+    # ── Decisions — what/who/when + the moment it landed (§2.6) ─────────────────
     lines += ["## Decisions", ""]
     if notes.decisions:
-        lines += [f"- {d.text.strip()}" for d in notes.decisions]
+        lines += [f"- {d.text.strip()}{_decision_suffix(d)}" for d in notes.decisions]
     else:
         lines += ["_None recorded._"]
+
+    # ── Action items — who/what/when ───────────────────────────────────────────
     lines += ["", "## Action items", ""]
     if notes.action_items:
         for a in notes.action_items:
@@ -222,13 +307,121 @@ def render_markdown(notes: FinalNotes) -> str:
             lines += [f"- [ ] {a.text.strip()}{who}{when}"]
     else:
         lines += ["_None recorded._"]
+
+    # ── Open questions ─────────────────────────────────────────────────────────
     lines += ["", "## Open questions", ""]
     if notes.open_questions:
         lines += [f"- {q.text.strip()}" for q in notes.open_questions]
     else:
         lines += ["_None._"]
+
+    # ── What Proxy did — each ask/work/draft WITH its receipt (§2.6 / Law 1) ────
+    # Emitted only when there is at least one action, so the Doc-03 render (no
+    # actions) stays byte-identical. Every item carries its receipt — grounded or
+    # silent: an action without a receipt is never fabricated here.
+    if notes.proxy_actions:
+        lines += ["", "## What Proxy did", ""]
+        for act in notes.proxy_actions:
+            label = act.kind.strip()
+            prefix = f"**{label}** " if label else ""
+            lines += [f"- {prefix}{act.text.strip()}", f"  - receipt: {act.receipt.strip()}"]
+
+    # ── Raw-transcript pointer (§2.6) ──────────────────────────────────────────
+    if notes.transcript_ref:
+        lines += ["", "## Raw transcript", "", f"- {notes.transcript_ref.strip()}"]
+
     lines += [""]
     return "\n".join(lines)
+
+
+def _entry_str(payload: dict[str, Any], key: str) -> Optional[str]:
+    """A trimmed non-empty string field off a folded entry, else None (deterministic)."""
+    val = payload.get(key)
+    if isinstance(val, str) and val.strip():
+        return val.strip()
+    return None
+
+
+def final_notes_from_folded(folded: Any, *, transcript_ref: str | None = None) -> FinalNotes:
+    """Build the §2.6 :class:`FinalNotes` DETERMINISTICALLY from the folded note_deltas.
+
+    ``folded`` is a :class:`scribe.notes_reader.Notes` — the deterministic left-fold
+    of ``note_deltas`` in ``id`` order (CANONICAL §11.4). This is a PURE projection
+    of that object into the publishable §2.6 shape: no model call, no clock, no
+    set/dict-iteration nondeterminism — it walks ``folded.order`` (the stable fold
+    order) and classifies each entry by its ``kind``. So the same fold in yields a
+    byte-identical rendered artifact out (the DoD's "deterministically, from the
+    folded note_deltas object").
+
+    Mapping (each field emitted only when the source is present, never fabricated):
+
+    * ``current_goal`` — the one-line goal/blocker signal (§3) — leads the summary
+      as the worst-news-first blocker/risk.
+    * ``kind == 'decision'`` → :class:`FinalDecision`: ``text``; ``owner`` from the
+      "for" voters in ``leans`` (sorted, deterministic); ``landed_moment`` from the
+      close ``resolution`` when the decision resolved (the moment it landed).
+    * ``kind == 'action'`` → :class:`FinalActionItem` (text/owner/due).
+    * ``kind == 'open_question'`` → :class:`FinalOpenQuestion` (unresolved ones).
+
+    The 'what Proxy did' section and the transcript pointer are NOT in ``note_deltas``
+    (they ride task telemetry + the persisted draft rows + the transcript ref, §2.6):
+    the caller passes ``proxy_actions`` in separately (via :class:`FinalNotes`) and
+    ``transcript_ref`` here. This function fills only what the fold can ground.
+    """
+    entries: dict[str, dict[str, Any]] = getattr(folded, "entries", {})
+    order: list[str] = getattr(folded, "order", [])
+    current_goal: Optional[str] = getattr(folded, "current_goal", None)
+
+    blockers_risks: list[str] = []
+    if isinstance(current_goal, str) and current_goal.strip():
+        blockers_risks.append(current_goal.strip())
+
+    decisions: list[FinalDecision] = []
+    action_items: list[FinalActionItem] = []
+    open_questions: list[FinalOpenQuestion] = []
+    summary_bits: list[str] = []
+
+    for eid in order:
+        payload = entries.get(eid, {})
+        kind = str(payload.get("kind", "")).strip()
+        text = _entry_str(payload, "text")
+        if text is None:
+            continue
+        if kind == "decision":
+            leans = payload.get("leans")
+            owner: Optional[str] = None
+            if isinstance(leans, dict):
+                fors = sorted(k for k, v in leans.items() if v == "for" and isinstance(k, str))
+                if fors:
+                    owner = ", ".join(fors)
+            landed = _entry_str(payload, "resolution") if payload.get("resolved") else None
+            decisions.append(
+                FinalDecision(text=text, owner=owner, landed_moment=landed)
+            )
+        elif kind == "action":
+            action_items.append(
+                FinalActionItem(
+                    text=text,
+                    owner=_entry_str(payload, "owner"),
+                    due=_entry_str(payload, "due"),
+                )
+            )
+        elif kind == "open_question":
+            if payload.get("resolved") is not True:
+                open_questions.append(FinalOpenQuestion(text=text))
+        elif kind == "claim":
+            # A claim's gist rides the summary body (deterministic fold order).
+            summary_bits.append(text)
+
+    summary = " ".join(summary_bits) if summary_bits else "See decisions and action items below."
+    return FinalNotes(
+        blockers_risks=blockers_risks,
+        summary=summary,
+        decisions=decisions,
+        action_items=action_items,
+        open_questions=open_questions,
+        transcript_ref=transcript_ref,
+    )
 
 
 # ── Model tier guard (fail-fast, before any SDK call) ───────────────────────
@@ -936,7 +1129,9 @@ __all__ = [
     "FinalDecision",
     "FinalActionItem",
     "FinalOpenQuestion",
+    "ProxyAction",
     "render_markdown",
+    "final_notes_from_folded",
     "resolve_close_model",
     "assert_not_haiku",
     "approx_tokens",
