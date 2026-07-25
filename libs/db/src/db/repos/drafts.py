@@ -51,3 +51,23 @@ async def set_draft_status(conn: Any, draft_id: Any, status: str) -> None:
         draft_id,
         status,
     )
+
+
+async def list_drafts_for_meeting(conn: Any, meeting_id: Any) -> list[dict[str, Any]]:
+    """Every staged draft for ONE meeting, oldest-first — the §2.8 home's cards.
+
+    Scoped to a single ``meeting_id`` on purpose: the ``/m/{meeting_id}`` home is
+    **one meeting's** notes + drafts, never a cross-meeting list (§2.8 — "not a
+    dashboard"). The caller has already proven ``meeting→tenant`` server-side, so
+    this reader is a pure per-meeting projection; it never widens beyond the one id.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT draft_id, meeting_id, kind, summary, artifact_ref, status, created_at
+          FROM staged_drafts
+         WHERE meeting_id = $1
+         ORDER BY created_at ASC, draft_id ASC
+        """,
+        meeting_id,
+    )
+    return [dict(r) for r in rows]

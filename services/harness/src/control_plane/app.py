@@ -114,8 +114,23 @@ def create_app() -> FastAPI:
     from .accept_route import install_accept_route
     from .gateway_route import install_gateway_route
     from .internal import install_internal_routes
+    from .meeting_home import install_meeting_home_route
+    from .webhooks import install_recall_webhook_route
 
     install_internal_routes(app)
+    # §2.8: the authenticated dual-mode per-meeting home GET /m/{meeting_id}. It
+    # renders the §2.6 notes (the SAME note_deltas fold /internal/notes uses) PLUS
+    # that meeting's staged-draft cards (§2.4 #8) for a signed-in tenant member —
+    # behind a SERVER-SIDE meeting→tenant check (a cross-tenant member gets Not
+    # found). A valid capability token gives a notes-ONLY view (NO drafts, Law 3);
+    # no session + no token → Not found. It is in PUBLIC_ROUTES (public only via a
+    # valid token) — the enumeration test accepts it as public by that allowlist.
+    install_meeting_home_route(app)
+    # §4.6: the Recall webhook receiver — PUBLIC_ROUTES-allowlisted but HMAC-gated.
+    # The signature is verified over the RAW body via a constant-time compare BEFORE
+    # the durable webhook_events insert, so a forged/missing signature is a 401 with
+    # NO row landed (a forged delivery can never dedupe-poison the table).
+    install_recall_webhook_route(app)
     # The §4.6 internal-token trust plane: the /internal/* routes are gated by the
     # X-Internal-Token header (a server-to-server bearer, NEVER the user session
     # cookie), so they are tenant-scoped by a different gate than protected(). Stamp

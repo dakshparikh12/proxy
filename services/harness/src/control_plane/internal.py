@@ -37,7 +37,6 @@ if TYPE_CHECKING:
 
 INTERNAL_RECONCILE_PATH = "/internal/reconcile"
 INTERNAL_NOTES_PATH = "/internal/notes/{meeting_id}"
-M_SURFACE_PATH = "/m/{meeting_id}"
 INTERNAL_TOKEN_HEADER = "X-Internal-Token"  # nosec B105 - HTTP header name, not a secret
 
 
@@ -112,70 +111,18 @@ def install_internal_notes_route(app: "FastAPI") -> None:
         return _to_response(resp)
 
 
-def install_m_surface_route(app: "FastAPI") -> None:
-    """Mount GET /m/{meeting_id} — the DUAL-MODE notes home (§2.8 / §4.6, §12.9).
-
-    Two callers reach the SAME route (§4.6):
-
-    * a **signed-in tenant member** (session present) — served via the canonical
-      :func:`scribe.notes_reader.m_handler`, which folds the SAME ``note_deltas``
-      as ``/internal/notes`` (never NOTES_CACHE);
-    * a **forwarded-to recipient** presenting a **signed, short-TTL, meeting-scoped,
-      revocable capability token** in the ``?token=`` query — the ONLY public entry
-      (this route is in ``PUBLIC_ROUTES``). A valid token grants **read-only notes**
-      for exactly its meeting and NOTHING else: no drafts, never accept/reject,
-      never another meeting (§2.8, Law 3).
-
-    The capability path NEVER trusts the client-supplied ``meeting_id`` as authority:
-    the token's own signed ``meeting_id`` is re-checked against the path by
-    ``libs.ops.verify_capability_token``, and only a matching, unexpired,
-    unrevoked ``notes:read`` grant unlocks the read. A missing/garbage/wrong-meeting/
-    expired/tampered/revoked token yields no grant → the caller falls through to the
-    session path, and a caller with neither a grant nor a session gets ``Not found``
-    (404) — the generic refusal, never a leak of whether the meeting exists.
-    """
-    from scribe.notes_reader import m_handler
-
-    from libs.ops import verify_capability_token
-
-    @app.get(M_SURFACE_PATH, include_in_schema=True)
-    async def m_surface(
-        meeting_id: str, request: Request, token: str | None = None
-    ) -> Response:
-        db = _acquirer(request.app)
-        if db is None:
-            return Response(status_code=503)
-
-        # ── Capability-token path (the only public entry) ──────────────────────
-        # A valid same-meeting notes:read grant reads the notes read-only. Drafts
-        # are NEVER returned to a token bearer (§4.6: "token = notes only").
-        grant = verify_capability_token(token, meeting_id)
-        if grant is not None:
-            resp = await m_handler(meeting_id, session={"cap_grant": True}, db=db)
-            return _to_response(resp)
-
-        # ── Session path (a signed-in tenant member) ───────────────────────────
-        try:
-            session = request.session.get("user")
-        except (AssertionError, AttributeError):
-            session = None  # no SessionMiddleware installed → treated as no session
-        resp = await m_handler(meeting_id, session=session, db=db)
-        # No grant AND no session ⇒ Not found (the generic refusal), never a 401 that
-        # would tell an anonymous caller the meeting exists.
-        if not session and resp.status_code == 401:
-            return Response(status_code=404)
-        return _to_response(resp)
-
-
 def install_internal_routes(app: Any) -> None:
-    """Mount every /internal notes + reconcile route + the /m user surface.
+    """Mount the /internal notes + reconcile routes (the cross-service read plane).
 
     ONE registration seam ``create_app`` calls so the cross-service notes read has
     a live endpoint mounted alongside /internal/reconcile (DOC03-CSREAD mount gap).
+    The authenticated ``GET /m/{meeting_id}`` user surface is NOT mounted here — it
+    is the dual-mode §2.8 home owned by ``control_plane.meeting_home`` (it renders
+    notes + that meeting's staged-draft cards behind a server-side meeting→tenant
+    check, which is more than the notes-only fold this /internal plane carries).
     """
     install_internal_reconcile_route(app)
     install_internal_notes_route(app)
-    install_m_surface_route(app)
 
 
 def install_internal_reconcile_route(app: "FastAPI") -> None:
