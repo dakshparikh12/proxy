@@ -4,12 +4,27 @@
 persists a 'proposed' staged_drafts row at creation. ``accept_draft`` reads the
 persisted row + object body (never the dead in-memory review session), so a human
 can approve long after the sandbox is gone.
+
+**The one write-to-the-world (§3.8).** ``propose_change`` is MULTI-FILE (CANONICAL
+§12.9): one call stages a whole code-change draft — ``propose_change(kind, summary,
+files:[{path, old_sha?, new_content}] | unified_diff)`` → **ONE** GCS Object-Versioned
+bundle + **ONE** ``staged_drafts`` row, returning a ``draft_id`` with
+``status=needs_review`` — it NEVER lands and is NEVER pushed (push is Expansion behind
+``contents:write``). ``make_propose_change_server()`` registers it as a HOST-side
+in-process SDK MCP server (CANONICAL §11.7 — GCS/Postgres creds live on the trusted
+host, unreachable from the egress-denied credential-less E2B sandbox), minted
+factory-per-query and mounted ONLY for the worker disposition (§3.5). The persisted
+bundle is accepted from durable storage by the accept-handler AFTER the sandbox is
+gone (``control_plane.accept``) — never a dead in-memory session.
 """
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass
 from typing import Any
+
+from claude_agent_sdk import McpSdkServerConfig, SdkMcpTool, create_sdk_mcp_server, tool
 
 from libs.db import Database, repos
 
@@ -99,46 +114,68 @@ def teardown_review_session(review_session_id: Any) -> None:
     return None
 
 
-async def _propose_change_async(
-    db: Database,
-    *,
-    meeting_id: Any,
-    kind: str,
-    summary: str,
-    content: str,
-) -> ProposedDraft:
-    """Persist a draft at creation (async pool path): body → store, row → DB."""
-    artifact_ref = f"gs://proxy-drafts/{meeting_id}/{uuid.uuid4().hex}"
-    objectstore.put(artifact_ref, content)
-    async with db.acquire() as conn:
-        row = await repos.drafts.insert_draft(
-            conn,
-            meeting_id=meeting_id,
-            kind=kind,
-            summary=summary,
-            artifact_ref=artifact_ref,
-            status="proposed",
-        )
-    return ProposedDraft(
-        draft_id=row["draft_id"],
-        meeting_id=row["meeting_id"],
-        artifact_ref=row["artifact_ref"],
-        status=row["status"],
-        review_session_id=uuid.uuid4().hex,
-    )
+def _normalize_files(files: Any) -> list[dict[str, Any]]:
+    """Normalize the ``files`` argument to a list of ``{path, old_sha?, new_content}``.
+
+    Each file carries the COMPLETE new content per file (§3.8). ``old_sha`` is optional:
+    when absent the original for the diff comes from the pinned clone at
+    ``meeting.pinned_sha`` (recorded here as the ``original`` source hint; the read is the
+    accept-handler / diff-render's job, not this write's — this stage only persists the
+    proposed new content + the original pointer, never landing anything).
+    """
+    normalized: list[dict[str, Any]] = []
+    for f in files or []:
+        if not isinstance(f, dict) or "path" not in f:
+            raise ValueError("each file needs a 'path'")
+        entry: dict[str, Any] = {
+            "path": f["path"],
+            "new_content": f.get("new_content", ""),
+        }
+        # The original source: the agent's old_sha, else the pinned clone (recorded, not
+        # guessed — the diff-render reads it at accept, never fabricated here).
+        if "old_sha" in f:
+            entry["old_sha"] = f["old_sha"]
+        else:
+            entry["original_from"] = "meeting.pinned_sha"
+        normalized.append(entry)
+    return normalized
 
 
-def _propose_change_sync(
-    conn: Any,
-    *,
-    meeting_id: Any,
-    kind: str,
-    summary: str,
-    content: str | bytes,
+def _build_bundle(
+    *, kind: str, files: Any = None, unified_diff: str | None = None, content: str | bytes | None = None
+) -> str:
+    """Build the ONE bundle body persisted to GCS at creation (a single JSON blob).
+
+    Accepts EITHER a multi-file ``files`` list OR a ``unified_diff`` (§3.8 / CANONICAL
+    §12.9); the legacy single ``content`` rides the same bundle as a one-file list so a
+    core notes-edit accept still reads a plain string. Exactly one bundle is produced —
+    all files / the diff live in this single Object-Versioned blob (never one blob per
+    file).
+    """
+    if content is not None and files is None and unified_diff is None:
+        # Legacy single-content path (e.g. a notes-edit): the body IS the plain string so
+        # the notes-edit accept path reads it verbatim (no JSON envelope to unwrap).
+        return content.decode("utf-8", "replace") if isinstance(content, bytes) else content
+    if not files and not unified_diff:
+        raise ValueError("propose_change needs a 'files' list or a 'unified_diff'")
+    bundle = {
+        "kind": kind,
+        "files": _normalize_files(files),
+        "unified_diff": unified_diff,
+    }
+    return json.dumps(bundle)
+
+
+def _persist_bundle_row_sync(
+    conn: Any, *, meeting_id: Any, kind: str, summary: str, body: str
 ) -> ProposedDraft:
-    """Persist a draft at creation (sync psycopg path) — durable BEFORE teardown."""
+    """Persist ONE GCS bundle + ONE staged_drafts row (sync psycopg path) at creation.
+
+    Durable BEFORE teardown (CANONICAL §4): the body is written to Object-Versioned
+    storage and a SINGLE 'proposed' row is inserted, then the ``draft_id`` is returned.
+    Exactly one object + one row — never one row/blob per file.
+    """
     artifact_ref = f"gs://proxy-drafts/{meeting_id}/{uuid.uuid4().hex}"
-    body = content.decode("utf-8", "replace") if isinstance(content, bytes) else content
     objectstore.put(artifact_ref, body)
     row = conn.execute(
         """
@@ -152,7 +189,36 @@ def _propose_change_sync(
         draft_id=row[0],
         meeting_id=row[1],
         artifact_ref=row[2],
-        status=row[3],
+        status="needs_review",
+        review_session_id=uuid.uuid4().hex,
+    )
+
+
+async def _propose_change_async(
+    db: Database,
+    *,
+    meeting_id: Any,
+    kind: str,
+    summary: str,
+    body: str,
+) -> ProposedDraft:
+    """Persist a draft at creation (async pool path): ONE body → store, ONE row → DB."""
+    artifact_ref = f"gs://proxy-drafts/{meeting_id}/{uuid.uuid4().hex}"
+    objectstore.put(artifact_ref, body)
+    async with db.acquire() as conn:
+        row = await repos.drafts.insert_draft(
+            conn,
+            meeting_id=meeting_id,
+            kind=kind,
+            summary=summary,
+            artifact_ref=artifact_ref,
+            status="proposed",
+        )
+    return ProposedDraft(
+        draft_id=row["draft_id"],
+        meeting_id=row["meeting_id"],
+        artifact_ref=row["artifact_ref"],
+        status="needs_review",
         review_session_id=uuid.uuid4().hex,
     )
 
@@ -161,24 +227,29 @@ def propose_change(
     db: Any = None,
     *,
     meeting_id: Any,
-    kind: str,
+    kind: str = "code-change",
     summary: str,
-    content: str | bytes,
+    files: Any = None,
+    unified_diff: str | None = None,
+    content: str | bytes | None = None,
 ) -> Any:
-    """Stage a change draft, durable at creation.
+    """Stage a MULTI-FILE change draft, durable at creation (§3.8 / CANONICAL §12.9).
 
-    ``Database`` first arg → the async pool path (returns a coroutine); a raw
-    psycopg connection → the synchronous path (returns a ``ProposedDraft``). The
-    draft persists (GCS Object-Versioned body + a 'proposed' row) the moment it is
-    proposed, so it survives the Workroom sandbox teardown.
+    Accepts EITHER a multi-file ``files:[{path, old_sha?, new_content}]`` list OR a
+    ``unified_diff`` — one call stages a whole code-change draft. The legacy single
+    ``content`` keyword still works for a notes-edit. It persists **exactly one** GCS
+    Object-Versioned bundle (all files / the diff in one blob) + **exactly one**
+    ``staged_drafts`` row the moment it is proposed (so it survives the Workroom sandbox
+    teardown), and returns a ``draft_id`` with ``status=needs_review``. It NEVER lands and
+    is NEVER pushed (propose-not-apply, §3.8).
+
+    ``Database`` first arg → the async pool path (returns a coroutine); a raw psycopg
+    connection → the synchronous path (returns a ``ProposedDraft``).
     """
+    body = _build_bundle(kind=kind, files=files, unified_diff=unified_diff, content=content)
     if isinstance(db, Database):
-        return _propose_change_async(
-            db, meeting_id=meeting_id, kind=kind, summary=summary, content=str(content)
-        )
-    return _propose_change_sync(
-        db, meeting_id=meeting_id, kind=kind, summary=summary, content=content
-    )
+        return _propose_change_async(db, meeting_id=meeting_id, kind=kind, summary=summary, body=body)
+    return _persist_bundle_row_sync(db, meeting_id=meeting_id, kind=kind, summary=summary, body=body)
 
 
 async def accept_draft(
@@ -197,3 +268,107 @@ async def accept_draft(
         applied=bool(content),
         read_from="durable",
     )
+
+
+# ===========================================================================
+# The HOST-side in-process SDK MCP server (§3.8 / CANONICAL §11.7).
+# ===========================================================================
+# ``propose_change`` writes GCS + staged_drafts (Postgres) — impossible from the
+# egress-denied, credential-less E2B sandbox — so it runs on the TRUSTED HOST as an
+# in-process SDK MCP server (exactly like host-side ``code_intel``, §3.5), invoked by the
+# Workroom agent but executed where the creds live. It is registered per query
+# (factory-per-query; SDK MCP servers are connection-bound) and mounted ONLY for the
+# worker disposition (§3.5) — never quick / plan / critic / verifier.
+
+# The one MCP server name the tool policy advertises as
+# ``mcp__propose_change__propose_change`` (agent_config.PROPOSE_CHANGE_TOOL).
+PROPOSE_CHANGE_SERVER_NAME = "propose_change"
+
+# The single disposition that carries the host propose_change server (§3.8): the worker is
+# the only disposition that may write to the world (through the staged-draft gate). Named
+# here so the mount decision has ONE source of truth alongside agent_config's tool policy.
+_WRITE_DISPOSITION = "worker"
+
+_TOOL_DESCRIPTION = (
+    "Propose a code-change draft (one or more files). It is STAGED for user review and "
+    "approval — it does NOT land and is NEVER pushed. Give the COMPLETE new content per "
+    "file, or a unified_diff."
+)
+
+
+def make_propose_change_tool(*, conn: Any, meeting_id: Any) -> SdkMcpTool[Any]:
+    """Build the ``propose_change`` SDK tool bound to ONE query's conn + meeting (§3.8).
+
+    A factory-per-query tool: it closes over the trusted-host psycopg ``conn`` + the
+    meeting UUID, so when the Workroom agent invokes it the write executes on the HOST
+    (where the GCS/Postgres creds live), never in the sandbox. The handler NEVER raises
+    (Hard Rule 6 / D-018): any fault is returned as an ``is_error`` content result. On
+    success it persists EXACTLY one GCS bundle + one ``staged_drafts`` row at creation and
+    returns ``draft_id`` + ``status=needs_review`` — it never lands and is never pushed.
+    """
+
+    @tool(PROPOSE_CHANGE_SERVER_NAME, _TOOL_DESCRIPTION, {"kind": str, "summary": str})
+    async def propose_change_tool(args: dict[str, Any]) -> dict[str, Any]:
+        try:
+            if conn is None:
+                raise ValueError("no host connection bound to the propose_change tool")
+            result = propose_change(
+                conn,
+                meeting_id=meeting_id,
+                kind=args.get("kind", "code-change"),
+                summary=args.get("summary", ""),
+                files=args.get("files"),
+                unified_diff=args.get("unified_diff"),
+            )
+            files = args.get("files") or []
+            paths = [f.get("path") for f in files if isinstance(f, dict)]
+            payload = {
+                "draft_id": str(result.draft_id),
+                "status": "needs_review",
+                "files": paths,
+                "note": (
+                    "Staged for user review — a named human approves; "
+                    "nothing lands or is pushed."
+                ),
+            }
+            return {"content": [{"type": "text", "text": json.dumps(payload)}]}
+        except Exception as exc:  # noqa: BLE001 - never-throw boundary (Hard Rule 6 / D-018)
+            err = {"code": "propose_change_error", "message": f"{type(exc).__name__}: {exc}"}
+            return {
+                "is_error": True,
+                "content": [{"type": "text", "text": json.dumps(err)}],
+            }
+
+    return propose_change_tool
+
+
+def make_propose_change_server(*, conn: Any, meeting_id: Any) -> McpSdkServerConfig:
+    """Register the HOST-side in-process SDK MCP server for ``propose_change`` (§3.8).
+
+    Minted factory-per-query (SDK MCP servers are connection-bound): returns the
+    ``create_sdk_mcp_server`` config (``{type:'sdk', name, instance}``) carrying the one
+    ``propose_change`` tool bound to this query's host conn + meeting. Mounted ONLY for the
+    worker disposition — the read-only dispositions never get this server (§3.5), and the
+    raw-write block for them rides ``disallowed_tools`` in ``agent_config`` (``allowed_tools``
+    does not filter MCP tools, §3.8).
+    """
+    tool_fn = make_propose_change_tool(conn=conn, meeting_id=meeting_id)
+    return create_sdk_mcp_server(
+        name=PROPOSE_CHANGE_SERVER_NAME, version="1.0.0", tools=[tool_fn]
+    )
+
+
+def mcp_servers_for_disposition(
+    disposition: str, *, conn: Any, meeting_id: Any
+) -> dict[str, McpSdkServerConfig]:
+    """The host-side in-process MCP servers to mount for a disposition (§3.5 / §3.8).
+
+    Returns the ``propose_change`` in-process server ONLY for the worker disposition; every
+    read-only disposition (quick / plan / critic / verifier) gets an empty mapping — the one
+    write-to-the-world is mounted for the worker alone (§3.8). This is the MOUNT decision (the
+    server presence); the ADVERTISE/BLOCK decision (per-disposition allowed/disallowed tool
+    lists) lives in ``agent_config.disposition_tool_policy`` — the two agree by construction.
+    """
+    if disposition == _WRITE_DISPOSITION:
+        return {PROPOSE_CHANGE_SERVER_NAME: make_propose_change_server(conn=conn, meeting_id=meeting_id)}
+    return {}
