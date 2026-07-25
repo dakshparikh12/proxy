@@ -111,7 +111,7 @@ def create_app() -> FastAPI:
     # The token-gated /internal notes + reconcile routes and the /m user surface.
     # Mounted here so the Workroom's cross-service notes read has a LIVE endpoint
     # alongside /internal/reconcile (closes the DOC03-CSREAD mount gap).
-    from .accept_route import install_accept_route
+    from .accept_route import install_accept_route, install_reject_route
     from .gateway_route import install_gateway_route
     from .internal import install_internal_routes
     from .meeting_home import install_meeting_home_route
@@ -143,6 +143,13 @@ def create_app() -> FastAPI:
     from libs.http import protected
 
     install_accept_route(app, dependencies=[protected(_resolve_session_from_request)])
+    # The symmetric draft-REJECT surface (§2.8/§12.9): POST /m/{id}/drafts/{id}/reject
+    # BEHIND the SAME auth wall. It declares the §4.6 protected() wrapper (so a
+    # capability token can NEVER reach it — reject is the other half of the one
+    # world-touching pair, Law 3) and flips the durable row to 'rejected' (applies
+    # nothing, never pushes). A separate protected() instance per route keeps each
+    # route's dependant tree independently stamped for the enumeration test.
+    install_reject_route(app, dependencies=[protected(_resolve_session_from_request)])
     # The WS upgrade gateway (§4.3/§12.9): /ws authenticates at the connection UPGRADE —
     # an unauthenticated upgrade is rejected (401) BEFORE the 101, never per-message.
     install_gateway_route(app)

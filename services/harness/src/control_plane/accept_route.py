@@ -35,15 +35,20 @@ if TYPE_CHECKING:
 # The same key replays the FIRST result and never re-runs the apply (§3.16.1, §12.9).
 _ACCEPTS: dict[tuple[str, str, str], "AcceptResponse"] = {}
 
+# The reject route's own idempotency ledger, keyed the same way. Reject and accept are
+# separate world-touching decisions, so each owns its own replay ledger (§12.9).
+_REJECTS: dict[tuple[str, str, str], "AcceptResponse"] = {}
+
 
 @dataclass(frozen=True)
 class AcceptResponse:
-    """The accept route's typed response."""
+    """The accept/reject route's typed response (shared shape, symmetric twins)."""
 
     status: int
     accepted: bool = False
     rejected: bool = False
     accept_id: str | None = None
+    reject_id: str | None = None
     idempotent_replay: bool = False
     kind: str | None = None
     applied_status: str | None = None
@@ -140,8 +145,92 @@ def handle_accept(
     return response
 
 
+def handle_reject(
+    conn: Any,
+    *,
+    request: Any,
+    meeting_id: str,
+    draft_id: str,
+    idempotency_key: str,
+    audit_sink: Callable[[Any], None] | None = None,
+) -> AcceptResponse:
+    """Authorize + decline a draft on DURABLE storage (idempotent, audited).
+
+    The symmetric twin of :func:`handle_accept` (spec §2.8, CANONICAL §12.9). Same
+    fail-closed order — auth → CSRF → server-side draft→meeting→tenant → (replay?
+    return first) → decline → audit — but the terminal action flips the durable row
+    to ``rejected`` and applies NOTHING (no notes-edit, no push). ``conn`` is a durable
+    (sync psycopg) connection: a reject can arrive long after the meeting harness is
+    gone, so it runs on durable storage, never the dead in-memory review session.
+    """
+    # (1) Authentication: an unauthenticated caller cannot reject.
+    if not _authenticated(request):
+        return AcceptResponse(status=401, rejected=True)
+
+    # (2+3) CSRF + SERVER-SIDE draft→meeting→tenant barrier (same gate as accept — the
+    #        owning tenant is derived from the persisted row, never a client field).
+    try:
+        _authz.authorize_draft_accept(
+            conn,
+            draft_id=draft_id,
+            principal_tenant=getattr(request, "tenant", None),
+            csrf_valid=getattr(request, "csrf_valid", True),
+        )
+    except _authz.CsrfInvalid:
+        return AcceptResponse(status=403, rejected=True)
+    except (_authz.CrossTenantReadDenied, LookupError):
+        # A different tenant OR an unknown draft — refused, and NOTHING is changed.
+        return AcceptResponse(status=403, rejected=True)
+
+    # (4) Idempotency: the SAME key replays the first result, never double-rejects.
+    key = (str(meeting_id), str(draft_id), str(idempotency_key))
+    prior = _REJECTS.get(key)
+    if prior is not None:
+        return AcceptResponse(
+            status=prior.status,
+            rejected=prior.rejected,
+            reject_id=prior.reject_id,
+            idempotent_replay=True,
+            kind=prior.kind,
+            applied_status=prior.applied_status,
+            pushed=prior.pushed,
+        )
+
+    # (5) Decline on DURABLE storage: flip the row to 'rejected', apply/push nothing.
+    try:
+        declined = _accept.reject_staged_draft(
+            conn, meeting_id=meeting_id, draft_id=draft_id
+        )
+    except LookupError:
+        return AcceptResponse(status=404, rejected=True)
+
+    reject_id = uuid.uuid4().hex
+    response = AcceptResponse(
+        status=200,
+        rejected=True,
+        accepted=False,
+        reject_id=reject_id,
+        idempotent_replay=False,
+        kind=declined.kind,
+        applied_status=declined.applied_status,
+        pushed=declined.pushed,
+    )
+    _REJECTS[key] = response
+
+    # (6) Audit: capture the rejecting tenant member (never a secret).
+    if audit_sink is not None:
+        audit_sink(
+            f"reject meeting={meeting_id} draft={draft_id} "
+            f"tenant={getattr(request, 'tenant', None)} "
+            f"user={getattr(request, 'user', None)} "
+            f"kind={declined.kind} reject_id={reject_id}"
+        )
+    return response
+
+
 # ── The authenticated control_plane route mount ──────────────────────────────
 ACCEPT_PATH = "/m/{meeting_id}/drafts/{draft_id}/accept"
+REJECT_PATH = "/m/{meeting_id}/drafts/{draft_id}/reject"
 
 
 class _AuthzedRequest:
@@ -157,6 +246,37 @@ class _AuthzedRequest:
         self.tenant = tenant
         self.user = user
         self.csrf_valid = csrf_valid
+
+
+def _principal_and_key(request: Any) -> "tuple[_AuthzedRequest | None, str]":
+    """Derive the SERVER-SIDE principal (+ idempotency key) for a mutation route.
+
+    Shared by the accept and reject route mounts so both derive the tenant/CSRF the
+    SAME way: the tenant rides the signed session server-side (never a client body
+    field), the CSRF is the double-submit header==cookie compare, and the idempotency
+    key is the ``Idempotency-Key`` header. Returns ``(None, "")`` when there is no
+    session (the caller maps that to a fail-closed 401) — a missing SessionMiddleware
+    (an app built without the optional dep) reads as no session.
+    """
+    try:
+        session = request.session.get("user")
+    except (AssertionError, AttributeError):
+        session = None  # no SessionMiddleware installed -> treated as no session
+    if not session:
+        return None, ""
+
+    tenant = session.get("tenant_id") if isinstance(session, dict) else None
+    csrf_header = request.headers.get("X-CSRF-Token")
+    csrf_cookie = request.cookies.get("csrf_token")
+    csrf_valid = bool(csrf_header) and csrf_header == csrf_cookie
+    idem_key = request.headers.get("Idempotency-Key", "")
+    principal = _AuthzedRequest(
+        authenticated=True,
+        tenant=tenant,
+        user=session.get("email") if isinstance(session, dict) else session,
+        csrf_valid=csrf_valid,
+    )
+    return principal, idem_key
 
 
 def install_accept_route(
@@ -191,27 +311,9 @@ def install_accept_route(
         if db is None:
             return Response(status_code=503)  # no durable substrate handle -> honest 503
 
-        try:
-            session = request.session.get("user")
-        except (AssertionError, AttributeError):
-            session = None  # no SessionMiddleware installed -> treated as no session
-        if not session:
+        principal, idem_key = _principal_and_key(request)
+        if principal is None:
             return Response(status_code=401)
-
-        # Tenant + CSRF are derived SERVER-SIDE from the session/headers, never a
-        # client-supplied body field.
-        tenant = session.get("tenant_id") if isinstance(session, dict) else None
-        csrf_header = request.headers.get("X-CSRF-Token")
-        csrf_cookie = request.cookies.get("csrf_token")
-        csrf_valid = bool(csrf_header) and csrf_header == csrf_cookie
-        idem_key = request.headers.get("Idempotency-Key", "")
-
-        principal = _AuthzedRequest(
-            authenticated=True,
-            tenant=tenant,
-            user=session.get("email") if isinstance(session, dict) else session,
-            csrf_valid=csrf_valid,
-        )
 
         # The durable connection is acquired from the pool for this one apply.
         async with db.acquire() as aconn:  # noqa: F841 - async pool handle
@@ -235,6 +337,61 @@ def install_accept_route(
                 "kind": resp.kind,
                 "status": resp.applied_status,
                 "bundle_url": resp.bundle_url,
+                "pushed": resp.pushed,
+            },
+            status_code=200,
+        )
+
+
+def install_reject_route(
+    app: "FastAPI", *, dependencies: "list[Any] | None" = None
+) -> None:
+    """Mount POST /m/{meeting_id}/drafts/{draft_id}/reject BEHIND the auth wall.
+
+    The symmetric twin of :func:`install_accept_route` (spec §2.8, CANONICAL §12.9):
+    same ``protected()`` wall (via ``dependencies``), same server-side session/tenant/
+    CSRF derivation, same durable-connection acquire — but it delegates to
+    :func:`handle_reject`, which flips the persisted row to ``rejected`` and applies
+    NOTHING (no notes-edit, no push). A missing substrate handle is an honest 503; an
+    anonymous caller is a fail-closed 401 (defense-in-depth behind the ``protected()``
+    dependency, which already 401/403s an anonymous/tenant-less caller server-side).
+
+    ``dependencies`` declares the §4.6 ``protected()`` wrapper so the route classifies
+    ``protected`` (never ``raw``) and a capability token can NEVER reach it — reject is
+    the other half of the one world-touching pair, and a token grants notes-read only
+    (Law 3). ``app`` is the concrete :class:`fastapi.FastAPI` so the decorator is typed
+    under ``mypy --strict``.
+    """
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse, Response
+
+    @app.post(REJECT_PATH, include_in_schema=True, dependencies=dependencies or [])
+    async def reject_draft_route(meeting_id: str, draft_id: str, request: Request) -> Response:
+        db = getattr(request.app.state, "db", None)
+        if db is None:
+            return Response(status_code=503)  # no durable substrate handle -> honest 503
+
+        principal, idem_key = _principal_and_key(request)
+        if principal is None:
+            return Response(status_code=401)
+
+        async with db.acquire() as aconn:  # noqa: F841 - async pool handle
+            resp = handle_reject(
+                aconn,
+                request=principal,
+                meeting_id=meeting_id,
+                draft_id=draft_id,
+                idempotency_key=idem_key,
+            )
+        if resp.status != 200:
+            return Response(status_code=resp.status)
+        return JSONResponse(
+            {
+                "rejected": resp.rejected,
+                "reject_id": resp.reject_id,
+                "idempotent_replay": resp.idempotent_replay,
+                "kind": resp.kind,
+                "status": resp.applied_status,
                 "pushed": resp.pushed,
             },
             status_code=200,

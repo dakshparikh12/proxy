@@ -154,6 +154,61 @@ def apply_accepted_draft(conn: Any, *, meeting_id: Any, draft_id: Any) -> Applie
     )
 
 
+def reject_staged_draft(conn: Any, *, meeting_id: Any, draft_id: Any) -> AppliedDraft:
+    """Decline a staged draft from its persisted row (post-teardown safe, no-apply).
+
+    Reject is the symmetric twin of :func:`apply_accepted_draft` (§3.16.1, CANONICAL
+    §12.9): it reads the DURABLE ``staged_drafts`` row and flips it to
+    ``status='rejected'`` — but it applies NOTHING (no ``note_deltas`` append for a
+    notes-edit; no push for a code-change: reject is the opposite of a push). It is
+    kind-aware only insofar as a code-change reject still never touches the push seam.
+
+    The DURABLE idempotency belt is the same row-status witness the accept uses: an
+    already-terminal row (``status IN ('applied','rejected')``) is NOT re-written, so a
+    replayed reject is a no-op AND a reject can never un-apply a draft the human already
+    accepted (the ``applied`` state wins — a later reject reports it, never flips it).
+
+    Raises :class:`LookupError` when the draft does not exist. Never reads the dead
+    in-memory review session — proof is ``read_from == 'durable'``.
+    """
+    row = conn.execute(
+        "SELECT artifact_ref, kind, status FROM staged_drafts WHERE draft_id = %s",
+        (draft_id,),
+    ).fetchone()
+    if row is None:
+        raise LookupError(f"no staged draft {draft_id!r}")
+    artifact_ref, kind, row_status = row[0], (row[1] or ""), row[2]
+
+    # DURABLE idempotency/terminal belt: an already-applied OR already-rejected draft
+    # is NOT re-written. A reject NEVER un-applies an applied draft — the terminal row
+    # status is the durable witness (holds even without the route's in-memory ledger).
+    if row_status in ("applied", "rejected"):
+        return AppliedDraft(
+            draft_id=draft_id,
+            ok=bool(artifact_ref),
+            read_from="durable",
+            kind=kind,
+            applied_status=row_status,
+            bundle_url=None,
+            pushed=False,
+            already_applied=True,
+        )
+
+    conn.execute(
+        "UPDATE staged_drafts SET status = 'rejected' WHERE draft_id = %s",
+        (draft_id,),
+    )
+    return AppliedDraft(
+        draft_id=draft_id,
+        ok=bool(artifact_ref),
+        read_from="durable",
+        kind=kind,
+        applied_status="rejected",
+        bundle_url=None,  # a declined draft exposes no bundle
+        pushed=False,  # reject NEVER pushes
+    )
+
+
 def accept_draft(conn: Any, draft_id: Any, *, principal: str) -> AppliedDraft:
     """Backwards-compatible entrypoint — accept a staged draft from the persisted row.
 
