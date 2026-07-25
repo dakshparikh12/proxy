@@ -899,7 +899,7 @@
     "title": "Multi-stage uv Dockerfiles, non-root+HOME, self-migrate with advisory-lock retry",
     "region": "00-FOUNDATION",
     "disposition": "fix",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "00-FOUNDATION.md#9",
       "00-FOUNDATION.md#11"
