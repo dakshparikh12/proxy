@@ -68,3 +68,4 @@ slices/
 # testmon local cache (+ SQLite -wal/-shm sidecars) + SDD scratch ledger
 .testmondata*
 .superpowers/
+build/observability.env

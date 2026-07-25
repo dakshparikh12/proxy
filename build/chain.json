@@ -4912,7 +4912,7 @@
       "title": "Provider seam + AgentChunk normalization + [CRITICAL] tripwire",
       "region": "04-ORCHESTRATOR",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "04-ORCHESTRATOR.md#3.3",
         "04-ORCHESTRATOR.md#3.2",
@@ -4964,7 +4964,7 @@
       "title": "stream_deltas one-arg delta computer (verify)",
       "region": "04-ORCHESTRATOR",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "04-ORCHESTRATOR.md#3.3",
         "CANONICAL-DECISIONS.md#11.3",
@@ -5009,7 +5009,7 @@
       "title": "BehaviorRunner wired to the provider seam + cost/error boundary (verify+extend)",
       "region": "04-ORCHESTRATOR",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "04-ORCHESTRATOR.md#3.4",
         "CANONICAL-DECISIONS.md#12.5",
@@ -5064,7 +5064,7 @@
       "title": "Wake-behaviors as typed BehaviorConfig constants + build-time capability manifest",
       "region": "04-ORCHESTRATOR",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "04-ORCHESTRATOR.md#3.4",
         "CANONICAL-DECISIONS.md#12.5",
@@ -5120,7 +5120,7 @@
       "title": "1-hour-TTL cached wake prefix + state-digest compaction (verify)",
       "region": "04-ORCHESTRATOR",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "04-ORCHESTRATOR.md#3.2",
         "CANONICAL-DECISIONS.md#10.1",
@@ -5164,7 +5164,7 @@
       "title": "The wake turn \u2014 one persistent SDK session, digest in, tool calls out",
       "region": "04-ORCHESTRATOR",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "04-ORCHESTRATOR.md#3.2",
         "04-ORCHESTRATOR.md#3.18",
@@ -5221,7 +5221,7 @@
       "title": "Address detection \u2014 mechanical name-gate + tiny disambiguator",
       "region": "04-ORCHESTRATOR",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "04-ORCHESTRATOR.md#3.1",
         "04-ORCHESTRATOR.md#2"
@@ -5269,7 +5269,7 @@
       "title": "The 0.5s 'on it' ack reflex + boundary/barge-in gating (code, not agent)",
       "region": "04-ORCHESTRATOR",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "04-ORCHESTRATOR.md#2",
         "04-ORCHESTRATOR.md#3.17",
@@ -5320,7 +5320,7 @@
       "title": "Direct-answer path \u2014 grounded lookup answered in the wake turn via host-side code_intel",
       "region": "04-ORCHESTRATOR",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "04-ORCHESTRATOR.md#2",
         "CANONICAL-DECISIONS.md#11.6",
@@ -5375,7 +5375,7 @@
       "title": "Workroom dispatch \u2014 bundle assembly (ask + notes_ref + tail) + completion-callback wake",
       "region": "04-ORCHESTRATOR",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "04-ORCHESTRATOR.md#2",
         "CANONICAL-DECISIONS.md#11.6",
@@ -5615,7 +5615,7 @@
       "title": "Atomic-claim ownership + affinity primitives (verify)",
       "region": "04-ORCHESTRATOR",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "04-ORCHESTRATOR.md#3.6",
         "CANONICAL-DECISIONS.md#2",
@@ -5671,7 +5671,7 @@
       "title": "Heartbeat canonicalization \u2014 operation_runs fence, not Healthchecks (fix)",
       "region": "04-ORCHESTRATOR",
       "disposition": "fix",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "04-ORCHESTRATOR.md#3.7",
         "04-ORCHESTRATOR.md#3.10",
@@ -5723,7 +5723,7 @@
       "title": "Two-tier session durability \u2014 session_id resume + stale-session replay",
       "region": "04-ORCHESTRATOR",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "04-ORCHESTRATOR.md#3.5",
         "CANONICAL-DECISIONS.md#6",
@@ -5781,7 +5781,7 @@
       "title": "Live cost circuit-breaker \u2014 check_meeting_budget with 0.8/1.0 caps (fix)",
       "region": "04-ORCHESTRATOR",
       "disposition": "fix",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "04-ORCHESTRATOR.md#3.13",
         "CANONICAL-DECISIONS.md#12.7",
@@ -5838,7 +5838,7 @@
       "id": "orchestrator.abort-discipline-verify",
       "title": "AbortController discipline \u2014 abort-is-final (verify)",
       "region": "04-ORCHESTRATOR",
-      "disposition": "verify",
+      "disposition": "build-new",
       "status": "pending",
       "spec_refs": [
         "04-ORCHESTRATOR.md#3.11",
@@ -5846,7 +5846,7 @@
       ],
       "requirement_ids": [],
       "criterion_ids": [],
-      "intent": "Verifies the already-built AbortController + AbortRegistry (libs/agentkit/abort.py) against \u00a73.11: every wake turn and dispatched Workroom run is threaded with an abort handle in a dict keyed by meeting_id|task_id; aborting halts the MODEL loop itself (not just ignoring the result \u2014 the SDK would otherwise run to maxTurns=1000, burning budget). Abort is FINAL, never retried \u2014 this is what makes \u00a73.5's stale-session/JSON retry safe. Wired to three triggers: meeting-end (cancel everything), whisper-'stop'/'Proxy, quiet' (cancel the addressed task), and a hard per-task timeout (rescaled to seconds for the interactive loop). Imported from libs/agentkit/abort.py, never redefined (\u00a711.9).",
+      "intent": "[RECLASSIFIED verify\u2192build-new: spine-B fresh verify proved the existing code is a walking-skeleton seam, not a real implementation] Verifies the already-built AbortController + AbortRegistry (libs/agentkit/abort.py) against \u00a73.11: every wake turn and dispatched Workroom run is threaded with an abort handle in a dict keyed by meeting_id|task_id; aborting halts the MODEL loop itself (not just ignoring the result \u2014 the SDK would otherwise run to maxTurns=1000, burning budget). Abort is FINAL, never retried \u2014 this is what makes \u00a73.5's stale-session/JSON retry safe. Wired to three triggers: meeting-end (cancel everything), whisper-'stop'/'Proxy, quiet' (cancel the addressed task), and a hard per-task timeout (rescaled to seconds for the interactive loop). Imported from libs/agentkit/abort.py, never redefined (\u00a711.9).",
       "definition_of_done": "DONE: abort.py's AbortController/AbortRegistry halt the model loop, a new judgment-moment preempts a stale one (make() cancels the prior), cancel_meeting kills all a meeting's tasks, and abort short-circuits before any \u00a73.5 recovery. 'Proxy, quiet' aborts the in-flight turn. NOT done: an abort that only ignores the result, a resurrected aborted build, or a redefined AbortRegistry outside libs/agentkit.",
       "consumes": [
         "ops.AbortRegistry",
@@ -5863,7 +5863,7 @@
       ],
       "integration_point": "libs/agentkit/src/agentkit/abort.py (verified against the harness wake/dispatch/close abort wiring)",
       "acceptance": "WHEN 'Proxy, quiet' or meeting-end fires THE SYSTEM SHALL abort the addressed (or all) in-flight model loops finally, so no aborted build is ever resurrected by resume or JSON-retry.",
-      "acceptance_cmd": "libs/agentkit/tests -k abort or abort_registry",
+      "acceptance_cmd": "tests/doc04 -k \"abort\"",
       "evidence_class": "[unit]",
       "journeys_now_live": [
         "J-09-S4-barge-in-human-control"
@@ -5886,7 +5886,7 @@
       "id": "orchestrator.reconcile-sandbox-verify",
       "title": "Reconcile sweep + ManagedResource sandbox lifecycle + Scheduler (verify)",
       "region": "04-ORCHESTRATOR",
-      "disposition": "verify",
+      "disposition": "build-new",
       "status": "pending",
       "spec_refs": [
         "04-ORCHESTRATOR.md#3.8",
@@ -5896,7 +5896,7 @@
       ],
       "requirement_ids": [],
       "criterion_ids": [],
-      "intent": "Verifies the already-built reconcile sweep + simplified sandbox lifecycle (libs/ops/reconcile.py, sandbox_provider.py, sandbox.py; control_plane/internal.py) against \u00a73.8/\u00a73.9. \u00a73.8: one idempotent run_reconcile_sweep behind POST /internal/reconcile (RECONCILE_TOKEN bearer-gated, outside the auth wall), prod=Cloud Scheduler every 5min / dev=in-process interval calling the SAME function; each step isolated in its own try/except; steps = stale-harnesses (operation_runs reaper), meeting-sandboxes (TTL/orphan reap), notes-retention. \u00a73.9: the per-meeting E2B sandbox as a ManagedResource with THREE defenses and NO state machine (state machine cut per \u00a76) \u2014 E2B-native timeout = crash backstop, explicit destroy on meeting-end, a TTL cron that lists live sandboxes and kills orphans; idempotent provider verbs (provision/destroy-tolerates-404/health); ensure_running is the one race-safe call.",
+      "intent": "[RECLASSIFIED verify\u2192build-new: spine-B fresh verify proved the existing code is a walking-skeleton seam, not a real implementation] Verifies the already-built reconcile sweep + simplified sandbox lifecycle (libs/ops/reconcile.py, sandbox_provider.py, sandbox.py; control_plane/internal.py) against \u00a73.8/\u00a73.9. \u00a73.8: one idempotent run_reconcile_sweep behind POST /internal/reconcile (RECONCILE_TOKEN bearer-gated, outside the auth wall), prod=Cloud Scheduler every 5min / dev=in-process interval calling the SAME function; each step isolated in its own try/except; steps = stale-harnesses (operation_runs reaper), meeting-sandboxes (TTL/orphan reap), notes-retention. \u00a73.9: the per-meeting E2B sandbox as a ManagedResource with THREE defenses and NO state machine (state machine cut per \u00a76) \u2014 E2B-native timeout = crash backstop, explicit destroy on meeting-end, a TTL cron that lists live sandboxes and kills orphans; idempotent provider verbs (provision/destroy-tolerates-404/health); ensure_running is the one race-safe call.",
       "definition_of_done": "DONE: run_reconcile_sweep runs the three isolated steps idempotently behind the token-gated /internal/reconcile; ensure_running provisions a cold meeting's sandbox once (race-safe) and returns the existing one on a redelivered join; an ended meeting's sandbox is destroyed by close and, failing that, by the cron/E2B timeout; no provisioning/running/stopped/failed state machine survives. NOT done: a non-idempotent sweep, a re-provision on redelivery, a surviving state machine, or /internal/reconcile inside the auth wall.",
       "consumes": [
         "ops.reconcile",
@@ -5914,7 +5914,7 @@
       ],
       "integration_point": "libs/ops/src/ops/reconcile.py + libs/ops/src/ops/sandbox_provider.py + libs/ops/src/ops/sandbox.py, entrypoint services/harness/src/control_plane/internal.py",
       "acceptance": "WHEN /internal/reconcile is hit (Scheduler or dev interval) THE SYSTEM SHALL run the three isolated idempotent steps; WHEN a cold meeting starts THE SYSTEM SHALL provision its sandbox exactly once (race-safe) and destroy it at close or via the TTL cron.",
-      "acceptance_cmd": "libs/ops/tests -k reconcile or sandbox_lifecycle and services/harness/tests -k internal_reconcile",
+      "acceptance_cmd": "tests/doc04 -k \"reconcile or sandbox\"",
       "evidence_class": "[integration]",
       "journeys_now_live": [
         "J-09-one-operation-runs",
@@ -6065,7 +6065,7 @@
       "title": "Server boot ordering + settings gate + emit frontier + join/webhook seams (verify)",
       "region": "04-ORCHESTRATOR",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "04-ORCHESTRATOR.md#3",
         "04-ORCHESTRATOR.md#3.15",
@@ -6138,7 +6138,7 @@
       "title": "Session-scoped preferences (shorter answers / stop posting decision notes) via the session-state digest",
       "region": "04-ORCHESTRATOR",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "08-EXPERIENCE.md#2.4",
         "04-ORCHESTRATOR.md#3.2"
@@ -6319,7 +6319,7 @@
       "title": "Conversational wake-behaviors (catch-me-up / where-are-we / dry-run / show-your-work / capability-answer)",
       "region": "04-ORCHESTRATOR",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "08-EXPERIENCE.md#2.4"
       ],
