@@ -45,27 +45,43 @@ status. See `chain.schema.json` for the authoritative field list; the short vers
   `build/gates/verify-node.sh`), `evidence_class`, `journeys_now_live` (the cumulative product
   state true after this node — each id ∈ `build/journeys.json`).
 - **Build guidance:** `codebase_anchors`, `invariants`, `risks`, `human_gated`.
-- **Status:** `not-built` | `built:needs-verification` | `verified`.
+- **Disposition + status:** `disposition` (`verify`|`fix`|`rebuild`|`build-new`, plan-time) +
+  `status` (`pending`|`verified`|`blocked`, execution-time).
 
 Node granularity: a node is right-sized when it has **exactly one testable acceptance
 criterion**, fits **one build session** (`/clear` boundary), and touches a **file set disjoint
 from its siblings**. Too big to verify in one pass → split; no independent criterion → merge.
-**Every node cites ≥1 sealed criterion** — there are no criterion-less nodes; a wiring/journey
-node cites the relevant cross-cutting or Doc-09 journey criterion (Doc-09 is sealed like any
-other doc, its criteria being the integration journeys). This keeps Tier-A A1 uniform.
+**Every node cites its spec source** (`spec_refs`, ≥1) — the spec is the definition of done.
+Nodes in already-built docs (00–03) also cite their existing `criterion_ids` (the tests we
+verify against); 04–09 nodes are judged against their cited spec sections directly. **No criteria
+are generated or "sealed"** — the fresh critic (Tier B) proves coverage against the spec.
+
+**Each node carries a `disposition`** stamped by the code-vs-spec audit at plan time — the
+expected starting action, so the plan shows what is kept vs built:
+- `verify` — code exists and looks right → run its real test; keep if green.
+- `fix` — code exists with a known defect → targeted fix + verify.
+- `rebuild` — code exists but is fundamentally wrong → rip out + build fresh.
+- `build-new` — no code → TDD build from scratch.
+The build loop is the same for all four: run the node's real test on real data → green +
+reviewer-OK → done; else make it green. Disposition is a planning label, not a separate path.
 
 ## 3. Completeness — proving the chain IS the whole product
 Four tiers, decreasing mechanical certainty, increasing subtlety. This is the guarantee that
 "every node done ⇒ fully working Proxy," down to the wiring.
 
 - **Tier A — mechanical closure** (`check_completeness.py`, deterministic, un-driftable):
-  1. **Requirement closure (both ways):** every sealed criterion (`acceptance/doc*/…`) is
-     cited by ≥1 node, and every node cites ≥1 real criterion. No gaps, no scope creep.
+  1. **Existing-test closure:** every existing sealed criterion (00–03, `acceptance/doc*/…`) is
+     cited by ≥1 node (no existing test is dropped); every node traces to a criterion OR a
+     `spec_ref` (no untraceable nodes). 04–09 coverage is proven by Tier B against the spec.
   2. **Wiring closure:** every `consumes` is produced by an earlier `exposes` (or a declared
      external input); every `exposes` is consumed by someone (or a declared product endpoint).
-     A dangling consumer = the "routes-together" gap; a dangling producer = dead code.
+     A dangling consumer = the "routes-together" gap; a dangling producer = dead wiring.
   3. **Journey closure:** every Doc-09 integration journey (enumerated into `build/journeys.json`)
      maps step-by-step onto nodes.
+  4. **Reverse-map (no dead code):** every product source file under `services/*/src` +
+     `libs/*/src` is claimed by ≥1 node's `codebase_anchors`. An unclaimed existing file = dead
+     code / old-process scope-creep → surfaced at HALT 1 (remove or add a node); zero orphans is
+     enforced at Phase-3 sign-off (`--final`).
 - **Tier B — semantic critic** (fresh agent): hunts *implicit* obligations Tier A can't see
   (implied but never stated) and weak/untestable nodes. Loops to zero.
 - **Tier C — human HALT:** you are the backstop for the truly-unstated. The one gap no
@@ -81,18 +97,20 @@ Four tiers, decreasing mechanical certainty, increasing subtlety. This is the gu
 
 ## 4. The phases
 **Phase 1 — Plan.** Fresh readers (one per region; the Doc-09 reader also writes
-`build/journeys.json`) read spec + code → unsealed docs **04/05/08/09** get their acceptance
-bundle sealed (**HALT 1b**, human-gated, committed before synthesis) → lead authors + schema-
-validates `chain.json` → Tier A must exit 0 → Tier B loops to zero → Tier D corpus traced →
-**HALT 1** (you approve the chain + closure report + `decisions.md` + scenario coverage).
+`build/journeys.json`) read spec + code → the lead runs a **code-vs-spec audit** stamping each
+node's disposition (verify/fix/rebuild/build-new) → lead authors + schema-validates `chain.json`
+(nodes cite spec_refs; 00–03 also cite existing criterion_ids) → Tier A must exit 0 (incl. the
+reverse-map orphan list) → Tier B loops to zero → Tier D corpus traced → **HALT 1** (you approve
+the chain + closure report + the orphan-file/dead-wiring list + `decisions.md` + scenario
+coverage). No criteria-sealing step; the spec is the source of truth.
 
 **Phase 2 — Build.** Walk the chain in order. Per node: **PLAN** (builder reads node → cited
 spec → codebase → plan) → **BUILD** (TDD on the real path) → **INTEGRATE** (wire into the live
 product at `integration_point`) → **VERIFY (fresh context)** (independent reviewer given only
 the node's DoD + cumulative `journeys_now_live` confirms: node green on real data, new journeys
 green, no prior regression, invariants intact — evidence shown) → **ADVANCE** (flip `verified`,
-commit, `/clear`, next). `built:needs-verification` nodes skip PLAN/BUILD and go straight to a
-fast VERIFY. Optional HALT at each region boundary.
+commit, `/clear`, next). `verify`-disposition nodes skip PLAN/BUILD and go straight to a fast
+VERIFY. Optional HALT at each region boundary.
 
 **Phase 3 — Sign-off.** Because every node was integrated + verified as it landed, this is one
 whole-product pass: `build/gates/signoff.sh` (ruff + mypy --strict + bandit + full offline suite,
@@ -100,13 +118,14 @@ self-contained) + the full scenario corpus + Doc-09 journeys on real infra + dee
 → **HALT** (final).
 
 ## 5. Absorbing existing work (00–03) — no lost progress, no slow re-audit
-The chain covers the whole product; existing code pre-populates the already-built nodes. In
-Phase 1 the readers map real files onto nodes and seed `status`:
-- **00, 01** are production-verified — start `built:needs-verification`; Phase 2 gives them a
-  fast *confirmation* run (still green, still integrated), **not** a rebuild.
-- **02, 03** are substantially built — start `built:needs-verification`; Phase 2 verifies each
-  node against the existing code; anything red or missing (e.g. the inbound-chat gap) gets the
-  full 5-step loop, node-scoped.
+The chain covers the whole product; existing code pre-populates nodes via their `disposition`. In
+Phase 1 the audit maps real files onto nodes and stamps disposition:
+- **00, 01** are production-verified — `disposition: verify`; Phase 2 gives them a fast
+  *confirmation* run (still green, still integrated), **not** a rebuild.
+- **02, 03** are substantially built — mostly `verify`, with `fix` on known defects; Phase 2
+  proves each node against the existing code, node-scoped.
+- Nothing is trusted on the old flag: `verify` still means re-prove on real data, and a node that
+  fails becomes `fix`/`rebuild`. The reverse-map (A4) surfaces any file no node claims.
 Verification is **per node + scenario-scoped**, not doc-level re-auditing — that is why this is
 fast, unlike the prior hours-long verify pass.
 

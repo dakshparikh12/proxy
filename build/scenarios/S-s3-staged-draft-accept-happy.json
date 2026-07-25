@@ -1,0 +1,24 @@
+{
+  "id": "S-s3-staged-draft-accept-happy",
+  "kind": "journey",
+  "spec_refs": [
+    "09-VERIFICATION.md#3",
+    "05-WORKROOM.md#3.7",
+    "05-WORKROOM.md#3.8",
+    "04-ORCHESTRATOR.md#3.16.1"
+  ],
+  "given": "Proxy is handed real multi-file work in a meeting and provisions its Workroom sandbox.",
+  "when": "Proxy builds the change, runs the verify gate, and stages it via propose_change; the human clicks accept AFTER the meeting tears down.",
+  "then": "The draft persists to staged_drafts + GCS at creation; 'verified' only past the separate fresh-context critic + deterministic evidence gate; the post-teardown accept reads the durable row and applies it.",
+  "touches_nodes": [
+    "workroom.plan-step",
+    "workroom.sequential-build",
+    "workroom.verify-gate",
+    "workroom.propose-change",
+    "workroom.drafts-persist-verify",
+    "orchestrator.accept-handler",
+    "experience.draft-accept-reject-routes",
+    "journey.s3-staged-draft-accept"
+  ],
+  "journey_id": "J-09-S3-staged-draft-accept"
+}

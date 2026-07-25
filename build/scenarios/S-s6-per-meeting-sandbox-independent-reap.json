@@ -1,0 +1,18 @@
+{
+  "id": "S-s6-per-meeting-sandbox-independent-reap",
+  "kind": "edge",
+  "spec_refs": [
+    "09-VERIFICATION.md#3",
+    "05-WORKROOM.md#3.9"
+  ],
+  "given": "One of several concurrent meetings ends while others continue.",
+  "when": "The ended meeting's sandbox is torn down.",
+  "then": "Only that meeting's sandbox is reaped; the other meetings' sandboxes are untouched and keep running \u2014 lifecycle is per-meeting, not shared.",
+  "touches_nodes": [
+    "workroom.sandbox-provision-verify",
+    "orchestrator.reconcile-sandbox-verify",
+    "orchestrator.bundle-dispatch",
+    "journey.s6-concurrency"
+  ],
+  "journey_id": "J-09-S6-concurrency"
+}

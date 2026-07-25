@@ -1,0 +1,19 @@
+{
+  "id": "S-contract-registry-closed-happy",
+  "kind": "journey",
+  "spec_refs": [
+    "09-VERIFICATION.md#2",
+    "00-FOUNDATION.md#12",
+    "08-EXPERIENCE.md#4.1"
+  ],
+  "given": "The full MessageType enum and CHANNEL_REGISTRY are both loaded at boot.",
+  "when": "assert_registry_closed() runs in CI and again at process boot.",
+  "then": "set(MessageType) == set(CHANNEL_REGISTRY) exactly (signal-surface types excluded per CANONICAL \u00a711.8); boot proceeds.",
+  "touches_nodes": [
+    "foundation.contracts-registry",
+    "foundation.ci-guards",
+    "experience.contract-registry",
+    "journey.registry-closed"
+  ],
+  "journey_id": "J-09-registry-closed"
+}

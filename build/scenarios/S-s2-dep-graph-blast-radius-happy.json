@@ -1,0 +1,20 @@
+{
+  "id": "S-s2-dep-graph-blast-radius-happy",
+  "kind": "journey",
+  "spec_refs": [
+    "09-VERIFICATION.md#3",
+    "01-CODE-INTELLIGENCE.md#3.4",
+    "01-CODE-INTELLIGENCE.md#3.5"
+  ],
+  "given": "Proxy is in an architecture meeting with a ready index for the connected repo.",
+  "when": "'What breaks if we change the users table?' is asked out loud.",
+  "then": "Proxy answers from the dependency/call graph in ~1 tool call (get_dependents/who_writes), grounded in file:line, honest about coverage \u2014 no E2B sandbox spun.",
+  "touches_nodes": [
+    "codeintel.substrate_graph",
+    "codeintel.mcp_tools",
+    "codeintel.direct_answer",
+    "orchestrator.direct-answer-path",
+    "journey.s2-dep-graph-blast-radius"
+  ],
+  "journey_id": "J-09-S2-dep-graph-blast-radius"
+}

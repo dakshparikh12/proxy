@@ -1,0 +1,1277 @@
+[
+  {
+    "id": "foundation.contracts-registry",
+    "title": "Typed contracts + import-time closed registry",
+    "region": "00-FOUNDATION",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "00-FOUNDATION.md#2",
+      "00-FOUNDATION.md#12",
+      "CANONICAL-DECISIONS.md#1.2"
+    ],
+    "requirement_ids": [
+      "R-DOC00-2-01",
+      "R-DOC00-2-02",
+      "R-DOC00-2-03",
+      "R-DOC00-2-06",
+      "R-DOC00-2-07",
+      "R-DOC00-2-08",
+      "R-DOC00-2-09",
+      "R-DOC00-2-12",
+      "R-DOC00-2-16",
+      "R-DOC00-2-17",
+      "R-DOC00-12-01",
+      "R-DOC00-12-02",
+      "R-DOC00-12-03",
+      "R-DOC00-12-04"
+    ],
+    "criterion_ids": [
+      "AC-CMP-002",
+      "AC-CMP-003",
+      "AC-CMP-006",
+      "AC-CMP-007",
+      "AC-CMP-008",
+      "AC-CMP-009",
+      "AC-CMP-011",
+      "AC-CMP-012",
+      "AC-CMP-016",
+      "AC-CMP-017",
+      "AC-REG-001",
+      "AC-REG-002",
+      "AC-REG-003",
+      "AC-REG-004",
+      "AC-REG-005"
+    ],
+    "intent": "Realizes the seam spine: every 04<->05 and 03->04 wire shape is a Pydantic model in libs/contracts (Bundle, Envelope, NoteOp, Readiness, ChannelReport, material-change events) and a ProxyMessage self-registers on definition so assert_registry_closed() proves the MessageType enum and CHANNEL_REGISTRY are set-equal \u2014 the spec's 'a produced-but-unconsumed field is a build error, not a style choice' (\u00a72/\u00a712) made structural, not a manual audit. Signal-surface events stay out of the client registry per CANONICAL \u00a711.8.",
+    "definition_of_done": "Every contract model has EXACTLY its canonical field/member set (Bundle notes_ref:UUID handle; EnvelopeStatus 5-member; NoteOp {add,patch,close}; Readiness minus 'mapping'; dm_available:bool; material-change 7 kinds), every id is UUID / free-text bounded / selector Literal, and assert_registry_closed() passes on the consistent registry AND raises on an injected orphan. NOT done if a field set drifts, 'verified'/'draft' appear as status values, or the closure is only asserted at boot but not exposed to CI.",
+    "consumes": [],
+    "exposes": [
+      "contracts.Bundle",
+      "contracts.Envelope",
+      "contracts.NoteOp",
+      "contracts.Readiness",
+      "contracts.ChannelReport",
+      "contracts.registry"
+    ],
+    "depends_on": [],
+    "integration_point": "libs/contracts/src/contracts/ (imported by every service; registry validated in the libs/http dispatch funnel and at boot)",
+    "acceptance": "WHEN a ProxyMessage subclass is defined and assert_registry_closed() runs THE SYSTEM SHALL register it under its type discriminator and prove MessageType == CHANNEL_REGISTRY, raising on any produced-but-unconsumed type.",
+    "acceptance_cmd": "tests/doc00/test_m00_cmp.py tests/doc00/test_m10_reg.py -k 'cmp_002 or cmp_003 or cmp_006 or cmp_007 or cmp_008 or cmp_009 or cmp_012 or cmp_016 or cmp_017 or reg'",
+    "evidence_class": "[contract]",
+    "journeys_now_live": [
+      "J-09-registry-closed",
+      "J-09-contracts-resolve"
+    ],
+    "codebase_anchors": [
+      "libs/contracts/src/__init__.py",
+      "libs/contracts/src/contracts/__init__.py",
+      "libs/contracts/src/contracts/bundle.py",
+      "libs/contracts/src/contracts/channels.py",
+      "libs/contracts/src/contracts/envelopes.py",
+      "libs/contracts/src/contracts/material_change.py",
+      "libs/contracts/src/contracts/notes.py",
+      "libs/contracts/src/contracts/readiness.py",
+      "libs/contracts/src/contracts/registry.py"
+    ],
+    "invariants": [
+      "closed-graph: produced-but-unconsumed message/field fails the build (assert_registry_closed)",
+      "status enum is canonical \u2014 verified/draft are never status members",
+      "signal-surface events are out of the client-registry closure scope (CANONICAL \u00a711.8)"
+    ],
+    "risks": [
+      "MessageType is an Enum so get_args() is () \u2014 closure must compare enum VALUES (09-VERIFICATION:16), not the stale get_args form in 00-FOUNDATION",
+      "adding a client message without a consumer must fail, not silently pass"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "foundation.agentchunk-behavior",
+    "title": "AgentChunk union + stream_deltas + BehaviorRunner + never-throw tools",
+    "region": "00-FOUNDATION",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "00-FOUNDATION.md#2",
+      "00-FOUNDATION.md#14",
+      "CANONICAL-DECISIONS.md#12.5"
+    ],
+    "requirement_ids": [
+      "R-DOC00-2-04",
+      "R-DOC00-2-05",
+      "R-DOC00-2-13",
+      "R-DOC00-2-14",
+      "R-DOC00-2-15",
+      "R-DOC00-2-10",
+      "R-DOC00-14-03"
+    ],
+    "criterion_ids": [
+      "AC-CMP-004",
+      "AC-CMP-005",
+      "AC-CMP-013",
+      "AC-CMP-014",
+      "AC-CMP-015",
+      "AC-CMP-010",
+      "AC-CON-003"
+    ],
+    "intent": "Realizes the normalized SDK stream contract: the 6-variant AgentChunk union (discriminator 'type', RESULT carrying total_cost_usd \u2014 the cost-meter's source contract), the stream_deltas delta-izer applied EXACTLY ONCE inside BehaviorRunner.run() over typed Python BehaviorConfig constants (no YAML), and the never-throw tool boundary. This is the \u00a72 'agent chunk \u2014 one stream, projected per channel' plus the \u00a714 'every tool handler returns errors, never throws' hard rule; abort/resume/provider-seam are defined once here (DRY, \u00a72).",
+    "definition_of_done": "ChunkType == {INIT,TEXT,TOOL_USE,TOOL_RESULT,RESULT,ERROR} with 'type' (not 'kind'); each variant's metadata keys are canonical and RESULT carries total_cost_usd; stream_deltas has exactly one call site (in BehaviorRunner.run), yields per-msg_id suffix deltas, resets on new msg_id, passes non-TEXT through unchanged, and double-application corrupts (exactly-once is semantic); every tool handler returns an error result under injected faults and never raises. NOT done if a consumer re-wraps stream_deltas, behaviors are loaded from YAML, or a handler propagates an exception.",
+    "consumes": [
+      "contracts.registry"
+    ],
+    "exposes": [
+      "contracts.AgentChunk",
+      "agentkit.BehaviorRunner",
+      "agentkit.stream_deltas",
+      "agentkit.tools"
+    ],
+    "depends_on": [
+      "foundation.contracts-registry"
+    ],
+    "integration_point": "libs/agentkit/src/agentkit/execution.py (BehaviorRunner.run \u2014 the sole stream_deltas site) + libs/contracts/src/contracts/chunks.py",
+    "acceptance": "WHEN a scripted AgentChunk stream is passed once through BehaviorRunner.run() THE SYSTEM SHALL emit per-msg_id suffix TEXT deltas, pass INIT/TOOL_USE/TOOL_RESULT/RESULT/ERROR through unchanged, and surface RESULT.metadata['total_cost_usd'] with stream_deltas applied exactly once.",
+    "acceptance_cmd": "tests/doc00/test_m00_cmp.py -k 'cmp_004 or cmp_005 or cmp_013 or cmp_014 or cmp_015 or cmp_010' ; tests/doc00/test_m12_con.py -k con_003",
+    "evidence_class": "[model-stateful]",
+    "journeys_now_live": [
+      "J-09-agentchunk-stream-deltas"
+    ],
+    "codebase_anchors": [
+      "libs/contracts/src/contracts/chunks.py",
+      "libs/agentkit/src/__init__.py",
+      "libs/agentkit/src/agentkit/__init__.py",
+      "libs/agentkit/src/agentkit/deltas.py",
+      "libs/agentkit/src/agentkit/execution.py",
+      "libs/agentkit/src/agentkit/config.py",
+      "libs/agentkit/src/agentkit/tools.py",
+      "libs/agentkit/src/agentkit/wake_cache.py",
+      "libs/agentkit/src/agentkit/abort.py",
+      "libs/agentkit/src/agentkit/resume.py"
+    ],
+    "invariants": [
+      "stream_deltas applied exactly once inside BehaviorRunner.run() \u2014 downstream MUST NOT re-wrap",
+      "behaviors are typed Python BehaviorConfig constants \u2014 no YAML registry/loader/schema in core",
+      "every tool handler returns errors, never throws (libs.agentkit.tools never-throw boundary)"
+    ],
+    "risks": [
+      "a second stream_deltas over its own output silently corrupts deltas \u2014 the guard must catch double-wrap",
+      "RESULT metadata missing total_cost_usd breaks the whole cost meter"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "foundation.repo-structure",
+    "title": "uv-workspace monorepo skeleton (src-layout, three deployables shape)",
+    "region": "00-FOUNDATION",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "00-FOUNDATION.md#2",
+      "00-FOUNDATION.md#3",
+      "CANONICAL-DECISIONS.md#9"
+    ],
+    "requirement_ids": [
+      "R-DOC00-2-01",
+      "R-DOC00-3-01",
+      "R-DOC00-3-02",
+      "R-DOC00-3-03",
+      "R-DOC00-3-04",
+      "R-DOC00-3-05",
+      "R-DOC00-3-06",
+      "R-DOC00-3-07",
+      "R-DOC00-3-08",
+      "R-DOC00-3-09"
+    ],
+    "criterion_ids": [
+      "AC-CMP-001",
+      "AC-REPO-001",
+      "AC-REPO-002",
+      "AC-REPO-003",
+      "AC-REPO-004",
+      "AC-REPO-005",
+      "AC-REPO-006",
+      "AC-REPO-007",
+      "AC-REPO-008",
+      "AC-REPO-009"
+    ],
+    "intent": "Realizes \u00a73 'the repository, built first': one root pyproject.toml with a members glob + one shared uv.lock, every package src-layout, services/ = the six mechanism packages as importable code (not network services) deploying as three deployables, libs/ = exactly the six focused single-concern packages (no libs/code_intel or libs/transport, no god-package), apps/* Vite/pnpm and excluded from uv sync. This is the structural spine everything else fills in.",
+    "definition_of_done": "One root pyproject with the members glob + one uv.lock; every services/* and libs/* uses src/<pkg>/; one requires-python; each member declares its imports explicitly; services/=={harness,code_intel,transport,scribe,workroom}; libs/=={contracts,db,llm,agentkit,ops,http}; apps/{connect,tile} present and NOT in the uv members glob; prod images use uv sync --package <svc> --no-editable. NOT done if a lockfile-per-package appears, a flat-layout package exists, or libs gains a god-package.",
+    "consumes": [],
+    "exposes": [],
+    "depends_on": [],
+    "integration_point": "pyproject.toml (root) + uv.lock + services/*/pyproject.toml + libs/*/pyproject.toml + apps/ pnpm workspace",
+    "acceptance": "WHEN the repo tree and workspace config are enumerated THE SYSTEM SHALL show one root pyproject+uv.lock, src-layout everywhere, services/=={harness,code_intel,transport,scribe,workroom}, libs/=={contracts,db,llm,agentkit,ops,http}, and apps/* excluded from uv sync.",
+    "acceptance_cmd": "tests/doc00/test_m01_repo.py ; tests/doc00/test_m00_cmp.py -k cmp_001",
+    "evidence_class": "[static]",
+    "journeys_now_live": [],
+    "codebase_anchors": [
+      "pyproject.toml",
+      "uv.lock"
+    ],
+    "invariants": [
+      "one shared uv.lock \u2014 never a per-package lockfile",
+      "libs/ never a god-package; service-internal code stays under services/ (no libs/code_intel|transport)",
+      "apps/* is pnpm/Vite and outside the uv workspace"
+    ],
+    "risks": [
+      "uv does not prevent importing an undeclared transitive dep \u2014 declare every dep explicitly",
+      "editable install in a prod image breaks self-containment"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "foundation.substrate-schema",
+    "title": "The broker-free durable substrate \u2014 schema (operation_runs, cost, drafts, identity, transcript)",
+    "region": "00-FOUNDATION",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "00-FOUNDATION.md#5",
+      "00-FOUNDATION.md#5.6",
+      "00-FOUNDATION.md#5.7",
+      "CANONICAL-DECISIONS.md#2",
+      "CANONICAL-DECISIONS.md#11.1",
+      "CANONICAL-DECISIONS.md#12.10"
+    ],
+    "requirement_ids": [
+      "R-DOC00-5-01",
+      "R-DOC00-5-02",
+      "R-DOC00-5-16",
+      "R-DOC00-5-17",
+      "R-DOC00-5-18",
+      "R-DOC00-5-19",
+      "R-DOC00-5-20",
+      "R-DOC00-5-24",
+      "R-DOC00-5-26",
+      "R-INV-09"
+    ],
+    "criterion_ids": [
+      "AC-SUB-001",
+      "AC-SUB-002",
+      "AC-SUB-003",
+      "AC-SUB-022",
+      "AC-SUB-024",
+      "AC-SUB-025",
+      "AC-SUB-027",
+      "AC-SUB-029",
+      "AC-SUB-030",
+      "AC-SUB-034",
+      "AC-SUB-037",
+      "AC-TEN-001"
+    ],
+    "intent": "Realizes \u00a75.6 the minimal crash-safe durable footprint (reject the table zoo): ONE operation_runs row (canonical columns + the partial-unique-on-running index) is the universal durable unit \u2014 workroom tasks and meeting-close are operation_type variants, NOT new tables; meeting_cost, staged_drafts, webhook_events, transcript_segments, and the \u00a75.7 identity tables {tenants,users,repos,meetings,sessions} complete the set. Every tenant-scoped table reaches tenant_id (meeting_cost/staged_drafts via a DECLARED meeting_id REFERENCES meetings(id) FK per A-009).",
+    "definition_of_done": "operation_runs has exactly the canonical column set with the partial unique index WHERE status='running' (2nd running insert for (S,T) fails; a completed row does NOT block re-claim) and status constrained to {running,completed,failed,interrupted}; meeting_cost + staged_drafts carry the canonical columns and a meeting_id uuid REFERENCES meetings(id) FK; webhook_events dedupes by delivery_guid; transcript_segments.status DEFAULTs 'pending'; the five identity tables exist with tenant_id; NO meeting_harness/workroom_tasks/close_jobs/meeting_events tables. NOT done if any column drifts, the FK-to-meetings is missing, or a redundant table appears.",
+    "consumes": [],
+    "exposes": [
+      "substrate.operation_runs",
+      "substrate.meeting_cost",
+      "substrate.staged_drafts",
+      "substrate.webhook_events",
+      "substrate.transcript_segments"
+    ],
+    "depends_on": [
+      "foundation.repo-structure"
+    ],
+    "integration_point": "migrations/versions/0001_substrate.py + 0002_note_deltas.py + 0003_tenant_id_everywhere.py + 0004_doc03_note_store_v33.py",
+    "acceptance": "WHEN the migrated Postgres schema is introspected THE SYSTEM SHALL show operation_runs with its canonical columns + partial-unique-on-running index, meeting_cost/staged_drafts with a meeting_id REFERENCES meetings(id) FK, the five identity tables carrying tenant_id, and NO meeting_harness/workroom_tasks/close_jobs/meeting_events table.",
+    "acceptance_cmd": "tests/doc00/test_m03_sub.py -k 'sub_001 or sub_002 or sub_003 or sub_022 or sub_024 or sub_025 or sub_027 or sub_029 or sub_030 or sub_034 or sub_037' ; tests/doc00/test_m15_ten.py -k ten_001",
+    "evidence_class": "[contract]",
+    "journeys_now_live": [
+      "J-09-one-operation-runs"
+    ],
+    "codebase_anchors": [
+      "migrations/versions/0001_substrate.py",
+      "migrations/versions/0002_note_deltas.py",
+      "migrations/versions/0003_tenant_id_everywhere.py",
+      "migrations/versions/0004_doc03_note_store_v33.py"
+    ],
+    "invariants": [
+      "one operation_runs table is the universal durable unit \u2014 no meeting_harness/workroom_tasks/close_jobs/meeting_events tables (reject the table zoo)",
+      "tenant_id reachable from every tenant-scoped table (cross-tenant read = P0 breach)",
+      "operation_runs.scope_id stays text; every meeting_id column is uuid"
+    ],
+    "risks": [
+      "the partial unique index MUST be predicated WHERE status='running' \u2014 a full unique index would block legitimate re-claim (AC-SUB-003)",
+      "meeting_cost/staged_drafts must declare the meetings FK explicitly (A-009) or AC-TEN-001 cannot hold"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "foundation.substrate-runtime",
+    "title": "The durable substrate \u2014 runtime (with_operation_run, fencing, atomic claim, reconcile, sandbox lifecycle)",
+    "region": "00-FOUNDATION",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "00-FOUNDATION.md#5.1",
+      "00-FOUNDATION.md#5.2",
+      "00-FOUNDATION.md#5.3",
+      "00-FOUNDATION.md#5.4",
+      "00-FOUNDATION.md#5.5",
+      "CANONICAL-DECISIONS.md#6",
+      "CANONICAL-DECISIONS.md#12.10"
+    ],
+    "requirement_ids": [
+      "R-DOC00-5-03",
+      "R-DOC00-5-04",
+      "R-DOC00-5-05",
+      "R-DOC00-5-06",
+      "R-DOC00-5-07",
+      "R-DOC00-5-08",
+      "R-DOC00-5-09",
+      "R-DOC00-5-10",
+      "R-DOC00-5-11",
+      "R-DOC00-5-12",
+      "R-DOC00-5-13",
+      "R-DOC00-5-14",
+      "R-DOC00-5-15",
+      "R-DOC00-5-16",
+      "R-DOC00-5-17",
+      "R-DOC00-5-18",
+      "R-DOC00-5-23",
+      "R-DOC00-5-25",
+      "R-DOC00-5-27"
+    ],
+    "criterion_ids": [
+      "AC-SUB-004",
+      "AC-SUB-005",
+      "AC-SUB-006",
+      "AC-SUB-007",
+      "AC-SUB-008",
+      "AC-SUB-009",
+      "AC-SUB-010",
+      "AC-SUB-011",
+      "AC-SUB-012",
+      "AC-SUB-013",
+      "AC-SUB-014",
+      "AC-SUB-015",
+      "AC-SUB-016",
+      "AC-SUB-017",
+      "AC-SUB-018",
+      "AC-SUB-019",
+      "AC-SUB-020",
+      "AC-SUB-021",
+      "AC-SUB-023",
+      "AC-SUB-026",
+      "AC-SUB-028",
+      "AC-SUB-033",
+      "AC-SUB-035",
+      "AC-SUB-036",
+      "AC-SUB-038"
+    ],
+    "intent": "Realizes \u00a75.1-5.5 crash-durability without a broker via three Postgres primitives: with_operation_run heartbeats a running row (and bump_activity keeps the sandbox alive during silent work); the heartbeat IS the fence (rowcount 0 => reclaimed => is_owner=False, self-terminate, every emit verb gates on is_owner so a zombie can't double-speak); the atomic claim (INSERT ON CONFLICT DO NOTHING RETURNING id, created_by=instance-id) is the sole cross-process coordinator; run_reconcile_sweep + the three-guard sandbox lifecycle (E2B timeout + explicit destroy + TTL reconcile, no ManagedResource FSM, no warm pool) prevent leaks; recycled orchestrator reloads meeting_cost, never resets to 0.",
+    "definition_of_done": "with_operation_run inserts running + heartbeats + completes/fails; a stale row sweeps to interrupted lazily and at boot; the fencing UPDATE keeps ownership at rowcount 1 and drops it at 0; the FULL emit frontier {speak,send_chat,show_screen,apply,dispatch} gates on is_owner (incl. show_screen); the atomic claim yields exactly one owner under concurrency and populates created_by; sandbox has only {provision,destroy,health_check} + the triple guard + no warm pool; run_reconcile_sweep is idempotent and token-gated; a recycled orchestrator reloads spent cost. NOT done if any emit verb bypasses is_owner, a broker/in-memory cross-process lock appears, or cost resets to 0 on recycle.",
+    "consumes": [
+      "substrate.operation_runs",
+      "substrate.meeting_cost",
+      "substrate.staged_drafts",
+      "substrate.webhook_events"
+    ],
+    "exposes": [
+      "ops.claim_meeting",
+      "ops.with_meeting_lock",
+      "ops.AbortRegistry",
+      "ops.resume_with_fallback",
+      "ops.sandbox_provider",
+      "ops.reconcile"
+    ],
+    "depends_on": [
+      "foundation.substrate-schema",
+      "foundation.agentchunk-behavior"
+    ],
+    "integration_point": "libs/ops/src/ops/operation_run.py + claim.py + reconcile.py + sandbox_provider.py (wired into services/harness meeting_runtime + webhooks)",
+    "acceptance": "WHEN an operation is entered via with_operation_run and its row is later reclaimed THE SYSTEM SHALL heartbeat+bump_activity while owner, and on fencing rowcount 0 set is_owner=False, self-terminate, and refuse every emit verb {speak,send_chat,show_screen,apply,dispatch}.",
+    "acceptance_cmd": "tests/doc00/test_m03_sub.py -k 'sub_004 or sub_005 or sub_006 or sub_007 or sub_008 or sub_009 or sub_010 or sub_011 or sub_012 or sub_013 or sub_014 or sub_015 or sub_016 or sub_017 or sub_018 or sub_019 or sub_020 or sub_021 or sub_023 or sub_026 or sub_028 or sub_033 or sub_035 or sub_036 or sub_038'",
+    "evidence_class": "[model-stateful]",
+    "journeys_now_live": [
+      "J-09-one-operation-runs",
+      "J-09-cost-drafts-persist",
+      "J-09-S5-recycle-survives"
+    ],
+    "codebase_anchors": [
+      "libs/ops/src/__init__.py",
+      "libs/ops/src/ops/__init__.py",
+      "libs/ops/src/ops/operation_run.py",
+      "libs/ops/src/ops/claim.py",
+      "libs/ops/src/ops/reconcile.py",
+      "libs/ops/src/ops/sandbox_provider.py",
+      "libs/ops/src/ops/sandbox.py",
+      "libs/ops/src/ops/cost.py",
+      "libs/ops/src/ops/affinity.py"
+    ],
+    "invariants": [
+      "cross-process coordination = Postgres atomic claim / advisory lock \u2014 never an in-memory lock, never a broker",
+      "a reclaimed zombie emits nothing: every emit verb gates on is_owner (incl. show_screen)",
+      "recycled orchestrator reloads meeting_cost \u2014 never resets spent cost to 0",
+      "sandbox bounded by three guards; no ManagedResource FSM, no warm pool"
+    ],
+    "risks": [
+      "AC-SUB-009's original four-verb list omitted show_screen \u2014 the emit frontier must be enumerated as completely as it is gated (AC-SUB-035)",
+      "an availability-critical loop (STT-cred refresh) must stay in-process, not on the scale-to-zero reconcile cron"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "foundation.hosting-deployables",
+    "title": "The three deployables + Cloud SQL / GCS substrate topology",
+    "region": "00-FOUNDATION",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "00-FOUNDATION.md#4",
+      "CANONICAL-DECISIONS.md#12.1",
+      "CANONICAL-DECISIONS.md#12.2"
+    ],
+    "requirement_ids": [
+      "R-DOC00-4-01",
+      "R-DOC00-4-02",
+      "R-DOC00-4-03",
+      "R-DOC00-4-04",
+      "R-DOC00-4-05",
+      "R-DOC00-4-06",
+      "R-DOC00-4-07",
+      "R-DOC00-4-08",
+      "R-DOC00-4-09",
+      "R-DOC00-4-10",
+      "R-DOC00-4-11",
+      "R-DOC00-4-12"
+    ],
+    "criterion_ids": [
+      "AC-HOST-001",
+      "AC-HOST-002",
+      "AC-HOST-003",
+      "AC-HOST-004",
+      "AC-HOST-005",
+      "AC-HOST-006",
+      "AC-HOST-007",
+      "AC-HOST-008",
+      "AC-HOST-009",
+      "AC-HOST-010",
+      "AC-HOST-011",
+      "AC-HOST-012"
+    ],
+    "intent": "Realizes \u00a74 the hosting shape: control_plane on Cloud Run (autoscaling, timeout_seconds=3600, --no-cpu-throttling load-bearing, Cloud SQL connector + Direct-VPC egress + minScale>=1, the webhook/connect/API/WS/internal route surface); meeting_runtime on GCE MIG (Amendment A1 \u2014 NOT Cloud Run, one asyncio process per meeting, no bus/broker/volume); code_intel one stateful GCE/MIG host with the per-tenant encrypted volume behind a tenant+SHA API; ONE Cloud SQL Postgres 15 (private IP, Auth-Proxy Unix socket, no app SSL) + GCS Object-Versioned; the direct-answer path touches neither E2B nor a Workroom session; no K8s/mesh/multi-region/GPU.",
+    "definition_of_done": "control_plane is Cloud Run with timeout 3600, cpu-throttling=false, cloudsql annotation, Direct-VPC egress, minScale>=1 and the full route surface; meeting_runtime is a GCE MIG with no broker/volume; code_intel is a stateful host with an encrypted volume + scoped API; exactly one PG15 instance (private IP, unix-socket DSN, no sslmode); notes/artifacts GCS buckets have Object Versioning; the direct-answer sim provisions zero E2B and dispatches zero Workroom; zero K8s/mesh/multi-region/GPU. NOT done if meeting_runtime lands on Cloud Run or the DB gets a public IP.",
+    "consumes": [],
+    "exposes": [],
+    "depends_on": [
+      "foundation.repo-structure"
+    ],
+    "integration_point": "infra/control_plane.tf + meeting_runtime.tf + code_intel.tf + cloudsql.tf + storage.tf + network.tf + deployables.tf",
+    "acceptance": "WHEN the Terraform plan and route mounts are inspected THE SYSTEM SHALL show control_plane on Cloud Run (timeout 3600, cpu-throttling=false, minScale>=1), meeting_runtime on GCE MIG with no broker/volume, code_intel stateful+encrypted-volume, and one private-IP PG15 over a unix socket.",
+    "acceptance_cmd": "tests/doc00/test_m02_host.py",
+    "evidence_class": "[deployment]",
+    "journeys_now_live": [],
+    "codebase_anchors": [
+      "infra/control_plane.tf",
+      "infra/meeting_runtime.tf",
+      "infra/code_intel.tf",
+      "infra/cloudsql.tf",
+      "infra/storage.tf",
+      "infra/network.tf",
+      "infra/deployables.tf"
+    ],
+    "invariants": [
+      "three deployables only \u2014 no fourth, no per-service network service",
+      "meeting_runtime = GCE MIG, NOT Cloud Run (Amendment A1); holds no volume, no broker",
+      "the direct-answer path touches neither E2B nor a Workroom session (CANONICAL \u00a712.2)",
+      "one Cloud SQL PG15, private IP, Auth-Proxy unix socket, no app-side SSL"
+    ],
+    "risks": [
+      "--no-cpu-throttling is load-bearing \u2014 request-scoped CPU 503s background provisioning",
+      "a public DB IP or a second PG instance breaks the single-durable-substrate invariant"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "foundation.config-secrets",
+    "title": "Config contract, model-seat routing, Secret Manager wiring, credential homes",
+    "region": "00-FOUNDATION",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "00-FOUNDATION.md#7",
+      "CANONICAL-DECISIONS.md#12.12",
+      "CANONICAL-DECISIONS.md#12.8"
+    ],
+    "requirement_ids": [
+      "R-DOC00-7-01",
+      "R-DOC00-7-02",
+      "R-DOC00-7-03",
+      "R-DOC00-7-04",
+      "R-DOC00-7-05",
+      "R-DOC00-7-06",
+      "R-DOC00-7-07",
+      "R-DOC00-7-08",
+      "R-DOC00-7-09",
+      "R-DOC00-7-10",
+      "R-DOC00-15-14",
+      "R-DOC00-16-02",
+      "R-INV-10"
+    ],
+    "criterion_ids": [
+      "AC-CFG-001",
+      "AC-CFG-002",
+      "AC-CFG-003",
+      "AC-CFG-004",
+      "AC-CFG-005",
+      "AC-CFG-006",
+      "AC-CFG-007",
+      "AC-CFG-008",
+      "AC-CFG-009",
+      "AC-CFG-010",
+      "AC-CFG-011",
+      "AC-TEN-003"
+    ],
+    "intent": "Realizes \u00a77: .env.example is the config contract AND the boot required-key manifest (every var documented; commented-out = optional-with-default); libs/llm/routing.py holds the ONE 8-seat table with real model ids only (no per-doc variant, no fake ids); PROXY_MAX_INFLIGHT_LLM caps global concurrent model calls; one AES-256-GCM key per integration domain (never shared); numeric tunables live in config/defaults.toml (env overrides only secrets/seats) incl. the [latency_slo] pin; Terraform creates secrets as random_id with ignore_changes=[secret_data]; check-secret-bindings fails on drift; Nango holds end-user GitHub OAuth (minted per-operation, never cached/logged) while Secret Manager holds platform creds + the App key; zero feature-flag table; Authlib+Google OIDC /auth/{login,callback,logout}.",
+    "definition_of_done": ".env.example documents every var and is manifest-parity with the boot required keys; routing.py has exactly the 8 seats with ids in {claude-haiku-4-5,claude-sonnet-4-6,claude-opus-4-8}; the global in-flight semaphore caps at PROXY_MAX_INFLIGHT_LLM; one AES key per domain; every numeric tunable read from config/defaults.toml with [latency_slo] matching \u00a712.8; TF secrets are random_id + ignore_changes=[secret_data]; check-secret-bindings exits nonzero on drift; Nango vs Secret Manager homes never mix and GitHub tokens mint per-op/never-logged; no feature_flags table; the three /auth routes exist. NOT done if a fake model id, a shared domain key, a numeric tunable in env, or a credential-home mix appears.",
+    "consumes": [],
+    "exposes": [
+      "llm.routing",
+      "ops.check_secret_bindings"
+    ],
+    "depends_on": [
+      "foundation.repo-structure"
+    ],
+    "integration_point": ".env.example + config/defaults.toml + libs/llm/src/llm/routing.py + infra/secrets.tf + libs/ops/src/ops/check_secret_bindings.py + libs/ops/src/ops/nango.py + libs/ops/src/ops/secrets.py",
+    "acceptance": "WHEN the config surface is inspected THE SYSTEM SHALL show routing.py's single 8-seat table with only real model ids, [latency_slo] matching CANONICAL \u00a712.8, numeric tunables sourced from defaults.toml, one AES key per domain, TF secrets as random_id+ignore_changes, and Nango vs Secret Manager credential homes unmixed.",
+    "acceptance_cmd": "tests/doc00/test_m05_cfg.py ; tests/doc00/test_m15_ten.py -k ten_003",
+    "evidence_class": "[static]",
+    "journeys_now_live": [],
+    "codebase_anchors": [
+      ".env.example",
+      "config/defaults.toml",
+      "libs/llm/src/__init__.py",
+      "libs/llm/src/llm/__init__.py",
+      "libs/llm/src/llm/routing.py",
+      "libs/llm/src/llm/client.py",
+      "libs/llm/src/llm/prompts.py",
+      "libs/ops/src/ops/check_secret_bindings.py",
+      "libs/ops/src/ops/secrets.py",
+      "libs/ops/src/ops/nango.py"
+    ],
+    "invariants": [
+      "libs/llm/routing.py is the single canonical seat table with real ids only \u2014 no per-doc variant, no fake claude-haiku-4/claude-sonnet-4",
+      "numeric tunables live in config/defaults.toml; env overrides only secrets/seats",
+      "GitHub tokens mint per-operation via Nango, never cached, never logged; credential homes never mix",
+      "one AES-256-GCM key per integration domain \u2014 never shared"
+    ],
+    "risks": [
+      "a fake/hallucinated model id silently ships the wrong model",
+      "a numeric tunable read from env instead of defaults.toml drifts config discipline"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "foundation.db-layer",
+    "title": "asyncpg pool + Database facade/repos (no ORM) + Alembic revision DAG",
+    "region": "00-FOUNDATION",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "00-FOUNDATION.md#11",
+      "CANONICAL-DECISIONS.md#11.2"
+    ],
+    "requirement_ids": [
+      "R-DOC00-11-01",
+      "R-DOC00-11-02",
+      "R-DOC00-11-03",
+      "R-DOC00-11-04"
+    ],
+    "criterion_ids": [
+      "AC-DB-001",
+      "AC-DB-002",
+      "AC-DB-003",
+      "AC-DB-004"
+    ],
+    "intent": "Realizes \u00a711 the database layer: one asyncpg pool (min_size=2,max_size=20,max_inactive_connection_lifetime=30,command_timeout=10) over the Cloud SQL Auth-Proxy Unix socket (no app SSL); a single Database facade owning the pool and exposing a repos namespace of thin per-domain repositories with plain parameterized SQL and NO ORM; meeting_id is uuid across every app table with operation_runs.scope_id the sole text exception (the atomic claim casts meeting_id::text once); Alembic with a revision DAG + the env.py advisory lock + the parallel-boot retry CMD.",
+    "definition_of_done": "create_pool is called with the canonical args over a unix-socket DSN with no sslmode; exactly one Database facade owns the pool and the repos namespace, all SQL parameterized, zero ORM imports; every meeting_id column is uuid and only operation_runs.scope_id is text with a single ::text cast; migrations use a revision DAG (not epoch filenames) with env.py pg_advisory_lock. NOT done if an ORM appears, SQL is interpolated, or a meeting_id column is non-uuid.",
+    "consumes": [
+      "substrate.operation_runs",
+      "substrate.meeting_cost",
+      "substrate.staged_drafts",
+      "substrate.webhook_events",
+      "substrate.transcript_segments"
+    ],
+    "exposes": [
+      "ops.check_meeting_budget"
+    ],
+    "depends_on": [
+      "foundation.substrate-schema"
+    ],
+    "integration_point": "libs/db/src/db/database.py (the facade + pool) + libs/db/src/db/repos/*",
+    "acceptance": "WHEN the db layer is analyzed THE SYSTEM SHALL show one asyncpg pool with the canonical args over a unix socket, a single facade+repos namespace with parameterized SQL and no ORM, uuid meeting_id everywhere (scope_id text alone), and Alembic revision-DAG migrations with an env.py advisory lock.",
+    "acceptance_cmd": "tests/doc00/test_m09_db.py ; tests/doc00/test_m03_sub.py -k sub_033",
+    "evidence_class": "[static]",
+    "journeys_now_live": [
+      "J-09-cost-drafts-persist"
+    ],
+    "codebase_anchors": [
+      "libs/db/src/__init__.py",
+      "libs/db/src/db/__init__.py",
+      "libs/db/src/db/config.py",
+      "libs/db/src/db/database.py",
+      "libs/db/src/db/sync.py",
+      "libs/db/src/db/repos/__init__.py",
+      "libs/db/src/db/repos/cost.py",
+      "libs/db/src/db/repos/drafts.py",
+      "libs/db/src/db/repos/identity.py",
+      "libs/db/src/db/repos/meetings.py",
+      "libs/db/src/db/repos/notes.py",
+      "libs/db/src/db/repos/repositories.py",
+      "libs/db/src/db/repos/sessions.py",
+      "libs/db/src/db/repos/transcript.py",
+      "libs/db/src/db/repos/webhooks.py"
+    ],
+    "invariants": [
+      "no ORM \u2014 plain parameterized SQL through one Database facade + thin repos",
+      "meeting_id is uuid across every app table; operation_runs.scope_id is the sole text exception (one ::text cast)",
+      "one shared pool with the canonical asyncpg args over the Auth-Proxy unix socket (no app SSL)"
+    ],
+    "risks": [
+      "any string-interpolated SQL is an injection defect",
+      "a rogue meeting_id::text elsewhere would break the uuid-everywhere invariant"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "foundation.tenant-crypto-isolation",
+    "title": "Per-tenant envelope-key crypto isolation + crypto-shred offboarding",
+    "region": "00-FOUNDATION",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "00-FOUNDATION.md#4",
+      "00-FOUNDATION.md#15",
+      "CANONICAL-DECISIONS.md#11.1"
+    ],
+    "requirement_ids": [
+      "R-DOC00-4-13",
+      "R-DOC00-15-10",
+      "R-INV-09"
+    ],
+    "criterion_ids": [
+      "AC-HOST-013",
+      "AC-HOST-014",
+      "AC-INV-010",
+      "AC-TEN-002",
+      "AC-TEN-004"
+    ],
+    "intent": "Realizes the \u00a74 per-tenant encryption floor and \u00a715 offboarding invariant: a KMS-encrypted PD is the floor, plus a per-tenant envelope key over each tenant's subdirectory (a single shared key across tenants is the named anti-pattern), so offboarding = destroy the key = crypto-shred bounded to that tenant; run_reconcile_sweep() extends to delete a tenant's Postgres rows + GCS prefixes; a cross-tenant read is refused server-side; /internal/notes is token-gated outside the auth wall and resolves meeting_id->tenant so no meeting_id crosses into another tenant's notes.",
+    "definition_of_done": "Two tenants have DISTINCT envelope keys over a KMS-encrypted PD (no LUKS); destroying tenant A's key makes A's ciphertext unrecoverable while B stays readable; run_reconcile_sweep() deletes an offboarded tenant's rows + GCS prefixes; a tenant-B read of a tenant-A entity is denied with zero rows leaked; /internal/notes refuses an untokened request and never returns cross-tenant notes. NOT done if a shared tenant key exists, a shred affects another tenant, or a cross-tenant read leaks any row.",
+    "consumes": [
+      "substrate.operation_runs"
+    ],
+    "exposes": [
+      "http.internal_notes"
+    ],
+    "depends_on": [
+      "foundation.substrate-schema",
+      "foundation.hosting-deployables"
+    ],
+    "integration_point": "infra/data_protection.tf + infra/secrets.tf (KMS/envelope keys) + libs/ops/src/ops/reconcile.py + libs/http/src/http/internal.py (owned by foundation.seam-external-dispatch)",
+    "acceptance": "WHEN tenant A's envelope key is destroyed on offboarding THE SYSTEM SHALL render A's ciphertext unrecoverable while tenant B stays fully readable, and refuse any cross-tenant read or untokened /internal/notes request with zero rows leaked.",
+    "acceptance_cmd": "tests/doc00/test_m02_host.py -k 'host_013 or host_014' ; tests/doc00/test_m13_inv.py -k inv_010 ; tests/doc00/test_m15_ten.py -k 'ten_002 or ten_004'",
+    "evidence_class": "[security-adversarial]",
+    "journeys_now_live": [
+      "J-09-S9-tenant-isolation"
+    ],
+    "codebase_anchors": [
+      "infra/data_protection.tf",
+      "libs/ops/src/ops/redaction.py"
+    ],
+    "invariants": [
+      "per-tenant envelope key \u2014 never a single shared key across tenants (P0 crypto-isolation)",
+      "offboarding = destroy the key = crypto-shred, blast radius bounded to that tenant",
+      "cross-tenant read is a P0 breach \u2014 refused server-side, zero rows leaked",
+      "/internal/notes is token-gated outside the auth wall and meeting->tenant scoped"
+    ],
+    "risks": [
+      "no hand-rolled LUKS \u2014 KMS PD floor + envelope key only",
+      "/internal/notes is session-less so the authenticated-/m/ oracle cannot exercise it \u2014 the token+scope path needs its own coverage (AC-TEN-004)"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "foundation.boot-lifecycle",
+    "title": "Ordered fail-fast boot lifespan + provisioner_ready + EPIPE tolerance + parallel shutdown",
+    "region": "00-FOUNDATION",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "00-FOUNDATION.md#6",
+      "00-FOUNDATION.md#5.7"
+    ],
+    "requirement_ids": [
+      "R-DOC00-6-01",
+      "R-DOC00-6-02",
+      "R-DOC00-6-03",
+      "R-DOC00-6-04",
+      "R-DOC00-6-05",
+      "R-DOC00-6-06",
+      "R-DOC00-6-07",
+      "R-DOC00-5-21",
+      "R-DOC00-5-22"
+    ],
+    "criterion_ids": [
+      "AC-BOOT-001",
+      "AC-BOOT-002",
+      "AC-BOOT-003",
+      "AC-BOOT-004",
+      "AC-BOOT-005",
+      "AC-BOOT-006",
+      "AC-BOOT-007",
+      "AC-SUB-031",
+      "AC-SUB-032"
+    ],
+    "intent": "Realizes \u00a76 'fail loud at boot, not on first use': pydantic-settings validates the full required-key set at import (missing key => startup crash naming it); the ordered lifespan is init tracing -> open asyncpg pool -> construct Database facade -> provisioner_ready async gate -> boot-time stale-row reaper -> mount routers last (so a join can't race an unwired provisioner and no request sees a stale-running row); EPIPE from a crashed SDK subprocess is swallowed+recovered while unknown exceptions crash after a flush; shutdown gathers flush_tracing/db.close/bot.leave_all/server.shutdown in parallel with a backstop; the \u00a75.7 sign-in/binding flow (users row + signed session cookie + resolve_session; meetings row bound to tenant/repo/pinned_sha + recall_bot_id round-trip) is wired.",
+    "definition_of_done": "A missing required key crashes at import naming the key; the recorded lifespan step order equals the canonical sequence with routers mounted last; a join awaits provisioner_ready; the boot reaper interrupts orphans before router mount; BrokenPipeError is swallowed+recovered and an unknown exception crashes after a flush; shutdown runs the four tasks concurrently with a hard-exit backstop; all three SDK auth modes are documented+resolvable; resolve_session returns {user_id,tenant_id} and the invite binds a meetings row + round-trips recall_bot_id. NOT done if a required key fails lazily or routers mount before the reaper.",
+    "consumes": [
+      "substrate.operation_runs",
+      "ops.check_secret_bindings"
+    ],
+    "exposes": [],
+    "depends_on": [
+      "foundation.substrate-runtime",
+      "foundation.config-secrets"
+    ],
+    "integration_point": "services/harness/src/harness/server.py (FastAPI lifespan) + settings.py + meetings.py + session.py",
+    "acceptance": "WHEN the server boots THE SYSTEM SHALL validate all required keys at import, run the lifespan in the exact order (tracing -> pool -> facade -> provisioner_ready -> boot reaper -> routers), and mount routers only after the reaper has interrupted orphaned running rows.",
+    "acceptance_cmd": "tests/doc00/test_m04_boot.py ; tests/doc00/test_m03_sub.py -k 'sub_031 or sub_032'",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S5-recycle-survives"
+    ],
+    "codebase_anchors": [
+      "services/harness/src/harness/server.py",
+      "services/harness/src/harness/settings.py",
+      "services/harness/src/harness/session.py",
+      "services/harness/src/harness/meetings.py",
+      "services/harness/src/harness/recovery.py"
+    ],
+    "invariants": [
+      "fail loud at boot, not on first use \u2014 a missing required key is a startup crash",
+      "routers mount LAST, after the boot-time stale-row reaper",
+      "handlers await provisioner_ready before touching bot/sandbox (join-before-wired race defused)"
+    ],
+    "risks": [
+      "shutdown must be parallel \u2014 a serial gather loses trace spans (the platform bug)",
+      "the required-key set differs prod vs dev (SESSION_SECRET/GCP project prod-only)"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "foundation.iac",
+    "title": "Terraform IaC \u2014 modules/envs, promote discipline, prevent_destroy, least-privilege",
+    "region": "00-FOUNDATION",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "00-FOUNDATION.md#8"
+    ],
+    "requirement_ids": [
+      "R-DOC00-8-01",
+      "R-DOC00-8-02",
+      "R-DOC00-8-03",
+      "R-DOC00-8-04",
+      "R-DOC00-8-05",
+      "R-DOC00-8-06"
+    ],
+    "criterion_ids": [
+      "AC-IAC-001",
+      "AC-IAC-002",
+      "AC-IAC-003",
+      "AC-IAC-004",
+      "AC-IAC-005",
+      "AC-IAC-006"
+    ],
+    "intent": "Realizes \u00a78 the Terraform layout and cross-cutting discipline: modules/{bootstrap,platform} + envs/{dev,prod}/{bootstrap,platform} applied bootstrap->platform; dev auto-deploys on a Cloud Build trigger while prod is promote-based (Artifact Registry immutable tag + a promote job, no direct prod push); prevent_destroy on every data-bearing resource; Terraform owns the service shell (Cloud Run template ignore_changes'd) while the deploy script owns image/env/secrets; least-privilege service-account-per-role; the customer-platform per-customer-GCP-project module is recorded but instantiates nothing.",
+    "definition_of_done": "infra/modules/{bootstrap,platform} + infra/envs/{dev,prod}/{bootstrap,platform} exist with the documented bootstrap->platform apply order; dev auto-deploys on a trigger and prod is promote-only with no direct-push path; prevent_destroy is set on the specs bucket, both SQL DBs, credential-key random_ids, and the project lien; the Cloud Run template is ignore_changes'd so promote/CI own runtime config; each role has its own least-privilege SA; customer-platform is named but instantiates zero resources. NOT done if a data resource lacks prevent_destroy or a direct prod-push path exists.",
+    "consumes": [],
+    "exposes": [],
+    "depends_on": [
+      "foundation.hosting-deployables"
+    ],
+    "integration_point": "infra/modules/{bootstrap,platform}/main.tf + infra/envs/{dev,prod}/{bootstrap,platform}/main.tf + infra/pipeline.tf + infra/iam.tf + infra/data_protection.tf",
+    "acceptance": "WHEN the infra tree and pipeline config are inspected THE SYSTEM SHALL show the modules/envs layout with bootstrap->platform order, prod promote-only (no direct push), prevent_destroy on every data-bearing resource, and a least-privilege SA per role.",
+    "acceptance_cmd": "tests/doc00/test_m06_iac.py",
+    "evidence_class": "[static]",
+    "journeys_now_live": [],
+    "codebase_anchors": [
+      "infra/modules/bootstrap/main.tf",
+      "infra/modules/platform/main.tf",
+      "infra/modules/customer-platform/main.tf",
+      "infra/envs/dev/bootstrap/main.tf",
+      "infra/envs/dev/platform/main.tf",
+      "infra/envs/prod/bootstrap/main.tf",
+      "infra/envs/prod/platform/main.tf",
+      "infra/pipeline.tf",
+      "infra/iam.tf",
+      "infra/data_protection.tf",
+      "infra/setup-remote-state.sh"
+    ],
+    "invariants": [
+      "prevent_destroy on every data-bearing resource",
+      "prod is promote-based only \u2014 no direct push path to prod",
+      "Terraform owns the service shell; the deploy script owns image/env/secrets",
+      "customer-platform is recorded but builds nothing (anti-inflation)"
+    ],
+    "risks": [
+      "a Cloud Run template not ignore_changes'd means TF apply fights the promote path",
+      "the customer-platform module must instantiate zero resources"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "foundation.ci-guards",
+    "title": "CI/CD guards \u2014 fast-blocking split, migration/secret/triad/banned/field guards, pre-commit parity",
+    "region": "00-FOUNDATION",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "00-FOUNDATION.md#10"
+    ],
+    "requirement_ids": [
+      "R-DOC00-10-01",
+      "R-DOC00-10-02",
+      "R-DOC00-10-03",
+      "R-DOC00-10-04",
+      "R-DOC00-10-05",
+      "R-DOC00-10-06",
+      "R-DOC00-10-07",
+      "R-DOC00-10-08"
+    ],
+    "criterion_ids": [
+      "AC-CI-001",
+      "AC-CI-002",
+      "AC-CI-003",
+      "AC-CI-004",
+      "AC-CI-005",
+      "AC-CI-006",
+      "AC-CI-007"
+    ],
+    "intent": "Realizes \u00a710 CI/CD guarded: GitHub Actions runs the fast merge-blocking checks (ruff + mypy + unit + a fast security/contract suite); check-migration-order fails loud on Alembic multiple-heads vs main (never-skip); check-sdk-isolation-triad fails when a query() site omits the triad/block-list; check-secret-bindings fails on drift; the banned-strings guard flags dead tokens (but NOT 'GCE-per-meeting' \u2014 A1 revived it); every guard runs in BOTH pre-commit and CI (parity); only fast unit+security block merges while heavy E2E runs nightly and never gates on flake; Cloud Build build->Artifact Registry->deploy with a separate migrations step.",
+    "definition_of_done": "ruff+mypy+unit+security/contract are required merge-blocking checks; check-migration-order, check-secret-bindings, check-sdk-isolation-triad, banned-strings, and field-contract each appear in BOTH pre-commit and CI (no guard in only one place); each guard exits nonzero on its negative build; the banned set excludes 'GCE-per-meeting' (A-007); E2E is nightly-only, never a merge gate; Cloud Build has the build/registry/deploy stages + a separate migrations step. NOT done if a guard is CI-only, a multi-head is accepted, or E2E gates a merge.",
+    "consumes": [
+      "ops.check_secret_bindings",
+      "contracts.registry",
+      "lint.naming"
+    ],
+    "exposes": [
+      "ops.check_sdk_isolation_triad"
+    ],
+    "depends_on": [
+      "foundation.substrate-schema",
+      "foundation.contracts-registry",
+      "foundation.config-secrets",
+      "foundation.invariants-guards"
+    ],
+    "integration_point": ".github/workflows/guards.yml + contracts-check.yml + e2e-nightly.yml + .pre-commit-config.yaml + deploy/cloudbuild.yaml",
+    "acceptance": "WHEN each guard runs on its negative build THE SYSTEM SHALL exit non-zero (multi-head, secret drift, untriaged query(), dead token, orphan field) in BOTH pre-commit and CI, while heavy E2E runs nightly and never gates a merge.",
+    "acceptance_cmd": "tests/doc00/test_m08_ci.py ; tests/doc00/test_w_workflows.py",
+    "evidence_class": "[static]",
+    "journeys_now_live": [
+      "J-09-registry-closed"
+    ],
+    "codebase_anchors": [
+      ".github/workflows/guards.yml",
+      ".github/workflows/contracts-check.yml",
+      ".github/workflows/e2e-nightly.yml",
+      ".github/workflows/verify.yml",
+      "libs/ops/src/ops/check_banned_strings.py",
+      "libs/ops/src/ops/check_field_contract.py",
+      "libs/ops/src/ops/check_sdk_isolation_triad.py",
+      "deploy/cloudbuild.yaml",
+      "deploy/promote.sh"
+    ],
+    "invariants": [
+      "every guard runs in BOTH pre-commit AND CI (local fast-fail + server-side enforcement)",
+      "unit+security block merges; heavy E2E is nightly and never gates on flake",
+      "check-migration-order is fail-loud-never-skip; 'GCE-per-meeting' is NOT a banned token (A1/A-007)"
+    ],
+    "risks": [
+      "a guard drifting to CI-only breaks the local fast-fail discipline",
+      "banning 'GCE-per-meeting' would collide with the A1 meeting_runtime deploy definition"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "foundation.docker-migrate",
+    "title": "Multi-stage uv Dockerfiles, non-root+HOME, self-migrate with advisory-lock retry",
+    "region": "00-FOUNDATION",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "00-FOUNDATION.md#9",
+      "00-FOUNDATION.md#11"
+    ],
+    "requirement_ids": [
+      "R-DOC00-9-01",
+      "R-DOC00-9-02",
+      "R-DOC00-9-03",
+      "R-DOC00-9-04",
+      "R-DOC00-11-04"
+    ],
+    "criterion_ids": [
+      "AC-DOCK-001",
+      "AC-DOCK-002",
+      "AC-DOCK-003",
+      "AC-DOCK-004"
+    ],
+    "intent": "Realizes \u00a79 the Dockerfile: a multi-stage uv build (builder runs uv sync --frozen --no-dev --package <svc> for a self-contained image), a non-root uid-1001 appuser with HOME set (the Claude Agent SDK writes to $HOME), the migrate-retry CMD that lets Alembic + an env.py pg_advisory_lock serialize N parallel container boots (losers retry 30x5s then exec the server), and the SANDBOX_IMAGE_HASH LABEL pinning the app release to its matching warm-sandbox base image fail-closed.",
+    "definition_of_done": "Each service Dockerfile is multi-stage with `uv sync --frozen --no-dev --package <svc>`; the runtime stage sets USER appuser (uid 1001) and ENV HOME; the CMD runs `until alembic upgrade head; ...` and env.py wraps the upgrade in pg_advisory_lock so exactly one container migrates at a time under a parallel-boot race; the image carries a proxy.sandbox-image-hash LABEL and a mismatched app/sandbox pair fails closed. NOT done if the sync is non-frozen, the image runs as root or without HOME, or migrations race without the advisory lock.",
+    "consumes": [],
+    "exposes": [],
+    "depends_on": [
+      "foundation.repo-structure",
+      "foundation.db-layer"
+    ],
+    "integration_point": "deploy/Dockerfile + deploy/{control_plane,meeting_runtime,code_intel}/Dockerfile + migrations/env.py",
+    "acceptance": "WHEN N containers boot in parallel and race the migration THE SYSTEM SHALL serialize them via the env.py pg_advisory_lock so exactly one migrates while losers retry 30x5s then exec the server, from a non-root uid-1001 image with HOME set.",
+    "acceptance_cmd": "tests/doc00/test_m07_dock.py",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [],
+    "codebase_anchors": [
+      "deploy/Dockerfile",
+      "deploy/control_plane/Dockerfile",
+      "deploy/meeting_runtime/Dockerfile",
+      "deploy/code_intel/Dockerfile",
+      "migrations/env.py"
+    ],
+    "invariants": [
+      "HOME is required \u2014 the Claude Agent SDK writes to $HOME (non-root uid 1001)",
+      "parallel-boot migrations serialize via env.py pg_advisory_lock + retry CMD \u2014 never concurrent/partial",
+      "prod images are frozen + no-dev + per-service (self-contained)"
+    ],
+    "risks": [
+      "Alembic does not lock by default \u2014 the advisory lock in env.py is load-bearing for parallel Cloud Run boot",
+      "a mismatched SANDBOX_IMAGE_HASH pair must fail closed, not run"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "foundation.seam-external-dispatch",
+    "title": "The call_external seam + the dispatch funnel + internal API surface",
+    "region": "00-FOUNDATION",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "00-FOUNDATION.md#2",
+      "00-FOUNDATION.md#12",
+      "00-FOUNDATION.md#14"
+    ],
+    "requirement_ids": [
+      "R-DOC00-2-10",
+      "R-DOC00-12-05",
+      "R-DOC00-14-04"
+    ],
+    "criterion_ids": [
+      "AC-CMP-010",
+      "AC-REG-006",
+      "AC-CON-004"
+    ],
+    "intent": "Realizes the \u00a72 shared-mechanism DRY homes and the \u00a714 external-call hard rule: libs/http holds the ONE call_external seam (every model/Recall/STT/GitHub/GCS call wrapped with bounded retry + cost telemetry, the sole home of raw client construction) and the ONE dispatch() funnel that Pydantic-validates every untrusted tile->backend message once centrally; dispatch/AbortRegistry/resume_with_fallback/provider-seam are each defined exactly once and imported, never re-implemented per service. The connect page is a public URL so tile->backend input is never trusted.",
+    "definition_of_done": "dispatch() has exactly one definition in libs/http and AbortRegistry/resume_with_fallback/provider-seam one each in libs/agentkit, none re-implemented; the dispatch funnel rejects a malformed/oversized/unregistered client message with one central Pydantic validation; every external-call site is wrapped with retry + cost telemetry and no bare unwrapped external call exists outside libs/http. NOT done if a service re-implements a shared mechanism or a raw vendor client is constructed outside libs/http.",
+    "consumes": [
+      "contracts.registry"
+    ],
+    "exposes": [
+      "http.call_external",
+      "http.dispatch",
+      "http.internal_notes"
+    ],
+    "depends_on": [
+      "foundation.contracts-registry",
+      "foundation.agentchunk-behavior"
+    ],
+    "integration_point": "libs/http/src/http/external.py (call_external) + dispatch.py (the funnel) + internal.py (/internal/notes)",
+    "acceptance": "WHEN a malformed/unregistered client message hits the dispatch funnel and any external call is issued THE SYSTEM SHALL reject the message via one central Pydantic validation and route the external call through the single retry+cost-telemetry call_external seam, with no raw client outside libs/http.",
+    "acceptance_cmd": "tests/doc00/test_m00_cmp.py -k cmp_010 ; tests/doc00/test_m10_reg.py -k reg_006 ; tests/doc00/test_m12_con.py -k con_004",
+    "evidence_class": "[static]",
+    "journeys_now_live": [
+      "J-09-contracts-resolve"
+    ],
+    "codebase_anchors": [
+      "libs/http/src/__init__.py",
+      "libs/http/src/http/__init__.py",
+      "libs/http/src/http/external.py",
+      "libs/http/src/http/dispatch.py",
+      "libs/http/src/http/internal.py"
+    ],
+    "invariants": [
+      "every external call wrapped with retry + cost telemetry; the raw client lives ONLY in libs/http (the call_external seam)",
+      "dispatch()/AbortRegistry/resume_with_fallback/provider-seam are defined once and imported, never re-implemented",
+      "tile->backend is untrusted \u2014 validated once centrally in the dispatch funnel"
+    ],
+    "risks": [
+      "a raw Anthropic/httpx/GCS client constructed outside libs/http silently escapes the seam \u2014 the new call-external-guard (foundation.call-external-guard) is what makes this structural"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "foundation.observability-floor",
+    "title": "Observability + operational floor \u2014 logs, Sentry, cost telemetry, Langfuse scaffold, hardening, affinity",
+    "region": "00-FOUNDATION",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "00-FOUNDATION.md#13",
+      "CANONICAL-DECISIONS.md#11.11"
+    ],
+    "requirement_ids": [
+      "R-DOC00-13-01",
+      "R-DOC00-13-02",
+      "R-DOC00-13-03",
+      "R-DOC00-13-04",
+      "R-DOC00-13-05",
+      "R-DOC00-13-06",
+      "R-DOC00-13-07",
+      "R-DOC00-13-08",
+      "R-DOC00-13-09",
+      "R-INV-03-SRC",
+      "R-DOC00-16-03"
+    ],
+    "criterion_ids": [
+      "AC-OBS-001",
+      "AC-OBS-002",
+      "AC-OBS-003",
+      "AC-OBS-004",
+      "AC-OBS-005",
+      "AC-OBS-006",
+      "AC-OBS-007",
+      "AC-OBS-008",
+      "AC-OBS-009",
+      "AC-OBS-010"
+    ],
+    "intent": "Realizes \u00a713 the observability + operational floor: structured JSON logs via structlog to stdout; Sentry wired once shared across services (with a before_send scrubber so no raw customer source reaches logs/Sentry/artifacts); per-meeting cost telemetry in Postgres (total_cost_usd + the cache-read/creation split, aggregated per meeting \u2014 how we prove the Scribe cache is hitting); the Langfuse tracing scaffold wired day-one but inert (SDK trace-wrapped, flush_tracing in shutdown, keys unset, no self-hosted ClickHouse); /health + Healthchecks.io heartbeats; one idempotent hardening script (key-only SSH, no root, fail2ban, host firewall AND security group, code exec only inside E2B); live-WS instance affinity routing reconnects/retries to the operation_runs claim owner (never random LB); the skip-list built nowhere; daily code_intel volume snapshots (clones/indexes = rebuildable cache).",
+    "definition_of_done": "log lines are structlog JSON on stdout; Sentry is a single shared init used by all services and a source-sentinel appears in neither logs nor the Sentry before_send payload nor artifacts; cost telemetry records total + cache split aggregated per meeting; the Langfuse scaffold is inert (keys unset, no ClickHouse) with flush_tracing in the parallel shutdown; /health returns healthy + the harness emits heartbeats; the hardening script enforces the full control set and is idempotent; live-WS affinity routes to created_by never random LB; no skip-list technology present; the code_intel volume has a daily snapshot schedule. NOT done if raw source leaks to logs/Sentry, a skip-list item is built, or routing uses random LB.",
+    "consumes": [
+      "substrate.meeting_cost",
+      "substrate.operation_runs"
+    ],
+    "exposes": [
+      "ops.affinity"
+    ],
+    "depends_on": [
+      "foundation.substrate-runtime",
+      "foundation.hosting-deployables"
+    ],
+    "integration_point": "libs/ops/src/ops/logging.py + sentry.py + telemetry.py + affinity.py + agentkit tracing.py + deploy/harden.sh + infra/snapshots.tf",
+    "acceptance": "WHEN a read/log/error path over clone content carrying a source-sentinel runs and a tile WS reconnects to a non-owner instance THE SYSTEM SHALL keep the sentinel out of logs/Sentry/artifacts and route the reconnect to the operation_runs claim owner (never random LB).",
+    "acceptance_cmd": "tests/doc00/test_m11_obs.py",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-cost-drafts-persist"
+    ],
+    "codebase_anchors": [
+      "libs/ops/src/ops/logging.py",
+      "libs/ops/src/ops/sentry.py",
+      "libs/ops/src/ops/telemetry.py",
+      "libs/agentkit/src/agentkit/tracing.py",
+      "deploy/harden.sh",
+      "infra/snapshots.tf",
+      "infra/firewall.tf"
+    ],
+    "invariants": [
+      "no raw customer source in logs/Sentry/artifacts (source scrubbing broader than secret redaction)",
+      "Langfuse scaffold is wired but inert \u2014 no self-hosted ClickHouse at V0",
+      "live-WS affinity routes to the operation_runs claim owner \u2014 never random Cloud Run LB",
+      "no skip-list item is built (building any is a defect)"
+    ],
+    "risks": [
+      "arbitrary code exec must only ever run inside E2B \u2014 the hardening script must leave no host-code-exec path",
+      "cost telemetry missing the cache split cannot prove the Scribe is hitting its cached prefix"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "foundation.invariants-guards",
+    "title": "Consolidated invariants + constitution \u2014 cost meters, lethal-trifecta, safety floor, naming lint",
+    "region": "00-FOUNDATION",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "00-FOUNDATION.md#14",
+      "00-FOUNDATION.md#15",
+      "CANONICAL-DECISIONS.md#12.7"
+    ],
+    "requirement_ids": [
+      "R-DOC00-14-01",
+      "R-DOC00-14-02",
+      "R-DOC00-15-01",
+      "R-DOC00-15-02",
+      "R-DOC00-15-03",
+      "R-DOC00-15-04",
+      "R-DOC00-15-05",
+      "R-DOC00-15-06",
+      "R-DOC00-15-07",
+      "R-DOC00-15-08",
+      "R-DOC00-15-09",
+      "R-DOC00-15-11",
+      "R-DOC00-15-12",
+      "R-DOC00-15-13",
+      "R-DOC00-16-01",
+      "R-DOC00-16-02",
+      "R-DOC00-16-03"
+    ],
+    "criterion_ids": [
+      "AC-CON-001",
+      "AC-CON-002",
+      "AC-INV-001",
+      "AC-INV-002",
+      "AC-INV-003",
+      "AC-INV-004",
+      "AC-INV-005",
+      "AC-INV-006",
+      "AC-INV-007",
+      "AC-INV-008",
+      "AC-INV-009",
+      "AC-INV-011",
+      "AC-INV-012",
+      "AC-INV-013",
+      "AC-BLD-001",
+      "AC-BLD-002",
+      "AC-BLD-003"
+    ],
+    "intent": "Realizes \u00a714/\u00a715/\u00a716 the consolidated invariants and constitution: the two honest cost meters (listening baseline SLA ~$0.95-1.25/hr vs a separate disclosed task budget, never a false all-in $1) with check_meeting_budget() summing the three meters, soft-cap-degrades / hard-cap-notes-only on the listening subset, one pre-dispatch estimate gate, no ledger; the lethal-trifecta invariant (no transcript-triggered path reaches an outward side-effect without a human click; transcript is fenced as untrusted data; world-touching tools in disallowed_tools; core apply is a draft not a push); the safety floor (read-path secret redaction, per-sandbox random JWT, capability tokens read-only, accept requires an authenticated tenant member idempotent+CSRF+audit, full tool-call telemetry); the naming lint (user-visible strings never contain internal names \u2014 the product and agent are Proxy); and the \u00a716 pre-build spike + step-1 provable bundle.",
+    "definition_of_done": "The listening baseline stays within its SLA ceiling and task spend is a separate meter that never trips the listening breaker; check_meeting_budget() sums the three meters with the correct soft/hard-cap behavior and one pre-dispatch gate and no ledger; a static trace shows no transcript->outward-side-effect path without a human click, the transcript is fenced in both prompts, world-touching tools are in disallowed_tools, and core apply records approval + exposes a bundle (no push); secrets are redacted from logs, each sandbox has a distinct JWT, capability tokens grant read-only never accept, accept requires an authenticated tenant member (unauth/cross-tenant refused, idempotent, CSRF, audited), tool-call telemetry is complete; the naming lint flags an internal name in a user string; the pre-build spike gates on p50<=2.5s + ORM accuracy with deterministic fallbacks; the step-1 provable bundle (CI green, self-migrate+/health, deploy lands, registry-closed, harness heartbeat+self-reap) holds. NOT done if any P0 boundary (trifecta, cross-tenant accept, shared sandbox secret, secret-in-log) is reachable.",
+    "consumes": [
+      "substrate.meeting_cost",
+      "substrate.staged_drafts",
+      "substrate.operation_runs",
+      "contracts.registry",
+      "ops.check_meeting_budget"
+    ],
+    "exposes": [
+      "lint.naming",
+      "ops.check_meeting_budget",
+      "draft.accepted"
+    ],
+    "depends_on": [
+      "foundation.substrate-runtime",
+      "foundation.db-layer",
+      "foundation.observability-floor",
+      "foundation.seam-external-dispatch"
+    ],
+    "integration_point": "libs/ops/src/lint/naming.py + capability.py + services/harness accept_route.py + budget.py + CLAUDE.md (constitution); read-path redaction (redaction.py) owned by foundation.tenant-crypto-isolation, tool telemetry (telemetry.py) by foundation.observability-floor",
+    "acceptance": "WHEN a transcript line carrying an injected instruction is traced to any outward side-effect and a cross-tenant accept is attempted THE SYSTEM SHALL show no side-effect reachable without a human click, treat the injection as fenced data, and refuse the cross-tenant/unauthenticated accept \u2014 while the naming lint flags any internal name in a user-visible string.",
+    "acceptance_cmd": "tests/doc00/test_m12_con.py -k 'con_001 or con_002' ; tests/doc00/test_m13_inv.py ; tests/doc00/test_m14_bld.py",
+    "evidence_class": "[security-adversarial]",
+    "journeys_now_live": [
+      "J-09-S3-staged-draft-accept",
+      "J-09-S7-cost-circuit-breaker",
+      "J-09-S9-tenant-isolation"
+    ],
+    "codebase_anchors": [
+      "libs/ops/src/lint/__init__.py",
+      "libs/ops/src/lint/naming.py",
+      "libs/ops/src/ops/capability.py"
+    ],
+    "invariants": [
+      "lethal-trifecta: no transcript-triggered path reaches an outward side-effect without a human click (P0)",
+      "two honest cost meters \u2014 never a false all-in $1; task spend never trips the listening breaker",
+      "user-visible strings never contain internal names \u2014 the product and agent are Proxy (naming lint)",
+      "accept requires an authenticated tenant member (idempotent+CSRF+audit); per-sandbox random JWT; read-path secret redaction"
+    ],
+    "risks": [
+      "the cap basis must be the listening subset only (A-006) or task spend wrongly forces notes-only",
+      "the emit/accept authority frontier must be enumerated completely \u2014 a missed verb is a P0 escape"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "foundation.webhook-events-schema-fix",
+    "title": "FIX: webhook_events schema drift \u2014 add provider/sha/received_at + status CHECK",
+    "region": "00-FOUNDATION",
+    "disposition": "fix",
+    "status": "pending",
+    "spec_refs": [
+      "00-FOUNDATION.md#5.6",
+      "CANONICAL-DECISIONS.md#12.10"
+    ],
+    "requirement_ids": [
+      "R-DOC00-5-16"
+    ],
+    "criterion_ids": [
+      "AC-SUB-022",
+      "AC-SUB-023",
+      "AC-SUB-024"
+    ],
+    "intent": "Realizes CANONICAL \u00a712.10's canonical webhook_events schema. The built migration 0001_substrate.py created webhook_events as {id, delivery_guid, status, payload, created_at, processed_at} \u2014 but the canonical literal is {id, provider('github'|'recall'), delivery_guid UNIQUE, sha, payload NOT NULL, status DEFAULT 'pending', received_at}. This closes the drift so provider/sha/received_at exist and status is constrained to {pending,processed,failed}: webhook_events is the ONE external-callback durability (GitHub push + Recall) and its columns feed the freshness/push (sha) and drain paths.",
+    "definition_of_done": "A NEW forward Alembic migration adds provider (NOT NULL, CHECK provider IN ('github','recall')), sha (nullable), and received_at (timestamptz NOT NULL DEFAULT now()), makes payload NOT NULL, and constrains status via a CHECK to {pending,processed,failed}, reconciling the existing created_at/processed_at usage with the canonical received_at without breaking the drain path; introspection shows the canonical column set; delivery_guid stays UNIQUE (dedupe) and ingest still returns 200 then drains pending. NOT done if the drift is fixed by editing 0001 in place (must be a forward migration) or if the status CHECK is missing. An acceptance test inserts a webhook_events row with status='invalid' and asserts the CHECK constraint rejects it (not just column existence); and the boot-time + periodic drain processes status='pending' rows idempotently.",
+    "consumes": [
+      "substrate.webhook_events"
+    ],
+    "exposes": [
+      "substrate.webhook_events"
+    ],
+    "depends_on": [
+      "foundation.substrate-schema"
+    ],
+    "integration_point": "migrations/versions/0005_webhook_events_canonical.py (NEW forward migration) + libs/db/src/db/repos/webhooks.py (owned by foundation.db-layer)",
+    "acceptance": "WHEN the new migration is applied and webhook_events is introspected THE SYSTEM SHALL show the canonical columns {id, provider, delivery_guid UNIQUE, sha, payload NOT NULL, status, received_at} with a CHECK constraining status to {pending,processed,failed}, and a duplicate delivery_guid remains a no-op.",
+    "acceptance_cmd": "tests/doc00/test_m03_sub.py -k 'sub_022 or sub_023 or sub_024'",
+    "evidence_class": "[contract]",
+    "journeys_now_live": [],
+    "codebase_anchors": [
+      "migrations/versions/0001_substrate.py"
+    ],
+    "invariants": [
+      "webhook_events is the ONLY external-callback durability \u2014 no general meeting_events bus",
+      "the fix is a NEW forward migration \u2014 never edit a shipped migration in place",
+      "delivery_guid stays UNIQUE (at-least-once dedupe); status domain is {pending,processed,failed}"
+    ],
+    "risks": [
+      "existing rows/code use created_at + processed_at \u2014 the migration must reconcile with received_at without breaking the boot/periodic drain",
+      "a schema migration touches durable state \u2014 human review required (human_gated)"
+    ],
+    "human_gated": true
+  },
+  {
+    "id": "foundation.call-external-guard",
+    "title": "BUILD-NEW: AST guard forbidding raw vendor clients outside libs/http",
+    "region": "00-FOUNDATION",
+    "disposition": "build-new",
+    "status": "pending",
+    "spec_refs": [
+      "00-FOUNDATION.md#2",
+      "00-FOUNDATION.md#14",
+      "00-FOUNDATION.md#10"
+    ],
+    "requirement_ids": [
+      "R-DOC00-14-04",
+      "R-DOC00-2-10"
+    ],
+    "criterion_ids": [
+      "AC-CON-004",
+      "AC-CMP-010"
+    ],
+    "intent": "Realizes the \u00a714 hard rule 'every external call wrapped with retry + cost telemetry' and its \u00a72 seam claim structurally. libs/http/external.py asserts it is the SOLE home of raw vendor-client construction (Anthropic/httpx/GCS) so a static scan finds every external-call site there and nowhere else \u2014 but NO guard enforces this today (only check_sdk_isolation_triad/secret_bindings/banned_strings/field_contract exist). This adds a new AST guard (mirroring check_sdk_isolation_triad's scan-services+libs structure) that flags any raw vendor client constructed outside libs/http, making the single-seam invariant enforced rather than documented.",
+    "definition_of_done": "A NEW libs/ops/src/ops/check_call_external.py AST-scans services/+libs/ for raw vendor-client constructions (AsyncAnthropic(), httpx.AsyncClient()/Client(), google.cloud.storage.Client(), and equivalent Recall/STT/TTS raw clients) and returns nonzero naming any site OUTSIDE libs/http; the module exposes a check(root)/main() CLI mirroring check_sdk_isolation_triad; it is wired into BOTH .github/workflows/guards.yml and .pre-commit-config.yaml (guard parity); on the current tree it passes honestly (every raw client is in libs/http/external.py). NOT done if the guard is CI-only, misses a vendor-client construction form, or false-flags the legitimate libs/http home.",
+    "consumes": [
+      "http.call_external"
+    ],
+    "exposes": [],
+    "depends_on": [
+      "foundation.seam-external-dispatch",
+      "foundation.ci-guards"
+    ],
+    "integration_point": "libs/ops/src/ops/check_call_external.py (NEW, mirrors libs/ops/src/ops/check_sdk_isolation_triad.py owned by foundation.ci-guards; scans over libs/http/src/http/external.py owned by foundation.seam-external-dispatch) wired into .github/workflows/guards.yml + .pre-commit-config.yaml",
+    "acceptance": "WHEN a raw vendor client (AsyncAnthropic/httpx/GCS/Recall/STT) is constructed outside libs/http THE SYSTEM SHALL exit non-zero naming the offending file:line in both pre-commit and CI, and pass honestly on the current tree where every raw client lives in libs/http/external.py.",
+    "acceptance_cmd": "tests/doc00/test_m12_con.py -k 'con_004 or call_external_guard' ; tests/doc00/test_m00_cmp.py -k cmp_010",
+    "evidence_class": "[static]",
+    "journeys_now_live": [],
+    "codebase_anchors": [
+      "libs/ops/src/ops/check_call_external.py"
+    ],
+    "invariants": [
+      "the raw vendor client lives ONLY in libs/http (the call_external seam) \u2014 a static AST guard enforces it",
+      "the guard runs in BOTH pre-commit and CI (guard parity)",
+      "it mirrors check_sdk_isolation_triad's AST-scan-of-services+libs structure \u2014 never a manual re-audit"
+    ],
+    "risks": [
+      "must recognize every raw-client construction form (lazy imports inside functions, aliased imports) without false-flagging libs/http's own home",
+      "must not flag TYPE_CHECKING-only imports of vendor types"
+    ],
+    "human_gated": false
+  }
+]

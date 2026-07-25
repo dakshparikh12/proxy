@@ -1,0 +1,18 @@
+{
+  "id": "S-s4-abort-during-build",
+  "kind": "negative",
+  "spec_refs": [
+    "09-VERIFICATION.md#3",
+    "04-ORCHESTRATOR.md#3.11"
+  ],
+  "given": "A Workroom build is in flight for the meeting.",
+  "when": "A human says 'stop' (abort the running build).",
+  "then": "The in-flight wake/build aborts and abort-is-final (no resurrection); the abort handle keyed by meeting_id|task_id is fired; Proxy confirms it stopped \u2014 never silently keeps building.",
+  "touches_nodes": [
+    "orchestrator.abort-discipline-verify",
+    "orchestrator.run-loop",
+    "transport.turn-barge-in",
+    "journey.s4-barge-in-human-control"
+  ],
+  "journey_id": "J-09-S4-barge-in-human-control"
+}

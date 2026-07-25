@@ -1,0 +1,18 @@
+{
+  "id": "S-contract-one-operation-runs-happy",
+  "kind": "journey",
+  "spec_refs": [
+    "09-VERIFICATION.md#2",
+    "CANONICAL-DECISIONS.md#2"
+  ],
+  "given": "The whole repo is scanned for operation_runs table definitions.",
+  "when": "The single-table check runs in CI (and no meeting_harness table exists).",
+  "then": "Exactly ONE operation_runs table definition is found across the repo; no meeting_harness twin.",
+  "touches_nodes": [
+    "foundation.substrate-schema",
+    "foundation.substrate-runtime",
+    "orchestrator.claim-fence-affinity-verify",
+    "journey.one-operation-runs"
+  ],
+  "journey_id": "J-09-one-operation-runs"
+}

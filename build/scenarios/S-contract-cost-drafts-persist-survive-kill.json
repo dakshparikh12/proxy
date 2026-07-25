@@ -1,0 +1,20 @@
+{
+  "id": "S-contract-cost-drafts-persist-survive-kill",
+  "kind": "edge",
+  "spec_refs": [
+    "09-VERIFICATION.md#2",
+    "CANONICAL-DECISIONS.md#3",
+    "CANONICAL-DECISIONS.md#4"
+  ],
+  "given": "meeting_cost and staged_drafts rows are written mid-meeting.",
+  "when": "The process is killed and restarted (simulated kill).",
+  "then": "Both rows survive the kill and reload with correct values; nothing lived only in memory.",
+  "touches_nodes": [
+    "foundation.substrate-runtime",
+    "workroom.drafts-persist-verify",
+    "orchestrator.heartbeat-fence",
+    "orchestrator.accept-handler",
+    "journey.cost-drafts-persist"
+  ],
+  "journey_id": "J-09-cost-drafts-persist"
+}

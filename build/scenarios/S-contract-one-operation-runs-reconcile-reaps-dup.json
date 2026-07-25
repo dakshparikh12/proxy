@@ -1,0 +1,19 @@
+{
+  "id": "S-contract-one-operation-runs-reconcile-reaps-dup",
+  "kind": "edge",
+  "spec_refs": [
+    "09-VERIFICATION.md#2",
+    "CANONICAL-DECISIONS.md#2",
+    "04-ORCHESTRATOR.md#3.8"
+  ],
+  "given": "A stale/duplicate operation_runs row is left behind by a crashed harness.",
+  "when": "The idempotent run_reconcile_sweep runs.",
+  "then": "The reconcile sweep reaps the duplicate/stale row; exactly one live run remains per scope.",
+  "touches_nodes": [
+    "foundation.substrate-runtime",
+    "orchestrator.reconcile-sandbox-verify",
+    "orchestrator.claim-fence-affinity-verify",
+    "journey.one-operation-runs"
+  ],
+  "journey_id": "J-09-one-operation-runs"
+}

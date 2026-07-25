@@ -11,8 +11,8 @@ it on for the whole run. Config is **frozen**: you never edit `pyproject.toml`, 
 `.venv`, or `.claude/settings.json` mid-run — a needed config change is a HALT, not an auto-edit.
 
 **Worker agents** (all in `.claude/agents/`, dispatched via the Agent tool):
-`analyst` (intent/hidden-obligations), `criteria-auditor` (generate/seal criteria),
-`coverage-auditor` + `criteria-auditor` (Tier-B critic), `planner-reviewer` (plan review),
+`analyst` (intent/hidden-obligations), `coverage-auditor` + `criteria-auditor` (Tier-B critic —
+coverage vs the spec), `planner-reviewer` (plan review),
 `reviewer` (fresh read-only per-node verify — tools: Read/Grep/Glob/Bash, **no Edit/Write**).
 
 ---
@@ -49,29 +49,26 @@ that only appear at the seams. Expect gaps; classify each:
 When unsure, treat it as product-level and ask. Every seam becomes an explicit wiring node so
 Tier-A A2 can prove it routes together.
 
-**1.2 Seal acceptance bundles for the unsealed docs → HALT 1b.** Docs **04, 05, 08, and 09** have
-no sealed `acceptance/doc<NN>/` yet. For each, dispatch `criteria-auditor` to generate criteria
-(EARS-testable, one criterion per obligation; Doc-09's criteria ARE the integration journeys),
-run the coverage gate, then **HALT 1b:** the human reviews and **seals** each bundle by committing
-the YAML into `acceptance/doc<NN>/criteria/`. **Do not proceed to 1.3 until all four are sealed
-and visible in `git status`** — the seal IS the files landing in the repo. (00–03 already sealed;
-never regenerate.) Rationale: `check_completeness.py` closes the chain against *sealed* criteria,
-so every doc must be sealed first or Tier A fails with "node cites no valid sealed criterion."
+**1.2 Code-vs-spec audit → stamp dispositions.** For every obligation across all 8 docs, decide
+its node's `disposition` from the readers' evidence: `verify` (code exists + looks right),
+`fix` (exists + known defect), `rebuild` (exists + fundamentally wrong), `build-new` (absent).
+No criteria are generated or sealed — the spec is the source of truth; 00–03 nodes reuse their
+existing tests (`criterion_ids`), 04–09 nodes are judged against `spec_refs`.
 
 **1.3 Synthesize `chain.json` (you, the lead, author it).** From the readers' reports, author the
 full node set for all 8 docs against `chain.schema.json` — the sample node in `SPEC.md §2` is the
-template. Rules: dependency-order it (every `depends_on` backward-only); **every node cites ≥1
-sealed criterion** (wiring/journey nodes cite the relevant cross-cutting or Doc-09 journey
-criterion — there are no criterion-less nodes); seed `status` from 1.1 evidence
-(`built:needs-verification` where code exists, else `not-built`); fill every field, especially
-`intent` + `definition_of_done` (cite + interpret the spec, never re-copy it). Then **validate
-structurally** before 1.4: the file must parse and satisfy `chain.schema.json` (a node missing a
-required field is a bug to fix now).
+template. Rules: dependency-order it (every `depends_on` backward-only); **every node cites its
+`spec_refs`** (00–03 also cite existing `criterion_ids`); stamp `disposition` (1.2) and set
+`status: pending`; give every node its `codebase_anchors` (the files it owns — this feeds the
+reverse-map); fill every field, especially `intent` + `definition_of_done` (cite + interpret the
+spec, never re-copy it). Then **validate structurally** before 1.4: the file must parse and
+satisfy `chain.schema.json`.
 
 **1.4 Tier A — mechanical closure.** Run `python3 build/check_completeness.py`. It must exit 0:
-order-validity (backward-only `depends_on` = acyclic ✓), requirement closure both ways, wiring
-producer/consumer balance, and Doc-09 journey closure (needs `build/journeys.json` from 1.1). Fix
-`chain.json` until green — this is arithmetic; a red is a real gap, not a judgment call.
+order-validity (acyclic), requirement closure (existing tests covered + every node traceable),
+wiring producer/consumer balance, Doc-09 journey closure, and **A4 reverse-map** (every existing
+source file claimed by a node; the orphan list = dead code to remove/cover at HALT 1). Fix
+`chain.json` until green — this is arithmetic; a red is a real gap.
 
 **1.5 Tier B — semantic critic (fresh context).** Dispatch `coverage-auditor` + `criteria-auditor`
 (fresh) to re-read all specs vs the chain and report: implicit obligations with no node, nodes
@@ -100,7 +97,7 @@ Pick the next node whose `depends_on` are all `verified`. For each:
 `spec_refs`, `acceptance`, `consumes`/`exposes`, `integration_point`, `codebase_anchors`,
 `invariants`, `risks`). The builder reads the node → opens the cited spec sections → reads the
 codebase → writes its plan. Have `planner-reviewer` (fresh) review it before any code.
-*(If `status == built:needs-verification`, skip 2.1–2.3; go straight to 2.4 — the fast verify.)*
+*(If `disposition == verify`, skip 2.1–2.3; go straight to 2.4 — the fast verify.)*
 
 **2.2 BUILD.** TDD: write the failing acceptance test on the **real path** → code to green. You may
 CREATE a new test; you must never EDIT or delete a **sealed** test/cassette/golden/`_baseline.json`

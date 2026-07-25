@@ -1,0 +1,18 @@
+{
+  "id": "S-s4-quiet-command",
+  "kind": "edge",
+  "spec_refs": [
+    "09-VERIFICATION.md#3",
+    "02-VOICE-TRANSPORT.md#3.6"
+  ],
+  "given": "Proxy is speaking.",
+  "when": "A human says 'Proxy, quiet'.",
+  "then": "Speech stops immediately and Proxy holds silence until re-addressed; no argument, no trailing audio.",
+  "touches_nodes": [
+    "transport.turn-barge-in",
+    "transport.speak",
+    "transport.cost-xcut",
+    "journey.s4-barge-in-human-control"
+  ],
+  "journey_id": "J-09-S4-barge-in-human-control"
+}

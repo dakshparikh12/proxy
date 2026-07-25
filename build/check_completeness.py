@@ -76,20 +76,43 @@ def check_order(nodes: list[dict]) -> list[str]:
 
 
 def check_requirements(nodes: list[dict], sealed: set[str]) -> list[str]:
+    """Every node must trace to SOMETHING (an existing sealed criterion OR a spec_ref — the spec
+    is the source of truth for 04-09). Separately, every EXISTING sealed criterion (00-03) must be
+    covered by a node, so no existing test is silently dropped."""
     problems: list[str] = []
     cited: set[str] = set()
     for n in nodes:
         crit = [c for c in n.get("criterion_ids", []) if c in sealed]
-        if not crit:
-            problems.append(f"node '{n.get('id','?')}' cites no valid sealed criterion "
-                            f"(scope-creep / unbuilt-bundle): {n.get('criterion_ids', [])}")
         cited.update(crit)
+        if not crit and not n.get("spec_refs"):
+            problems.append(f"node '{n.get('id','?')}' traces to neither a sealed criterion nor a "
+                            f"spec_ref (untraceable — scope-creep)")
     uncovered = sealed - cited
     if uncovered:
         show = ", ".join(sorted(uncovered)[:20])
         more = f" (+{len(uncovered) - 20} more)" if len(uncovered) > 20 else ""
-        problems.append(f"{len(uncovered)} sealed criteria covered by NO node: {show}{more}")
+        problems.append(f"{len(uncovered)} existing sealed criteria (00-03) covered by NO node — "
+                        f"an existing test would be dropped: {show}{more}")
     return problems
+
+
+def source_files() -> set[str]:
+    """Product source files the chain must account for (the reverse-map universe)."""
+    files: set[str] = set()
+    for pat in ("services/*/src/**/*.py", "libs/*/src/**/*.py"):
+        for p in ROOT.glob(pat):
+            files.add(str(p.relative_to(ROOT)))
+    return files
+
+
+def check_orphans(nodes: list[dict]) -> list[str]:
+    """Reverse-map: every existing product source file must be claimed by some node's
+    codebase_anchors. Unclaimed = dead code / old-process scope-creep."""
+    claimed: set[str] = set()
+    for n in nodes:
+        for a in n.get("codebase_anchors", []):
+            claimed.add(a.split(":")[0].strip())          # strip a trailing :line
+    return sorted(f for f in source_files() if f not in claimed)
 
 
 def check_wiring(chain: dict) -> list[str]:
@@ -140,19 +163,36 @@ def section(name: str, problems: list[str]) -> bool:
 
 
 def main() -> None:
-    chain = load_chain(sys.argv)
+    final = "--final" in sys.argv                          # Phase-3: orphans become a hard FAIL
+    argv = [a for a in sys.argv if a != "--final"]
+    chain = load_chain(argv)
     nodes = chain["nodes"]
     sealed = sealed_criteria()
     if not sealed:
         die("no sealed criteria found under acceptance/doc*/criteria/ — nothing to close against.")
     journeys = enumerated_journeys()
 
-    print(f"== Tier A: completeness closure ({len(nodes)} nodes, {len(sealed)} sealed criteria) ==")
+    print(f"== Tier A: completeness closure ({len(nodes)} nodes, {len(sealed)} existing criteria) ==")
     ok = True
     ok &= section("order-validity (depends_on backward-only)", check_order(nodes))
-    ok &= section("A1 requirement closure (both ways)", check_requirements(nodes, sealed))
+    ok &= section("A1 requirement closure (existing tests + traceability)", check_requirements(nodes, sealed))
     ok &= section("A2 wiring closure (producer/consumer balance)", check_wiring(chain))
     ok &= section("A3 journey closure (Doc-09)", check_journeys(nodes, journeys))
+
+    orphans = check_orphans(nodes)                          # A4 reverse-map (no dead code)
+    if not orphans:
+        print("[PASS] A4 reverse-map (every source file claimed by a node)")
+    else:
+        tag = "FAIL" if final else "INFO"
+        print(f"[{tag}] A4 reverse-map: {len(orphans)} existing file(s) claimed by NO node "
+              f"(dead code / to-remove — decide at HALT 1; must be 0 at --final sign-off):")
+        for f in orphans[:40]:
+            print(f"       - {f}")
+        if len(orphans) > 40:
+            print(f"       ... (+{len(orphans) - 40} more)")
+        if final:
+            ok = False
+
     print("─" * 60)
     if ok:
         print("Tier A: CLOSED — the chain covers the whole product structurally.")

@@ -1,0 +1,18 @@
+{
+  "id": "S-s1-not-addressed-stays-silent",
+  "kind": "negative",
+  "spec_refs": [
+    "09-VERIFICATION.md#3",
+    "04-ORCHESTRATOR.md#3.1"
+  ],
+  "given": "Two humans are talking about a 'proxy server' in the codebase; Proxy is not being addressed.",
+  "when": "The name 'proxy' appears in transcript but not as an address to the agent.",
+  "then": "The name-gate's tiny disambiguator resolves 'not addressed to me'; Proxy stays silent, wakes no turn, spends no tokens \u2014 no false barge.",
+  "touches_nodes": [
+    "orchestrator.name-gate",
+    "transport.hear-transcript",
+    "orchestrator.wake-turn",
+    "journey.s1-happy-arc"
+  ],
+  "journey_id": "J-09-S1-happy-arc"
+}

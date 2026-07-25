@@ -1,0 +1,26 @@
+{
+  "id": "S-s1-happy-arc-full",
+  "kind": "journey",
+  "spec_refs": [
+    "09-VERIFICATION.md#3",
+    "01-CODE-INTELLIGENCE.md#3.5",
+    "04-ORCHESTRATOR.md#3.2"
+  ],
+  "given": "A team connected a real repo (reached ready) and invited Proxy to a live meeting; consent posted.",
+  "when": "A member says 'Proxy, where do we validate the auth token?' out loud.",
+  "then": "Within the latency SLO Proxy speaks a cited voice-headline and posts the file:line chat-detail from the live clone; at meeting-end a notes file lands with decisions/actions/questions + receipts.",
+  "touches_nodes": [
+    "transport.join-consent",
+    "transport.hear-transcript",
+    "orchestrator.name-gate",
+    "orchestrator.wake-turn",
+    "orchestrator.direct-answer-path",
+    "transport.speak",
+    "transport.chat",
+    "scribe.close-pass",
+    "experience.notes-file-template",
+    "orchestrator.ordered-close",
+    "journey.s1-happy-arc"
+  ],
+  "journey_id": "J-09-S1-happy-arc"
+}

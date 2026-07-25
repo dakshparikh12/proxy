@@ -1,0 +1,1187 @@
+[
+  {
+    "id": "orchestrator.provider-seam",
+    "title": "Provider seam + AgentChunk normalization + [CRITICAL] tripwire",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "build-new",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#3.3",
+      "04-ORCHESTRATOR.md#3.2",
+      "CANONICAL-DECISIONS.md#1.1",
+      "CANONICAL-DECISIONS.md#12.3",
+      "CANONICAL-DECISIONS.md#11.10"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Realizes \u00a73.3: the SINGLE place the Claude Agent SDK is called for a seam-routed agent turn (Proxy's wake + the Workroom build). A dumb Claude provider translates native SDK messages into the canonical `contracts.AgentChunk` union (six variants; discriminator `.type`, `TEXT.text` is accumulated-per-msg_id NOT a delta) and re-throws nothing in-band (ERROR passes through as a chunk). The seam owns every cross-cutting concern named in \u00a73.3: the SDK-isolation triad (strict_mcp_config=True, setting_sources=[], computed built-in `tools`), env sanitization (curated env, mutually-exclusive auth keys stripped, stderr redaction), and the [CRITICAL] tripwire (a non-MCP built-in Read/Grep/Bash firing in sandbox mode means the isolation triad leaked \u2192 log [CRITICAL]). This is the source the barge-in/TTS substrate consumes.",
+    "definition_of_done": "DONE: `pick_provider(model)` returns a Claude `AgentProvider` whose `stream()` yields `contracts.AgentChunk` with each variant's metadata keys populated (INIT.session_id, TEXT.msg_id, RESULT.total_cost_usd) \u2014 the SDK-message\u2192AgentChunk mapping CONFIRMED against the installed `claude_agent_sdk` live shapes at build (\u00a711.10, D-010), never guessed; the isolation triad is set on every seam call and asserted by check_sdk_isolation_triad; a non-MCP built-in tool firing in sandbox mode emits `[CRITICAL]`. NOT done: yielding bare str, a raw client anywhere outside this seam, an assumed SDK wire shape, or ERROR raised in-band.",
+    "consumes": [
+      "contracts.AgentChunk",
+      "llm.routing",
+      "ops.check_sdk_isolation_triad"
+    ],
+    "exposes": [
+      "orchestrator.provider_seam"
+    ],
+    "depends_on": [],
+    "integration_point": "new services/harness/src/harness/provider.py (the Claude AgentProvider + pick_provider) feeding libs/agentkit BehaviorRunner",
+    "acceptance": "WHEN a synthetic Claude SDK stream is fed through the Claude provider THE SYSTEM SHALL yield normalized AgentChunk variants with correct metadata and log [CRITICAL] if a non-MCP built-in tool fires in sandbox mode.",
+    "acceptance_cmd": "services/harness/tests -k provider_seam or agentchunk_mapping",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-agentchunk-stream-deltas"
+    ],
+    "codebase_anchors": [
+      "services/harness/src/harness/provider.py"
+    ],
+    "invariants": [
+      "CON-004 call_external seam (no raw SDK client outside the seam)",
+      "SDK-isolation triad on every query() call site",
+      "no situation-conditional branching"
+    ],
+    "risks": [
+      "SDK message shape drift \u2014 MUST confirm live at build (\u00a711.10)",
+      "auth-key leak from a dev .env picking the wrong auth path",
+      "sk-ant-* / Bearer token leaking into logs without redaction"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.stream-deltas-verify",
+    "title": "stream_deltas one-arg delta computer (verify)",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#3.3",
+      "CANONICAL-DECISIONS.md#11.3",
+      "CANONICAL-DECISIONS.md#1.1"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Verifies the already-built `stream_deltas` (libs/agentkit/deltas.py) against \u00a73.3/\u00a711.3: takes ONE upstream AgentChunk iterable, delta-izes only TEXT (emits the new suffix per msg_id, resets on a new msg_id), passes INIT/TOOL_USE/TOOL_RESULT/RESULT/ERROR through UNCHANGED, and yields AgentChunk (never bare str) so tool events survive. It is applied EXACTLY ONCE \u2014 inside BehaviorRunner.run \u2014 and never re-wrapped downstream. This is the barge-in/TTS start point (first TEXT delta) that Proxy speaks from.",
+    "definition_of_done": "DONE: the existing deltas.py + execution.py satisfy \u00a711.3 (one arg, yields AgentChunk, TEXT-only delta with msg_id reset, non-TEXT pass-through) and there is exactly one call site (BehaviorRunner.run); a downstream re-wrap fails a completeness check. NOT done: any second stream_deltas call, a str yield, or dropping tool events.",
+    "consumes": [
+      "contracts.AgentChunk",
+      "agentkit.stream_deltas"
+    ],
+    "exposes": [
+      "agentkit.stream_deltas"
+    ],
+    "depends_on": [
+      "orchestrator.provider-seam"
+    ],
+    "integration_point": "libs/agentkit/src/agentkit/deltas.py (verified as the sole delta site consumed by execution.py)",
+    "acceptance": "WHEN an accumulated TEXT stream with interleaved tool events is passed to stream_deltas THE SYSTEM SHALL emit per-msg_id suffix deltas and forward every non-TEXT chunk unchanged, from exactly one call site.",
+    "acceptance_cmd": "libs/agentkit/tests -k stream_deltas or deltaize",
+    "evidence_class": "[unit]",
+    "journeys_now_live": [
+      "J-09-agentchunk-stream-deltas"
+    ],
+    "codebase_anchors": [
+      "libs/agentkit/src/agentkit/deltas.py"
+    ],
+    "invariants": [
+      "stream_deltas applied exactly once (no re-wrap)",
+      "no consumer reads a raw AgentChunk"
+    ],
+    "risks": [
+      "a downstream consumer silently re-wrapping the already-delta'd stream"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.behavior-runner",
+    "title": "BehaviorRunner wired to the provider seam + cost/error boundary (verify+extend)",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#3.4",
+      "CANONICAL-DECISIONS.md#12.5",
+      "CANONICAL-DECISIONS.md#10.5",
+      "04-ORCHESTRATOR.md#3.3"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Verifies the ONE generic runner (libs/agentkit config.py + execution.py) against \u00a73.4: it reads a typed BehaviorConfig, mounts EXACTLY the declared curated tool subset (allowed_tools = b.config.tools, \u00a710.5 \u2014 never the union), applies the SDK-isolation triad, streams through the provider seam, applies stream_deltas once, feeds the cost meter as a consumer of that same typed stream (RESULT.total_cost_usd \u2192 \u00a73.13), and surfaces the pass-through ERROR chunk as a ProviderError at the runner boundary (where \u00a73.5 recovery catches it). Selecting a behavior by name IS the branch \u2014 no per-behavior code path exists.",
+    "definition_of_done": "DONE: BehaviorRunner mounts only the declared curated subset, computes the isolation params, wraps the seam's raw stream with stream_deltas once, the cost meter observes RESULT off the delta stream, and an ERROR chunk raises ProviderError at the boundary. NOT done: mounting the tool union, a per-behavior if/branch, a second stream_deltas, or metering inside the delta computer. Targeted extended thinking is ON only for the Opus grounded-answer + Workroom plan turns and explicitly OFF on the Scribe / should-I-speak / quick-ask paths; the thinking budget is capped below MAX_OUTPUT_TOKENS (CANONICAL \u00a710.6).",
+    "consumes": [
+      "orchestrator.provider_seam",
+      "agentkit.stream_deltas",
+      "agentkit.BehaviorRunner",
+      "llm.routing",
+      "substrate.meeting_cost"
+    ],
+    "exposes": [
+      "agentkit.BehaviorRunner"
+    ],
+    "depends_on": [
+      "orchestrator.provider-seam",
+      "orchestrator.stream-deltas-verify"
+    ],
+    "integration_point": "libs/agentkit/src/agentkit/execution.py + config.py (runner bound to the harness provider seam + cost meter)",
+    "acceptance": "WHEN a behavior is run by name through the runner THE SYSTEM SHALL mount only its declared curated tools, stream normalized deltas once, meter RESULT cost, and raise ProviderError on an ERROR chunk \u2014 with no per-behavior code branch.",
+    "acceptance_cmd": "libs/agentkit/tests -k behavior_runner or curated_tools",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-agentchunk-stream-deltas",
+      "J-09-S7-cost-circuit-breaker"
+    ],
+    "codebase_anchors": [
+      "libs/agentkit/src/agentkit/execution.py",
+      "libs/agentkit/src/agentkit/config.py"
+    ],
+    "invariants": [
+      "config configures the surface; judgment makes the choice",
+      "curated tool subset (never the union)",
+      "stream_deltas applied exactly once"
+    ],
+    "risks": [
+      "advertising more tools than the behavior needs (degrades selection accuracy)"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.behaviors-dir",
+    "title": "Wake-behaviors as typed BehaviorConfig constants + build-time capability manifest",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "build-new",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#3.4",
+      "CANONICAL-DECISIONS.md#12.5",
+      "CANONICAL-DECISIONS.md#7",
+      "CANONICAL-DECISIONS.md#10.9"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Realizes \u00a73.4: Proxy's wake-behaviors (`answer-question`, `catchup`, `surface-risk`, `propose-action`) as typed Python BehaviorConfig module constants (NOT YAML, \u00a712.5) \u2014 each declares the capability envelope (role/rules-as-examples, inputs, model tier, max_turns, curated tools). The normative `answer-question` (AMENDMENT C3) mounts the code_intel read tools (get_dependents/who_writes/list_entry_points/grep/read/batch_read) via mcp_servers PLUS the orchestration verbs so it can DIRECT-ANSWER a grounded lookup, not only dispatch. Rules are framed as examples-to-prime-judgment, never a decision table. with_proxy_guardrails appends the cheapest-tool-first / spoken-register lines (\u00a710.9, C2). A small JSON/TS capability manifest is generated at build from these constants for UI labels.",
+    "definition_of_done": "DONE: each behavior is a `register()`-ed typed constant; `answer-question` mounts the code_intel MCP server + orchestration verbs as a curated subset and can direct-answer a grounded lookup via code_intel WITHOUT dispatching; the build emits a JSON/TS capability manifest from the same tools list; adding a behavior is one constant + one register() line. NOT done: a YAML loader, a `rules` entry of the form 'if speaker says X call tool Y', or a behavior advertising the tool union.",
+    "consumes": [
+      "agentkit.BehaviorRunner",
+      "llm.routing",
+      "codeintel.mcp_tools",
+      "codeintel.direct_api"
+    ],
+    "exposes": [
+      "orchestrator.behaviors"
+    ],
+    "depends_on": [
+      "orchestrator.behavior-runner"
+    ],
+    "integration_point": "new services/harness/src/harness/behaviors/ (answer_question.py, catchup.py, surface_risk.py, propose_action.py, __init__.py) + a build-time manifest emitter",
+    "acceptance": "WHEN the answer-question behavior receives a simple grounded lookup THE SYSTEM SHALL answer it directly via the mounted code_intel tools with a cited file:line and no workroom dispatch; adding a new behavior SHALL require only one constant + one register() line.",
+    "acceptance_cmd": "services/harness/tests -k behaviors or answer_question_direct",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S2-dep-graph-blast-radius"
+    ],
+    "codebase_anchors": [
+      "services/harness/src/harness/behaviors/__init__.py",
+      "services/harness/src/harness/behaviors/answer_question.py",
+      "services/harness/src/harness/behaviors/catchup.py",
+      "services/harness/src/harness/behaviors/surface_risk.py",
+      "services/harness/src/harness/behaviors/propose_action.py"
+    ],
+    "invariants": [
+      "no rules-table of if-X-do-Y in typed config",
+      "curated tool subset per behavior",
+      "spoken register in at least two prompt locations"
+    ],
+    "risks": [
+      "boil-the-ocean rule-list that becomes a hidden decision table",
+      "answer-question omitting code_intel tools and forcing every ask to the workroom"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.wake-cache-verify",
+    "title": "1-hour-TTL cached wake prefix + state-digest compaction (verify)",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#3.2",
+      "CANONICAL-DECISIONS.md#10.1",
+      "CANONICAL-DECISIONS.md#10.2"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Verifies the built wake-cache prefix (libs/agentkit/wake_cache.py) against \u00a73.2/\u00a710.1: the manual cache_control breakpoint sits at the END of the stable prefix (identity + rules + roster + state digest) and carries a 1-hour TTL (ttl=3600), NOT the 5-min default, so sporadic wakes over an hour-plus meeting don't re-pay the cache-write each wake; the volatile tail (wake event + transcript tail) is placed AFTER the breakpoint. The wake turn is primed by the compact state digest (regenerated every ~15 wakes or on material-state change), never raw history; the Notes object read via notes_ref is the durable memory that survives compaction.",
+    "definition_of_done": "DONE: wake_cache.py builds the stable prefix with a 1-hour ephemeral breakpoint at the prefix end and the volatile tail after it, and the digest-regeneration cadence (~15 wakes / material change) is exercised. NOT done: a 5-min TTL, the transcript tail inside the cached block, or priming from raw session history.",
+    "consumes": [
+      "scribe.notes_object"
+    ],
+    "exposes": [
+      "agentkit.wake_cache"
+    ],
+    "depends_on": [
+      "orchestrator.behavior-runner"
+    ],
+    "integration_point": "libs/agentkit/src/agentkit/wake_cache.py (verified against the harness wake-turn assembly)",
+    "acceptance": "WHEN the wake prefix is built THE SYSTEM SHALL place a 1-hour-TTL cache_control breakpoint at the end of the stable prefix with the volatile event tail after it.",
+    "acceptance_cmd": "libs/agentkit/tests -k wake_cache or cache_prefix",
+    "evidence_class": "[unit]",
+    "journeys_now_live": [
+      "J-09-S5-recycle-survives"
+    ],
+    "codebase_anchors": [
+      "libs/agentkit/src/agentkit/wake_cache.py"
+    ],
+    "invariants": [
+      "notes object is the durable memory across compaction",
+      "digest not raw history primes the turn"
+    ],
+    "risks": [
+      "5-min cache silently expiring between sporadic wakes \u2192 re-paying the cache-write each wake"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.wake-turn",
+    "title": "The wake turn \u2014 one persistent SDK session, digest in, tool calls out",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "build-new",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#3.2",
+      "04-ORCHESTRATOR.md#3.18",
+      "CANONICAL-DECISIONS.md#10.8",
+      "CANONICAL-DECISIONS.md#3"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Realizes \u00a73.2/\u00a73.18: one persistent Claude Agent SDK session kept open all meeting, reached ONLY through the provider seam. A wake = one message (the event + a compact state digest: tasks in flight, pending items, mouth free/busy, component health) \u2192 the model replies with tool calls that the harness routes to real functions; turn over, the session idles. The transcript is spotlighted as UNTRUSTED input (\u00a710.3 lethal-trifecta cut). Within-session tool-result reuse (\u00a710.8) caches identical get_dependents/who_writes/grep/read/batch_read results per meeting keyed on the pinned SHA. This REBUILDS the placeholder `wake.py`/`orchestrator.py` fa\u00e7ades (D-008): their hard-coded quick-vs-workroom pick (wake.py:60) becomes model judgment (config-not-code) \u2014 no `if event_type \u2192 action` anywhere in the harness.",
+    "definition_of_done": "DONE: run_wake_turn feeds {event + state digest} into the persistent session through the BehaviorRunner/seam and emits the model's tool calls with NOTHING hard-coded between event and action; the transcript is delimited as untrusted; the per-meeting tool-result cache dedups identical reads at the pinned SHA. NOT done: the surviving code-branch quick-vs-workroom pick, an if-event-type dispatch table, or a wake that re-primes from raw history.",
+    "consumes": [
+      "orchestrator.provider_seam",
+      "agentkit.BehaviorRunner",
+      "orchestrator.behaviors",
+      "agentkit.wake_cache",
+      "scribe.notes_object",
+      "human.speech"
+    ],
+    "exposes": [
+      "orchestrator.wake_turn"
+    ],
+    "depends_on": [
+      "orchestrator.behaviors-dir",
+      "orchestrator.wake-cache-verify"
+    ],
+    "integration_point": "services/harness/src/harness/wake.py + services/harness/src/harness/orchestrator.py (rebuilt from placeholder fa\u00e7ades to the real seam-driven wake turn)",
+    "acceptance": "WHEN a wake event + state digest is delivered THE SYSTEM SHALL take one agent turn that emits tool calls chosen entirely by model judgment, with the transcript treated as untrusted data and no situation-conditional code branch.",
+    "acceptance_cmd": "services/harness/tests -k wake_turn or wake_judgment",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc",
+      "J-09-S8-honest-failure"
+    ],
+    "codebase_anchors": [
+      "services/harness/src/harness/wake.py",
+      "services/harness/src/harness/orchestrator.py"
+    ],
+    "invariants": [
+      "no situation-conditional branching in the harness",
+      "transcript is untrusted data, never an instruction (lethal-trifecta cut)",
+      "every world-touching act is a staged draft behind a human click (Law 3)"
+    ],
+    "risks": [
+      "a prompt-injection in the transcript reaching an outward side-effect",
+      "leaving the placeholder code-branch pick (D-008) in place"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.name-gate",
+    "title": "Address detection \u2014 mechanical name-gate + tiny disambiguator",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "build-new",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#3.1",
+      "04-ORCHESTRATOR.md#2"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Realizes \u00a73.1 (the front gate, mostly free): the transcript feed is scanned mechanically for the name ('Proxy') and chat for '@proxy'. A name-hit triggers ONE tiny disambiguation call ('addressed to me, or proxy-server?' \u2014 pennies, only on hits); confirmed \u2192 the ack reflex fires and Proxy wakes. Chat '@proxy' needs no disambiguation. Proxy's own transcribed speech is never a hit (Doc 02 marks it). This is a reflex-layer physics component, not a judgment turn \u2014 but the disambiguation itself is a bounded model call.",
+    "definition_of_done": "DONE: a mechanical scanner detects 'Proxy'/@proxy, fires the disambiguator only on spoken hits, and 'the proxy server config' does NOT wake Proxy while 'Proxy, can you...' does; Proxy's own marked speech never self-triggers. NOT done: disambiguating chat @proxy, or firing the model on every transcript line.",
+    "consumes": [
+      "transport.transcript",
+      "transport.chat",
+      "orchestrator.provider_seam"
+    ],
+    "exposes": [
+      "orchestrator.name_gate"
+    ],
+    "depends_on": [
+      "orchestrator.wake-turn"
+    ],
+    "integration_point": "new services/harness/src/harness/name_gate.py (subscribed to the SignalCarrier transcript/chat feeds)",
+    "acceptance": "WHEN 'Proxy, would renaming chargeCard break anything?' is spoken THE SYSTEM SHALL confirm the address via one disambiguation call and wake Proxy; WHEN 'the proxy server config' is spoken THE SYSTEM SHALL NOT wake.",
+    "acceptance_cmd": "services/harness/tests -k name_gate or disambiguat",
+    "evidence_class": "[unit]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc"
+    ],
+    "codebase_anchors": [
+      "services/harness/src/harness/name_gate.py"
+    ],
+    "invariants": [
+      "Proxy's own speech never self-triggers",
+      "disambiguation only on spoken name-hits (pennies)"
+    ],
+    "risks": [
+      "over-triggering on 'proxy' as a common noun",
+      "self-triggering on Proxy's own TTS in the transcript"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.ack-reflex",
+    "title": "The 0.5s 'on it' ack reflex + boundary/barge-in gating (code, not agent)",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "build-new",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#2",
+      "04-ORCHESTRATOR.md#3.17",
+      "04-ORCHESTRATOR.md#4"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Realizes the reflex layer (\u00a72 'reflexes-in-code for physics'): the canned 'on it' ack fires within 0.5s of a confirmed address (dead air is the enemy) and is FIFO-honest when busy ('on it \u2014 right after Sam's'); voice may start only on a turn boundary; barge-in kills speech in <200ms. These are sub-second mechanics where a model in the loop would be malpractice \u2014 physics, not decisions. The ack fires BEFORE the wake turn (the ask is dispatched by the time the wake completes ~1s).",
+    "definition_of_done": "DONE: on a confirmed address the ack is audible within the 0.5s deadline (p95 \u2264500ms), is FIFO-ordered when Proxy is mid-answer, speaks only into a boundary, and barge-in aborts speech <200ms. NOT done: routing the ack through a model turn, speaking over a human, or an ack that waits on the wake turn.",
+    "consumes": [
+      "orchestrator.name_gate",
+      "transport.boundary",
+      "transport.barge_in",
+      "transport.speak"
+    ],
+    "exposes": [
+      "orchestrator.ack_reflex"
+    ],
+    "depends_on": [
+      "orchestrator.name-gate"
+    ],
+    "integration_point": "new services/harness/src/harness/reflex.py (ack + boundary gating + barge-in abort, driven by the SignalCarrier boundary/barge-in signals)",
+    "acceptance": "WHEN a confirmed address lands THE SYSTEM SHALL emit the canned 'on it' ack within 0.5s (FIFO-honest if busy) without a model turn; WHEN a human starts speaking THE SYSTEM SHALL stop Proxy's voice within 200ms.",
+    "acceptance_cmd": "services/harness/tests -k ack_reflex or barge_in or boundary_gate",
+    "evidence_class": "[unit]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc",
+      "J-09-S4-barge-in-human-control"
+    ],
+    "codebase_anchors": [
+      "services/harness/src/harness/reflex.py"
+    ],
+    "invariants": [
+      "reflexes are code, never a model turn (physics not decisions)",
+      "voice only into a turn boundary",
+      "barge-in stops speech <200ms (Law 3 human control)"
+    ],
+    "risks": [
+      "a buffered Output Media TTS buffer defeating <200ms barge-in",
+      "ack latency slipping past 0.5s under load"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.direct-answer-path",
+    "title": "Direct-answer path \u2014 grounded lookup answered in the wake turn via host-side code_intel",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "build-new",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#2",
+      "CANONICAL-DECISIONS.md#11.6",
+      "CANONICAL-DECISIONS.md#12.2",
+      "CANONICAL-DECISIONS.md#12.8"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Realizes the DIRECT-ANSWER path (\u00a711.6, the ~1\u20132s path): a simple grounded lookup ('where's the checkout retry logic?', 'what writes the refunds table?') is answered in Proxy's OWN wake turn via the mounted code_intel tools, which hit the HOST-SIDE code_intel internal API (one ~50\u2013100ms hop against the warm graph + pinned clone, \u00a712.2) \u2014 NO E2B and NO Workroom session on the direct path. Path selection is Proxy's wake JUDGMENT (\u00a711.6), not a code branch. The existing harness `direct_answer.py` re-exports the ONE canonical resolver from code_intel.direct_answer (no second copy, no layering inversion); this node wires it as the code_intel-tool answer inside the wake turn and holds the shallow SLO (\u00a712.8: first-grounded-text p50\u22642s/p95\u22644s, first-grounded-audio p50\u22642.5s/p95\u22645s; LSP-bound answers exempt from the audio gate, fire a 'checking\u2026' tile ACK).",
+    "definition_of_done": "DONE: a simple grounded lookup is answered directly in the wake turn with a cited file:line drawn from a real read at the pinned SHA, provisioning NO sandbox and dispatching NO workroom (proven), and the shallow direct path meets the \u00a712.8 SLOs; an LSP-bound answer fires the tile ACK and is excluded from the shallow SLO. NOT done: routing a trivial lookup through the workroom, an E2B round-trip on the direct path, or a fabricated citation (Law 1 abstains instead). Additionally, a direct answer NEVER calls dispatch_workroom() and NEVER provisions an E2B sandbox \u2014 it returns a final envelope from the wake turn alone (negative contract; testable: a 'where is X?' ask returns with no Workroom task created).",
+    "consumes": [
+      "orchestrator.wake_turn",
+      "orchestrator.behaviors",
+      "codeintel.direct_api",
+      "codeintel.mcp_tools",
+      "transport.speak"
+    ],
+    "exposes": [
+      "orchestrator.direct_answer"
+    ],
+    "depends_on": [
+      "orchestrator.wake-turn"
+    ],
+    "integration_point": "services/harness/src/harness/direct_answer.py (the host-side re-export of code_intel.direct_answer, mounted into the answer-question wake turn)",
+    "acceptance": "WHEN a simple grounded lookup is addressed to Proxy THE SYSTEM SHALL answer it in the wake turn via the host-side code_intel API with a cited file:line, no E2B and no workroom, within the shallow SLO.",
+    "acceptance_cmd": "services/harness/tests -k direct_answer or direct_path_no_touch",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc",
+      "J-09-S2-dep-graph-blast-radius",
+      "J-09-S8-honest-failure"
+    ],
+    "codebase_anchors": [
+      "services/harness/src/harness/direct_answer.py"
+    ],
+    "invariants": [
+      "direct path touches NO E2B and NO workroom session",
+      "grounded or silent \u2014 cite file:line or abstain (Law 1)",
+      "exact tagged resolved, search-derived tagged lower-bound (Law 2)"
+    ],
+    "risks": [
+      "a direct answer that provisions a sandbox (violates the no-touch contract)",
+      "an LSP-bound answer counted against the shallow audio gate"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.bundle-dispatch",
+    "title": "Workroom dispatch \u2014 bundle assembly (ask + notes_ref + tail) + completion-callback wake",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "build-new",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#2",
+      "CANONICAL-DECISIONS.md#11.6",
+      "CANONICAL-DECISIONS.md#1.3",
+      "CANONICAL-DECISIONS.md#11.5",
+      "04-ORCHESTRATOR.md#3.15"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Realizes the WORKROOM-DISPATCH path (\u00a711.6, minutes-scale): real work is bundled as `contracts.Bundle` (the ask verbatim + speaker + timestamp + a notes_ref = the meeting_id + the raw transcript tail + a task_id, \u00a71.3/\u00a711.5) and dispatched to the workroom; the workroom does ALL the thinking. Every dispatched workroom is an asyncio.create_task with a done-callback \u2014 the runtime delivers the done-moment (\u00a73.2), nothing polls. The returning `workroom.envelope` re-wakes Proxy to present. Bundle never re-serializes the growing notes object \u2014 only the notes_ref (the workroom reads live notes via GET /internal/notes/{meeting_id}).",
+    "definition_of_done": "DONE: real work produces a `contracts.Bundle` carrying notes_ref (not the notes object) + task_id and is dispatched as an asyncio task whose completion re-wakes Proxy with the `workroom.envelope`; the wake presents by channel/timing/still-relevance. NOT done: inlining the notes object in the bundle, polling for completion, or dispatching a trivial grounded lookup that should have direct-answered.",
+    "consumes": [
+      "orchestrator.wake_turn",
+      "orchestrator.direct_answer",
+      "workroom.envelope",
+      "substrate.staged_drafts",
+      "transport.speak",
+      "transport.send_chat",
+      "transport.show_screen"
+    ],
+    "exposes": [
+      "orchestrator.bundle_dispatch",
+      "contracts.Bundle"
+    ],
+    "depends_on": [
+      "orchestrator.direct-answer-path"
+    ],
+    "integration_point": "new services/harness/src/harness/dispatch.py (bundle assembly + asyncio.create_task done-callback re-wake, invoked by the wake turn's dispatch_workroom tool)",
+    "acceptance": "WHEN real work is asked THE SYSTEM SHALL assemble a Bundle with a notes_ref (never the notes object) and a task_id, dispatch it as an asyncio task, and re-wake Proxy on the Envelope's completion callback to present the result.",
+    "acceptance_cmd": "services/harness/tests -k bundle_dispatch or dispatch_notes_ref",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc",
+      "J-09-S3-staged-draft-accept",
+      "J-09-S6-concurrency"
+    ],
+    "codebase_anchors": [
+      "services/harness/src/harness/dispatch.py"
+    ],
+    "invariants": [
+      "bundle carries notes_ref, never the notes object (\u00a71.3)",
+      "completion-callback wake, never polling",
+      "one mouth \u2014 Proxy serializes only at the mouth"
+    ],
+    "risks": [
+      "re-serializing the notes object per ask (cost/latency trap)",
+      "a late result spoken without a still-relevant re-check"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.run-loop",
+    "title": "The run loop \u2014 the asyncio event queue that is the missing spine",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "build-new",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#3",
+      "04-ORCHESTRATOR.md#3.2",
+      "04-ORCHESTRATOR.md#3.15",
+      "04-ORCHESTRATOR.md#3.17"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Realizes the RUN block of the \u00a73 build diagram and \u00a73.2's 'one plain asyncio program per meeting' \u2014 THE missing spine (D-008). Every signal (webhook, heartbeat, boundary, confirmed ask, workroom-done, control command, cost threshold, anomaly) lands as an event on ONE asyncio queue; the loop pulls each event and routes it to a wake turn (or a reflex). The standing pipes (audio\u2192STT\u2192transcript; transcript\u2192Scribe; Scribe\u2192judge; heartbeats) are wired once at join as PURE forwarding (no decision \u2014 wiring an organism, not hard-coding a situation). In-flight bookkeeping (\u00a73.15): a [3\u20135] semaphore, a duplicate of an in-flight ask ATTACHES rather than spawns, a correction mid-task INJECTS into that task's session, anything past ~2s DETACHES. Every mouth/apply/dispatch side-effect is gated on op.is_owner (\u00a73.7 fencing). No bus, no broker \u2014 Postgres rows + wall-clock + the asyncio Task are the whole runtime.",
+    "definition_of_done": "DONE: a single per-meeting asyncio event queue routes every event type through the loop to a wake turn or a reflex; standing pipes forward continuously with zero agent involvement; the semaphore bounds in-flight work, duplicate asks attach, corrections inject, past-2s detaches; every side-effect gates on is_owner. A test meeting runs an hour with pipes flowing and zero agent calls when nothing is addressed. NOT done: an `if event_type \u2192 handler` dispatch table (the routing is the wake turn), a message bus/broker, or an ungated side-effect.",
+    "consumes": [
+      "orchestrator.wake_turn",
+      "orchestrator.bundle_dispatch",
+      "orchestrator.ack_reflex",
+      "transport.signal_carrier",
+      "transport.roster",
+      "transport.speaking",
+      "transport.channel_report",
+      "scribe.material_events",
+      "substrate.operation_runs",
+      "ops.claim_meeting"
+    ],
+    "exposes": [
+      "orchestrator.run_loop"
+    ],
+    "depends_on": [
+      "orchestrator.bundle-dispatch",
+      "orchestrator.ack-reflex"
+    ],
+    "integration_point": "new services/harness/src/harness/run_loop.py wired into services/harness/src/harness/meeting_runtime.py (the per-meeting assembly)",
+    "acceptance": "WHEN any signal (ask/workroom-done/heartbeat/boundary/control/cost/anomaly) arrives THE SYSTEM SHALL enqueue it and route it through the loop to a wake turn or reflex, with standing pipes forwarding continuously and every side-effect gated on is_owner \u2014 no bus, no per-event code branch.",
+    "acceptance_cmd": "services/harness/tests -k run_loop or event_queue or standing_pipes",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc",
+      "J-09-S6-concurrency",
+      "J-09-S4-barge-in-human-control"
+    ],
+    "codebase_anchors": [
+      "services/harness/src/harness/run_loop.py",
+      "services/harness/src/harness/meeting_runtime.py",
+      "services/harness/src/__init__.py"
+    ],
+    "invariants": [
+      "no bus, no broker \u2014 asyncio Task + Postgres row + wall-clock only",
+      "standing pipes are pure forwarding (no decision)",
+      "every mouth/apply/dispatch gated on is_owner (fencing)",
+      "no situation-conditional branching"
+    ],
+    "risks": [
+      "cross-meeting starvation under one host if the semaphore/loop isn't fair",
+      "a leaked side-effect from a fenced-out (is_owner False) zombie harness"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.standing-pipes",
+    "title": "Standing pipes wiring + STT credential refresh loop (join-time plumbing)",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "build-new",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#2",
+      "04-ORCHESTRATOR.md#3",
+      "04-ORCHESTRATOR.md#3.8"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Realizes the standing-pipes half of \u00a72/\u00a73 (plumbing, wired once at join, run continuously, cost nothing, no agent): audio\u2192STT\u2192the transcript feed, transcript\u2192the Scribe, Scribe\u2192material-change events\u2192(judge, V1-dormant), component heartbeats \u2014 the session's nervous system on the ONE in-process SignalCarrier (meeting_runtime already assembles the carrier\u2194Scribe wiring). The availability-critical STT-credential refresh (stt.py) stays on its OWN in-process interval (\u00a73.8 split), NOT the scale-to-zero reconcile cron, because a live meeting provably has a warm instance. These are constant connections, not judgment moments.",
+    "definition_of_done": "DONE: at join the harness wires audio\u2192STT\u2192transcript\u2192Scribe and Scribe material-events onto the SignalCarrier as pure forwarding with zero agent calls, and the STT credential refresh runs on its own in-process interval (not the reconcile cron). The scribe_runtime serial consumer starts on the Recall in_call callback and stops on call_ended. NOT done: routing a standing pipe through a wake turn, or putting the availability-critical STT loop on the scale-to-zero cron.",
+    "consumes": [
+      "transport.signal_carrier",
+      "transport.transcript",
+      "scribe.material_events",
+      "stt.stream"
+    ],
+    "exposes": [
+      "scribe.note_deltas"
+    ],
+    "depends_on": [
+      "orchestrator.run-loop"
+    ],
+    "integration_point": "services/harness/src/harness/scribe_runtime.py + services/harness/src/harness/stt.py (join-time pipe wiring, driven from webhooks.py in_call/call_ended)",
+    "acceptance": "WHEN a bot enters the room (Recall in_call) THE SYSTEM SHALL wire the standing pipes as pure forwarding and start the Scribe serial consumer, and keep STT credentials fresh on an in-process interval \u2014 all with zero agent calls.",
+    "acceptance_cmd": "services/harness/tests -k standing_pipes or scribe_runtime or stt_refresh",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc"
+    ],
+    "codebase_anchors": [
+      "services/harness/src/harness/scribe_runtime.py",
+      "services/harness/src/harness/stt.py"
+    ],
+    "invariants": [
+      "standing pipes cost nothing and involve no agent",
+      "availability-critical loops stay on an in-process interval, not the scale-to-zero cron"
+    ],
+    "risks": [
+      "starting the Scribe from the wrong lifecycle point (never started bug)",
+      "the STT loop dying silently and degrading transcription mid-meeting"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.claim-fence-affinity-verify",
+    "title": "Atomic-claim ownership + affinity primitives (verify)",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#3.6",
+      "CANONICAL-DECISIONS.md#2",
+      "CANONICAL-DECISIONS.md#11.11",
+      "CANONICAL-DECISIONS.md#11.2"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Verifies the already-built atomic-claim + affinity primitives (libs/ops/claim.py, affinity.py) against \u00a73.6: the claim INSERTs a `meeting-harness` row DIRECTLY into the canonical operation_runs (scope_id holds meeting_id::text \u2014 the one documented cast, \u00a711.2), the partial-unique index operation_runs_active is the lock, RETURNING/rowcount decides the winner, no Redis. The owner instance-id is written to created_by so a reconnecting tile WS / retried Recall webhook routes to the owner (route_to_owner, \u00a711.11); when a harness dies and its heartbeat goes stale the index frees so a replacement re-claims. No separate meeting_harness table (deleted per \u00a72).",
+    "definition_of_done": "DONE: two processes handed the same Recall webhook \u2192 exactly one claim_meeting returns non-null and opens a harness; the loser backs off; created_by carries the owner instance-id and route_to_owner hands a non-owner request to the owner; a reaped row frees the index for re-claim. NOT done: a second claim winning, a duplicate meeting_harness table, Redis, or random Cloud Run routing.",
+    "consumes": [
+      "ops.claim_meeting",
+      "ops.with_meeting_lock",
+      "ops.affinity",
+      "substrate.operation_runs"
+    ],
+    "exposes": [
+      "ops.claim_meeting",
+      "ops.affinity"
+    ],
+    "depends_on": [
+      "orchestrator.run-loop"
+    ],
+    "integration_point": "libs/ops/src/ops/claim.py + libs/ops/src/ops/affinity.py (verified against the harness join/reclaim path)",
+    "acceptance": "WHEN two instances receive the same at-least-once join webhook THE SYSTEM SHALL let exactly one win the atomic claim and record the owner instance-id, so affinity routes reconnects to the owner.",
+    "acceptance_cmd": "libs/ops/tests -k claim_meeting or affinity or route_to_owner",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-one-operation-runs",
+      "J-09-S5-recycle-survives",
+      "J-09-S6-concurrency"
+    ],
+    "codebase_anchors": [
+      "libs/ops/src/ops/claim.py",
+      "libs/ops/src/ops/affinity.py"
+    ],
+    "invariants": [
+      "one harness per meeting (single-writer-per-meeting)",
+      "the row is the lock \u2014 no Redis, no broker",
+      "operation_runs.scope_id is the sole text column with the documented meeting_id::text cast"
+    ],
+    "risks": [
+      "a check-then-act race spawning two harnesses",
+      "affinity routing a reconnect to a dead instance"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.heartbeat-fence",
+    "title": "Heartbeat canonicalization \u2014 operation_runs fence, not Healthchecks (fix)",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "fix",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#3.7",
+      "04-ORCHESTRATOR.md#3.10",
+      "CANONICAL-DECISIONS.md#12.10",
+      "CANONICAL-DECISIONS.md#2"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Fixes D-003 (two heartbeat mechanisms): the harness liveness authority is the operation_runs FENCING heartbeat in libs/ops/operation_run.py (\u00a73.7/\u00a712.10 \u2014 with_operation_run adopts the claimed run_id, beats every ~10s scoped to status='running'; rowcount 0 \u21d2 reclaimed \u21d2 is_owner=False \u21d2 self-terminate; activity.bump keeps the sandbox alive during silent work; STALE_AFTER_S\u224840). The existing services/harness/heartbeat.py Healthchecks.io dead-man ping is auxiliary observability, NOT the liveness authority \u2014 demote it (or gate it behind the fence) so there is one liveness story, not a split-brain. Crash detection is a staleness read (mark_stale_operations_interrupted boot sweep + lazy per-read), not a broker ack. Restart-not-resume (\u00a73.10): a re-claimed harness re-joins via Recall, never resumes the dead media session (recovery.py).",
+    "definition_of_done": "DONE: with_operation_run adopts the claimed run_id and the fencing heartbeat is the single liveness authority; a reaper flips a stale row to interrupted and the boot sweep heals the DB before routers mount; heartbeat.py's Healthchecks ping is explicitly auxiliary (never the fence). Killing the process leaves a row the boot-reaper flips to interrupted, and a replacement re-claims + re-joins via Recall (restart-not-resume). NOT done: two competing liveness authorities, treating the Healthchecks ping as the fence, or resuming the dead media session.",
+    "consumes": [
+      "substrate.operation_runs",
+      "ops.claim_meeting",
+      "ops.reconcile"
+    ],
+    "exposes": [
+      "orchestrator.close"
+    ],
+    "depends_on": [
+      "orchestrator.claim-fence-affinity-verify"
+    ],
+    "integration_point": "services/harness/src/harness/heartbeat.py (demoted to auxiliary) + services/harness/src/harness/recovery.py, over libs/ops/operation_run.py as the fence",
+    "acceptance": "WHEN a harness process is killed THE SYSTEM SHALL let the operation_runs fencing heartbeat go stale so the boot-reaper flips the row to interrupted and a replacement re-claims and re-joins via Recall \u2014 with the Healthchecks ping only auxiliary, never the liveness authority.",
+    "acceptance_cmd": "services/harness/tests -k heartbeat_fence or recovery or stale_reaper",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S5-recycle-survives",
+      "J-09-cost-drafts-persist"
+    ],
+    "codebase_anchors": [
+      "services/harness/src/harness/heartbeat.py",
+      "services/harness/src/harness/recovery.py"
+    ],
+    "invariants": [
+      "one liveness authority \u2014 the operation_runs fence (no split-brain)",
+      "fencing self-check: rowcount 0 \u21d2 is_owner False \u21d2 self-terminate",
+      "restart-not-resume \u2014 never resume the dead media session"
+    ],
+    "risks": [
+      "split-brain if the Healthchecks ping is treated as authoritative",
+      "a zombie harness speaking after being fenced out"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.session-durability",
+    "title": "Two-tier session durability \u2014 session_id resume + stale-session replay",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "build-new",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#3.5",
+      "CANONICAL-DECISIONS.md#6",
+      "CANONICAL-DECISIONS.md#11.9",
+      "CANONICAL-DECISIONS.md#12.12"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Realizes \u00a73.5 two-tier durability so a Cloud Run recycle can't erase the meeting. Tier 1: on the first turn's INIT chunk capture metadata.session_id, write it to the meeting row, pass resume=<session_id> on every subsequent wake (covers same-instance). Tier 2: the stale-session replay floor \u2014 when resume fails (match BOTH markers 'no conversation found with session id' AND 'process exited'), rebuild context from Doc 03's Postgres transcript plane (the single durable history \u2014 the Tier-2 SDK-session mirror is CUT per \u00a76), prepend a delimited preamble, emit a user-visible 'session restored' notice (transparent, not silent amnesia), and retry WITHOUT resume. This is the pinned full 6-arg resume_with_fallback(runner, behavior, inputs, resume_id, abort, history_fn), IMPORTED from libs/agentkit/resume.py (\u00a711.9/\u00a712.12) \u2014 Doc 04 passes Doc 03's transcript-plane reader as history_fn. Abort-is-final short-circuits before recovery; JSON-truncation retry (cap 2) on the same session. NOTE: libs/agentkit/resume.py is currently a NotImplementedError arity stub (D-008) that this node pins to the 6-arg signature.",
+    "definition_of_done": "DONE: session_id is persisted from INIT and resumed per wake; on a stale-session error (both markers matched) resume_with_fallback rebuilds from the transcript plane, emits the RESTORED_NOTICE, and retries without resume; abort is final (never resurrected); resume.py's NotImplementedError stub is replaced by the pinned 6-arg impl. A wake after a simulated instance swap replays and answers coherently. NOT done: a second SDK-session mirror table (cut per \u00a76), silent amnesia, resurrecting an aborted build, or leaving resume.py as a stub.",
+    "consumes": [
+      "orchestrator.provider_seam",
+      "agentkit.BehaviorRunner",
+      "ops.resume_with_fallback",
+      "scribe.material_events",
+      "substrate.transcript_segments",
+      "ops.AbortRegistry"
+    ],
+    "exposes": [
+      "ops.resume_with_fallback"
+    ],
+    "depends_on": [
+      "orchestrator.heartbeat-fence"
+    ],
+    "integration_point": "libs/agentkit/src/agentkit/resume.py (pin the 6-arg signature) + services/harness/src/harness/session.py wiring (session_id persist/resume + transcript-plane history_fn)",
+    "acceptance": "WHEN a wake lands on a different instance after a recycle and resume fails with a stale-session marker THE SYSTEM SHALL rebuild from Doc 03's transcript plane, emit a 'session restored' notice, and retry without resume \u2014 never silent amnesia, never resurrecting an aborted build.",
+    "acceptance_cmd": "libs/agentkit/tests -k resume_with_fallback and services/harness/tests -k session_durability",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S5-recycle-survives"
+    ],
+    "codebase_anchors": [
+      "libs/agentkit/src/agentkit/resume.py",
+      "services/harness/src/harness/session.py"
+    ],
+    "invariants": [
+      "single-writer-per-meeting (\u00a73.6 guarantees one owner)",
+      "abort is final \u2014 never retried/resurrected",
+      "resume_with_fallback defined once in libs/agentkit, imported not redefined (\u00a711.9)",
+      "session restore is user-visible, never silent"
+    ],
+    "risks": [
+      "the two stale-session match strings drifting on an SDK upgrade (re-audit each upgrade)",
+      "leaving resume.py as the NotImplementedError arity stub"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.cost-circuit-breaker",
+    "title": "Live cost circuit-breaker \u2014 check_meeting_budget with 0.8/1.0 caps (fix)",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "fix",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#3.13",
+      "CANONICAL-DECISIONS.md#12.7",
+      "CANONICAL-DECISIONS.md#3"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Fixes D-004: libs/ops/cost.py hard-codes the listening soft/hard caps at $1.5/$3.0 (lines 33-34), but \u00a73.13 + CANONICAL \u00a712.7 mandate soft/hard = 0.8/1.0 \u00d7 projected-hours (~$0.95\u20131.25/hr listening baseline). Govern by CANONICAL \u00a712.7 \u2014 the caps become a function of projected hours, not fixed constants. Two honest meters (\u00a712.7): the listening baseline (transport + Scribe + orch-idle) is the SLA ceiling and drives the degrade\u2192notes-only breaker; substantive work (Workroom/Opus/E2B) is a SEPARATE metered task budget governed by the pre-dispatch estimate gate on dispatch_workroom, never folded into the baseline. The accumulator is PERSISTED (meeting_cost row) and reload_from_db()'d on re-claim so a recycle never resets to 0. Crossing a threshold is itself a wake event so the AGENT phrases the disclosure (soft cap \u2192 drop to Haiku + widen Scribe + proactive off, disclosed; hard cap \u2192 notes-only) \u2014 enforcement deterministic, disclosure judgment; never a silent cliff. HUMAN-CONFIRM at HALT 1 (D-004): confirm no sealed doc00/01 criterion locks the old $1.5/$3.0 constant before changing it.",
+    "definition_of_done": "DONE: the listening caps are computed as 0.8/1.0 \u00d7 projected-hours (the old $1.5/$3.0 constants removed), check_meeting_budget reads the persisted model+transport+e2b sum, reload_from_db survives a recycle, the estimate gate blocks a dispatch whose estimate exceeds the remaining task budget (ask-approval/decline, disclosed), and crossing a cap raises a cost-threshold wake event whose disclosure the agent phrases. Crossing the soft cap downgrades Orchestrator to Haiku with a spoken line; the hard cap goes notes-only. NOT done: keeping the $1.5/$3.0 constants, an in-memory-only meter that resets on crash, a silent degradation, or changing the constant before the HALT-1 sealed-criterion confirm. Concretely: check_meeting_budget() gates EVERY non-Scribe call; soft cap (0.8\u00d7projected-hrs) \u2192 Proxy wake resolves to Haiku + widen Scribe interval + spoken disclosure; hard cap (1.0\u00d7) \u2192 notes-only; Workroom dispatch has a separate pre-dispatch task-budget estimate gate.",
+    "consumes": [
+      "substrate.meeting_cost",
+      "contracts.AgentChunk",
+      "ops.check_meeting_budget",
+      "orchestrator.bundle_dispatch",
+      "scribe.cost"
+    ],
+    "exposes": [
+      "orchestrator.cost_breaker"
+    ],
+    "depends_on": [
+      "orchestrator.session-durability"
+    ],
+    "integration_point": "libs/ops/src/ops/cost.py (replace the $1.5/$3.0 constants with 0.8/1.0 \u00d7 projected-hours) wired into services/harness/src/harness/budget.py",
+    "acceptance": "WHEN listening spend crosses 0.8 \u00d7 projected-hours THE SYSTEM SHALL degrade (Orchestrator\u2192Haiku, widen Scribe, proactive off) with a spoken disclosure, and at 1.0 \u00d7 projected-hours go notes-only \u2014 reading the persisted meter that survives a recycle, never a silent cliff.",
+    "acceptance_cmd": "libs/ops/tests -k check_meeting_budget or projected_hours_cap and services/harness/tests -k budget",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S7-cost-circuit-breaker",
+      "J-09-cost-drafts-persist",
+      "J-09-S5-recycle-survives"
+    ],
+    "codebase_anchors": [
+      "libs/ops/src/ops/cost.py",
+      "services/harness/src/harness/budget.py"
+    ],
+    "invariants": [
+      "$1/meeting-hour is a promised SLA \u2014 gate, don't just observe",
+      "two honest meters \u2014 never the false all-in $1 (\u00a712.7)",
+      "the accumulator is persisted, never resets to 0 on recycle",
+      "degradation is always disclosed (never a silent cliff)"
+    ],
+    "risks": [
+      "a sealed doc00/01 criterion locking the old $1.5/$3.0 constant (HALT-1 confirm)",
+      "folding substantive task spend into the listening baseline"
+    ],
+    "human_gated": true
+  },
+  {
+    "id": "orchestrator.abort-discipline-verify",
+    "title": "AbortController discipline \u2014 abort-is-final (verify)",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#3.11",
+      "CANONICAL-DECISIONS.md#11.9"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Verifies the already-built AbortController + AbortRegistry (libs/agentkit/abort.py) against \u00a73.11: every wake turn and dispatched Workroom run is threaded with an abort handle in a dict keyed by meeting_id|task_id; aborting halts the MODEL loop itself (not just ignoring the result \u2014 the SDK would otherwise run to maxTurns=1000, burning budget). Abort is FINAL, never retried \u2014 this is what makes \u00a73.5's stale-session/JSON retry safe. Wired to three triggers: meeting-end (cancel everything), whisper-'stop'/'Proxy, quiet' (cancel the addressed task), and a hard per-task timeout (rescaled to seconds for the interactive loop). Imported from libs/agentkit/abort.py, never redefined (\u00a711.9).",
+    "definition_of_done": "DONE: abort.py's AbortController/AbortRegistry halt the model loop, a new judgment-moment preempts a stale one (make() cancels the prior), cancel_meeting kills all a meeting's tasks, and abort short-circuits before any \u00a73.5 recovery. 'Proxy, quiet' aborts the in-flight turn. NOT done: an abort that only ignores the result, a resurrected aborted build, or a redefined AbortRegistry outside libs/agentkit.",
+    "consumes": [
+      "ops.AbortRegistry",
+      "transport.barge_in",
+      "human.speech"
+    ],
+    "exposes": [
+      "ops.AbortRegistry"
+    ],
+    "depends_on": [
+      "orchestrator.cost-circuit-breaker"
+    ],
+    "integration_point": "libs/agentkit/src/agentkit/abort.py (verified against the harness wake/dispatch/close abort wiring)",
+    "acceptance": "WHEN 'Proxy, quiet' or meeting-end fires THE SYSTEM SHALL abort the addressed (or all) in-flight model loops finally, so no aborted build is ever resurrected by resume or JSON-retry.",
+    "acceptance_cmd": "libs/agentkit/tests -k abort or abort_registry",
+    "evidence_class": "[unit]",
+    "journeys_now_live": [
+      "J-09-S4-barge-in-human-control"
+    ],
+    "codebase_anchors": [
+      "libs/agentkit/src/agentkit/abort.py"
+    ],
+    "invariants": [
+      "abort halts the model loop (not just the result)",
+      "abort is final, never retried",
+      "AbortRegistry imported not redefined (\u00a711.9)"
+    ],
+    "risks": [
+      "an abort that leaves the SDK loop running to maxTurns=1000",
+      "abort-then-resume resurrecting a killed build"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.reconcile-sandbox-verify",
+    "title": "Reconcile sweep + ManagedResource sandbox lifecycle + Scheduler (verify)",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#3.8",
+      "04-ORCHESTRATOR.md#3.9",
+      "CANONICAL-DECISIONS.md#6",
+      "CANONICAL-DECISIONS.md#12.1"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Verifies the already-built reconcile sweep + simplified sandbox lifecycle (libs/ops/reconcile.py, sandbox_provider.py, sandbox.py; control_plane/internal.py) against \u00a73.8/\u00a73.9. \u00a73.8: one idempotent run_reconcile_sweep behind POST /internal/reconcile (RECONCILE_TOKEN bearer-gated, outside the auth wall), prod=Cloud Scheduler every 5min / dev=in-process interval calling the SAME function; each step isolated in its own try/except; steps = stale-harnesses (operation_runs reaper), meeting-sandboxes (TTL/orphan reap), notes-retention. \u00a73.9: the per-meeting E2B sandbox as a ManagedResource with THREE defenses and NO state machine (state machine cut per \u00a76) \u2014 E2B-native timeout = crash backstop, explicit destroy on meeting-end, a TTL cron that lists live sandboxes and kills orphans; idempotent provider verbs (provision/destroy-tolerates-404/health); ensure_running is the one race-safe call.",
+    "definition_of_done": "DONE: run_reconcile_sweep runs the three isolated steps idempotently behind the token-gated /internal/reconcile; ensure_running provisions a cold meeting's sandbox once (race-safe) and returns the existing one on a redelivered join; an ended meeting's sandbox is destroyed by close and, failing that, by the cron/E2B timeout; no provisioning/running/stopped/failed state machine survives. NOT done: a non-idempotent sweep, a re-provision on redelivery, a surviving state machine, or /internal/reconcile inside the auth wall.",
+    "consumes": [
+      "ops.reconcile",
+      "ops.sandbox_provider",
+      "substrate.operation_runs"
+    ],
+    "exposes": [
+      "ops.reconcile",
+      "ops.sandbox_provider"
+    ],
+    "depends_on": [
+      "orchestrator.abort-discipline-verify"
+    ],
+    "integration_point": "libs/ops/src/ops/reconcile.py + libs/ops/src/ops/sandbox_provider.py + libs/ops/src/ops/sandbox.py, entrypoint services/harness/src/control_plane/internal.py",
+    "acceptance": "WHEN /internal/reconcile is hit (Scheduler or dev interval) THE SYSTEM SHALL run the three isolated idempotent steps; WHEN a cold meeting starts THE SYSTEM SHALL provision its sandbox exactly once (race-safe) and destroy it at close or via the TTL cron.",
+    "acceptance_cmd": "libs/ops/tests -k reconcile or sandbox_lifecycle and services/harness/tests -k internal_reconcile",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-one-operation-runs",
+      "J-09-S6-concurrency"
+    ],
+    "codebase_anchors": [
+      "libs/ops/src/ops/reconcile.py",
+      "libs/ops/src/ops/sandbox_provider.py",
+      "libs/ops/src/ops/sandbox.py",
+      "services/harness/src/control_plane/internal.py"
+    ],
+    "invariants": [
+      "idempotent provider verbs (provision/destroy-404/health)",
+      "no ManagedResource state machine (cut per \u00a76)",
+      "cost-driven reaping on the Scheduler; availability-critical loops in-process",
+      "one reconcile function, two schedulers (no drift)"
+    ],
+    "risks": [
+      "a dropped reconcile tick leaking a sandbox (mitigated by E2B-native timeout)",
+      "prod/dev reconcile paths drifting"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.accept-handler",
+    "title": "Accept-handler \u2014 human accepts a staged draft after the call (control_plane route)",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "build-new",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#3.16.1",
+      "CANONICAL-DECISIONS.md#4",
+      "CANONICAL-DECISIONS.md#12.9",
+      "CANONICAL-DECISIONS.md#5"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Realizes \u00a73.16.1: the accept-handler reached via the authenticated control_plane route POST /m/{meeting_id}/drafts/{draft_id}/accept (\u00a712.9 \u2014 protected() + server-side meeting/draft\u2192tenant check + CSRF + audit + idempotent). It (1) reads the persisted staged_drafts row + its GCS content by draft_id (rejecting an already-applied/rejected draft \u2014 idempotent), (2) performs the actual apply \u2014 for a core `notes-edit` kind, writes the edit into the notes object via Doc 03's write path, (3) flips the row to status='applied' and posts confirmation in chat. A `code-change` draft is NOT a PR (\u00a712.9): accept RECORDS the approval and exposes the diff bundle for download (already persisted in GCS) \u2014 it never pushes (push is an Expansion seam behind contents:write). Proxy's other inbound control commands register into the ONE libs/http dispatch funnel (\u00a73.14/\u00a75, meeting-scoped by default); the accept route is the control_plane surface, not the WS funnel.",
+    "definition_of_done": "DONE: POST /m/{id}/drafts/{id}/accept on a persisted core notes-edit draft applies the edit and flips the row to applied (idempotent \u2014 a replayed key returns the first result); a cross-tenant caller and an invalid CSRF are rejected; a code-change draft records approval + exposes the bundle link WITHOUT pushing; the apply reads durable storage (post-teardown safe), never the dead review session. NOT done: pushing a code-change, double-applying on replay, trusting a client-supplied tenant, or reading the dead in-memory session.",
+    "consumes": [
+      "substrate.staged_drafts",
+      "scribe.note_deltas",
+      "human.accept_click",
+      "transport.send_chat"
+    ],
+    "exposes": [
+      "orchestrator.accept_handler",
+      "draft.accepted"
+    ],
+    "depends_on": [
+      "orchestrator.reconcile-sandbox-verify"
+    ],
+    "integration_point": "services/harness/src/harness/accept_route.py + services/harness/src/control_plane/accept.py + services/harness/src/control_plane/authz.py (the POST /m/{id}/drafts/{id}/accept route)",
+    "acceptance": "WHEN a tenant member accepts a persisted core notes-edit draft THE SYSTEM SHALL apply the notes edit and flip the row to applied idempotently; WHEN the draft is a code-change THE SYSTEM SHALL record approval and expose the bundle without pushing; a cross-tenant or bad-CSRF accept SHALL be rejected.",
+    "acceptance_cmd": "services/harness/tests -k accept_handler or accept_route or accept_draft",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S3-staged-draft-accept",
+      "J-09-cost-drafts-persist",
+      "J-09-S9-tenant-isolation"
+    ],
+    "codebase_anchors": [
+      "services/harness/src/harness/accept_route.py",
+      "services/harness/src/control_plane/accept.py",
+      "services/harness/src/control_plane/authz.py"
+    ],
+    "invariants": [
+      "human control is absolute \u2014 every world-touching apply behind a human click (Law 3)",
+      "core apply is a code-change draft, never a PR/push (\u00a712.9)",
+      "cross-tenant read denied (isolation)",
+      "accept is idempotent + audited + CSRF-guarded",
+      "reads durable storage, never the dead review session"
+    ],
+    "risks": [
+      "a code-change draft silently pushing (must only record + expose the bundle)",
+      "double-applying on an idempotency-key replay",
+      "trusting a client-supplied tenant"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.ordered-close",
+    "title": "The ordered close \u2014 freeze \u2192 close pass \u2192 destroy sandbox \u2192 complete row \u2192 teardown last",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "build-new",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#3.16",
+      "CANONICAL-DECISIONS.md#12.10",
+      "CANONICAL-DECISIONS.md#4"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Realizes \u00a73.16: on meeting-end (the in-place close \u2014 no separate close doc) Proxy runs the ordered close as its OWN operation_runs row (operation_type='meeting-close', completion predicate = the notes.md object exists \u2014 no close_jobs table, \u00a712.10), making the close crash-safe and idempotent. Ordered: freeze the notes \u2192 trigger Doc 03's close pass (writes the notes file if_generation_match=0 + posts the link in chat \u2014 the whole V0 close deliverable) \u2192 destroy the sandbox (\u00a73.9) \u2192 mark the harness operation_runs row completed (\u00a73.7) \u2192 tear down pipes LAST (nothing reads a torn-down store). Staged drafts persist in durable state (staged_drafts + GCS-versioned content, \u00a74) past teardown so the accept-handler still works after the call. The existing close.py provides the claim + explicit sandbox destroy; this node wires the full ordered sequence.",
+    "definition_of_done": "DONE: a full join\u2192close runs the close as a meeting-close operation_runs row (predicate = notes.md exists, idempotent), in order freeze\u2192close-pass\u2192destroy-sandbox\u2192complete-harness-row\u2192teardown-pipes-last, leaving the notes posted, staged drafts durable, and nothing reading a torn-down store. NOT done: a close_jobs table, tearing down pipes before completing the row, a non-idempotent close, or losing staged drafts at teardown.",
+    "consumes": [
+      "orchestrator.run_loop",
+      "orchestrator.close",
+      "scribe.close_artifact",
+      "ops.sandbox_provider",
+      "substrate.operation_runs",
+      "transport.meeting_end",
+      "transport.send_chat"
+    ],
+    "exposes": [
+      "orchestrator.close",
+      "notes.finalized"
+    ],
+    "depends_on": [
+      "orchestrator.accept-handler"
+    ],
+    "integration_point": "services/harness/src/harness/close.py wired into the run loop's meeting-end path (meeting_runtime aclose)",
+    "acceptance": "WHEN the meeting-end signal arrives THE SYSTEM SHALL run the ordered close as a meeting-close operation_runs row (idempotent, predicate=notes.md exists) \u2014 freeze, close pass, destroy sandbox, complete the harness row, tear down pipes last \u2014 leaving the notes posted and staged drafts durable.",
+    "acceptance_cmd": "services/harness/tests -k ordered_close or close_meeting or teardown_order",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc",
+      "J-09-S3-staged-draft-accept",
+      "J-09-demo-arc"
+    ],
+    "codebase_anchors": [
+      "services/harness/src/harness/close.py"
+    ],
+    "invariants": [
+      "close is its own operation_runs row (no close_jobs table, \u00a712.10)",
+      "teardown is last \u2014 nothing reads a torn-down store",
+      "notes written if_generation_match=0 (create-only)",
+      "staged drafts persist past teardown (\u00a74)"
+    ],
+    "risks": [
+      "tearing down pipes before completing the harness row",
+      "a non-idempotent close double-writing notes"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.boot-lifecycle-verify",
+    "title": "Server boot ordering + settings gate + emit frontier + join/webhook seams (verify)",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "04-ORCHESTRATOR.md#3",
+      "04-ORCHESTRATOR.md#3.15",
+      "04-ORCHESTRATOR.md#3.14",
+      "CANONICAL-DECISIONS.md#12.10",
+      "CANONICAL-DECISIONS.md#11.1"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Verifies the harness/control_plane assembly-and-lifecycle files that the run-loop spine composes, against \u00a73 (JOIN/RUN/CLOSE), \u00a73.15 (bookkeeping/is_owner-gated emit frontier), and \u00a711.1 (identity/tenancy). Covers: server.py (ordered fail-fast boot: tracing\u2192pool\u2192Database\u2192provisioner_ready\u2192reaper\u2192routers, routers mount AFTER the boot reaper); settings.py (pydantic fail-fast config gate, hard-gate keys named at boot); emit.py (the SOLE outward-delivery frontier {speak,send_chat,show_screen,apply,dispatch}, each gated on is_owner \u2014 a fenced-out zombie emits nothing); meetings.py (invite \u2192 meetings row bound to (tenant,repo,pinned_sha), real Recall bot launch, consent as the FIRST observable action); webhooks.py + control_plane/webhooks.py (durable webhook_events INSERT\u2192200\u2192idempotent drain; the in_call/call_ended drain is the join/end seam); control_plane/app.py (Authlib Google OIDC /auth routes); control_plane/webhooks.py; the __init__ package markers. dispatch() itself is single-def in libs/http (\u00a75) \u2014 the harness registers handlers into it, never redefines it.",
+    "definition_of_done": "DONE: boot runs the ordered fail-fast lifecycle with routers mounting after the reaper; a missing hard-gate key crashes at boot naming the key; every EMIT_FRONTIER verb is is_owner-gated and a fenced zombie emits nothing; invite creates a (tenant,repo,pinned_sha) meetings row + launches a real Recall bot with consent as the first action; webhook_events ingest returns 200 after the durable INSERT and drains idempotently on the in_call/call_ended seam; the OIDC /auth routes mount. NOT done: routers mounting before the reaper, a lazy first-use config failure, an ungated emit verb, or a re-defined dispatch funnel.",
+    "consumes": [
+      "http.dispatch",
+      "http.call_external",
+      "ops.check_secret_bindings",
+      "substrate.webhook_events",
+      "recall.webhook",
+      "github.webhook",
+      "chat.inbound",
+      "transport.join_consent"
+    ],
+    "exposes": [
+      "connect.rendered",
+      "meeting_home.rendered"
+    ],
+    "depends_on": [
+      "orchestrator.ordered-close"
+    ],
+    "integration_point": "services/harness/src/harness/{server.py,settings.py,emit.py,meetings.py,webhooks.py,__init__.py} + services/harness/src/control_plane/{app.py,webhooks.py,__init__.py}",
+    "acceptance": "WHEN the harness boots THE SYSTEM SHALL run the ordered fail-fast lifecycle (routers after the reaper) and crash at boot on a missing hard-gate key; WHEN a harness is fenced out THE SYSTEM SHALL let no EMIT_FRONTIER verb reach the wire; WHEN a Recall webhook lands THE SYSTEM SHALL durably persist then 200 then drain idempotently.",
+    "acceptance_cmd": "services/harness/tests -k boot_order or settings_gate or emit_frontier or webhook_drain or invite_bot",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc",
+      "J-09-S9-tenant-isolation",
+      "J-09-cost-drafts-persist"
+    ],
+    "codebase_anchors": [
+      "services/harness/src/harness/server.py",
+      "services/harness/src/harness/settings.py",
+      "services/harness/src/harness/emit.py",
+      "services/harness/src/harness/meetings.py",
+      "services/harness/src/harness/webhooks.py",
+      "services/harness/src/harness/__init__.py",
+      "services/harness/src/control_plane/app.py",
+      "services/harness/src/control_plane/webhooks.py",
+      "services/harness/src/control_plane/__init__.py"
+    ],
+    "invariants": [
+      "fail loud at boot, not on first use",
+      "every outward verb gated on is_owner (fencing)",
+      "webhook_events is the only external-callback durability (no bus)",
+      "secrets only from Secret Manager (check_secret_bindings)",
+      "dispatch() single-def in libs/http (\u00a75)",
+      "consent is the first observable action on join"
+    ],
+    "risks": [
+      "routers mounting before the boot reaper heals the DB",
+      "an outward verb added outside EMIT_FRONTIER escaping the is_owner gate",
+      "a fabricated Recall bot id (must write back the real one)"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.conversational-behaviors",
+    "title": "Conversational wake-behaviors (catch-me-up / where-are-we / dry-run / show-your-work / capability-answer)",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "build-new",
+    "status": "pending",
+    "spec_refs": [
+      "08-EXPERIENCE.md#2.4"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Realizes the Doc 08 \u00a72.4 conversational features #1,2,5,6,10 as first-class wake-behaviors on the run loop: catch-me-up (a ~20s spoken recap folded from the live notes object), where-are-we (current-state answer), dry-run (\"what would you do?\" \u2014 plan the action WITHOUT executing it, no Workroom dispatch), show-your-work (expand a prior receipt into its underlying reads/citations), and capability-answer (\"what can you do?\" answered from the experience capabilities catalog). Each is a bounded direct wake turn that grounds its answer in already-produced substrate (notes, receipts, capabilities) and speaks+posts the result \u2014 never a new build task.",
+    "definition_of_done": "DONE: each of the five behaviors is selectable at the wake turn and produces its grounded spoken+chat answer from existing substrate \u2014 catch-me-up folds scribe.notes_object into a ~20s recap, where-are-we reports the live state, dry-run returns a planned course of action while provisioning NO sandbox and dispatching NO Workroom task, show-your-work re-expands a named receipt into its citations, and capability-answer is drawn from experience.capabilities (not invented). NOT done: a dry-run that actually executes or dispatches, a catch-me-up longer than the spoken envelope, a capability answer not grounded in the capabilities catalog, or any of these routed as a Workroom build.",
+    "consumes": [
+      "scribe.notes_object",
+      "codeintel.direct_api",
+      "experience.capabilities",
+      "transport.speak",
+      "transport.send_chat"
+    ],
+    "exposes": [],
+    "depends_on": [
+      "scribe.pipeline-apply",
+      "codeintel.mcp_tools",
+      "experience.capabilities-catalog",
+      "transport.speak",
+      "transport.chat"
+    ],
+    "integration_point": "new services/harness/src/harness/behaviors/conversational.py, selected from the orchestrator run-loop wake turn",
+    "acceptance": "WHEN a wake turn selects a conversational behavior (catch-me-up / where-are-we / dry-run / show-your-work / capability-answer) THE SYSTEM SHALL produce its grounded spoken+chat answer from existing substrate and, for dry-run, provision no sandbox and dispatch no Workroom task.",
+    "acceptance_cmd": "services/harness/tests -k conversational_behaviors or catch_me_up or dry_run",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc"
+    ],
+    "codebase_anchors": [
+      "services/harness/src/harness/behaviors/conversational.py"
+    ],
+    "invariants": [
+      "Law 1 grounded-or-silent (recap/answer cites real substrate)",
+      "Law 3 dry-run touches nothing (staged/no-op)",
+      "no situation-conditional branching"
+    ],
+    "risks": [
+      "dry-run silently executing",
+      "catch-me-up exceeding the spoken char/hr envelope",
+      "capability answer drifting from the catalog"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "orchestrator.session-preferences",
+    "title": "Session-scoped preferences (shorter answers / stop posting decision notes) via the session-state digest",
+    "region": "04-ORCHESTRATOR",
+    "disposition": "build-new",
+    "status": "pending",
+    "spec_refs": [
+      "08-EXPERIENCE.md#2.4",
+      "04-ORCHESTRATOR.md#3.2"
+    ],
+    "requirement_ids": [],
+    "criterion_ids": [],
+    "intent": "Realizes Doc 08 \u00a72.4 #9: a participant can steer Proxy's behavior in-meeting with session-scoped preferences (\"keep answers shorter\", \"stop posting decision notes\") that persist for the rest of the meeting only. The preference is parsed from chat, folded into the session-state digest that every wake turn reads, and applied by later behaviors \u2014 never a hard-coded flag and never persisted past the session.",
+    "definition_of_done": "DONE: a preference expressed in chat (\"keep answers shorter\", \"stop posting decision notes\") is captured into the session-state digest, survives a wake-turn recycle within the same meeting, is applied by subsequent turns (shorter output / suppressed decision-note posting), and is scoped to the session (a new meeting starts clean). NOT done: a preference that persists across meetings, one applied via a hard-coded conditional rather than the digest, or one that is captured but not actually honored by later turns.",
+    "consumes": [
+      "transport.chat"
+    ],
+    "exposes": [],
+    "depends_on": [
+      "transport.chat"
+    ],
+    "integration_point": "new services/harness/src/harness/behaviors/session_prefs.py, folded into the session-state digest read by the run-loop wake turn",
+    "acceptance": "WHEN a participant states a session preference in chat THE SYSTEM SHALL fold it into the session-state digest and apply it to subsequent wake turns for the remainder of the meeting only.",
+    "acceptance_cmd": "services/harness/tests -k session_prefs or session_preferences",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [],
+    "codebase_anchors": [
+      "services/harness/src/harness/behaviors/session_prefs.py"
+    ],
+    "invariants": [
+      "Law 4 dynamic-not-hard-coded (preference lives in the digest, not a branch)",
+      "session-scoped only (no cross-meeting persistence)"
+    ],
+    "risks": [
+      "preference leaking across meetings",
+      "captured-but-not-honored",
+      "hard-coding the mapping instead of the digest"
+    ],
+    "human_gated": false
+  }
+]

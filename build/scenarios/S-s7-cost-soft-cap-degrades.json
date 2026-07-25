@@ -1,0 +1,19 @@
+{
+  "id": "S-s7-cost-soft-cap-degrades",
+  "kind": "journey",
+  "spec_refs": [
+    "09-VERIFICATION.md#3",
+    "04-ORCHESTRATOR.md#3.13",
+    "CANONICAL-DECISIONS.md#12.7"
+  ],
+  "given": "A meeting with real builds accrues cost toward the 0.8x projected-hours soft cap.",
+  "when": "check_meeting_budget detects the soft cap crossed.",
+  "then": "Proxy degrades gracefully (Orchestrator -> Haiku, widen Scribe interval) WITH a spoken disclosure \u2014 never a silent cliff.",
+  "touches_nodes": [
+    "orchestrator.cost-circuit-breaker",
+    "orchestrator.behavior-runner",
+    "workroom.cost-latency",
+    "journey.s7-cost-circuit-breaker"
+  ],
+  "journey_id": "J-09-S7-cost-circuit-breaker"
+}

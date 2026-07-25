@@ -1,0 +1,19 @@
+{
+  "id": "S-s8-build-fails-returns-failed",
+  "kind": "negative",
+  "spec_refs": [
+    "09-VERIFICATION.md#3",
+    "05-WORKROOM.md#3.7"
+  ],
+  "given": "A dispatched Workroom build cannot reach a passing verified state.",
+  "when": "The build exhausts its gated replan budget without passing the evidence gate.",
+  "then": "The build returns needs_review/failed with the reason, never 'done'; the fail-closed verify refuses to green a build that didn't actually run.",
+  "touches_nodes": [
+    "workroom.verify-gate",
+    "workroom.gated-replan",
+    "workroom.envelope",
+    "workroom.sandbox-receipts",
+    "journey.s8-honest-failure"
+  ],
+  "journey_id": "J-09-S8-honest-failure"
+}

@@ -1,0 +1,18 @@
+{
+  "id": "S-s5-workroom-task-resumes-after-recycle",
+  "kind": "edge",
+  "spec_refs": [
+    "09-VERIFICATION.md#3",
+    "05-WORKROOM.md#3.1"
+  ],
+  "given": "A Workroom build task is in progress when the orchestrator recycles.",
+  "when": "The replacement re-claims and reaches the in-flight task.",
+  "then": "The SDK session resumes from the persisted session_id; on resume failure the context rebuilds from the bundle and the run continues \u2014 durable task, no lost work.",
+  "touches_nodes": [
+    "workroom.session-resume",
+    "workroom.task-durability",
+    "orchestrator.session-durability",
+    "journey.s5-recycle-survives"
+  ],
+  "journey_id": "J-09-S5-recycle-survives"
+}

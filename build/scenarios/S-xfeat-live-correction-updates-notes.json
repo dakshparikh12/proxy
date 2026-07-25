@@ -1,0 +1,19 @@
+{
+  "id": "S-xfeat-live-correction-updates-notes",
+  "kind": "cross-feature",
+  "spec_refs": [
+    "09-VERIFICATION.md#3",
+    "03-MEETING-UNDERSTANDING.md#3"
+  ],
+  "given": "Proxy captured a decision in the live notes, then a speaker corrects an earlier statement.",
+  "when": "A human says 'actually, scratch that \u2014 we're going with Postgres, not Mongo'.",
+  "then": "Scribe emits an immediate attributed superseded patch; the correction is injected into the rolling notes so the final notes file reflects the corrected decision, not the stale one.",
+  "touches_nodes": [
+    "scribe.corrections",
+    "scribe.rolling-summary",
+    "scribe.close-pass",
+    "experience.notes-file-template",
+    "journey.s1-happy-arc"
+  ],
+  "journey_id": "J-09-S1-happy-arc"
+}

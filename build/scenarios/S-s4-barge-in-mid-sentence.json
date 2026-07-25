@@ -1,0 +1,19 @@
+{
+  "id": "S-s4-barge-in-mid-sentence",
+  "kind": "journey",
+  "spec_refs": [
+    "09-VERIFICATION.md#3",
+    "02-VOICE-TRANSPORT.md#3.6",
+    "04-ORCHESTRATOR.md#3.11"
+  ],
+  "given": "Proxy is mid-sentence speaking a long answer.",
+  "when": "A human starts talking over it (Silero VAD speaking=on).",
+  "then": "Speech stops <200ms via the VAD trigger (not the ~300ms transcript); Proxy yields the floor \u2014 human control is absolute (Law 3).",
+  "touches_nodes": [
+    "transport.turn-barge-in",
+    "transport.speak",
+    "orchestrator.ack-reflex",
+    "journey.s4-barge-in-human-control"
+  ],
+  "journey_id": "J-09-S4-barge-in-human-control"
+}

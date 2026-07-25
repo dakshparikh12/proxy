@@ -1,0 +1,1084 @@
+[
+  {
+    "id": "scribe.coalescer",
+    "title": "Coalescer \u2014 cut natural Scribe windows (turn/pause/cap, VAD-gated, chat-merged, serial-ordered)",
+    "region": "03-MEETING-UNDERSTANDING",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "03-MEETING-UNDERSTANDING.md#3.1",
+      "03-MEETING-UNDERSTANDING.md#4 (tunable defaults: window 30-60s/turn, cap 45s/~1200 tokens)"
+    ],
+    "requirement_ids": [
+      "R-doc03-COAL-01",
+      "R-doc03-COAL-02",
+      "R-doc03-COAL-03"
+    ],
+    "criterion_ids": [
+      "AC-COAL-01",
+      "AC-COAL-02",
+      "AC-COAL-03",
+      "AC-COAL-04",
+      "AC-COAL-05",
+      "AC-COAL-05-NEG",
+      "AC-COAL-06",
+      "AC-COAL-07",
+      "AC-COAL-08",
+      "AC-COAL-08-NEG",
+      "AC-COAL-09",
+      "AC-COAL-10",
+      "AC-COAL-11",
+      "AC-COAL-11-NEG",
+      "AC-COAL-12",
+      "AC-COAL-12-NEG",
+      "AC-COAL-13",
+      "AC-COAL-14",
+      "AC-COAL-14-NEG",
+      "AC-COAL-15",
+      "AC-COAL-15-NEG",
+      "AC-COAL-16",
+      "AC-COAL-16-NEG",
+      "AC-COAL-17",
+      "AC-COAL-17-NEG",
+      "AC-COAL-18",
+      "AC-COAL-18-NEG"
+    ],
+    "intent": "Realizes \u00a73.1's front-of-Scribe plumbing: the coalescer buffers Doc 02's raw transcript stream and cuts natural windows \u2014 a speaker turn, a pause within a turn, or the hard cap (last 45s OR ~1,200 tokens, whichever is smaller) \u2014 whichever comes first, so the uncached tail handed to the Scribe stays small and near-constant (the load-bearing latency guarantee). It owns ONLY the physics of window-cutting (Law 4: code owns physics, pipes, substrate), depending on nothing from the note schema. VAD-gating means silence emits no window (and therefore no downstream micro-call); rapid multi-speaker exchange chunks per turn so attribution stays one-speaker-per-window; a monologue chunks on its pauses; a run that would cross the cap is cut at the cap on a turn boundary and the remainder rolls to the next window (comprehension never widens to catch up). Chat messages in the same span fold into the window (chat is part of the meeting record). Windows are produced strictly in order for the single serial consumer.",
+    "definition_of_done": "DONE = the real `Coalescer` cuts correctly-attributed windows on turn/pause/cap boundaries on a recorded conversation, emits ZERO windows during silence, always in-order, folds same-span chat, and rolls the over-cap remainder forward \u2014 proven by the AC-COAL bundle running on the real coalescer. NOT done if any window boundary logic only fires in a test double, if silence still triggers a window, if the cap can be exceeded, or if chat in a window's span is dropped.",
+    "consumes": [
+      "transport.transcript",
+      "transport.chat"
+    ],
+    "exposes": [
+      "scribe.windows"
+    ],
+    "depends_on": [],
+    "integration_point": "services/scribe/src/scribe/coalescer.py \u2014 fed by services/harness/src/harness/scribe_runtime.py:_pump_transcripts (carrier.subscribe \u2192 coalescer.feed \u2192 asyncio.Queue)",
+    "acceptance": "WHEN the Doc 02 transcript stream delivers speaker turns, pauses, an over-cap run, same-span chat, and silence THE SYSTEM SHALL emit exactly one correctly-attributed, in-order window per natural boundary (turn/pause/cap), fold same-span chat into its window, and emit nothing during silence \u2014 within the 45s/1,200-token cap.",
+    "acceptance_cmd": "services/scribe/tests -k coalescer",
+    "evidence_class": "[unit]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc"
+    ],
+    "codebase_anchors": [
+      "services/scribe/src/scribe/coalescer.py",
+      "services/harness/src/harness/scribe_runtime.py (_pump_transcripts, launch_scribe_runtime)",
+      "services/scribe/src/__init__.py",
+      "services/scribe/src/scribe/__init__.py"
+    ],
+    "invariants": [
+      "Law 4: dynamic-never-hard-coded \u2014 code owns only physics/pipes (window cutting), not judgment",
+      "serial ordering per meeting is correctness (no window fan-out)"
+    ],
+    "risks": [
+      "chat carries no native timestamp from transport (see scribe.chat-timestamp node) \u2014 the coalescer relies on the pump synthesizing ts_s, so a mis-synthesized ts could drop chat from its window or mis-order it",
+      "over-cap remainder roll-forward must not double-count nor drop tokens"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "scribe.chat-timestamp",
+    "title": "Inbound-chat temporal synthesis \u2014 ChatMessage has no `t`; the pump synthesizes ts_s (verify ordering)",
+    "region": "03-MEETING-UNDERSTANDING",
+    "disposition": "fix",
+    "status": "pending",
+    "spec_refs": [
+      "03-MEETING-UNDERSTANDING.md#3.1 (chat is part of the meeting record; same-window chat folds in)",
+      "03-MEETING-UNDERSTANDING.md#3 (data-flow: any chat messages from the same span)"
+    ],
+    "requirement_ids": [
+      "R-doc03-COAL-02"
+    ],
+    "criterion_ids": [
+      "AC-COAL-04",
+      "AC-COAL-13",
+      "AC-BRIDGE-01"
+    ],
+    "intent": "Realizes the \u00a73.1 requirement that meeting chat is never dropped from the notes record, closing the specific nuance the analyst flagged: transport's `ChatMessage` (transport.signals) carries NO temporal field `t` \u2014 only sender+message \u2014 whereas the coalescer's own `scribe.coalescer.ChatMessage` needs a `ts_s` to fold a chat line into the window whose span holds it. The harness pump (`_pump_transcripts`) therefore SYNTHESIZES `ts_s` = the current stream position (the last final word's start_s, or 0.0 before the first word) when it re-wraps a transport ChatMessage as a scribe ChatMessage and pushes it into the coalescer. This is a fix-disposition node because the synthesis is a load-bearing bridge, not a pass-through: an inbound chat that arrives between windows must land on the correct (current/next) window or be swept onto the last window at flush \u2014 never dropped and never mis-ordered relative to the transcript words it interleaves with. Verify the synthesized temporal ordering holds: chat at stream-position P folds into the window covering P; trailing chat after the last window is swept onto it at MeetingEnd.",
+    "definition_of_done": "DONE = a transport ChatMessage (no `t`) pushed through the real pump lands in the correct window by synthesized ts_s, mid-stream and at end-of-meeting (drain_trailing_chat sweep), with temporal ordering relative to interleaved transcript words verified \u2014 proven on the real pump+coalescer path. NOT done if chat can be dropped when it arrives between windows, if the synthesized ts_s can place chat in the wrong window, or if the sweep-on-flush path is only test-covered.",
+    "consumes": [
+      "transport.chat",
+      "scribe.windows"
+    ],
+    "exposes": [
+      "scribe.windows"
+    ],
+    "depends_on": [
+      "scribe.coalescer"
+    ],
+    "integration_point": "services/harness/src/harness/scribe_runtime.py:_pump_transcripts (ChatMessage branch: ts_s = pending.start_s or 0.0; coalescer.push_chat) + coalescer.drain_trailing_chat sweep on MeetingEnd",
+    "acceptance": "WHEN a transport ChatMessage (no timestamp field) arrives mid-stream or after the last window THE SYSTEM SHALL synthesize a ts_s from the current stream position and fold the chat into the covering window (or sweep it onto the last window at flush) \u2014 never dropped, never mis-ordered against interleaved transcript words.",
+    "acceptance_cmd": "services/scribe/tests -k \"coalescer and chat\" services/harness/tests -k \"scribe_runtime and chat\"",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc"
+    ],
+    "codebase_anchors": [
+      "services/harness/src/harness/scribe_runtime.py (_pump_transcripts ChatMessage branch, ts_s synthesis)",
+      "services/scribe/src/scribe/coalescer.py (ChatMessage.ts_s, push_chat, drain_trailing_chat)"
+    ],
+    "invariants": [
+      "meeting chat is never dropped from the notes record (\u00a73.1)",
+      "serial in-order processing \u2014 synthesized ts must not reorder chat ahead of its antecedent words"
+    ],
+    "risks": [
+      "transport ChatMessage has no `t`; the 0.0-before-first-word fallback could cluster all pre-speech chat at ts_s=0.0 \u2014 verify that is acceptable (folds into the first/current window) and never loses a line",
+      "a chat arriving exactly on a window boundary must fall on exactly one window (ts_s <= end_s fold rule)"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "scribe.schema",
+    "title": "NoteDelta schema \u2014 Pydantic source of truth (firmness, provenance, reversibility, said_at_s guard)",
+    "region": "03-MEETING-UNDERSTANDING",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "03-MEETING-UNDERSTANDING.md#3.2.1",
+      "03-MEETING-UNDERSTANDING.md#2 (the notes object schema \u2014 rich where it feeds the machine)"
+    ],
+    "requirement_ids": [
+      "R-doc03-SCHEMA-01",
+      "R-doc03-SCHEMA-02",
+      "R-doc03-SCHEMA-03"
+    ],
+    "criterion_ids": [
+      "AC-SCHEMA-01",
+      "AC-SCHEMA-02",
+      "AC-SCHEMA-03",
+      "AC-SCHEMA-04",
+      "AC-SCHEMA-05",
+      "AC-SCHEMA-06",
+      "AC-SCHEMA-07",
+      "AC-SCHEMA-08",
+      "AC-SCHEMA-09",
+      "AC-SCHEMA-10",
+      "AC-SCHEMA-11",
+      "AC-SCHEMA-12",
+      "AC-SCHEMA-13",
+      "AC-SCHEMA-14",
+      "AC-SCHEMA-15",
+      "AC-SCHEMA-16",
+      "AC-SCHEMA-16-NEG",
+      "AC-SCHEMA-17",
+      "AC-SCHEMA-18",
+      "AC-SCHEMA-18-NEG",
+      "AC-SCHEMA-19",
+      "AC-SCHEMA-19-NEG",
+      "AC-SCHEMA-20",
+      "AC-SCHEMA-20-NEG",
+      "AC-SCHEMA-21",
+      "AC-SCHEMA-21-NEG",
+      "AC-SCHEMA-22",
+      "AC-SCHEMA-22-NEG",
+      "AC-SCHEMA-23",
+      "AC-SCHEMA-24",
+      "AC-SCHEMA-25",
+      "AC-SCHEMA-26"
+    ],
+    "intent": "Realizes \u00a73.2.1's machine-grade note schema: the Pydantic models (Claim/Decision/ActionItem/OpenQuestion/ContextLine + AddOp/PatchOp/CloseOp + NoteDelta) that are the single source of truth for BOTH the forced tool's JSON Schema and the runtime re-validator (belt-and-suspenders). This carries the fields vendors can't (firmness firm/hedged/speculative, provenance observed/inferred to block laundered hallucination, reversibility easy/hard/irreversible so downstream scales verification depth, DecisionStatus forming/final, contradicts links, positions held open). Two enforcement points beyond plain caps: `verified` defaults False on every Claim (a checkable claim lands UNVERIFIED \u2014 nothing sets it True at construction), and a `said_at_s` field-validator rejects any value above the meeting-duration ceiling so a laundered wall-clock unix epoch cannot masquerade as a meeting-relative offset. A NoteDelta is a DELTA (ops list, \u226440, + optional current_goal), never a rewrite of the object.",
+    "definition_of_done": "DONE = the real schema round-trips every entry kind with all machine-grade fields, `verified` cannot be True at construction, said_at_s rejects wall-clock epochs, and the discriminated-union add/patch/close ops validate \u2014 proven by the AC-SCHEMA bundle on the real Pydantic models. NOT done if any field cap or enum is unenforced, if verified can construct True, or if a wall-clock timestamp validates as said_at_s.",
+    "consumes": [],
+    "exposes": [
+      "scribe.note_schema"
+    ],
+    "depends_on": [],
+    "integration_point": "services/scribe/src/scribe/schema.py (Pydantic models); consumed by scribe/tool.py (JSON Schema) and scribe/parse.py (re-validation)",
+    "acceptance": "WHEN the Scribe emits any note entry THE SYSTEM SHALL validate it against the Pydantic schema carrying firmness, provenance, reversibility, forming/final status, and contradicts links \u2014 defaulting Claim.verified False and rejecting a wall-clock value in said_at_s.",
+    "acceptance_cmd": "services/scribe/tests -k schema",
+    "evidence_class": "[unit]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc"
+    ],
+    "codebase_anchors": [
+      "services/scribe/src/scribe/schema.py",
+      "services/scribe/src/scribe/tool.py (NOTE_DELTA_TOOL input_schema = NoteDelta.model_json_schema())"
+    ],
+    "invariants": [
+      "provenance observed-vs-inferred structurally blocks laundered hallucination",
+      "verified=False default \u2014 a checkable claim never lands pre-verified",
+      "excluded on principle: no sentiment/emotion/engagement/meeting-type fields (observable facts only)"
+    ],
+    "risks": [
+      "Pydantic v2 discriminated-union (Field(discriminator='kind')) must round-trip through model_json_schema() \u2192 tool \u2192 model_validate without shape drift",
+      "said_at_s ceiling must be generous enough for long meetings yet below any unix epoch"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "scribe.prefix-tool",
+    "title": "Scribe cached prefix + forced tool \u2014 hand-placed \u00d72 cache_control breakpoints, byte-stable head",
+    "region": "03-MEETING-UNDERSTANDING",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "03-MEETING-UNDERSTANDING.md#3.2",
+      "03-MEETING-UNDERSTANDING.md#3.2 (byte-identical-prefix discipline)",
+      "03-MEETING-UNDERSTANDING.md#3.2 (transcript-as-untrusted spotlight, CANONICAL \u00a710.3)"
+    ],
+    "requirement_ids": [
+      "R-doc03-SCRIBE-04",
+      "R-doc03-SCRIBE-05",
+      "R-doc03-SCRIBE-06"
+    ],
+    "criterion_ids": [
+      "AC-SCRIBE-03",
+      "AC-SCRIBE-04",
+      "AC-SCRIBE-05",
+      "AC-SCRIBE-06",
+      "AC-SCRIBE-13",
+      "AC-SCRIBE-13-NEG",
+      "AC-SCRIBE-14",
+      "AC-SCHEMA-23",
+      "AC-SCHEMA-24"
+    ],
+    "intent": "Realizes \u00a73.2's cost mechanism: `build_scribe_prefix` is the ONE centralized place the cached region is built \u2014 Segment A (system prompt + frozen meeting header + schema prose, byte-identical for the whole meeting) with cache_control breakpoint #1, Segment B (the rolling summary, byte-stable between cadence refreshes) with breakpoint #2. The newest window is the ONLY uncached tail (in `messages`, never here). Centralization is the failure-mode-engineered-out: no clock, counter, per-call id, or reordered list may enter the prefix, so SHA-256(Segment A) and SHA-256(Segment B) are stable across a meeting's calls \u2014 this discipline is the difference between pennies-per-hour and a silent 10\u00d7 regression only the \u00a73.9 cache-split telemetry would catch. The forced tool (`NOTE_DELTA_TOOL`, tool_choice forces emit_notes_delta) is an OUTPUT SHAPE, not a capability \u2014 the Scribe has no execution tools. The transcript-as-untrusted spotlight lives here too: a SCRIBE_SYSTEM_PROMPT line (inside the cached head, free every call) declaring the transcript untrusted data, plus window.render() fencing the tail in explicit delimiters \u2014 the lethal-trifecta floor.",
+    "definition_of_done": "DONE = build_scribe_prefix emits exactly two ephemeral cache_control breakpoints on a byte-stable A/B region (hash-stable across calls, no clock/counter/id inside), the forced tool carries only emit_notes_delta as an output shape (no execution capability), and the untrusted-transcript fence + system-prompt line are present \u2014 proven on the real prefix/tool modules. NOT done if a timestamp/counter can enter the cached region, if a second execution tool exists, or if the untrusted fence is missing.",
+    "consumes": [
+      "scribe.note_schema"
+    ],
+    "exposes": [
+      "scribe.prefix"
+    ],
+    "depends_on": [
+      "scribe.schema"
+    ],
+    "integration_point": "services/scribe/src/scribe/prefix.py (build_scribe_prefix), services/scribe/src/scribe/tool.py (NOTE_DELTA_TOOL, SCRIBE_TOOLS)",
+    "acceptance": "WHEN a Scribe micro-call is assembled THE SYSTEM SHALL place exactly two ephemeral cache_control breakpoints on a byte-stable prefix (Segment A frozen, Segment B cadence-stable, no clock/counter inside) and force a single emit_notes_delta output tool with the transcript window fenced as untrusted data.",
+    "acceptance_cmd": "services/scribe/tests -k \"prefix or tool\"",
+    "evidence_class": "[unit]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc"
+    ],
+    "codebase_anchors": [
+      "services/scribe/src/scribe/prefix.py",
+      "services/scribe/src/scribe/tool.py"
+    ],
+    "invariants": [
+      "byte-identical-prefix discipline \u2014 a stray timestamp/counter busts the cache and reverts every call to full price",
+      "Scribe has no execution tools (single forced output shape) \u2014 no transcript-triggered outward side-effect (Doc 00 \u00a715)",
+      "transcript is untrusted DATA never instructions (CANONICAL \u00a710.3 lethal-trifecta floor)"
+    ],
+    "risks": [
+      "a future edit sprinkling datetime.now()/a counter into the cached region is the exact silent-10x-cost regression \u2014 only cost-telemetry catches it (see scribe.cost-telemetry)",
+      "Anthropic allows \u22644 cache_control breakpoints; the \u00d72 placement must not drift"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "scribe.call-parse",
+    "title": "Scribe micro-call + parse \u2014 bare messages.create (no agent loop), tool-forced, Pydantic re-validate, typed errors",
+    "region": "03-MEETING-UNDERSTANDING",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "03-MEETING-UNDERSTANDING.md#3.2",
+      "03-MEETING-UNDERSTANDING.md#3.2.1",
+      "03-MEETING-UNDERSTANDING.md#3.2 (model seat PROXY_MODEL_SCRIBE, swappable, eval-gated)"
+    ],
+    "requirement_ids": [
+      "R-doc03-SCRIBE-01",
+      "R-doc03-SCRIBE-02",
+      "R-doc03-SCRIBE-08"
+    ],
+    "criterion_ids": [
+      "AC-SCRIBE-01",
+      "AC-SCRIBE-01-NEG",
+      "AC-SCRIBE-02",
+      "AC-SCRIBE-02-NEG",
+      "AC-SCRIBE-08",
+      "AC-SCRIBE-09",
+      "AC-SCRIBE-10",
+      "AC-SCRIBE-11",
+      "AC-SCRIBE-12",
+      "AC-SCRIBE-15",
+      "AC-SCRIBE-15-NEG",
+      "AC-EVAL-01",
+      "AC-EVAL-01-NEG",
+      "AC-EVAL-02",
+      "AC-EVAL-02-NEG",
+      "AC-EVAL-05",
+      "AC-EVAL-05-NEG"
+    ],
+    "intent": "Realizes \u00a73.2/\u00a73.2.1's one-call-exactly: `scribe_call` issues a single raw `anthropic.AsyncAnthropic().messages.create` \u2014 NOT the Agent SDK query()/generateStructured loop (AC-SCRIBE-01: no loop scheduler on the call stack) \u2014 routed through the ONE `libs.http.call_external` seam (retry + cost telemetry, \u00a714), with the \u00d72 cache breakpoints from build_scribe_prefix and tool_choice forcing emit_notes_delta. The model seat reads from PROXY_MODEL_SCRIBE via the one canonical routing table (libs.llm routing.model_for), defaulting to claude-haiku-4-5 when unset \u2014 no hard-coded model string. `parse_scribe_result` extracts the forced tool_use then RE-VALIDATES with the same Pydantic NoteDelta (belt-and-suspenders), raising the two typed, window-level-non-retryable errors: ScribeMaxTokensError (stop_reason=='max_tokens') and ScribeNoDeltaError (no tool call). A repeated fact patches one entry, not fifty. Comprehension is a call, not an agent.",
+    "definition_of_done": "DONE = the real scribe_call is a bare messages.create through call_external with no agent-loop scaffold, seat from PROXY_MODEL_SCRIBE (default haiku-4-5, no hard-coded string), and parse re-validates via Pydantic raising the two typed errors on truncation/no-tool-call \u2014 proven on a scripted transcript where claims/decisions/actions land with firmness+provenance and a repeated fact patches one entry. NOT done if it routes through generateStructured/query, if the model is hard-coded, if a raw Anthropic client lives outside call_external, or if parse trusts the tool output without re-validation.",
+    "consumes": [
+      "scribe.prefix",
+      "scribe.note_schema",
+      "http.call_external"
+    ],
+    "exposes": [
+      "scribe.delta"
+    ],
+    "depends_on": [
+      "scribe.prefix-tool",
+      "scribe.schema"
+    ],
+    "integration_point": "services/scribe/src/scribe/call.py (scribe_call via call_external), services/scribe/src/scribe/parse.py (parse_scribe_result, typed errors); bound by harness scribe_runtime.build_real_seams",
+    "acceptance": "WHEN a coalesced window is handed to the Scribe THE SYSTEM SHALL issue one bare messages.create through call_external forcing emit_notes_delta on the PROXY_MODEL_SCRIBE seat, then Pydantic-re-validate the tool_use \u2014 raising ScribeMaxTokensError on truncation and ScribeNoDeltaError when no tool was called.",
+    "acceptance_cmd": "services/scribe/tests -k \"call or parse\"",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc"
+    ],
+    "codebase_anchors": [
+      "services/scribe/src/scribe/call.py",
+      "services/scribe/src/scribe/parse.py"
+    ],
+    "invariants": [
+      "CON-004: every external call through the single call_external seam (no raw Anthropic client outside it)",
+      "Law 4: model seat is env-configured (PROXY_MODEL_SCRIBE), never hard-coded",
+      "belt-and-suspenders: schema-shaped at generation AND Pydantic-revalidated on receipt"
+    ],
+    "risks": [
+      "the raw claude_agent_sdk / Anthropic structured-output surface (stop_reason, tool_use block shape, usage fields) is confirm-at-build (CANONICAL \u00a711.10 / \u00a717) \u2014 the close pass shares this pin",
+      "typed errors must be the EXACT classes the pipeline's DROP_ERRORS catches (imported from parse, never redefined) or a truncated window escapes the drop and stalls the meeting"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "scribe.pipeline-apply",
+    "title": "Serial pipeline + applier \u2014 one consumer per meeting, ~3.5s skip-never-retry, transactional apply+comprehend flip",
+    "region": "03-MEETING-UNDERSTANDING",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "03-MEETING-UNDERSTANDING.md#3.1 (serial stream, per-call timeout skip-never-retry, the applier)",
+      "03-MEETING-UNDERSTANDING.md#3.1 (transactional coupling, CANONICAL \u00a712.10 replay-idempotency)"
+    ],
+    "requirement_ids": [
+      "R-doc03-SCRIBE-03",
+      "R-doc03-SCRIBE-07",
+      "R-doc03-COAL-03"
+    ],
+    "criterion_ids": [
+      "AC-SCRIBE-03",
+      "AC-SCRIBE-07",
+      "AC-COAL-09",
+      "AC-COAL-10",
+      "AC-STORE-04",
+      "AC-STORE-05",
+      "AC-STORE-05-NEG",
+      "AC-FAIL-01",
+      "AC-FAIL-01-NEG",
+      "AC-FAIL-02",
+      "AC-FAIL-02-NEG",
+      "AC-FAIL-06-NEG",
+      "AC-EVAL-03",
+      "AC-EVAL-03-NEG",
+      "AC-EVAL-04",
+      "AC-EVAL-04-NEG",
+      "AC-EVAL-06",
+      "AC-EVAL-06-NEG",
+      "AC-EVAL-07",
+      "AC-EVAL-07-NEG",
+      "AC-PERF-01",
+      "AC-PERF-01-NEG",
+      "AC-PERF-02",
+      "AC-PERF-03",
+      "AC-PERF-04",
+      "AC-PERF-05",
+      "AC-PERF-06",
+      "AC-PERF-06-NEG",
+      "AC-PERF-07",
+      "AC-PERF-07-NEG",
+      "AC-PERF-08",
+      "AC-PERF-08-NEG",
+      "AC-PERF-09",
+      "AC-PERF-10",
+      "AC-PERF-11",
+      "AC-PERF-12",
+      "AC-PERF-13",
+      "AC-PERF-13-NEG",
+      "AC-PERF-14",
+      "AC-PERF-15",
+      "AC-PERF-16",
+      "AC-PERF-17",
+      "AC-PERF-18",
+      "AC-PERF-19",
+      "AC-PERF-20",
+      "AC-PERF-21",
+      "AC-PERF-22",
+      "AC-XCUT-02-NEG",
+      "AC-XCUT-03-NEG",
+      "AC-XCUT-05-NEG",
+      "AC-XCUT-06-NEG",
+      "AC-XCUT-08-NEG",
+      "AC-XCUT-11-NEG",
+      "AC-XCUT-12",
+      "AC-XCUT-13"
+    ],
+    "intent": "Realizes \u00a73.1's serial pipeline + applier: `run_scribe` is the ONE serial consumer per meeting (never window fan-out \u2014 parallel windows would let a T+40s claim land before its T+10s antecedent and corrupt contradicts links / firmness progression; the real concurrency axis is many-meetings-per-host, bounded by a host in-flight semaphore). Each micro-call runs under a ~3.5s asyncio.wait_for deadline; on timeout OR either typed error the window is DROPPED and the pipeline advances \u2014 never retried (a dropped note is fine: transcript preserved, content recurs, close pass backfills; a stalled meeting is not). The dropped span is recorded as an explicit comprehension gap on the transcript plane, never silently missing. The applier is a single writer per meeting: `add` mints a stable kind-prefixed id (c14/d3/a5), `patch` updates by id keeping the prior value superseded-not-erased \u2014 this patch-in-place is why the object grows with content, not time. The delta append AND the window's transcript_segments 'pending'\u2192'comprehended' flip happen in ONE Postgres transaction (the replay-idempotency linchpin): crash mid-apply leaves the window 'pending' for exactly-once reprocessing; ON CONFLICT DO NOTHING is belt-and-suspenders.",
+    "definition_of_done": "DONE = run_scribe processes windows strictly in order one-at-a-time, drops (never retries) on ~3.5s timeout or typed error while recording a comprehension gap, and the applier folds the delta AND flips the segment 'pending'\u2192'comprehended' in ONE transaction (a crash rolls both back) \u2014 proven on the real pipeline+applier path. NOT done if windows can process out of order, if a dropped window is retried or silently lost (no gap), or if the delta append and comprehend flip are not atomic.",
+    "consumes": [
+      "scribe.delta",
+      "scribe.windows",
+      "substrate.transcript_segments"
+    ],
+    "exposes": [
+      "scribe.note_deltas",
+      "scribe.notes_object"
+    ],
+    "depends_on": [
+      "scribe.call-parse",
+      "scribe.coalescer"
+    ],
+    "integration_point": "services/scribe/src/scribe/pipeline.py (run_scribe, DROP_ERRORS, MICRO_CALL_TIMEOUT_S), services/scribe/src/scribe/notes.py (apply_note_delta transactional flip); assembled by harness scribe_runtime.launch_scribe_runtime + build_real_seams.apply_delta",
+    "acceptance": "WHEN windows arrive at the serial consumer THE SYSTEM SHALL process them strictly in order one micro-call at a time, drop-without-retry on a ~3.5s timeout or typed error (recording a comprehension gap), and apply each delta with the transcript-segment 'pending'\u2192'comprehended' flip in one atomic transaction.",
+    "acceptance_cmd": "services/scribe/tests -k \"pipeline or apply or notes_apply\"",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc",
+      "J-09-S5-recycle-survives"
+    ],
+    "codebase_anchors": [
+      "services/scribe/src/scribe/pipeline.py",
+      "services/scribe/src/scribe/notes.py",
+      "services/harness/src/harness/scribe_runtime.py (launch_scribe_runtime, build_real_seams.apply_delta, _canonical_row, _kind_counters)"
+    ],
+    "invariants": [
+      "serial ordering per meeting is correctness (no window fan-out)",
+      "single writer per meeting (no write race)",
+      "CANONICAL \u00a712.10: delta append + comprehend flip in ONE tx (replay idempotency); ON CONFLICT DO NOTHING",
+      "skip-never-retry \u2014 a stalled meeting is the failure to avoid"
+    ],
+    "risks": [
+      "DROP_ERRORS must import the EXACT typed-error classes from scribe.parse (redefinition would let a truncated window escape the drop)",
+      "the host in-flight semaphore (HostBudget) bounds many-meetings-per-host \u2014 verify one busy meeting can't starve another (J-09-S6 lives in Doc 09 but the bound is here)"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "scribe.rolling-summary",
+    "title": "Rolling-summary generator \u2014 cadence-refreshed Segment B, off the hot path, byte-stable between refreshes",
+    "region": "03-MEETING-UNDERSTANDING",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "03-MEETING-UNDERSTANDING.md#3.2 (the rolling-summary generator)",
+      "03-MEETING-UNDERSTANDING.md#4 (cadence: every ~20 note-deltas / ~90s, whichever first)"
+    ],
+    "requirement_ids": [
+      "R-doc03-SCRIBE-07"
+    ],
+    "criterion_ids": [
+      "AC-SCRIBE-05",
+      "AC-SCRIBE-06",
+      "AC-SCRIBE-07"
+    ],
+    "intent": "Realizes \u00a73.2's rolling-summary generator \u2014 what refreshes cached Segment B. Segment B is NOT the full growing ledger (that would bust the cache every window and grow unbounded); it is a compact \u2264~250-token rolling summary regenerated on a CADENCE by its own cheap Haiku call (PROXY_MODEL_SCRIBE seat) that reads the CURRENT notes object (not the raw transcript) and rewrites the summary, ordered by stable id with no timestamps/wall-clock/counts so the prefix stays byte-stable between refreshes. It fires when EITHER ~20 note-deltas have applied OR ~90s elapsed since the last refresh (whichever first). It runs OFF the hot path \u2014 it does not block the serial Scribe consumer: the applier bumps the cadence and, when due, schedules refresh as a fire-and-forget task, then swaps the new text into the prefix holder so only Segment B's cache re-creates while Segment A keeps hitting. The next micro-call reads the fresh summary, so the Scribe sees the meeting's cross-time structure (a number at min 3 vs min 20, a forming\u2192final arc) \u2014 not just the newest window.",
+    "definition_of_done": "DONE = regenerate_rolling_summary produces a compact stable-ordered summary from the live notes object (no wall-clock/counts), the cadence fires on ~20-deltas-OR-~90s, and the refresh runs off the hot path (the serial consumer never awaits it) swapping only Segment B \u2014 proven on the real generator + cadence wiring. NOT done if the summary embeds timestamps/counters (busting the cache), if the refresh blocks the serial consumer, or if it reads the raw transcript instead of the notes object.",
+    "consumes": [
+      "scribe.notes_object"
+    ],
+    "exposes": [],
+    "depends_on": [
+      "scribe.pipeline-apply"
+    ],
+    "integration_point": "services/scribe/src/scribe/rolling_summary.py (regenerate_rolling_summary, rolling_summary_due, maybe_refresh_in_background); driven off harness scribe_runtime.build_real_seams.apply_delta \u2192 refresh_summary \u2192 summary_holder",
+    "acceptance": "WHEN ~20 note-deltas have applied OR ~90s elapsed since the last refresh THE SYSTEM SHALL regenerate a compact stable-ordered rolling summary from the live notes object off the hot path and swap it into cached Segment B \u2014 without blocking the serial Scribe consumer and without embedding any clock/counter that would bust the cache.",
+    "acceptance_cmd": "services/scribe/tests -k rolling_summary services/harness/tests -k \"scribe_runtime and summary\"",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc"
+    ],
+    "codebase_anchors": [
+      "services/scribe/src/scribe/rolling_summary.py",
+      "services/harness/src/harness/scribe_runtime.py (_SummaryHolder, RealSeams.refresh_summary, maybe_refresh_in_background)"
+    ],
+    "invariants": [
+      "byte-stable between refreshes (stable-ordered, no wall-clock/counts) \u2014 protects the Segment-A cache hit",
+      "off the hot path \u2014 live stays fast; the serial consumer never awaits the regen",
+      "reads the notes object, never the raw transcript (\u00a73.2)"
+    ],
+    "risks": [
+      "the cadence must fire the refresh fire-and-forget (asyncio task) so a slow regen call never stalls the next window",
+      "an empty ledger (no deltas yet) must leave the holder untouched (window-local start)"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "scribe.quality-gate",
+    "title": "Sampled online quality gate \u2014 grounding/entailment on the cheap cascade, escalate-not-block, cascade-health telemetry",
+    "region": "03-MEETING-UNDERSTANDING",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "03-MEETING-UNDERSTANDING.md#3.2.2 (CANONICAL \u00a710.7)"
+    ],
+    "requirement_ids": [
+      "R-doc03-QGATE-01",
+      "R-doc03-QGATE-02",
+      "R-doc03-QGATE-03"
+    ],
+    "criterion_ids": [
+      "AC-QGATE-01",
+      "AC-QGATE-02",
+      "AC-QGATE-02-NEG",
+      "AC-QGATE-03",
+      "AC-QGATE-03-NEG",
+      "AC-QGATE-04",
+      "AC-QGATE-04-NEG",
+      "AC-QGATE-05",
+      "AC-QGATE-06",
+      "AC-QGATE-07",
+      "AC-QGATE-07-NEG",
+      "AC-QGATE-08",
+      "AC-QGATE-08-NEG",
+      "AC-QGATE-09",
+      "AC-QGATE-09-NEG",
+      "AC-QGATE-10",
+      "AC-QGATE-10-NEG",
+      "AC-QGATE-11",
+      "AC-QGATE-11-NEG",
+      "AC-QGATE-12",
+      "AC-QGATE-13",
+      "AC-QGATE-14"
+    ],
+    "intent": "Realizes \u00a73.2.2's sampled online quality gate on the cheap-first cascade (CANONICAL \u00a710.7): the worst failure for a trust product is a confident wrong note driving a downstream action. We do NOT verify every micro-call (that would double per-call cost and defeat pennies-per-hour); instead a sampled ~1-in-10 (QUALITY_GATE_SAMPLE_RATE) lightweight grounding/entailment check runs, PLUS an always-check bias for the highest-stakes entries \u2014 a decision going final, an irreversible reversibility, or a contradicts link (no RNG consulted for those; a gate_enabled=False flag suppresses even those). The check is lean: ONE cheap Haiku entailment call (PROXY_MODEL_QUALITY_GATE) reading ONLY the fenced untrusted window + the emitted entry text \u2014 no full-notes context, no schema re-derivation \u2014 answering {grounded: bool, reason: str} (a parse failure is grounded=False, never True). It runs OFF the hot path: the sampled delta is already applied (live stays fast); the gate corrects/escalates rather than blocks. On grounded=false it re-runs THAT extraction on a strictly-stronger Sonnet tier (PROXY_MODEL_QUALITY_ESCALATION) over the same window and replaces the entry via the normal applier path (a patch attributed to the gate, superseded-not-erased). A miss is logged as a quality-gate-miss on the transcript plane \u2014 the cascade-health telemetry / eval signal that gates the open-weight seat swap.",
+    "definition_of_done": "DONE = the gate samples ~1-in-10, always-checks final/irreversible/contradicts, runs a single window-vs-note Haiku entailment off the hot path, and on a miss escalates to Sonnet + patches via the applier (attributed, superseded) + logs a quality-gate-miss \u2014 proven on the real gate module. NOT done if the gate blocks the applier's commit path, if a parse failure counts as grounded=True, if it re-derives full-notes context, or if the always-check entries are ever sampled out.",
+    "consumes": [
+      "scribe.note_deltas",
+      "http.call_external"
+    ],
+    "exposes": [],
+    "depends_on": [
+      "scribe.pipeline-apply",
+      "scribe.call-parse"
+    ],
+    "integration_point": "services/scribe/src/scribe/quality_gate.py (GateInput, entailment call, escalation \u2192 applier patch)",
+    "acceptance": "WHEN a Scribe delta is applied THE SYSTEM SHALL sample ~1-in-10 (always-checking decision-final / irreversible / contradicts) a lean window-vs-note Haiku entailment off the hot path, and on grounded=false escalate that extraction to Sonnet and replace the entry via an attributed superseded patch, logging a quality-gate-miss.",
+    "acceptance_cmd": "services/scribe/tests -k quality_gate",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc"
+    ],
+    "codebase_anchors": [
+      "services/scribe/src/scribe/quality_gate.py"
+    ],
+    "invariants": [
+      "never a confident wrong note (the trust-product floor)",
+      "off the hot path \u2014 the applier's latency is unaffected by gate scheduling",
+      "escalation replaces via the normal applier path (patch, attributed, superseded-not-erased \u00a73.6)",
+      "CON-004: the entailment/escalation calls go through call_external"
+    ],
+    "risks": [
+      "always-check entries must bypass the RNG draw entirely (a sampled-out final decision is the exact failure)",
+      "a parse failure of the {grounded,reason} answer must default grounded=False (fail-closed toward escalation)"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "scribe.referent-matcher",
+    "title": "Referent matcher \u2014 deterministic no-LLM lookup_referent over overview areas + graph_nodes, honest unbound",
+    "region": "03-MEETING-UNDERSTANDING",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "03-MEETING-UNDERSTANDING.md#3.4 (CANONICAL \u00a712.6)"
+    ],
+    "requirement_ids": [
+      "R-doc03-REFM-01",
+      "R-doc03-REFM-02",
+      "R-doc03-REFM-03"
+    ],
+    "criterion_ids": [
+      "AC-REFM-01",
+      "AC-REFM-02",
+      "AC-REFM-02-NEG",
+      "AC-REFM-03",
+      "AC-REFM-03-NEG",
+      "AC-REFM-04",
+      "AC-REFM-04-NEG",
+      "AC-REFM-05",
+      "AC-REFM-06",
+      "AC-REFM-07",
+      "AC-REFM-08",
+      "AC-FAIL-07",
+      "AC-FAIL-07-NEG"
+    ],
+    "intent": "Realizes \u00a73.4's deterministic referent binding: when the Scribe marks a referent candidate ('checkout', 'the retry logic'), the matcher calls Doc 01's `lookup_referent(term)` \u2014 a deterministic, NO-LLM, no-external-call lookup over the core overview areas + graph_nodes (area names, file names, key symbols) \u2014 returning node_id | area | None (str | None ONLY, never bool/list/dict). A matched term binds to the REAL id from the corpus (never fabricated); an unmatched term \u2014 or ANY term when no corpus is configured \u2014 stays honestly named-but-unbound (\u00a73.8: the notes never fabricate to fill a hole). It degrades honestly: an empty/absent corpus, a refused connection, a missing table, or garbage rows all yield None (or a surfaced failure for a genuinely broken handle) \u2014 never a fabricated binding, never a silent-corrupt proceed. Deterministic: the same term over a frozen corpus always returns the same value; ranking ties break on a stable key, never hash/random order. The resolved referent_bindings map rides ALONGSIDE the verbatim referent names on the payload so the Workroom reads a code-oriented notes object off /internal/notes. (The agentic/LLM referent map is Expansion \u2014 V0 binds deterministically only.)",
+    "definition_of_done": "DONE = lookup_referent binds 'checkout'\u2192the real payments/checkout area/node from a frozen corpus with zero LLM/external call, returns str|None only, stays honestly unbound on a miss/empty/broken corpus (never fabricated), is deterministic with stable tie-breaks, and the referent_bindings map is attached on the applier payload \u2014 proven on the real matcher. NOT done if any code path calls an LLM/call_external, if a nonsense term binds, or if the return type is ever non-string-non-None.",
+    "consumes": [
+      "scribe.note_deltas",
+      "codeintel.lookup_referent"
+    ],
+    "exposes": [],
+    "depends_on": [
+      "scribe.pipeline-apply"
+    ],
+    "integration_point": "services/scribe/src/scribe/referent.py (lookup_referent, ReferentCorpus); bound into the applier at harness scribe_runtime.build_real_seams._bind_referents / _canonical_row",
+    "acceptance": "WHEN the Scribe marks a referent candidate THE SYSTEM SHALL deterministically bind it via no-LLM lookup_referent over the overview areas + graph_nodes to a real node_id/area or leave it honestly unbound (str|None), never fabricating and never calling an LLM or external service.",
+    "acceptance_cmd": "services/scribe/tests -k referent",
+    "evidence_class": "[unit]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc"
+    ],
+    "codebase_anchors": [
+      "services/scribe/src/scribe/referent.py",
+      "services/harness/src/harness/scribe_runtime.py (_bind_referents, _canonical_row referent_bindings attach)"
+    ],
+    "invariants": [
+      "Law 1: grounded or silent \u2014 an unmatched referent stays named-but-unbound, never a fabricated binding (\u00a73.8)",
+      "no LLM / no call_external in the matcher (deterministic, CANONICAL \u00a712.6)",
+      "deterministic \u2014 stable tie-break, never hash/random order"
+    ],
+    "risks": [
+      "lookup_referent's contract with Doc 01 (overview areas + graph_nodes corpus shape) is the cross-doc seam \u2014 verify the corpus handle matches Doc 01's produced index",
+      "a genuinely-broken corpus handle must surface (not silently return None as if 'no match')"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "scribe.event-emitter",
+    "title": "Event emitter \u2014 material-change events to Doc 04, chitchat emits nothing, closed registry, deterministic chat-record line",
+    "region": "03-MEETING-UNDERSTANDING",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "03-MEETING-UNDERSTANDING.md#3.5 (CANONICAL \u00a712.3 pipe-never-mouth)",
+      "03-MEETING-UNDERSTANDING.md#3.5 (decision/action chat lines, CANONICAL \u00a712.12)"
+    ],
+    "requirement_ids": [
+      "R-doc03-EVENT-01",
+      "R-doc03-EVENT-02"
+    ],
+    "criterion_ids": [
+      "AC-EVENT-01",
+      "AC-EVENT-02",
+      "AC-EVENT-03",
+      "AC-EVENT-04",
+      "AC-EVENT-05",
+      "AC-EVENT-06",
+      "AC-EVENT-07",
+      "AC-EVENT-08",
+      "AC-EVENT-09",
+      "AC-EVENT-10"
+    ],
+    "intent": "Realizes \u00a73.5's event emitter (built in V0; its main consumer Proactive is deferred to V1 as a pure drop-in consumer, no re-pathing). On applying a committed delta the layer emits material-change events \u2014 exactly the seven kinds in the CLOSED contracts.MaterialChangeKind registry (claim-landed-checkable, decision-forming, decision-final, contradiction, action-item, question-open, question-closed) \u2014 to a Doc 04 sink, each carrying the triggering entry plus a FOCUSED context slice (relevant surrounding notes, never full meeting context). Chitchat (a ContextLine add) and running-context-only updates (a delta whose only signal is current_goal) emit NOTHING \u2014 yet a ContextLine still lands in the note_deltas ledger even though it fires no event. This layer is a PIPE, never the mouth (CANONICAL \u00a712.3): it supplies events + notes context to Doc 04 and holds no room-delivery authority \u2014 it never calls speak/send_chat/show_screen. The decision/action chat-record line (CANONICAL \u00a712.12) is a DETERMINISTIC harness formatter keyed on the committed note-delta \u2014 never a Proxy wake, never model-generated \u2014 that dedupes by meeting_revision and honors the room's disable toggle; it invents no new wire type (registry stays closed).",
+    "definition_of_done": "DONE = a scripted transcript fires exactly the expected sequence of the seven closed-registry material-change event kinds (each with a focused slice) with chitchat/running-context emitting nothing (yet still persisting), the layer never calls a room-delivery verb, and the deterministic chat-record line dedupes by meeting_revision and honors the disable toggle \u2014 proven on the real emitter. NOT done if a ContextLine fires an event, if the emitter delivers to the room, if a new event type escapes the closed registry, or if the chat-record line is model-generated.",
+    "consumes": [
+      "scribe.note_deltas",
+      "contracts.registry"
+    ],
+    "exposes": [
+      "scribe.material_events"
+    ],
+    "depends_on": [
+      "scribe.pipeline-apply"
+    ],
+    "integration_point": "services/scribe/src/scribe/events.py (material-change emit, MaterialChangeKind, deterministic chat-record formatter); consumed by Doc 04 orchestrator",
+    "acceptance": "WHEN a material note-delta is applied THE SYSTEM SHALL emit exactly one closed-registry material-change event (with a focused context slice) to Doc 04 and NOTHING for chitchat/running-context \u2014 never delivering to the room itself, and driving the deterministic decision/action chat-record line deduped by meeting_revision.",
+    "acceptance_cmd": "services/scribe/tests -k event",
+    "evidence_class": "[unit]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc"
+    ],
+    "codebase_anchors": [
+      "services/scribe/src/scribe/events.py"
+    ],
+    "invariants": [
+      "CANONICAL \u00a712.3: this layer is a pipe, never the mouth \u2014 no speak/send_chat/show_screen",
+      "contracts registry stays CLOSED \u2014 the seven MaterialChangeKinds only, no new wire type (assert_registry_closed)",
+      "CANONICAL \u00a712.12: the chat-record line is deterministic/model-free, deduped by meeting_revision, honors the disable toggle",
+      "chitchat emits nothing but still persists (AC-EVENT-10)"
+    ],
+    "risks": [
+      "the focused context slice must be bounded (a focused slice, never the full meeting) or it leaks unbounded context to Doc 04",
+      "the MaterialChangeKind enum must match contracts' closed registry exactly or assert_registry_closed fails the build"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "scribe.corrections",
+    "title": "Live corrections \u2014 immediate attributed superseded patch + notes-injection gate (final/irreversible = spoken receipt)",
+    "region": "03-MEETING-UNDERSTANDING",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "03-MEETING-UNDERSTANDING.md#3.6 (live corrections + notes-injection gate, CANONICAL \u00a710.3/\u00a711.11)"
+    ],
+    "requirement_ids": [
+      "R-doc03-CORR-01",
+      "R-doc03-CORR-02",
+      "R-doc03-CORR-03"
+    ],
+    "criterion_ids": [
+      "AC-CORR-01",
+      "AC-CORR-01-NEG",
+      "AC-CORR-02",
+      "AC-CORR-02-NEG",
+      "AC-CORR-03",
+      "AC-CORR-03-NEG",
+      "AC-CORR-04",
+      "AC-CORR-04-NEG",
+      "AC-CORR-05",
+      "AC-CORR-05-NEG",
+      "AC-CORR-06",
+      "AC-CORR-06-NEG",
+      "AC-CORR-07",
+      "AC-CORR-07-NEG",
+      "AC-CORR-08",
+      "AC-CORR-08-NEG",
+      "AC-CORR-09",
+      "AC-CORR-09-NEG",
+      "AC-CORR-10",
+      "AC-CORR-10-NEG",
+      "AC-CORR-11",
+      "AC-CORR-12"
+    ],
+    "intent": "Realizes \u00a73.6's trust behavior: anyone in the room can fix the record in the moment ('Proxy, we decided Friday, not Monday' / a chat correction). The ask arrives via Doc 04 (a reactive ask) and this layer applies it as an IMMEDIATE, ATTRIBUTED patch \u2014 the entry updates, the correction is noted (who corrected, when), the old value kept SUPERSEDED-NOT-ERASED (the record never silently rewrites history). Because corrections land as ordinary rows on the append-only note_deltas ledger, the next Scribe call sees the corrected notes in its prefix and the correction sticks. Attribution is mandatory: a correction missing the corrector identity or timestamp is REJECTED with AttributionError BEFORE any row is written. The notes-injection gate (CANONICAL \u00a710.3/\u00a711.11 \u2014 the untrusted-participant-edits-the-deliverable defense) is the narrow high-stakes floor: a correction that sets Decision.status=final, Reversibility=irreversible, or closes/finalizes an entry with those properties does NOT apply silently \u2014 it applies (still immediate, attributed, superseded) AND emits a one-line SPOKEN acknowledgement (an audible receipt via Doc 02's mouth owned by Doc 04's turn), never a blocking modal. Ordinary firmness bumps, action tweaks, forming leans, open-question edits stay on the silent-immediate path \u2014 the gate must not add friction to the common case.",
+    "definition_of_done": "DONE = a correction applies as an immediate attributed superseded-not-erased patch on the ledger (visible to the next Scribe prefix), rejects a correction missing corrector/timestamp before any write, and the narrow final/irreversible class ALSO emits a one-line spoken receipt while ordinary edits stay silent \u2014 proven on the real corrections module. NOT done if a correction erases the prior value, if an unattributed correction writes a row, or if a final/irreversible correction applies silently (or an ordinary one triggers the spoken gate).",
+    "consumes": [
+      "scribe.note_deltas"
+    ],
+    "exposes": [
+      "scribe.note_deltas"
+    ],
+    "depends_on": [
+      "scribe.pipeline-apply"
+    ],
+    "integration_point": "services/scribe/src/scribe/corrections.py (immediate attributed patch, AttributionError, notes-injection gate); ask routed from Doc 04, spoken receipt via Doc 02 mouth (Doc 04 turn)",
+    "acceptance": "WHEN a room correction arrives THE SYSTEM SHALL apply an immediate attributed superseded-not-erased patch (rejecting one missing corrector/timestamp before any write), and for a final/irreversible/closing correction ALSO emit a one-line spoken receipt \u2014 while ordinary edits stay silent-immediate.",
+    "acceptance_cmd": "services/scribe/tests -k correction",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc"
+    ],
+    "codebase_anchors": [
+      "services/scribe/src/scribe/corrections.py"
+    ],
+    "invariants": [
+      "Law 3: human control is absolute \u2014 the room can fix the record in the moment",
+      "superseded-not-erased \u2014 the record never silently rewrites history",
+      "CANONICAL \u00a710.3/\u00a711.11: no untrusted-transcript path silently mutates the irreversible/final record (the notes-injection gate)",
+      "the gate governs NOTES corrections only \u2014 world-touching actions already need a human click"
+    ],
+    "risks": [
+      "the spoken-receipt path crosses into Doc 04 (owns the turn) + Doc 02 (the mouth) \u2014 verify the seam exists, this layer never speaks directly (\u00a73.5 pipe-never-mouth)",
+      "the gate trigger must be narrow (final/irreversible/close only) so it does not add friction to the common correction"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "scribe.store",
+    "title": "Dual storage plane \u2014 Postgres append-only ledger (uuid, ON CONFLICT) + boot-reaping + GCS versioned artifact",
+    "region": "03-MEETING-UNDERSTANDING",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "03-MEETING-UNDERSTANDING.md#3.3 (dual storage plane)",
+      "03-MEETING-UNDERSTANDING.md#3.3 (boot-time stale-row reaping, JOIN operation_runs, \u00a711.2 uuid cast)",
+      "03-MEETING-UNDERSTANDING.md#3.3 (Plane 2 GCS Object Versioning, if_generation_match \u2192 NotesGenerationConflictError)"
+    ],
+    "requirement_ids": [
+      "R-doc03-STORE-01",
+      "R-doc03-STORE-02",
+      "R-doc03-STORE-03"
+    ],
+    "criterion_ids": [
+      "AC-STORE-01",
+      "AC-STORE-01-NEG",
+      "AC-STORE-02",
+      "AC-STORE-02-NEG",
+      "AC-STORE-03",
+      "AC-STORE-03-NEG",
+      "AC-STORE-06",
+      "AC-STORE-06-NEG",
+      "AC-STORE-07",
+      "AC-STORE-07-NEG",
+      "AC-STORE-08",
+      "AC-STORE-08-NEG",
+      "AC-STORE-09",
+      "AC-STORE-09-NEG",
+      "AC-STORE-10",
+      "AC-STORE-10-NEG",
+      "AC-STORE-11",
+      "AC-STORE-11-NEG",
+      "AC-STORE-12",
+      "AC-STORE-12-NEG",
+      "AC-STORE-13",
+      "AC-STORE-13-NEG",
+      "AC-STORE-14",
+      "AC-STORE-14-NEG",
+      "AC-FAIL-03",
+      "AC-FAIL-03-NEG",
+      "AC-FAIL-04",
+      "AC-FAIL-04-NEG"
+    ],
+    "intent": "Realizes \u00a73.3's dual storage plane, split by write model. Plane 1 (Postgres, append-only, status-tracked): transcript_segments + note_deltas append every few seconds (GCS whole-object writes would thrash), asyncpg over the Cloud SQL Auth-Proxy socket, thin repos no ORM. The live in-memory NOTES_CACHE object every downstream consumer reads is the deterministic left-fold of note_deltas in id order \u2014 single-writer per meeting, so a reader sees a consistent snapshot and a crashed harness rebuilds by replaying the ledger (this live plane is load-bearing for Doc 04's Tier-3 session recovery \u2014 J-09-S5). Both meeting_id columns are uuid (CANONICAL \u00a711.2). The note_deltas UNIQUE (meeting_id, window_start_s, entry_id, op) makes a stray re-append a silent no-op (ON CONFLICT DO NOTHING). Boot-time reaping (CANONICAL \u00a711.1/\u00a711.2): the reaper must NOT key off meetings.last_heartbeat_at (that column does not exist) \u2014 it JOINs operation_runs on scope_id = meeting_id::text (the one documented cast) for the 'meeting-harness' row and marks a live meeting whose harness row is interrupted or running-but-stale (>5min) as 'interrupted'. Plane 2 (GCS, native Object Versioning + optimistic concurrency): the polished markdown notes file is a whole-object write with if_generation_match \u2014 None=unconditional, 0=create-only, <gen>=exact prior \u2014 turning the close-summarizer-vs-human-edit race into a 412 caught as NotesGenerationConflictError; generations are uint64, NEVER coerced through float.",
+    "definition_of_done": "DONE = concurrent reads during writes see a consistent fold snapshot, the ledger replays the full meeting deterministically, a stray re-append is a no-op (ON CONFLICT), a killed harness's meeting is reaped to 'interrupted' on boot via the operation_runs JOIN (never off a nonexistent meetings.last_heartbeat_at), and two racing finalize-writes \u2192 one succeeds while the other raises NotesGenerationConflictError with generations kept as uint64 \u2014 proven on the real store + reaper + artifact modules. NOT done if the reaper keys off meetings.last_heartbeat_at, if a meeting_id column is non-uuid, if a generation is floated, or if the fold is not deterministic.",
+    "consumes": [
+      "scribe.note_deltas",
+      "substrate.operation_runs",
+      "substrate.transcript_segments"
+    ],
+    "exposes": [
+      "scribe.notes_object"
+    ],
+    "depends_on": [
+      "scribe.pipeline-apply"
+    ],
+    "integration_point": "services/scribe/src/scribe/notes_artifact.py (write_finalized_notes, NotesGenerationConflictError, list/read_notes_version); note_deltas/transcript_segments repos in libs/db; reap_orphaned_meetings on harness boot",
+    "acceptance": "WHEN note-deltas append and the finalized artifact is written THE SYSTEM SHALL keep the Postgres ledger append-only + deterministically foldable (uuid keys, ON CONFLICT no-op), reap a killed harness's meeting to 'interrupted' on boot via the operation_runs JOIN, and turn a concurrent GCS finalize race into NotesGenerationConflictError with uint64 generations preserved.",
+    "acceptance_cmd": "services/scribe/tests -k \"notes_artifact or store\" services/harness/tests -k reap",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc",
+      "J-09-S5-recycle-survives"
+    ],
+    "codebase_anchors": [
+      "services/scribe/src/scribe/notes_artifact.py"
+    ],
+    "invariants": [
+      "CANONICAL \u00a711.2: meeting_id columns are uuid; only operation_runs.scope_id is text (the meeting_id::text cast)",
+      "CANONICAL \u00a711.1: reaper JOINs operation_runs, NEVER meetings.last_heartbeat_at (that column does not exist)",
+      "the live Postgres plane is the durable source of truth; NOTES_CACHE is a hot-path optimization only",
+      "GCS generations are uint64 \u2014 never coerced through float (\u00a73.3)",
+      "close deliverable written create-only (if_generation_match=0), exactly once"
+    ],
+    "risks": [
+      "reap_orphaned_meetings SQL is copied in the scribe_runtime docstring but its production caller on harness boot must exist and run \u2014 verify it is wired, not just documented",
+      "the note_deltas repo append + the transcript flip must be the same tx as scribe.pipeline-apply (cross-node invariant)"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "scribe.cross-service-reader",
+    "title": "Cross-service notes read \u2014 GET /internal/notes/{meeting_id} folds Postgres, token-gated, host-independent, notes.finalized",
+    "region": "03-MEETING-UNDERSTANDING",
+    "disposition": "fix",
+    "status": "pending",
+    "spec_refs": [
+      "03-MEETING-UNDERSTANDING.md#3.3.1 (cross-service notes read, notes_ref, CANONICAL \u00a711.4)",
+      "03-MEETING-UNDERSTANDING.md#3.3.1 (GET /m/{meeting_id} user surface reads the SAME fold, CANONICAL \u00a712.9)",
+      "03-MEETING-UNDERSTANDING.md#3.8 (freshness flag)"
+    ],
+    "requirement_ids": [
+      "R-doc03-CSREAD-01",
+      "R-doc03-CSREAD-02",
+      "R-doc03-CSREAD-03"
+    ],
+    "criterion_ids": [
+      "AC-CSREAD-01",
+      "AC-CSREAD-02",
+      "AC-CSREAD-02-NEG",
+      "AC-CSREAD-03",
+      "AC-CSREAD-03-NEG",
+      "AC-CSREAD-04",
+      "AC-CSREAD-05",
+      "AC-CSREAD-06",
+      "AC-CSREAD-06-NEG",
+      "AC-CSREAD-07",
+      "AC-CSREAD-08",
+      "AC-CSREAD-08-NEG",
+      "AC-CSREAD-09",
+      "AC-CSREAD-09-NEG",
+      "AC-CSREAD-10",
+      "AC-CSREAD-10-NEG",
+      "AC-STORE-04"
+    ],
+    "intent": "Realizes \u00a73.3.1's cross-service read path: the bundle a wake turn hands the Workroom carries notes_ref = meeting_id (CANONICAL \u00a711.4), NOT the notes object inline (\u00a71.3). A foreign consumer (the Workroom, on another host) must read the live notes by that handle and CANNOT read the in-process NOTES_CACHE (a scribe-hot-path optimization only, not a cross-service source of truth). The durable source is note_deltas \u2014 the notes object is its deterministic left-fold in id order \u2014 so read_notes folds from Postgres, never from NOTES_CACHE. GET /internal/notes/{meeting_id} is a token-gated internal reader mounted OUTSIDE the auth wall alongside /internal/reconcile (gated by the shared internal bearer token, not the user session cookie): 401 on missing/invalid token, 200 with the canonical JSON + freshness flag riding the body, 404 for an unknown meeting (zero rows \u2014 never a 200-with-empty-object), 503 on a Postgres error (never a fabricated 200 / silent empty fallback). On the harness host it MAY serve NOTES_CACHE as a read-through optimization (identical bytes), but the fold-from-note_deltas path IS the contract \u2014 host-independent and crash-survivable. GET /m/{meeting_id} (the authenticated user surface, CANONICAL \u00a712.9) reads the SAME fold. resolve_notes_ref resolves a bundle's ref by HTTP GET, never accepting an inline object. The finalized notes leave the product as notes.finalized (the close deliverable link).",
+    "definition_of_done": "DONE = /internal/notes folds note_deltas from Postgres (never NOTES_CACHE as source) with the token gate (401), 404 for zero-rows, 503 on db failure, freshness flag on the body, and /m/ + resolve_notes_ref read the same fold by handle \u2014 proven on the real reader AND mounted into a running ASGI app outside the auth wall. NOT done if the reader reads NOTES_CACHE as the source of truth, if an unknown meeting returns a 200 empty object, if a db error returns a stale/fabricated 200, or if the handler is defined but NOT mounted into any app (the current gap).",
+    "consumes": [
+      "scribe.note_deltas",
+      "http.internal_notes"
+    ],
+    "exposes": [
+      "scribe.notes_object",
+      "notes.finalized"
+    ],
+    "depends_on": [
+      "scribe.store",
+      "scribe.pipeline-apply"
+    ],
+    "integration_point": "services/scribe/src/scribe/notes_reader.py (read_notes, internal_notes_handler, m_handler, resolve_notes_ref); must be REGISTERED alongside /internal/reconcile in services/harness/src/control_plane/internal.py",
+    "acceptance": "WHEN a foreign consumer GETs /internal/notes/{meeting_id} with the internal bearer token THE SYSTEM SHALL fold note_deltas from Postgres (never NOTES_CACHE as source) and return 200 + canonical JSON + freshness flag, 401 unauthenticated, 404 for an unknown meeting, 503 on a db failure \u2014 host-independent and never a stale/empty fabricated 200.",
+    "acceptance_cmd": "services/scribe/tests -k \"notes_reader or csread\" services/harness/tests -k \"internal and notes\"",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc",
+      "J-09-S5-recycle-survives"
+    ],
+    "codebase_anchors": [
+      "services/scribe/src/scribe/notes_reader.py",
+      "services/harness/src/control_plane/internal.py (mount alongside /internal/reconcile \u2014 the registration this node must close)"
+    ],
+    "invariants": [
+      "CANONICAL \u00a711.4: notes_ref = meeting_id; the object is a handle, never carried inline (\u00a71.3)",
+      "the durable source is the note_deltas fold; NOTES_CACHE is a hot-path optimization only (never the cross-service source)",
+      "mounted OUTSIDE the auth wall, internal-bearer-token gated (never the user session cookie)",
+      "Law 1: honest degradation \u2014 404 unknown / 503 db-down, never a fabricated 200"
+    ],
+    "risks": [
+      "PRODUCT GAP: internal_notes_handler / m_handler are DEFINED in notes_reader.py (with MOUNTS_OUTSIDE_AUTH_WALL metadata) but NOT registered into any ASGI app \u2014 control_plane/internal.py mounts /internal/reconcile but not /internal/notes, so the Workroom's cross-service read has no live endpoint. This node must close that wiring gap, not just verify the handler.",
+      "the read-through NOTES_CACHE optimization must produce bytes identical to the fold or two consumers disagree"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "scribe.cost-telemetry",
+    "title": "Per-call cost telemetry \u2014 Haiku rate card, cache-split write-through to meeting_cost, cache-hit ratio proves the breakpoint",
+    "region": "03-MEETING-UNDERSTANDING",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "03-MEETING-UNDERSTANDING.md#3.9 (cost telemetry per micro-call; PROVE the cache is hitting)",
+      "03-MEETING-UNDERSTANDING.md#4 (Scribe envelope ~$0.15-0.35/hr)"
+    ],
+    "requirement_ids": [
+      "R-doc03-COST-01",
+      "R-doc03-COST-02",
+      "R-doc03-COST-03"
+    ],
+    "criterion_ids": [
+      "AC-COST-01",
+      "AC-COST-02",
+      "AC-COST-03",
+      "AC-COST-03-NEG",
+      "AC-COST-04",
+      "AC-COST-05",
+      "AC-COST-05-NEG",
+      "AC-COST-06",
+      "AC-COST-06-NEG",
+      "AC-COST-07",
+      "AC-COST-08",
+      "AC-COST-09",
+      "AC-COST-10",
+      "AC-COST-10-NEG",
+      "AC-COST-11",
+      "AC-COST-12",
+      "AC-COST-12-NEG"
+    ],
+    "intent": "Realizes \u00a73.9's per-micro-call cost telemetry and the cache-hit PROOF. Every micro-call captures its usage; the raw Messages API returns exact token counts (input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens) but NOT a total_cost_usd (that is an Agent-SDK convenience the close pass gets free) \u2014 so for the raw Scribe call we compute cost from usage \u00d7 hardcoded Haiku-4.5 rates (few models, hardcode not a boot-loaded rate table), with the EXACT billing multipliers: cache-creation bills +25% of the input rate, cache-read at 10%. The cache-read-vs-creation SPLIT is the point: it is how we prove the manual \u00d72 breakpoint (\u00a73.2) is working and the ONLY signal that catches a silent byte-identical-prefix regression. record_scribe_cost writes model_usd + the cache split straight to the persisted meeting_cost table (write-through, UPSERT-ADD) \u2014 the Scribe is a bare messages.create, NOT the provider seam, so it writes DIRECTLY (no call_external in the cost path, AC-COST-11); transport/e2b accrue on the SAME row but metered elsewhere. The in-process MEETING_COST cache stays for hot-path budget reads; check_meeting_budget (Doc 04) reads the persisted sum, reloading spent_usd on harness re-claim (survives recycle). Steady-state fingerprint: first call \u2248 all cache_creation / near-zero hit ratio; every call after \u2248 cache_read \u2248 prefix size, input \u2248 window only, hit ratio near 1. A ratio that stays low after the first call = the prefix is no longer byte-identical \u2014 an alert, not a silent 10\u00d7 bleed.",
+    "definition_of_done": "DONE = record_scribe_cost computes cost from usage \u00d7 the exact Haiku rates (cache-write +25%, cache-read 10%), write-throughs model_usd + the cache split to meeting_cost via a direct Postgres UPSERT-ADD (NOT through call_external), and the cache-hit ratio reads near-0 on call 1 then near-1 steady-state (a mutated prefix drops it) \u2014 proven on the real cost path. NOT done if cost routes through the provider seam, if the multipliers are wrong, if the write clobbers instead of adds, or if the cache-split is not persisted (so the regression signal is blind).",
+    "consumes": [
+      "scribe.delta",
+      "substrate.meeting_cost"
+    ],
+    "exposes": [
+      "scribe.cost"
+    ],
+    "depends_on": [
+      "scribe.call-parse"
+    ],
+    "integration_point": "services/scribe/src/scribe/cost.py (record_scribe_cost / record_scribe_cost_from_usage, Haiku rate card, cache-split UPSERT); fed to Doc 04 check_meeting_budget; bound via harness scribe_runtime.build_real_seams._on_usage",
+    "acceptance": "WHEN a Scribe micro-call returns usage THE SYSTEM SHALL compute its cost from the exact Haiku rate card (cache-write +25%, cache-read 10%) and write model_usd + the cache-read/creation split directly (not via call_external) to the persisted meeting_cost row \u2014 surfacing a cache-hit ratio near 1 in steady state that drops if the prefix is no longer byte-identical.",
+    "acceptance_cmd": "services/scribe/tests -k cost",
+    "evidence_class": "[integration]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc",
+      "J-09-S5-recycle-survives"
+    ],
+    "codebase_anchors": [
+      "services/scribe/src/scribe/cost.py",
+      "services/harness/src/harness/scribe_runtime.py (build_real_seams._on_usage)"
+    ],
+    "invariants": [
+      "AC-COST-11: the cost path holds NO provider import \u2014 a direct Postgres write, never routed through call_external (the Scribe is a bare messages.create, not the seam)",
+      "the billing multipliers are exact and load-bearing: cache_creation +25%, cache_read 10% of input",
+      "write-through keeps the persisted meeting_cost row authoritative \u2014 check_meeting_budget reloads spent_usd on re-claim (survives recycle)",
+      "the cache-split telemetry is the ONLY signal that catches the byte-identical-prefix regression (\u00a73.2)"
+    ],
+    "risks": [
+      "the Haiku-4.5 published rates (HAIKU_INPUT/OUTPUT) are a PIN \u2014 verify/confirm at build against the live rate card (the seat is PROXY_MODEL_SCRIBE)",
+      "the usage field names (cache_creation_input_tokens / cache_read_input_tokens) are the Anthropic wire shape \u2014 confirm-at-build alongside the \u00a711.10 SDK pin"
+    ],
+    "human_gated": false
+  },
+  {
+    "id": "scribe.close-pass",
+    "title": "Close pass \u2014 Sonnet generateStructured over folded ledger + gap/pending backfill \u2192 markdown \u2192 GCS create-only \u2192 chat link \u2192 teardown",
+    "region": "03-MEETING-UNDERSTANDING",
+    "disposition": "verify",
+    "status": "pending",
+    "spec_refs": [
+      "03-MEETING-UNDERSTANDING.md#3.7 (the close pass, the permanent record)",
+      "03-MEETING-UNDERSTANDING.md#3.8 (failure honesty, gap/pending backfill)",
+      "03-MEETING-UNDERSTANDING.md#3.7 (build-time SDK-surface pin, CANONICAL \u00a711.10)"
+    ],
+    "requirement_ids": [
+      "R-doc03-CLOSE-01",
+      "R-doc03-CLOSE-02",
+      "R-doc03-CLOSE-03"
+    ],
+    "criterion_ids": [
+      "AC-CLOSE-01",
+      "AC-CLOSE-01-NEG",
+      "AC-CLOSE-02",
+      "AC-CLOSE-02-NEG",
+      "AC-CLOSE-03",
+      "AC-CLOSE-03-NEG",
+      "AC-CLOSE-04",
+      "AC-CLOSE-04-NEG",
+      "AC-CLOSE-05",
+      "AC-CLOSE-05B",
+      "AC-CLOSE-06",
+      "AC-CLOSE-06-NEG",
+      "AC-CLOSE-06B-NEG",
+      "AC-CLOSE-07",
+      "AC-CLOSE-07-NEG",
+      "AC-CLOSE-08",
+      "AC-CLOSE-08-NEG",
+      "AC-CLOSE-09",
+      "AC-CLOSE-09-NEG",
+      "AC-CLOSE-10",
+      "AC-CLOSE-10-NEG",
+      "AC-CLOSE-11",
+      "AC-CLOSE-11-NEG",
+      "AC-CLOSE-12",
+      "AC-CLOSE-12-NEG",
+      "AC-CLOSE-13",
+      "AC-CLOSE-13-NEG",
+      "AC-CLOSE-14",
+      "AC-CLOSE-14-NEG",
+      "AC-CLOSE-15",
+      "AC-CLOSE-16",
+      "AC-STORE-14",
+      "AC-FAIL-05",
+      "AC-FAIL-05-NEG",
+      "AC-FAIL-08"
+    ],
+    "intent": "Realizes \u00a73.7's close pass \u2014 the permanent record. On Doc 02's meeting-end signal ONE strong-model pass (Sonnet-class, PROXY_MODEL_SCRIBE_CLOSE) REDUCES over the FOLDED note-delta ledger + the gap/pending transcript backfill \u2014 NOT the full raw transcript as a map-reduce (CANONICAL \u00a712.10): the folded ledger is already the comprehension, so the pass reduces over it and pulls raw transcript ONLY for status IN ('gap','pending') spans no live window ever comprehended. It chunk-reduces ONLY above a token threshold (a normal meeting folds in one pass). Unlike the hot loop it is not latency-bound, so it runs as the Agent SDK generateStructured (outputFormat json_schema \u2192 Pydantic re-validate) inheriting the real terminal subtypes as typed errors (error_max_turns, error_max_structured_output_retries) + total_cost_usd for free. The V0 close deliverable, run as a SINGLE operation_runs row operation_type='meeting-close' (NO close_jobs table): render the final object through the notes template to markdown, write to GCS via write_finalized_notes with if_generation_match=0 (create-only, exactly once), post the link in the meeting chat, THEN tear down \u2014 IN THAT ORDER, so a durable notes URL exists before teardown and the bot never leaves without the record posted. It corrects live-tagging misses and backfills every gap AND pending span from the preserved transcript. This node is wired: run_meeting_close is the ONE production caller of run_close_pass, closing the DOC03-CLOSE-PASS-UNWIRED gap (the webhook call_ended path previously only drained + tore down).",
+    "definition_of_done": "DONE = on meeting-end run_meeting_close folds the ledger, backfills ONLY gap/pending spans, reduces via the Sonnet generateStructured pass into one FinalNotes, and runs the ordered close (markdown \u2192 GCS create-only \u2192 chat link \u2192 teardown) on one meeting-close operation_runs row \u2014 proven on a full test meeting where the polished markdown is posted BEFORE the bot leaves and the GCS object has a readable prior generation. NOT done if the close map-reduces the full raw transcript, if the order (write\u2192link\u2192teardown) is violated, if it uses a close_jobs table, or if run_close_pass has no production caller. Before building, confirm the live Python `claude_agent_sdk` structured-output API shape (generateStructured/outputFormat equivalent + total_cost_usd/session_id) against current docs \u2014 do not assume the TS names (CANONICAL \u00a711.10).",
+    "consumes": [
+      "scribe.note_deltas",
+      "scribe.notes_object",
+      "transport.meeting_end",
+      "http.call_external",
+      "substrate.operation_runs"
+    ],
+    "exposes": [
+      "scribe.close_artifact",
+      "scribe.cost",
+      "notes.finalized"
+    ],
+    "depends_on": [
+      "scribe.store",
+      "scribe.cross-service-reader",
+      "scribe.cost-telemetry"
+    ],
+    "integration_point": "services/scribe/src/scribe/close.py (run_close_pass, reduce_close, fetch_gap_pending_spans, anthropic_structured_caller); wired by services/harness/src/harness/scribe_runtime.py:run_meeting_close (the ONE production caller) on the meeting-end path",
+    "acceptance": "WHEN Doc 02 signals meeting-end THE SYSTEM SHALL run one Sonnet generateStructured pass reducing the folded ledger + only the gap/pending backfill into the final notes, then render markdown \u2192 GCS create-only (if_generation_match=0) \u2192 post the chat link \u2192 tear down, in that order, on a single meeting-close operation_runs row.",
+    "acceptance_cmd": "services/scribe/tests -k close services/harness/tests -k \"close and meeting\"",
+    "evidence_class": "[e2e]",
+    "journeys_now_live": [
+      "J-09-S1-happy-arc"
+    ],
+    "codebase_anchors": [
+      "services/scribe/src/scribe/close.py",
+      "services/harness/src/harness/scribe_runtime.py (run_meeting_close, CloseConfig, _MeetingCloseOpSink)"
+    ],
+    "invariants": [
+      "CANONICAL \u00a712.10: reduce over the FOLDED ledger + gap/pending backfill, NEVER a full-transcript map-reduce; NO close_jobs table (one meeting-close operation_runs row)",
+      "ordered close: render \u2192 GCS create-only (if_generation_match=0, exactly once) \u2192 chat link \u2192 teardown \u2014 the bot never leaves without the record posted",
+      "CON-004: the close call goes through call_external",
+      "Law 1: gaps/pending backfilled from ground truth, never fabricated (\u00a73.8)"
+    ],
+    "risks": [
+      "CONFIRM-AT-BUILD (CANONICAL \u00a711.10): the Python claude_agent_sdk structured-output surface \u2014 the generateStructured/outputFormat/json_schema equivalent, the terminal-error subtypes (error_max_turns / error_max_structured_output_retries), and total_cost_usd/session_id/msg_id on the result \u2014 MUST be confirmed against the live claude_agent_sdk docs at build; a design doc cannot pin a third-party wire shape, and the TS names may NOT carry over verbatim. This is the close-pass node's headline build-time risk.",
+      "the ordered close must be transactional-in-spirit: a failure after GCS write but before chat link must leave the durable URL and surface an honest failed op-row (\u00a73.8), never a silent teardown"
+    ],
+    "human_gated": false
+  }
+]

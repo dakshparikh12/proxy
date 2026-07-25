@@ -1,0 +1,18 @@
+{
+  "id": "S-s4-human-ask-preempts-running-turn",
+  "kind": "edge",
+  "spec_refs": [
+    "09-VERIFICATION.md#3",
+    "04-ORCHESTRATOR.md#3.11"
+  ],
+  "given": "Proxy is busy on a lower-priority wake turn.",
+  "when": "A human directly asks a new question mid-turn.",
+  "then": "The human ask preempts the running turn (FIFO-honest, 'on it \u2014 right after\u2026' if needed); the human is never made to wait behind Proxy's own work.",
+  "touches_nodes": [
+    "orchestrator.ack-reflex",
+    "orchestrator.run-loop",
+    "orchestrator.abort-discipline-verify",
+    "journey.s4-barge-in-human-control"
+  ],
+  "journey_id": "J-09-S4-barge-in-human-control"
+}

@@ -1,0 +1,19 @@
+{
+  "id": "S-s2-dep-graph-partial-coverage-honest",
+  "kind": "edge",
+  "spec_refs": [
+    "09-VERIFICATION.md#3",
+    "01-CODE-INTELLIGENCE.md#3.7"
+  ],
+  "given": "The change touches a file in a language the graph only partially covers.",
+  "when": "'What depends on this config loader?' is asked.",
+  "then": "Proxy returns the dependents it CAN see, tagged as a lower-bound, and states plainly which area is outside graph coverage (Law 1/Law 2) \u2014 never implies the list is exhaustive.",
+  "touches_nodes": [
+    "codeintel.substrate_graph",
+    "codeintel.mcp_tools",
+    "codeintel.coverage_readiness",
+    "codeintel.direct_answer",
+    "journey.s2-dep-graph-blast-radius"
+  ],
+  "journey_id": "J-09-S2-dep-graph-blast-radius"
+}

@@ -1,0 +1,19 @@
+{
+  "id": "S-s2-dep-graph-stale-index-freshness",
+  "kind": "edge",
+  "spec_refs": [
+    "09-VERIFICATION.md#3",
+    "01-CODE-INTELLIGENCE.md#3.6"
+  ],
+  "given": "A push webhook arrived seconds ago; the graph is mid-rebuild off the newly pinned SHA.",
+  "when": "A dep-graph question is asked before the rebuild completes.",
+  "then": "Proxy answers off the pinned/consistent view (never a half-rebuilt graph) and notes freshness honestly; the answer is SHA-consistent, not a lie.",
+  "touches_nodes": [
+    "codeintel.freshness",
+    "codeintel.substrate_graph",
+    "codeintel.pipeline_orchestration",
+    "codeintel.mcp_tools",
+    "journey.s2-dep-graph-blast-radius"
+  ],
+  "journey_id": "J-09-S2-dep-graph-blast-radius"
+}

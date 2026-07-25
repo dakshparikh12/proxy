@@ -1,0 +1,19 @@
+{
+  "id": "S-s7-cost-hard-cap-notes-only",
+  "kind": "negative",
+  "spec_refs": [
+    "09-VERIFICATION.md#3",
+    "04-ORCHESTRATOR.md#3.13",
+    "CANONICAL-DECISIONS.md#12.7"
+  ],
+  "given": "Cost crosses the 1.0x hard cap despite soft-cap degradation.",
+  "when": "check_meeting_budget detects the hard cap crossed.",
+  "then": "Proxy drops to notes-only, states plainly it is standing down active work; still produces honest notes \u2014 degraded, never silent, never a surprise bill.",
+  "touches_nodes": [
+    "orchestrator.cost-circuit-breaker",
+    "workroom.cost-latency",
+    "foundation.invariants-guards",
+    "journey.s7-cost-circuit-breaker"
+  ],
+  "journey_id": "J-09-S7-cost-circuit-breaker"
+}

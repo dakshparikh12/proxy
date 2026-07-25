@@ -33,7 +33,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "id", "title", "region", "status",
+        "id", "title", "region", "disposition", "status",
         "spec_refs", "requirement_ids", "criterion_ids", "intent", "definition_of_done",
         "consumes", "exposes", "depends_on", "integration_point",
         "acceptance", "acceptance_cmd", "evidence_class", "journeys_now_live",
@@ -43,11 +43,12 @@
         "id":       { "type": "string", "pattern": "^[a-z0-9]+([._-][a-z0-9]+)*$", "description": "stable unique id, e.g. scribe.fold-transcript" },
         "title":    { "type": "string", "description": "short human label" },
         "region":   { "type": "string", "description": "owning spec doc, e.g. 03-MEETING-UNDERSTANDING" },
-        "status":   { "enum": ["not-built", "built:needs-verification", "verified"] },
+        "disposition": { "enum": ["verify", "fix", "rebuild", "build-new"], "description": "plan-time action from the code-vs-spec audit" },
+        "status":   { "enum": ["pending", "verified", "blocked"] },
 
-        "spec_refs":       { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "cited spec sections — the source of truth (file#section)" },
+        "spec_refs":       { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "cited spec sections — the source of truth (file#section); the definition of done" },
         "requirement_ids": { "type": "array", "items": { "type": "string" }, "description": "R-* obligations discharged (from acceptance/doc*/requirements)" },
-        "criterion_ids":   { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "AC-* sealed acceptance criteria this node satisfies" },
+        "criterion_ids":   { "type": "array", "items": { "type": "string" }, "description": "existing AC-* criteria this node verifies against (00-03); empty for 04-09 (judged against spec_refs)" },
         "intent":            { "type": "string", "minLength": 40, "description": "what this realizes + what the cited spec means here; cites, never re-copies the spec" },
         "definition_of_done":{ "type": "string", "minLength": 40, "description": "concretely what 'done' is AND what does not count as done" },
 
