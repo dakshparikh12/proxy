@@ -52,6 +52,40 @@ class PoolAcquirer:
         return self._pool.acquire()
 
 
+class DsnAcquirer:
+    """A REAL Acquirer that opens a FRESH asyncpg connection per ``acquire()``.
+
+    The mounted-ASGI oracle drives the app through Starlette's ``TestClient``,
+    which runs the handler in its OWN event loop (a sync-portal thread) — NOT the
+    pytest_asyncio loop the shared ``pool`` fixture was created in. A pool bound to
+    another loop raises ``ConnectionDoesNotExistError`` when borrowed across loops.
+    This acquirer sidesteps that by connecting fresh, in whatever loop the handler
+    runs in — exactly the loop-affinity production gets for free (its ``Database``
+    pool is opened inside the app's own lifespan loop). It is still the REAL db
+    seam (a genuine asyncpg connection over the real note_deltas DB) — no stub.
+    """
+
+    def __init__(self, dsn: str) -> None:
+        self._dsn = dsn
+
+    def acquire(self) -> "DsnAcquirer._Conn":
+        return DsnAcquirer._Conn(self._dsn)
+
+    class _Conn:
+        def __init__(self, dsn: str) -> None:
+            self._dsn = dsn
+            self._conn: Any = None
+
+        async def __aenter__(self) -> Any:
+            self._conn = await asyncpg.connect(self._dsn)
+            return self._conn
+
+        async def __aexit__(self, *exc: Any) -> bool:
+            if self._conn is not None:
+                await self._conn.close()
+            return False
+
+
 class FaultAcquirer:
     """A REAL Acquirer whose ``acquire()`` connects to an unroutable DSN.
 

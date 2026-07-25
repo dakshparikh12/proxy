@@ -48,9 +48,23 @@ def _install_signed_session(app: FastAPI) -> None:
 
 
 def create_app() -> FastAPI:
-    """Construct the control_plane ASGI app with the /auth routes + /health."""
+    """Construct the control_plane ASGI app with the /auth routes + /health.
+
+    The /internal route group (POST /internal/reconcile + GET /internal/notes/
+    {meeting_id}) is mounted OUTSIDE the auth wall, gated by the internal bearer
+    token; the authenticated GET /m/{meeting_id} user surface is mounted behind
+    the wall. Both notes routes read the SAME note_deltas fold via the canonical
+    ``scribe.notes_reader`` reader (DOC03-CSREAD — the cross-service notes read).
+    """
     app = FastAPI(title="proxy-control-plane")
     _install_signed_session(app)
+
+    # The token-gated /internal notes + reconcile routes and the /m user surface.
+    # Mounted here so the Workroom's cross-service notes read has a LIVE endpoint
+    # alongside /internal/reconcile (closes the DOC03-CSREAD mount gap).
+    from .internal import install_internal_routes
+
+    install_internal_routes(app)
 
     @app.get("/health")
     async def health() -> Any:
