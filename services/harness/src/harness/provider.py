@@ -362,7 +362,8 @@ def build_sdk_options(prompt: str, query: ProviderQuery) -> ClaudeAgentOptions:
     options = ClaudeAgentOptions(
         model=query.model,
         allowed_tools=list(query.allowed_tools),
-        # Computed built-in list — empty in sandbox mode (no host Read/Grep/Bash).
+        # Computed built-in list — empty in sandbox mode (no host Read/Grep/Bash). See the
+        # mcp_servers block below for why an EMPTY list is NOT pinned when servers are mounted.
         tools=list(query.tools),
         disallowed_tools=list(disallowed_tools),
         permission_mode=permission_mode,
@@ -375,6 +376,38 @@ def build_sdk_options(prompt: str, query: ProviderQuery) -> ClaudeAgentOptions:
         options.system_prompt = query.system_prompt
     if query.resume:
         options.resume = query.resume
+    # Mount the behavior's CURATED MCP servers (the sandbox ``code`` HTTP server, the host-side
+    # ``propose_change`` in-process server, a code-intel server, …) so the ``mcp__<server>__*``
+    # tool names the behavior advertises in ``allowed_tools`` are actually REACHABLE by the
+    # model. Without this the model advertises tools whose providing server is never mounted and
+    # can never call them (the seam gap this fixes). ``strict_mcp_config=True`` keeps the triad
+    # intact: ONLY these explicitly-passed servers are mounted — a discovered ``.mcp.json`` /
+    # user connector is still ignored. An empty/None mapping leaves the SDK default (no servers).
+    if query.mcp_servers:
+        options.mcp_servers = query.mcp_servers
+        # CRITICAL: ``tools`` is the SDK's BASE tool set → the CLI serializes it as ``--tools
+        # <csv>``, and an EMPTY list emits ``--tools ""`` which zeroes out the ENTIRE base set,
+        # SUPPRESSING the mounted MCP tools too — so the model sees no tools and calls none (the
+        # silent no-op that left auth.py unchanged in the real gate). When servers ARE mounted we
+        # therefore DROP an empty ``tools`` (leave it the SDK default / ``--tools`` omitted) so
+        # the MCP tools load; isolation still holds via the curated ``allowed_tools`` permission
+        # gate (only ``mcp__code__*`` permitted) + ``disallowed_tools`` (host built-ins blocked) +
+        # ``strict_mcp_config`` + ``setting_sources=[]``. A genuinely NON-empty computed built-in
+        # list is still pinned as the restrictive base set (it names real built-ins to allow).
+        if not query.tools:
+            options.tools = None
+    # The curated per-turn env (the output-token clamp, §3.2/§3.9) rides the OPTIONS the SDK
+    # enforces so it actually caps this model's output.
+    if query.env:
+        options.env = dict(query.env)
+    # The per-query ``disallowed_tools`` block-list (the host-built-in backstop + a read-only
+    # disposition's mutating-tool block) MERGES into the module-level block-list on the options:
+    # it must ride the options because ``allowed_tools`` does not filter MCP tools (§3.8), so a
+    # read-only disposition's write block goes through ``disallowed_tools``.
+    if query.disallowed_tools:
+        options.disallowed_tools = list(
+            dict.fromkeys([*options.disallowed_tools, *query.disallowed_tools])
+        )
     return options
 
 

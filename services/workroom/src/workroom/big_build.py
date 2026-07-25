@@ -341,12 +341,19 @@ class BigBuildPlanner:
         store: Any = None,
         chat: Any = None,
         db: Any = None,
+        mcp_servers: dict[str, Any] | None = None,
         plan_max_turns: int = 8,
     ) -> None:
         self._provider = provider
         self._store = store
         self._chat = chat
         self._db = db
+        # The curated MCP servers whose tools the plan/critic turns advertise (the sandbox
+        # ``code`` server for THIS warm sandbox — plan/critic are read-only so they read code
+        # through ``mcp__code__*``). Threaded onto every ProviderQuery this planner builds so the
+        # advertised tools are actually MOUNTED and reachable by the model (the seam gap this
+        # closes). ``None`` = no servers (a pure-text plan turn with no tool access).
+        self._mcp_servers = dict(mcp_servers) if mcp_servers else None
         # The plan turn runs with a high max_turns (§3.6.1 — planning is a real reasoning
         # turn); the retry clamps to 1. Never the SDK default 1000 (§3.11 — always set our own).
         self._plan_max_turns = plan_max_turns
@@ -580,6 +587,7 @@ class BigBuildPlanner:
             setting_sources=(),             # triad
             thinking_enabled=enabled,       # from thinking_policy: OFF on Sonnet, ON only on Opus (D-022)
             thinking_budget_tokens=budget,  # 0 when OFF; capped below MAX_OUTPUT_TOKENS when ON (§3.6.1/N3)
+            mcp_servers=self._mcp_servers,  # the curated code server — MOUNTED so plan/critic reach mcp__code__* (§3.5)
         )
 
     def _model_for(self, disposition: str) -> str:
@@ -916,6 +924,7 @@ class BigBuildExecutor:
         store: Any = None,
         chat: Any = None,
         db: Any = None,
+        mcp_servers: dict[str, Any] | None = None,
         on_progress: ProgressSink | None = None,
         abort_registry: AbortRegistry | None = None,
         worker_max_turns: int = 6,
@@ -931,6 +940,12 @@ class BigBuildExecutor:
         self._store = store
         self._chat = chat
         self._db = db
+        # The curated MCP servers whose tools the resumed worker turns advertise (the sandbox
+        # ``code`` server for THIS warm sandbox — the readwrite ``mcp__code__*`` write set — plus
+        # any host-side server the caller wires, e.g. ``propose_change``). Threaded onto every
+        # worker ProviderQuery so a subtask's advertised tools are actually MOUNTED and reachable
+        # (the seam gap this closes). ``None`` = no servers mounted.
+        self._mcp_servers = dict(mcp_servers) if mcp_servers else None
         self._on_progress = on_progress
         self._abort_registry = abort_registry if abort_registry is not None else AbortRegistry()
         # A tight per-subtask max_turns (§3.11 — never the SDK default 1000; a subtask is one
@@ -1304,6 +1319,7 @@ class BigBuildExecutor:
             thinking_budget_tokens=budget,
             resume=session_id,              # resume the SAME plan session (one conversation, §3.6.2)
             abort=controller,               # the per-task abort (§3.11)
+            mcp_servers=self._mcp_servers,  # the curated code (+ propose_change) servers — MOUNTED (§3.5)
         )
 
     def _model_for(self, disposition: str) -> str:

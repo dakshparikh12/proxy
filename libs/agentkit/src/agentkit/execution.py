@@ -152,11 +152,20 @@ class BehaviorRunner:
         registry: Mapping[str, Behavior | BehaviorConfig] | None = None,
         provider: Provider | None = None,
         cost_meter: Any | None = None,
+        mcp_servers: dict[str, Any] | None = None,
     ) -> None:
         self._config = config
         self._registry: dict[str, Behavior | BehaviorConfig] = dict(registry or {})
         self._provider = provider
         self._cost = cost_meter if cost_meter is not None else _NullCostMeter()
+        # The CURATED MCP servers whose tools the behavior's ``allowed_tools`` reference — e.g.
+        # the orchestrator wake turn's code-intel MCP server, so ``mcp__code_intel__*`` is
+        # actually MOUNTED and reachable (the seam gap this closes). Threaded onto every
+        # ProviderQuery this runner builds. ``None`` = no servers (a behavior with only built-in
+        # or no tools needs none). The runner does not itself construct the server — it passes
+        # through what the wiring gives it, so the seam is CAPABLE of mounting the wake turn's
+        # code-intel tools without hard-wiring their server here.
+        self._mcp_servers = dict(mcp_servers) if mcp_servers else None
 
     @property
     def config(self) -> BehaviorConfig | None:
@@ -225,6 +234,7 @@ class BehaviorRunner:
             resume=inputs.get("resume"),
             preamble=inputs.get("preamble"),
             abort=abort,
+            mcp_servers=self._mcp_servers,  # the curated servers (e.g. the wake turn's code-intel) — MOUNTED
         )
 
     async def run(

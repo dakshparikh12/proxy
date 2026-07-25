@@ -40,8 +40,17 @@ from libs.contracts import AgentChunk
 # these params flow through, so it names them structurally: no built-in host tool
 # executes outside the sandbox, and no discovered .mcp.json / connector leaks in.
 SDK_LOCAL_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob", "Bash", "Write", "Edit")
-# The isolation permission mode the seam pins for every SDK call (host tools off).
-permission_mode: str = "default"
+# The isolation permission mode the seam pins for every SDK call. A seam-routed call is a
+# HEADLESS SERVER AGENT — there is no human at a terminal to answer a tool-permission prompt,
+# so ``permission_mode="default"`` would leave every tool call waiting on a prompt that a
+# non-interactive subprocess auto-DENIES, and the model silently gives up having called nothing
+# (the exact silent no-op that left the real file unedited). ``bypassPermissions`` is therefore
+# the correct — and the only workable — mode for these headless agents. Isolation is NOT
+# weakened by it: the real gate is the curated built-in ``tools`` list (``[]`` in sandbox mode)
+# + ``strict_mcp_config`` + ``setting_sources=[]`` + ``disallowed_tools`` (the host-built-in
+# block-list), never an interactive permission prompt. This mirrors ``workroom.agent_config``'s
+# ``permission_mode="bypassPermissions"`` so the wake path and the Workroom path never disagree.
+permission_mode: str = "bypassPermissions"
 # World-touching built-ins that must never be advertised to a seam-routed call —
 # they run on the orchestrator host, not in E2B. Kept OUT of every computed list.
 disallowed_tools: tuple[str, ...] = SDK_LOCAL_TOOLS
@@ -101,6 +110,24 @@ class ProviderQuery:
     resume: str | None = None
     preamble: str | None = None
     abort: Any = None
+    # The CURATED in-process/HTTP MCP servers whose tools this behavior's ``allowed_tools``
+    # reference — a mapping of server-name → SDK MCP server config (e.g. the sandbox ``code``
+    # HTTP server, the host-side ``propose_change`` in-process server, a code-intel server).
+    # ``build_sdk_options`` mounts EXACTLY these onto ``ClaudeAgentOptions.mcp_servers``; with
+    # ``strict_mcp_config=True`` ONLY these explicitly-passed servers are mounted (a discovered
+    # ``.mcp.json`` is still ignored — the isolation triad holds). ``None``/empty = mount no
+    # servers (backward-compatible: a query that advertises only host built-ins needs none).
+    mcp_servers: Any = None
+    # The curated per-turn env the SDK subprocess reads (e.g. the ``MAX_OUTPUT_TOKENS`` output
+    # clamp, §3.2/§3.9). Threaded onto ``ClaudeAgentOptions.env`` by ``build_sdk_options``;
+    # empty = the SDK default env.
+    env: dict[str, str] = field(default_factory=dict)
+    # The per-query disallowed-tool block-list — the ``SDK_LOCAL_TOOLS`` host-built-in backstop
+    # PLUS, for a read-only disposition, the mutating tools it must not reach (``allowed_tools``
+    # does not filter MCP tools, so a write block MUST go through ``disallowed_tools``, §3.8).
+    # ``build_sdk_options`` MERGES this into the module-level ``disallowed_tools`` on the options
+    # the SDK enforces. Empty = the module-level host-built-in block-list alone (the seam default).
+    disallowed_tools: tuple[str, ...] = ()
     extra: dict[str, Any] = field(default_factory=dict)
 
 

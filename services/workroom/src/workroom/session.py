@@ -87,20 +87,34 @@ from agentkit import (
     AbortController,
     AbortRegistry,
     ProviderError,
+    ProviderQuery,
     resume_with_fallback,
     stream_deltas,
+    thinking_policy,
 )
 from contracts import AgentChunk, Bundle, Envelope
 
+# Import the MODULE (not the bound name) so the transport registration is resolved by
+# attribute lookup at call time — the ONE seam the sandbox tool backend is injected through.
+# A ``from .sandbox_transport import get_agent_tool_config`` bind would freeze the reference at
+# import and make the transport un-substitutable (a live-assembly test that swaps the sandbox
+# `code` backend for its execution backend patches ``sandbox_transport.get_agent_tool_config``;
+# a frozen bound name would never see the swap and the real E2B backend would never mount).
+from . import sandbox_transport
+
 # The isolation-triad owner + the cacheable stable prefix + its 1-hour TTL (§3.4 / §3.9).
 # SDK_LOCAL_TOOLS is re-exported so the triad guard sees the marker on the query()-driving
-# module (the seam it drives builds the options carrying the triad).
+# module (the seam it drives builds the options carrying the triad). The disposition tool
+# policy + role give the curated ``mcp__code__*`` subset + the shared thinking role — the
+# SAME owner big_build.py reads, never redefined here (§3.5 / §10.5).
 from .agent_config import (
     SDK_LOCAL_TOOLS,
     WORKROOM_CACHE_TTL_SECONDS,
+    disposition_role,
     fence_transcript_tail,
     guardrailed_system_prefix,
 )
+from .drafts import PROPOSE_CHANGE_SERVER_NAME, make_propose_change_server
 
 # The ONE output contract + tool-boundary progress (the workroom.envelope node, §3.12):
 # the driver ASSEMBLES the Envelope and STREAMS ProgressEvents through this module — it
@@ -111,7 +125,6 @@ from .envelope import (
     emit_tool_boundary_progress,
     failure_envelope,
 )
-from .sandbox_transport import get_agent_tool_config
 
 # The triad guard markers, named on this module so a query()-driving site is covered (§11.11).
 disallowed_tools: tuple[str, ...] = SDK_LOCAL_TOOLS
@@ -316,7 +329,11 @@ class SessionDriver:
             handle = self._resolve_warm_sandbox(meeting_id)
             reader = self._reader_for(handle)
             prompt = self._render_bundle_prompt(bundle)
-            options = self._build_query_options(handle, access=access)
+            # Build the ProviderQuery WITH the abort threaded in (a frozen query can't be mutated
+            # after construction) and the curated MCP servers mounted so the tools are reachable.
+            options = self._build_query_options(
+                handle, access=access, controller=controller, meeting_id=meeting_id
+            )
             result_meta, wrote_paths = await self._drive_query(prompt, options, controller, task_id)
             # §3.1: persist the SDK session id per task (immediately, fire-and-forget) so a
             # follow-up or a RESTART resumes THIS conversation — into the SAME row's
@@ -436,13 +453,13 @@ class SessionDriver:
             resume_id = await self._read_session_id(run_id)
             handle = self._resolve_warm_sandbox(meeting_id)
             reader = self._reader_for(handle)
-            options = self._build_query_options(handle, access=access)
-            # Thread the abort onto the query envelope so the provider stream can poll it
-            # (the provider seam reads query.abort, §3.11) — mirrors :meth:`_drive_query`.
-            try:
-                options.abort = controller
-            except Exception:  # noqa: BLE001 - a frozen options object
-                pass
+            # Build the ProviderQuery with the abort + the persisted resume id threaded in at
+            # construction (a frozen query carries them); the curated MCP servers are mounted so
+            # a resumed run reaches its tools exactly like a fresh one. The per-attempt
+            # ``resume``/``preamble`` the fallback varies are folded in immutably by _ProviderRunner.
+            options = self._build_query_options(
+                handle, access=access, controller=controller, resume=resume_id, meeting_id=meeting_id
+            )
             runner = _ProviderRunner(self._provider_for(options), options, task_id, self._on_progress)
             inputs: dict[str, Any] = {"prompt": self._render_bundle_prompt(bundle)}
             result_meta: dict[str, Any] = {}
@@ -550,31 +567,107 @@ class SessionDriver:
             f"{fence_transcript_tail(bundle.transcript_tail)}"
         )
 
-    def _build_query_options(self, handle: Any, *, access: str) -> Any:
-        """Build the ``ClaudeAgentOptions`` for this task's ``query()`` — the triad + prefix.
+    def _build_query_options(
+        self,
+        handle: Any,
+        *,
+        access: str,
+        controller: AbortController | None = None,
+        resume: str | None = None,
+        meeting_id: str | None = None,
+    ) -> ProviderQuery:
+        """Build the immutable ``agentkit.ProviderQuery`` for this task's ``query()`` (§3.3).
 
-        Delegates to :func:`workroom.sandbox_transport.get_agent_tool_config`, which mounts
-        the sandbox ``code`` MCP server for THIS warm sandbox and rides
-        :func:`workroom.agent_config.workroom_options` — so ``strict_mcp_config=True`` +
-        ``setting_sources=[]`` + the computed built-in allow-list (``[]`` in sandbox mode) +
-        the ``SDK_LOCAL_TOOLS`` backstop are present by construction (§3.4). The stable
-        Workroom prefix is the cached ``system_prompt``.
+        **This is the seam contract the provider expects** — the provider's
+        ``stream(prompt, query)`` reads an ``agentkit.ProviderQuery`` (``query.mcp_servers`` /
+        ``query.allowed_tools`` / ``query.thinking_enabled`` / ``query.abort``), NOT a
+        ``claude_agent_sdk.ClaudeAgentOptions``. Mirrors ``big_build.py::_build_options`` (the
+        same immutable options shape the plan/build turns use) and additionally CARRIES the
+        curated MCP servers so the ``mcp__code__*`` tool names this disposition advertises are
+        actually MOUNTED and reachable by the model (the seam gap this closes):
+
+          * ``mcp_servers={"code": <the sandbox code server>}`` — the sandbox ``code`` MCP
+            server for THIS warm sandbox (from :func:`sandbox_transport.get_agent_tool_config`),
+            whose ``mcp__code__*`` read/write tools the worker's ``allowed_tools`` reference;
+            PLUS, for the readwrite worker, the host-side ``propose_change`` in-process server
+            (the one sanctioned world-touching write, §3.8) so ``mcp__propose_change__*`` is
+            reachable too.
+          * the curated ``allowed_tools`` subset + the ``SDK_LOCAL_TOOLS`` block-list ride the
+            disposition tool policy (§3.5 / §10.5) — never the whole-Proxy union.
+          * the isolation triad rides the ProviderQuery by construction
+            (``strict_mcp_config=True`` + ``setting_sources=()`` + ``tools=()``), so
+            ``build_sdk_options`` mounts ONLY these curated servers (a discovered ``.mcp.json``
+            is still ignored — the triad holds).
+
+        ``controller`` (the per-task abort) + ``resume`` (the SDK session id) are set on the
+        IMMUTABLE query at construction so the provider stream can poll the abort and resume the
+        conversation — a frozen ProviderQuery can't be mutated after the fact.
         """
         model = self._resolve_model(access)
-        config = get_agent_tool_config(
+        # The sandbox ``code`` server + the curated read/write tool subset come from the ONE
+        # transport owner (§3.5); we lift ITS mcp_servers mapping (the ``code`` HTTP server) and
+        # thread it onto the ProviderQuery so the tools the worker advertises are truly mounted.
+        config = sandbox_transport.get_agent_tool_config(
             handle,
             access="readwrite" if access == "readwrite" else "readonly",
             model=model,
             max_turns=self._max_turns,
             system_prompt=self.stable_prefix(),
         )
-        options = config.options
-        # §3.2/§3.9: the min(env, model_ceiling) output-token self-clamp for THIS model. The
-        # one global MAX_OUTPUT_TOKENS env is clamped DOWN to the model's own ceiling, then
-        # threaded into the curated env the SDK query() reads — so a Sonnet request never asks
-        # for an Opus-sized output. Computed via the IMPORTED clamp (never a literal here).
-        self._apply_output_clamp(options, model)
-        return options
+        mcp_servers: dict[str, Any] = dict(config.mcp_servers)
+        # The readwrite worker also gets the host-side ``propose_change`` server (§3.8) so the
+        # one sanctioned staged-draft write is reachable; read-only dispositions never mount it.
+        if access == "readwrite" and self._disposition == "worker":
+            conn = self._draft_conn()
+            mcp_servers[PROPOSE_CHANGE_SERVER_NAME] = make_propose_change_server(
+                conn=conn, meeting_id=meeting_id
+            )
+        # §3.2/§3.9: the min(env, model_ceiling) output-token self-clamp for THIS model, carried
+        # on ``ProviderQuery.env`` so ``build_sdk_options`` threads it onto the SDK query() env —
+        # a Sonnet request never asks for an Opus-sized output. Computed via the IMPORTED clamp.
+        enabled, budget = thinking_policy(model, disposition_role(self._disposition))
+        return ProviderQuery(
+            model=model,
+            allowed_tools=tuple(config.allowed_tools),
+            system_prompt=self.stable_prefix(),
+            max_turns=self._max_turns,
+            tools=(),                        # computed built-in allow-list: [] in sandbox mode (§3.4)
+            strict_mcp_config=True,          # isolation triad
+            setting_sources=(),              # isolation triad ([] — load no fs settings)
+            thinking_enabled=enabled,
+            thinking_budget_tokens=budget,
+            resume=resume,
+            abort=controller,
+            mcp_servers=mcp_servers,         # the curated code (+ propose_change) servers — MOUNTED
+            env=self._output_clamp_env(model),  # the min(env, ceiling) output-token clamp (§3.2/§3.9)
+            # The §3.4 host-built-in backstop + (read-only) the mutating-tool block — the block
+            # goes through disallowed_tools because allowed_tools does not filter MCP tools (§3.8).
+            disallowed_tools=tuple(config.disallowed_tools),
+        )
+
+    def _draft_conn(self) -> Any:
+        """The host psycopg conn / ``libs.db.Database`` the ``propose_change`` tool binds to (§3.8).
+
+        The staged-draft write executes on the HOST (where the Postgres/object-store live), never
+        in the sandbox. The driver's ``db`` seam is that host sink; when it is unwired (the pure
+        in-process host-fake path) the server is still MOUNTED — its tool then returns an honest
+        ``is_error`` rather than crashing (Rule 6 / Law 2 — a failed staging is spoken plainly,
+        never a fabricated draft), so the ``mcp__propose_change__*`` seam is always present and
+        reachable; only its durable write degrades when no host substrate is wired."""
+        return self._db
+
+    def _output_clamp_env(self, model: str) -> dict[str, str]:
+        """The ``min(env, model_ceiling)`` output-token clamp as a query env patch (§3.2/§3.9).
+
+        ``MAX_OUTPUT_TOKENS`` = the imported ``llm.routing.max_output_tokens_for(model)`` so the
+        SDK query() caps this model's output at the smaller of the global env budget and the
+        model's true ceiling. Best-effort (Rule 6) — a clamp that can't resolve yields no env."""
+        try:
+            from llm.routing import max_output_tokens_for
+
+            return {"MAX_OUTPUT_TOKENS": str(max_output_tokens_for(model))}
+        except Exception:  # noqa: BLE001 - the clamp is advisory, never fatal
+            return {}
 
     def _resolve_model(self, access: str) -> str:
         """The per-role model seat for this task (IMPORTED table, never redefined, §3.2).
@@ -627,11 +720,14 @@ class SessionDriver:
         The abort is FINAL — a fired controller halts the loop and is never retried (§3.11).
         """
         provider = self._provider_for(options)
-        # Thread the abort onto the query envelope so the provider stream can poll it.
-        try:
-            options.abort = controller  # the provider seam reads query.abort (§3.11)
-        except Exception:  # noqa: BLE001 - a frozen options object: fall back to the extra channel below
-            pass
+        # The abort is ALREADY on the immutable ProviderQuery (``query.abort``, set at build
+        # time so the frozen query carries it); the provider stream polls it (§3.11). Belt: if a
+        # mutable options object was injected without it, thread it here too.
+        if getattr(options, "abort", None) is None:
+            try:
+                options.abort = controller  # a mutable stand-in — the provider seam reads query.abort
+            except Exception:  # noqa: BLE001 - a frozen ProviderQuery already carries the abort
+                pass
         result_meta: dict[str, Any] = {}
         wrote_paths: list[str] = []
         raw_stream = provider.stream(prompt, options)
@@ -657,11 +753,14 @@ class SessionDriver:
         return pick_provider(getattr(options, "model", "") or "")
 
     def _observe_chunk(self, chunk: AgentChunk, result_meta: dict[str, Any], wrote_paths: list[str]) -> None:
-        """Fold one streamed chunk into the terminal state (cost telemetry + write paths).
+        """Fold one streamed chunk into the terminal state (cost telemetry + write paths + draft).
 
         The RESULT frame carries the SDK cost + cache-read/creation split (§3.9); a write
         TOOL_USE names a file that landed in the shared sandbox (a follow-up task reads it
-        back off disk). Field access is ``chunk.type`` / ``chunk.metadata`` (never ``.kind``).
+        back off disk); a successful ``propose_change`` TOOL_RESULT carries the staged
+        ``draft_id`` (Law 3 — the one world-touching act is a staged draft behind a human
+        click) which rides onto the terminal Envelope. Field access is ``chunk.type`` /
+        ``chunk.metadata`` (never ``.kind``).
         """
         meta = chunk.metadata or {}
         if chunk.type == "RESULT":
@@ -672,6 +771,12 @@ class SessionDriver:
                 path = (meta.get("input") or {}).get("path")
                 if isinstance(path, str) and path:
                     wrote_paths.append(path)
+        elif chunk.type == "TOOL_RESULT":
+            # A successful propose_change stages a draft and returns its id — capture it so the
+            # terminal Envelope carries the draft_id (the §1.2 needs_review/unverified mapping).
+            draft_id = _extract_draft_id(chunk.text)
+            if draft_id:
+                result_meta["draft_id"] = draft_id
 
     # -- the Envelope (the one output contract, §3.12) ------------------------
 
@@ -700,11 +805,15 @@ class SessionDriver:
                 landed = await reader(path)
                 if landed is not None:
                     receipts.append(f"wrote {path} ({len(landed)} bytes)")
+        # The staged draft_id (if the worker called propose_change and it succeeded) drives the
+        # §1.2 needs_review/unverified mapping — a world-touching change is a staged draft (Law 3).
+        draft_id = _coerce_draft_id(result_meta.get("draft_id"))
         return build_envelope(
             bundle=bundle,
             result_meta=result_meta,
             wrote_paths=wrote_paths,
             receipts=receipts,
+            draft_id=draft_id,
         )
 
     # -- (3) persist into the SAME operation_runs row (no bespoke per-task table) --
@@ -999,12 +1108,14 @@ class _ProviderRunner:
         pass-through ``ERROR`` as :class:`ProviderError` (where the §3.5 recovery catches it)."""
         prompt = str(inputs.get("prompt", ""))
         # ``resume``/``preamble`` are the fallback's per-attempt knobs: resume the live id, or
-        # (on a gone-session replay) drop resume and carry the bundle-derived preamble.
-        with _suppress():
-            self._options.resume = inputs.get("resume")
-        with _suppress():
-            self._options.preamble = inputs.get("preamble")
-        raw_stream = self._provider.stream(prompt, self._options)
+        # (on a gone-session replay) drop resume and carry the bundle-derived preamble. The
+        # ProviderQuery is a FROZEN dataclass, so we fold them in IMMUTABLY (``replace`` builds a
+        # new query carrying the new knobs) rather than mutating in place — the curated
+        # ``mcp_servers`` + triad + abort ride through unchanged. A non-dataclass stand-in falls
+        # back to best-effort attribute assignment.
+        per_attempt = {"resume": inputs.get("resume"), "preamble": inputs.get("preamble")}
+        options = _with_knobs(self._options, per_attempt)
+        raw_stream = self._provider.stream(prompt, options)
         progressing = emit_tool_boundary_progress(
             stream_deltas(raw_stream), self._task_id, self._on_progress
         )
@@ -1014,6 +1125,64 @@ class _ProviderRunner:
                 # inside ``resume_with_fallback`` catches (stale-session replay vs JSON retry).
                 raise ProviderError(chunk)
             yield chunk
+
+
+def _extract_draft_id(text: str | None) -> str | None:
+    """Pull the staged ``draft_id`` out of a successful ``propose_change`` TOOL_RESULT (§3.8).
+
+    The propose_change tool returns JSON ``{"draft_id": "...", "status": "needs_review", ...}``
+    on success (a real GCS bundle + ``staged_drafts`` row landed); an ``is_error`` payload (e.g.
+    "no host connection bound") carries NO ``draft_id`` and is ignored — a failed staging never
+    fabricates a draft (Law 2). Tolerant of surrounding text / non-JSON (returns ``None``)."""
+    if not text:
+        return None
+    import json
+
+    stripped = text.strip()
+    start, end = stripped.find("{"), stripped.rfind("}")
+    candidates = [stripped]
+    if start != -1 and end != -1 and end > start:
+        candidates.append(stripped[start : end + 1])
+    for cand in candidates:
+        try:
+            parsed = json.loads(cand)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(parsed, dict) and parsed.get("draft_id") and not parsed.get("is_error"):
+            return str(parsed["draft_id"])
+    return None
+
+
+def _coerce_draft_id(value: Any) -> UUID | None:
+    """Coerce a captured draft-id string into a ``UUID`` for the Envelope (``None`` if absent/bad)."""
+    if not value:
+        return None
+    if isinstance(value, UUID):
+        return value
+    try:
+        return UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def _with_knobs(options: Any, knobs: Mapping[str, Any]) -> Any:
+    """Return ``options`` carrying the per-attempt ``resume``/``preamble`` knobs (§11.9).
+
+    A :class:`agentkit.ProviderQuery` is a FROZEN dataclass, so ``dataclasses.replace`` builds a
+    NEW query carrying the knobs while every other field (the curated ``mcp_servers``, the
+    isolation triad, the abort) rides through unchanged. A non-dataclass stand-in (a test fake)
+    falls back to best-effort attribute assignment. Never raises (Rule 6)."""
+    import dataclasses
+
+    if dataclasses.is_dataclass(options) and not isinstance(options, type):
+        try:
+            return dataclasses.replace(options, **dict(knobs))
+        except Exception:  # noqa: BLE001 - an unknown field: fall through to attribute assignment
+            pass
+    for key, value in knobs.items():
+        with _suppress():
+            setattr(options, key, value)
+    return options
 
 
 class _suppress:

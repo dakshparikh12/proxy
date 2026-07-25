@@ -357,12 +357,22 @@ def test_backend_destroy_of_gone_is_idempotent() -> None:
     asyncio.run(_run())
 
 
-def test_honest_degrade_when_no_e2b_and_no_backend() -> None:
+def test_honest_degrade_when_no_e2b_and_no_backend(monkeypatch: "pytest.MonkeyPatch") -> None:
     """With e2b absent AND no injected backend, provision still yields a usable
     handle on the local substrate view (honest degrade, never a silent crash)."""
-    # e2b is genuinely not installed in this env — assert that, then prove degrade.
-    with pytest.raises(ImportError):
-        __import__("e2b")
+    # Hermetically SIMULATE e2b being absent (the live test-infra env now installs it, but
+    # the degrade path must still work when it isn't there — so we block the import rather
+    # than depend on the ambient install state).
+    import builtins
+
+    _real_import = builtins.__import__
+
+    def _no_e2b(name: str, *args: object, **kwargs: object) -> object:
+        if name == "e2b" or name.startswith("e2b.") or name.startswith("e2b_"):
+            raise ImportError(f"{name} not installed (simulated)")
+        return _real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(builtins, "__import__", _no_e2b)
     h = sandbox_provider.provision(meeting_id="m-degrade")
     assert h.id and h.jwt_secret
     assert bool(sandbox_provider.health_check(h)) is True
