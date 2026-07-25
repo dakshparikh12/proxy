@@ -62,9 +62,13 @@ def create_app() -> FastAPI:
     # The token-gated /internal notes + reconcile routes and the /m user surface.
     # Mounted here so the Workroom's cross-service notes read has a LIVE endpoint
     # alongside /internal/reconcile (closes the DOC03-CSREAD mount gap).
+    from .accept_route import install_accept_route
     from .internal import install_internal_routes
 
     install_internal_routes(app)
+    # The authenticated draft-accept surface (§12.9): POST /m/{id}/drafts/{id}/accept
+    # BEHIND the auth wall, reading durable storage (post-teardown safe).
+    install_accept_route(app)
 
     @app.get("/health")
     async def health() -> Any:
