@@ -27,13 +27,26 @@ async def flip_and_append(conn: Any, segment_id: Any, delta: str) -> None:
     meeting_id = await conn.fetchval(
         "SELECT meeting_id FROM transcript_segments WHERE id = $1", segment_id
     )
-    # Append the delta to the append-only ledger (§3.3); ON CONFLICT DO NOTHING
-    # keeps a stray re-append a silent no-op (replay idempotency, §3.3).
+    # Append the delta to the append-only ledger (§3.3), idempotently: a re-claimed
+    # or replayed apply of the SAME segment must be a silent no-op (§3.3 replay
+    # idempotency / AC-COAL-18 double_applies_allowed: 0). The natural key here is
+    # the segment-keyed add ``(meeting_id, entry_id='seg-<id>', op='add')`` — this
+    # seam always writes ``window_start_s = NULL`` (it has no window), so the
+    # ``(meeting_id, window_start_s, entry_id, op)`` UNIQUE INDEX can NOT dedupe it:
+    # Postgres treats NULLs as distinct in a unique index, so ON CONFLICT never
+    # fires on a NULL window and a second re-claim would double-append. We therefore
+    # guard the insert on the segment's natural key with ``WHERE NOT EXISTS``, which
+    # is NULL-blind and makes the re-append a true no-op. (The rich fold path carries
+    # a real ``window_start_s`` and rides the UNIQUE INDEX; this NULL-window seam
+    # cannot, hence the explicit existence guard.)
     await conn.execute(
         """
         INSERT INTO note_deltas (meeting_id, entry_id, op, payload, window_start_s)
-        VALUES ($1, $2, 'add', $3::jsonb, NULL)
-        ON CONFLICT (meeting_id, window_start_s, entry_id, op) DO NOTHING
+        SELECT $1, $2, 'add', $3::jsonb, NULL
+        WHERE NOT EXISTS (
+            SELECT 1 FROM note_deltas
+             WHERE meeting_id = $1 AND entry_id = $2 AND op = 'add'
+        )
         """,
         meeting_id,
         f"seg-{segment_id}",
