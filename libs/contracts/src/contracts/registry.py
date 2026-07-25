@@ -132,19 +132,27 @@ MESSAGE_FIELD_PRODUCERS: dict[str, set[str]] = {}  # contract model name → the
 MESSAGE_FIELD_CONSUMERS: dict[str, set[str]] = {}  # contract model name → the fields anyone CONSUMES
 
 
-def register_handler(message_type: MessageType, handler: Handler) -> None:
+def register_handler(
+    message_type: MessageType, handler: Handler, *, replace: bool = False
+) -> None:
     """Bind the single handler for an inbound client type (§4.3 dispatch funnel).
 
     Re-binding the SAME callable is idempotent; binding a *different* handler to an
-    already-handled inbound type is a wiring error (exactly-one-handler invariant).
+    already-handled inbound type is a wiring error (exactly-one-handler invariant) —
+    UNLESS ``replace=True``, which is the sanctioned way the LIVE host swaps the
+    closure-closing default stub (:func:`_default_channel_action_handler`) for the real
+    capability-gated handler at app-build time. Either way the type still has EXACTLY
+    ONE handler afterwards (the invariant is preserved, not relaxed — the map is
+    overwritten, never appended to), so closure stays green.
     """
     if message_type not in INBOUND:
         raise ValueError(f"{message_type.value!r} is not an inbound type; only inbound has handlers")
     existing = MESSAGE_HANDLERS.get(message_type)
-    if existing is not None and existing is not handler:
+    if existing is not None and existing is not handler and not replace:
         raise ValueError(
             f"inbound {message_type.value!r} already handled by {existing!r}; "
-            "an inbound type has EXACTLY ONE handler (§4.1)"
+            "an inbound type has EXACTLY ONE handler (§4.1) — pass replace=True to swap "
+            "the closure-closing default for the live handler"
         )
     MESSAGE_HANDLERS[message_type] = handler
 
