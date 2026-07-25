@@ -34,7 +34,7 @@
       "title": "Typed contracts + import-time closed registry",
       "region": "00-FOUNDATION",
       "disposition": "fix",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "00-FOUNDATION.md#2",
         "00-FOUNDATION.md#12",
@@ -120,7 +120,7 @@
       "title": "AgentChunk union + stream_deltas + BehaviorRunner + never-throw tools",
       "region": "00-FOUNDATION",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "00-FOUNDATION.md#2",
         "00-FOUNDATION.md#14",
@@ -193,7 +193,7 @@
       "title": "uv-workspace monorepo skeleton (src-layout, three deployables shape)",
       "region": "00-FOUNDATION",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "00-FOUNDATION.md#2",
         "00-FOUNDATION.md#3",
@@ -253,7 +253,7 @@
       "title": "The broker-free durable substrate \u2014 schema (operation_runs, cost, drafts, identity, transcript)",
       "region": "00-FOUNDATION",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "00-FOUNDATION.md#5",
         "00-FOUNDATION.md#5.6",
@@ -330,7 +330,7 @@
       "title": "The durable substrate \u2014 runtime (with_operation_run, fencing, atomic claim, reconcile, sandbox lifecycle)",
       "region": "00-FOUNDATION",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "00-FOUNDATION.md#5.1",
         "00-FOUNDATION.md#5.2",
@@ -445,7 +445,7 @@
       "title": "The three deployables + Cloud SQL / GCS substrate topology",
       "region": "00-FOUNDATION",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "00-FOUNDATION.md#4",
         "CANONICAL-DECISIONS.md#12.1",
@@ -517,7 +517,7 @@
       "title": "Config contract, model-seat routing, Secret Manager wiring, credential homes",
       "region": "00-FOUNDATION",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "00-FOUNDATION.md#7",
         "CANONICAL-DECISIONS.md#12.12",
@@ -596,7 +596,7 @@
       "title": "asyncpg pool + Database facade/repos (no ORM) + Alembic revision DAG",
       "region": "00-FOUNDATION",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "00-FOUNDATION.md#11",
         "CANONICAL-DECISIONS.md#11.2"
@@ -668,7 +668,7 @@
       "title": "Per-tenant envelope-key crypto isolation + crypto-shred offboarding",
       "region": "00-FOUNDATION",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "00-FOUNDATION.md#4",
         "00-FOUNDATION.md#15",
@@ -795,7 +795,7 @@
       "title": "Terraform IaC \u2014 modules/envs, promote discipline, prevent_destroy, least-privilege",
       "region": "00-FOUNDATION",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "00-FOUNDATION.md#8"
       ],
@@ -911,7 +911,7 @@
       "title": "The call_external seam + the dispatch funnel + internal API surface",
       "region": "00-FOUNDATION",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "00-FOUNDATION.md#2",
         "00-FOUNDATION.md#12",
@@ -970,7 +970,7 @@
       "title": "Observability + operational floor \u2014 logs, Sentry, cost telemetry, Langfuse scaffold, hardening, affinity",
       "region": "00-FOUNDATION",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "00-FOUNDATION.md#13",
         "CANONICAL-DECISIONS.md#11.11"
@@ -1047,7 +1047,7 @@
       "title": "Consolidated invariants + constitution \u2014 cost meters, lethal-trifecta, safety floor, naming lint",
       "region": "00-FOUNDATION",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "00-FOUNDATION.md#14",
         "00-FOUNDATION.md#15",
@@ -1144,7 +1144,7 @@
       "title": "CI/CD guards \u2014 fast-blocking split, migration/secret/triad/banned/field guards, pre-commit parity",
       "region": "00-FOUNDATION",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "00-FOUNDATION.md#10"
       ],
@@ -1313,7 +1313,7 @@
       "title": "Connect \u2014 GitHub App + Nango + RepoProvider seam",
       "region": "01-CODE-INTELLIGENCE",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "01-CODE-INTELLIGENCE.md#3.1",
         "01-CODE-INTELLIGENCE.md#3.8-step1",
@@ -1347,7 +1347,7 @@
       ],
       "integration_point": "services/code_intel/src/code_intel/repo_provider.py (RepoProvider.perform_operation / read_file / _mint_token, Nango seam)",
       "acceptance": "WHEN a GitHub App installation completes THE SYSTEM SHALL have requested exactly {contents:read, metadata:read}, minted the token per-operation via Nango without caching or logging it, and routed every git-host op through RepoProvider.",
-      "acceptance_cmd": "tests/code_intel -k 'M1 or repo_provider or nango or scope'",
+      "acceptance_cmd": "tests/test_m1_connection.py",
       "evidence_class": "[unit]",
       "journeys_now_live": [],
       "codebase_anchors": [
@@ -1371,7 +1371,7 @@
       "title": "Clone \u2014 per-tenant encrypted volume, blobless, no-exec",
       "region": "01-CODE-INTELLIGENCE",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "01-CODE-INTELLIGENCE.md#3.2",
         "01-CODE-INTELLIGENCE.md#3.8-step2",
@@ -1409,7 +1409,7 @@
       ],
       "integration_point": "services/code_intel/src/code_intel/cloner.py (Cloner.clone / pull_delta); paths under services/code_intel/src/code_intel/paths.py",
       "acceptance": "WHEN a repo is connected THE SYSTEM SHALL clone it blobless (above threshold) into the per-tenant encrypted volume, never execute repo code, never push to origin, and delta-pull on subsequent pushes with git blame intact.",
-      "acceptance_cmd": "tests/code_intel -k 'M2 or clone or blobless or tenant_volume or no_exec'",
+      "acceptance_cmd": "tests/test_m2_clone.py",
       "evidence_class": "[unit]",
       "journeys_now_live": [],
       "codebase_anchors": [
@@ -1435,7 +1435,7 @@
       "title": "Exclusions \u2014 gitleaks + policy globs + read-path redaction",
       "region": "01-CODE-INTELLIGENCE",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "01-CODE-INTELLIGENCE.md#3.3",
         "01-CODE-INTELLIGENCE.md#3.8-step3"
@@ -1468,7 +1468,7 @@
       ],
       "integration_point": "services/code_intel/src/code_intel/exclusions.py (ExclusionManager.scan_after_clone / scan_after_pull / redact); read-path redaction in mcp_server.batch_read",
       "acceptance": "WHEN a clone or delta pull completes THE SYSTEM SHALL gitleaks-scan the changed files, add hits+policy-glob paths to the exclusion set, and guarantee those paths and any detected secret value never appear in the graph, any tool result, the sandbox, or logs.",
-      "acceptance_cmd": "tests/code_intel -k 'M3 or exclusion or gitleaks or redact or secret'",
+      "acceptance_cmd": "tests/test_m3_exclusions.py",
       "evidence_class": "[unit]",
       "journeys_now_live": [],
       "codebase_anchors": [
@@ -1491,7 +1491,7 @@
       "title": "Structural substrate + dependency/call graph (mechanical, no LLM)",
       "region": "01-CODE-INTELLIGENCE",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "01-CODE-INTELLIGENCE.md#3.4",
         "01-CODE-INTELLIGENCE.md#2.2",
@@ -1551,7 +1551,7 @@
       ],
       "integration_point": "services/code_intel/src/code_intel/graph_builder.py (GraphBuilder.build); langs.py (tree-sitter); graph.py (PageRank/adjacency); graph_store.py (per-repo SQLite); orm.py (table nodes/tiers)",
       "acceptance": "WHEN the structural build runs on the post-exclusion tree THE SYSTEM SHALL emit the coverage record (indexed+flagged == ls-files), the PageRank-ranked overview, and the graph_nodes/graph_edges tables with the full edge-kind vocabulary and table::<name> nodes \u2014 mechanically, with zero LLM calls, stored in per-repo SQLite.",
-      "acceptance_cmd": "tests/code_intel -k 'M4 or LANG or graph_build or pagerank or coverage_record or edge_kinds'",
+      "acceptance_cmd": "tests/test_m4_substrate.py tests/test_m9_langs.py tests/test_canonical_contracts.py",
       "evidence_class": "[real-estate]",
       "journeys_now_live": [
         "J-09-S2-dep-graph-blast-radius"
@@ -1585,7 +1585,7 @@
       "title": "The code_intel MCP server \u2014 8 host-side tools (factory-per-query)",
       "region": "01-CODE-INTELLIGENCE",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "01-CODE-INTELLIGENCE.md#3.5",
         "01-CODE-INTELLIGENCE.md#2.3",
@@ -1655,7 +1655,7 @@
       ],
       "integration_point": "services/code_intel/src/code_intel/mcp_server.py (CodeIntelMCPServer + MCPServerFactory + the 8 @tool handlers); results.py result shapes; sandbox.py manifest",
       "acceptance": "WHEN the in-meeting agent calls a code_intel tool THE SYSTEM SHALL mint a fresh per-query server over the immutable graph and return file:line leads with correct honesty tags (resolved on tier-1 ORM, lower-bound elsewhere, never a silent wrong-exact), the mutable/LSP tools staying sandbox-exclusive.",
-      "acceptance_cmd": "tests/code_intel -k 'M5 or mcp or who_writes or shares_table or get_dependents or owner or batch_read or lookup_referent or sandbox_manifest'",
+      "acceptance_cmd": "tests/test_m5_tools.py tests/test_invariants.py tests/test_sandbox_boundary.py",
       "evidence_class": "[real-estate]",
       "journeys_now_live": [
         "J-09-S2-dep-graph-blast-radius",
@@ -1687,7 +1687,7 @@
       "title": "Direct-answer wake turn \u2014 host-side answer API (no E2B)",
       "region": "01-CODE-INTELLIGENCE",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "01-CODE-INTELLIGENCE.md#3.5",
         "01-CODE-INTELLIGENCE.md#2.1",
@@ -1722,7 +1722,7 @@
       ],
       "integration_point": "services/code_intel/src/code_intel/direct_answer.py (answer_direct, _classify, _find_definition, _confirm_read); direct.py (ask/tenant/sha fa\u00e7ade)",
       "acceptance": "WHEN a direct-answer wake turn asks a code question THE SYSTEM SHALL resolve it host-side over the code_intel API (no E2B, no Workroom), confirm the lead by reading the pinned clone, and return a real file:line citation with an honesty tag \u2014 or abstain honestly when no handle is bound.",
-      "acceptance_cmd": "tests/code_intel -k 'direct_answer or INV-001 or INV-002 or INV-003 or LAT-001 or where_misroute'",
+      "acceptance_cmd": "tests/code_intel/test_direct_answer_where_misroute_doc01.py tests/test_invariants.py",
       "evidence_class": "[real-estate]",
       "journeys_now_live": [
         "J-09-S2-dep-graph-blast-radius",
@@ -2182,7 +2182,7 @@
       "title": "Recall webhooks \u2192 roster / meeting-end / bot-status signals (durable-first)",
       "region": "02-VOICE-TRANSPORT",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "product/v0-spec/02-VOICE-TRANSPORT.md#3.1",
         "product/v0-spec/02-VOICE-TRANSPORT.md#3.9-2",
@@ -2400,7 +2400,7 @@
       "title": "Speaking: text \u2192 one calm voice + verbatim chat copy, headlines-only envelope",
       "region": "02-VOICE-TRANSPORT",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "product/v0-spec/02-VOICE-TRANSPORT.md#3.3",
         "product/v0-spec/02-VOICE-TRANSPORT.md#3.9-4",
@@ -2481,7 +2481,7 @@
       "title": "Chat: inbound @proxy asks + outbound broadcast/DM + per-meeting channel report",
       "region": "02-VOICE-TRANSPORT",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "product/v0-spec/02-VOICE-TRANSPORT.md#3.4",
         "product/v0-spec/02-VOICE-TRANSPORT.md#3.9-5"
@@ -2554,7 +2554,7 @@
       "title": "Canvas: one tile webpage + screenshare promote/demote, drawn social signals",
       "region": "02-VOICE-TRANSPORT",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "product/v0-spec/02-VOICE-TRANSPORT.md#3.5",
         "product/v0-spec/02-VOICE-TRANSPORT.md#3.9-6"
@@ -2624,7 +2624,7 @@
       "title": "Failure honesty: rejoin-once + honest gap + mark-lost + voice\u2192chat + rate limiter",
       "region": "02-VOICE-TRANSPORT",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "product/v0-spec/02-VOICE-TRANSPORT.md#3.7",
         "product/v0-spec/02-VOICE-TRANSPORT.md#3.9-8",
@@ -2966,7 +2966,7 @@
       "title": "Inbound-chat temporal synthesis \u2014 ChatMessage has no `t`; the pump synthesizes ts_s (verify ordering)",
       "region": "03-MEETING-UNDERSTANDING",
       "disposition": "fix",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "03-MEETING-UNDERSTANDING.md#3.1 (chat is part of the meeting record; same-window chat folds in)",
         "03-MEETING-UNDERSTANDING.md#3 (data-flow: any chat messages from the same span)"
@@ -2994,7 +2994,7 @@
       ],
       "integration_point": "services/harness/src/harness/scribe_runtime.py:_pump_transcripts (ChatMessage branch: ts_s = pending.start_s or 0.0; coalescer.push_chat) + coalescer.drain_trailing_chat sweep on MeetingEnd",
       "acceptance": "WHEN a transport ChatMessage (no timestamp field) arrives mid-stream or after the last window THE SYSTEM SHALL synthesize a ts_s from the current stream position and fold the chat into the covering window (or sweep it onto the last window at flush) \u2014 never dropped, never mis-ordered against interleaved transcript words.",
-      "acceptance_cmd": "services/scribe/tests -k \"coalescer and chat\" services/harness/tests -k \"scribe_runtime and chat\"",
+      "acceptance_cmd": "tests/doc03/coalescer/test_windowing.py tests/doc03/coalescer/test_chat_never_dropped_outside_span.py tests/doc03/e2e/test_live_chat_reaches_scribe_window.py tests/doc03/e2e/test_transcript_bridge_reaches_carrier.py",
       "evidence_class": "[integration]",
       "journeys_now_live": [
         "J-09-S1-happy-arc"
@@ -3018,7 +3018,7 @@
       "title": "NoteDelta schema \u2014 Pydantic source of truth (firmness, provenance, reversibility, said_at_s guard)",
       "region": "03-MEETING-UNDERSTANDING",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "03-MEETING-UNDERSTANDING.md#3.2.1",
         "03-MEETING-UNDERSTANDING.md#2 (the notes object schema \u2014 rich where it feeds the machine)"
@@ -3071,7 +3071,7 @@
       "depends_on": [],
       "integration_point": "services/scribe/src/scribe/schema.py (Pydantic models); consumed by scribe/tool.py (JSON Schema) and scribe/parse.py (re-validation)",
       "acceptance": "WHEN the Scribe emits any note entry THE SYSTEM SHALL validate it against the Pydantic schema carrying firmness, provenance, reversibility, forming/final status, and contradicts links \u2014 defaulting Claim.verified False and rejecting a wall-clock value in said_at_s.",
-      "acceptance_cmd": "services/scribe/tests -k schema",
+      "acceptance_cmd": "tests/doc03/schema",
       "evidence_class": "[unit]",
       "journeys_now_live": [
         "J-09-S1-happy-arc"
@@ -3096,7 +3096,7 @@
       "title": "Scribe cached prefix + forced tool \u2014 hand-placed \u00d72 cache_control breakpoints, byte-stable head",
       "region": "03-MEETING-UNDERSTANDING",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "03-MEETING-UNDERSTANDING.md#3.2",
         "03-MEETING-UNDERSTANDING.md#3.2 (byte-identical-prefix discipline)",
@@ -3131,7 +3131,7 @@
       ],
       "integration_point": "services/scribe/src/scribe/prefix.py (build_scribe_prefix), services/scribe/src/scribe/tool.py (NOTE_DELTA_TOOL, SCRIBE_TOOLS)",
       "acceptance": "WHEN a Scribe micro-call is assembled THE SYSTEM SHALL place exactly two ephemeral cache_control breakpoints on a byte-stable prefix (Segment A frozen, Segment B cadence-stable, no clock/counter inside) and force a single emit_notes_delta output tool with the transcript window fenced as untrusted data.",
-      "acceptance_cmd": "services/scribe/tests -k \"prefix or tool\"",
+      "acceptance_cmd": "tests/doc03/scribe/test_prefix.py tests/doc03/schema/test_tool.py",
       "evidence_class": "[unit]",
       "journeys_now_live": [
         "J-09-S1-happy-arc"
@@ -3156,7 +3156,7 @@
       "title": "Scribe micro-call + parse \u2014 bare messages.create (no agent loop), tool-forced, Pydantic re-validate, typed errors",
       "region": "03-MEETING-UNDERSTANDING",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "03-MEETING-UNDERSTANDING.md#3.2",
         "03-MEETING-UNDERSTANDING.md#3.2.1",
@@ -3203,7 +3203,7 @@
       ],
       "integration_point": "services/scribe/src/scribe/call.py (scribe_call via call_external), services/scribe/src/scribe/parse.py (parse_scribe_result, typed errors); bound by harness scribe_runtime.build_real_seams",
       "acceptance": "WHEN a coalesced window is handed to the Scribe THE SYSTEM SHALL issue one bare messages.create through call_external forcing emit_notes_delta on the PROXY_MODEL_SCRIBE seat, then Pydantic-re-validate the tool_use \u2014 raising ScribeMaxTokensError on truncation and ScribeNoDeltaError when no tool was called.",
-      "acceptance_cmd": "services/scribe/tests -k \"call or parse\"",
+      "acceptance_cmd": "tests/doc03/scribe/test_call.py tests/doc03/scribe/test_seat_swap_gate.py tests/doc03/schema/test_parse.py",
       "evidence_class": "[integration]",
       "journeys_now_live": [
         "J-09-S1-happy-arc"
@@ -3228,7 +3228,7 @@
       "title": "Serial pipeline + applier \u2014 one consumer per meeting, ~3.5s skip-never-retry, transactional apply+comprehend flip",
       "region": "03-MEETING-UNDERSTANDING",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "03-MEETING-UNDERSTANDING.md#3.1 (serial stream, per-call timeout skip-never-retry, the applier)",
         "03-MEETING-UNDERSTANDING.md#3.1 (transactional coupling, CANONICAL \u00a712.10 replay-idempotency)"
@@ -3313,7 +3313,7 @@
       ],
       "integration_point": "services/scribe/src/scribe/pipeline.py (run_scribe, DROP_ERRORS, MICRO_CALL_TIMEOUT_S), services/scribe/src/scribe/notes.py (apply_note_delta transactional flip); assembled by harness scribe_runtime.launch_scribe_runtime + build_real_seams.apply_delta",
       "acceptance": "WHEN windows arrive at the serial consumer THE SYSTEM SHALL process them strictly in order one micro-call at a time, drop-without-retry on a ~3.5s timeout or typed error (recording a comprehension gap), and apply each delta with the transcript-segment 'pending'\u2192'comprehended' flip in one atomic transaction.",
-      "acceptance_cmd": "services/scribe/tests -k \"pipeline or apply or notes_apply\"",
+      "acceptance_cmd": "tests/doc03/coalescer/test_pipeline.py tests/doc03/coalescer/test_pipeline_real_drop.py tests/doc03/e2e/test_apply_delta_ids_folds.py",
       "evidence_class": "[integration]",
       "journeys_now_live": [
         "J-09-S1-happy-arc",
@@ -3341,7 +3341,7 @@
       "title": "Rolling-summary generator \u2014 cadence-refreshed Segment B, off the hot path, byte-stable between refreshes",
       "region": "03-MEETING-UNDERSTANDING",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "03-MEETING-UNDERSTANDING.md#3.2 (the rolling-summary generator)",
         "03-MEETING-UNDERSTANDING.md#4 (cadence: every ~20 note-deltas / ~90s, whichever first)"
@@ -3365,7 +3365,7 @@
       ],
       "integration_point": "services/scribe/src/scribe/rolling_summary.py (regenerate_rolling_summary, rolling_summary_due, maybe_refresh_in_background); driven off harness scribe_runtime.build_real_seams.apply_delta \u2192 refresh_summary \u2192 summary_holder",
       "acceptance": "WHEN ~20 note-deltas have applied OR ~90s elapsed since the last refresh THE SYSTEM SHALL regenerate a compact stable-ordered rolling summary from the live notes object off the hot path and swap it into cached Segment B \u2014 without blocking the serial Scribe consumer and without embedding any clock/counter that would bust the cache.",
-      "acceptance_cmd": "services/scribe/tests -k rolling_summary services/harness/tests -k \"scribe_runtime and summary\"",
+      "acceptance_cmd": "tests/doc03/scribe/test_rolling_summary.py tests/doc03/e2e/test_rolling_summary_wired.py",
       "evidence_class": "[integration]",
       "journeys_now_live": [
         "J-09-S1-happy-arc"
@@ -3390,7 +3390,7 @@
       "title": "Sampled online quality gate \u2014 grounding/entailment on the cheap cascade, escalate-not-block, cascade-health telemetry",
       "region": "03-MEETING-UNDERSTANDING",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "03-MEETING-UNDERSTANDING.md#3.2.2 (CANONICAL \u00a710.7)"
       ],
@@ -3437,7 +3437,7 @@
       ],
       "integration_point": "services/scribe/src/scribe/quality_gate.py (GateInput, entailment call, escalation \u2192 applier patch)",
       "acceptance": "WHEN a Scribe delta is applied THE SYSTEM SHALL sample ~1-in-10 (always-checking decision-final / irreversible / contradicts) a lean window-vs-note Haiku entailment off the hot path, and on grounded=false escalate that extraction to Sonnet and replace the entry via an attributed superseded patch, logging a quality-gate-miss.",
-      "acceptance_cmd": "services/scribe/tests -k quality_gate",
+      "acceptance_cmd": "tests/doc03/qgate",
       "evidence_class": "[integration]",
       "journeys_now_live": [
         "J-09-S1-happy-arc"
@@ -3462,7 +3462,7 @@
       "title": "Referent matcher \u2014 deterministic no-LLM lookup_referent over overview areas + graph_nodes, honest unbound",
       "region": "03-MEETING-UNDERSTANDING",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "03-MEETING-UNDERSTANDING.md#3.4 (CANONICAL \u00a712.6)"
       ],
@@ -3499,7 +3499,7 @@
       ],
       "integration_point": "services/scribe/src/scribe/referent.py (lookup_referent, ReferentCorpus); bound into the applier at harness scribe_runtime.build_real_seams._bind_referents / _canonical_row",
       "acceptance": "WHEN the Scribe marks a referent candidate THE SYSTEM SHALL deterministically bind it via no-LLM lookup_referent over the overview areas + graph_nodes to a real node_id/area or leave it honestly unbound (str|None), never fabricating and never calling an LLM or external service.",
-      "acceptance_cmd": "services/scribe/tests -k referent",
+      "acceptance_cmd": "tests/doc03/scribe_referent tests/doc03/e2e/test_apply_delta_binds_referents.py",
       "evidence_class": "[unit]",
       "journeys_now_live": [
         "J-09-S1-happy-arc"
@@ -3524,7 +3524,7 @@
       "title": "Event emitter \u2014 material-change events to Doc 04, chitchat emits nothing, closed registry, deterministic chat-record line",
       "region": "03-MEETING-UNDERSTANDING",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "03-MEETING-UNDERSTANDING.md#3.5 (CANONICAL \u00a712.3 pipe-never-mouth)",
         "03-MEETING-UNDERSTANDING.md#3.5 (decision/action chat lines, CANONICAL \u00a712.12)"
@@ -3560,7 +3560,7 @@
       ],
       "integration_point": "services/scribe/src/scribe/events.py (material-change emit, MaterialChangeKind, deterministic chat-record formatter); consumed by Doc 04 orchestrator",
       "acceptance": "WHEN a material note-delta is applied THE SYSTEM SHALL emit exactly one closed-registry material-change event (with a focused context slice) to Doc 04 and NOTHING for chitchat/running-context \u2014 never delivering to the room itself, and driving the deterministic decision/action chat-record line deduped by meeting_revision.",
-      "acceptance_cmd": "services/scribe/tests -k event",
+      "acceptance_cmd": "tests/doc03/event",
       "evidence_class": "[unit]",
       "journeys_now_live": [
         "J-09-S1-happy-arc"
@@ -3585,7 +3585,7 @@
       "title": "Live corrections \u2014 immediate attributed superseded patch + notes-injection gate (final/irreversible = spoken receipt)",
       "region": "03-MEETING-UNDERSTANDING",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "03-MEETING-UNDERSTANDING.md#3.6 (live corrections + notes-injection gate, CANONICAL \u00a710.3/\u00a711.11)"
       ],
@@ -3631,7 +3631,7 @@
       ],
       "integration_point": "services/scribe/src/scribe/corrections.py (immediate attributed patch, AttributionError, notes-injection gate); ask routed from Doc 04, spoken receipt via Doc 02 mouth (Doc 04 turn)",
       "acceptance": "WHEN a room correction arrives THE SYSTEM SHALL apply an immediate attributed superseded-not-erased patch (rejecting one missing corrector/timestamp before any write), and for a final/irreversible/closing correction ALSO emit a one-line spoken receipt \u2014 while ordinary edits stay silent-immediate.",
-      "acceptance_cmd": "services/scribe/tests -k correction",
+      "acceptance_cmd": "tests/doc03/corr",
       "evidence_class": "[integration]",
       "journeys_now_live": [
         "J-09-S1-happy-arc"
@@ -3656,7 +3656,7 @@
       "title": "Dual storage plane \u2014 Postgres append-only ledger (uuid, ON CONFLICT) + boot-reaping + GCS versioned artifact",
       "region": "03-MEETING-UNDERSTANDING",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "03-MEETING-UNDERSTANDING.md#3.3 (dual storage plane)",
         "03-MEETING-UNDERSTANDING.md#3.3 (boot-time stale-row reaping, JOIN operation_runs, \u00a711.2 uuid cast)",
@@ -3713,7 +3713,7 @@
       ],
       "integration_point": "services/scribe/src/scribe/notes_artifact.py (write_finalized_notes, NotesGenerationConflictError, list/read_notes_version); note_deltas/transcript_segments repos in libs/db; reap_orphaned_meetings on harness boot",
       "acceptance": "WHEN note-deltas append and the finalized artifact is written THE SYSTEM SHALL keep the Postgres ledger append-only + deterministically foldable (uuid keys, ON CONFLICT no-op), reap a killed harness's meeting to 'interrupted' on boot via the operation_runs JOIN, and turn a concurrent GCS finalize race into NotesGenerationConflictError with uint64 generations preserved.",
-      "acceptance_cmd": "services/scribe/tests -k \"notes_artifact or store\" services/harness/tests -k reap",
+      "acceptance_cmd": "tests/doc03/store",
       "evidence_class": "[integration]",
       "journeys_now_live": [
         "J-09-S1-happy-arc",
@@ -3740,7 +3740,7 @@
       "title": "Cross-service notes read \u2014 GET /internal/notes/{meeting_id} folds Postgres, token-gated, host-independent, notes.finalized",
       "region": "03-MEETING-UNDERSTANDING",
       "disposition": "fix",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "03-MEETING-UNDERSTANDING.md#3.3.1 (cross-service notes read, notes_ref, CANONICAL \u00a711.4)",
         "03-MEETING-UNDERSTANDING.md#3.3.1 (GET /m/{meeting_id} user surface reads the SAME fold, CANONICAL \u00a712.9)",
@@ -3787,7 +3787,7 @@
       ],
       "integration_point": "services/scribe/src/scribe/notes_reader.py (read_notes, internal_notes_handler, m_handler, resolve_notes_ref); must be REGISTERED alongside /internal/reconcile in services/harness/src/control_plane/internal.py",
       "acceptance": "WHEN a foreign consumer GETs /internal/notes/{meeting_id} with the internal bearer token THE SYSTEM SHALL fold note_deltas from Postgres (never NOTES_CACHE as source) and return 200 + canonical JSON + freshness flag, 401 unauthenticated, 404 for an unknown meeting, 503 on a db failure \u2014 host-independent and never a stale/empty fabricated 200.",
-      "acceptance_cmd": "services/scribe/tests -k \"notes_reader or csread\" services/harness/tests -k \"internal and notes\"",
+      "acceptance_cmd": "tests/doc03/csread",
       "evidence_class": "[integration]",
       "journeys_now_live": [
         "J-09-S1-happy-arc",
@@ -3814,7 +3814,7 @@
       "title": "Per-call cost telemetry \u2014 Haiku rate card, cache-split write-through to meeting_cost, cache-hit ratio proves the breakpoint",
       "region": "03-MEETING-UNDERSTANDING",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "03-MEETING-UNDERSTANDING.md#3.9 (cost telemetry per micro-call; PROVE the cache is hitting)",
         "03-MEETING-UNDERSTANDING.md#4 (Scribe envelope ~$0.15-0.35/hr)"
@@ -3858,7 +3858,7 @@
       ],
       "integration_point": "services/scribe/src/scribe/cost.py (record_scribe_cost / record_scribe_cost_from_usage, Haiku rate card, cache-split UPSERT); fed to Doc 04 check_meeting_budget; bound via harness scribe_runtime.build_real_seams._on_usage",
       "acceptance": "WHEN a Scribe micro-call returns usage THE SYSTEM SHALL compute its cost from the exact Haiku rate card (cache-write +25%, cache-read 10%) and write model_usd + the cache-read/creation split directly (not via call_external) to the persisted meeting_cost row \u2014 surfacing a cache-hit ratio near 1 in steady state that drops if the prefix is no longer byte-identical.",
-      "acceptance_cmd": "services/scribe/tests -k cost",
+      "acceptance_cmd": "tests/doc03/scribe/test_cost.py",
       "evidence_class": "[integration]",
       "journeys_now_live": [
         "J-09-S1-happy-arc",
@@ -3885,7 +3885,7 @@
       "title": "Close pass \u2014 Sonnet generateStructured over folded ledger + gap/pending backfill \u2192 markdown \u2192 GCS create-only \u2192 chat link \u2192 teardown",
       "region": "03-MEETING-UNDERSTANDING",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "03-MEETING-UNDERSTANDING.md#3.7 (the close pass, the permanent record)",
         "03-MEETING-UNDERSTANDING.md#3.8 (failure honesty, gap/pending backfill)",
@@ -3958,7 +3958,7 @@
       ],
       "integration_point": "services/scribe/src/scribe/close.py (run_close_pass, reduce_close, fetch_gap_pending_spans, anthropic_structured_caller); wired by services/harness/src/harness/scribe_runtime.py:run_meeting_close (the ONE production caller) on the meeting-end path",
       "acceptance": "WHEN Doc 02 signals meeting-end THE SYSTEM SHALL run one Sonnet generateStructured pass reducing the folded ledger + only the gap/pending backfill into the final notes, then render markdown \u2192 GCS create-only (if_generation_match=0) \u2192 post the chat link \u2192 tear down, in that order, on a single meeting-close operation_runs row.",
-      "acceptance_cmd": "services/scribe/tests -k close services/harness/tests -k \"close and meeting\"",
+      "acceptance_cmd": "tests/doc03/close tests/doc03/e2e/test_webhook_close_pass_wired.py",
       "evidence_class": "[e2e]",
       "journeys_now_live": [
         "J-09-S1-happy-arc"

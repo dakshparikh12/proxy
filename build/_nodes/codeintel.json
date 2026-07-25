@@ -4,7 +4,7 @@
     "title": "Connect \u2014 GitHub App + Nango + RepoProvider seam",
     "region": "01-CODE-INTELLIGENCE",
     "disposition": "verify",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "01-CODE-INTELLIGENCE.md#3.1",
       "01-CODE-INTELLIGENCE.md#3.8-step1",
@@ -36,7 +36,7 @@
     "depends_on": [],
     "integration_point": "services/code_intel/src/code_intel/repo_provider.py (RepoProvider.perform_operation / read_file / _mint_token, Nango seam)",
     "acceptance": "WHEN a GitHub App installation completes THE SYSTEM SHALL have requested exactly {contents:read, metadata:read}, minted the token per-operation via Nango without caching or logging it, and routed every git-host op through RepoProvider.",
-    "acceptance_cmd": "tests/code_intel -k 'M1 or repo_provider or nango or scope'",
+    "acceptance_cmd": "tests/test_m1_connection.py",
     "evidence_class": "[unit]",
     "journeys_now_live": [],
     "codebase_anchors": [
@@ -60,7 +60,7 @@
     "title": "Clone \u2014 per-tenant encrypted volume, blobless, no-exec",
     "region": "01-CODE-INTELLIGENCE",
     "disposition": "verify",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "01-CODE-INTELLIGENCE.md#3.2",
       "01-CODE-INTELLIGENCE.md#3.8-step2",
@@ -97,7 +97,7 @@
     ],
     "integration_point": "services/code_intel/src/code_intel/cloner.py (Cloner.clone / pull_delta); paths under services/code_intel/src/code_intel/paths.py",
     "acceptance": "WHEN a repo is connected THE SYSTEM SHALL clone it blobless (above threshold) into the per-tenant encrypted volume, never execute repo code, never push to origin, and delta-pull on subsequent pushes with git blame intact.",
-    "acceptance_cmd": "tests/code_intel -k 'M2 or clone or blobless or tenant_volume or no_exec'",
+    "acceptance_cmd": "tests/test_m2_clone.py",
     "evidence_class": "[unit]",
     "journeys_now_live": [],
     "codebase_anchors": [
@@ -123,7 +123,7 @@
     "title": "Exclusions \u2014 gitleaks + policy globs + read-path redaction",
     "region": "01-CODE-INTELLIGENCE",
     "disposition": "verify",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "01-CODE-INTELLIGENCE.md#3.3",
       "01-CODE-INTELLIGENCE.md#3.8-step3"
@@ -156,7 +156,7 @@
     ],
     "integration_point": "services/code_intel/src/code_intel/exclusions.py (ExclusionManager.scan_after_clone / scan_after_pull / redact); read-path redaction in mcp_server.batch_read",
     "acceptance": "WHEN a clone or delta pull completes THE SYSTEM SHALL gitleaks-scan the changed files, add hits+policy-glob paths to the exclusion set, and guarantee those paths and any detected secret value never appear in the graph, any tool result, the sandbox, or logs.",
-    "acceptance_cmd": "tests/code_intel -k 'M3 or exclusion or gitleaks or redact or secret'",
+    "acceptance_cmd": "tests/test_m3_exclusions.py",
     "evidence_class": "[unit]",
     "journeys_now_live": [],
     "codebase_anchors": [
@@ -179,7 +179,7 @@
     "title": "Structural substrate + dependency/call graph (mechanical, no LLM)",
     "region": "01-CODE-INTELLIGENCE",
     "disposition": "verify",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "01-CODE-INTELLIGENCE.md#3.4",
       "01-CODE-INTELLIGENCE.md#2.2",
@@ -238,7 +238,7 @@
     ],
     "integration_point": "services/code_intel/src/code_intel/graph_builder.py (GraphBuilder.build); langs.py (tree-sitter); graph.py (PageRank/adjacency); graph_store.py (per-repo SQLite); orm.py (table nodes/tiers)",
     "acceptance": "WHEN the structural build runs on the post-exclusion tree THE SYSTEM SHALL emit the coverage record (indexed+flagged == ls-files), the PageRank-ranked overview, and the graph_nodes/graph_edges tables with the full edge-kind vocabulary and table::<name> nodes \u2014 mechanically, with zero LLM calls, stored in per-repo SQLite.",
-    "acceptance_cmd": "tests/code_intel -k 'M4 or LANG or graph_build or pagerank or coverage_record or edge_kinds'",
+    "acceptance_cmd": "tests/test_m4_substrate.py tests/test_m9_langs.py tests/test_canonical_contracts.py",
     "evidence_class": "[real-estate]",
     "journeys_now_live": [
       "J-09-S2-dep-graph-blast-radius"
@@ -272,7 +272,7 @@
     "title": "The code_intel MCP server \u2014 8 host-side tools (factory-per-query)",
     "region": "01-CODE-INTELLIGENCE",
     "disposition": "verify",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "01-CODE-INTELLIGENCE.md#3.5",
       "01-CODE-INTELLIGENCE.md#2.3",
@@ -340,7 +340,7 @@
     ],
     "integration_point": "services/code_intel/src/code_intel/mcp_server.py (CodeIntelMCPServer + MCPServerFactory + the 8 @tool handlers); results.py result shapes; sandbox.py manifest",
     "acceptance": "WHEN the in-meeting agent calls a code_intel tool THE SYSTEM SHALL mint a fresh per-query server over the immutable graph and return file:line leads with correct honesty tags (resolved on tier-1 ORM, lower-bound elsewhere, never a silent wrong-exact), the mutable/LSP tools staying sandbox-exclusive.",
-    "acceptance_cmd": "tests/code_intel -k 'M5 or mcp or who_writes or shares_table or get_dependents or owner or batch_read or lookup_referent or sandbox_manifest'",
+    "acceptance_cmd": "tests/test_m5_tools.py tests/test_invariants.py tests/test_sandbox_boundary.py",
     "evidence_class": "[real-estate]",
     "journeys_now_live": [
       "J-09-S2-dep-graph-blast-radius",
@@ -372,7 +372,7 @@
     "title": "Direct-answer wake turn \u2014 host-side answer API (no E2B)",
     "region": "01-CODE-INTELLIGENCE",
     "disposition": "verify",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "01-CODE-INTELLIGENCE.md#3.5",
       "01-CODE-INTELLIGENCE.md#2.1",
@@ -407,7 +407,7 @@
     ],
     "integration_point": "services/code_intel/src/code_intel/direct_answer.py (answer_direct, _classify, _find_definition, _confirm_read); direct.py (ask/tenant/sha fa\u00e7ade)",
     "acceptance": "WHEN a direct-answer wake turn asks a code question THE SYSTEM SHALL resolve it host-side over the code_intel API (no E2B, no Workroom), confirm the lead by reading the pinned clone, and return a real file:line citation with an honesty tag \u2014 or abstain honestly when no handle is bound.",
-    "acceptance_cmd": "tests/code_intel -k 'direct_answer or INV-001 or INV-002 or INV-003 or LAT-001 or where_misroute'",
+    "acceptance_cmd": "tests/code_intel/test_direct_answer_where_misroute_doc01.py tests/test_invariants.py",
     "evidence_class": "[real-estate]",
     "journeys_now_live": [
       "J-09-S2-dep-graph-blast-radius",
