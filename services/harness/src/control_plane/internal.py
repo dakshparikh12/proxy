@@ -113,24 +113,57 @@ def install_internal_notes_route(app: "FastAPI") -> None:
 
 
 def install_m_surface_route(app: "FastAPI") -> None:
-    """Mount GET /m/{meeting_id} — the authenticated user surface (CANONICAL §12.9).
+    """Mount GET /m/{meeting_id} — the DUAL-MODE notes home (§2.8 / §4.6, §12.9).
 
-    BEHIND the auth wall (a valid signed session is required) but reads the SAME
-    note_deltas fold as /internal/notes via the canonical reader — never NOTES_CACHE.
+    Two callers reach the SAME route (§4.6):
+
+    * a **signed-in tenant member** (session present) — served via the canonical
+      :func:`scribe.notes_reader.m_handler`, which folds the SAME ``note_deltas``
+      as ``/internal/notes`` (never NOTES_CACHE);
+    * a **forwarded-to recipient** presenting a **signed, short-TTL, meeting-scoped,
+      revocable capability token** in the ``?token=`` query — the ONLY public entry
+      (this route is in ``PUBLIC_ROUTES``). A valid token grants **read-only notes**
+      for exactly its meeting and NOTHING else: no drafts, never accept/reject,
+      never another meeting (§2.8, Law 3).
+
+    The capability path NEVER trusts the client-supplied ``meeting_id`` as authority:
+    the token's own signed ``meeting_id`` is re-checked against the path by
+    ``libs.ops.verify_capability_token``, and only a matching, unexpired,
+    unrevoked ``notes:read`` grant unlocks the read. A missing/garbage/wrong-meeting/
+    expired/tampered/revoked token yields no grant → the caller falls through to the
+    session path, and a caller with neither a grant nor a session gets ``Not found``
+    (404) — the generic refusal, never a leak of whether the meeting exists.
     """
     from scribe.notes_reader import m_handler
 
+    from libs.ops import verify_capability_token
+
     @app.get(M_SURFACE_PATH, include_in_schema=True)
-    async def m_surface(meeting_id: str, request: Request) -> Response:
+    async def m_surface(
+        meeting_id: str, request: Request, token: str | None = None
+    ) -> Response:
         db = _acquirer(request.app)
         if db is None:
             return Response(status_code=503)
-        # The signed-session middleware exposes the logged-in user on the session.
+
+        # ── Capability-token path (the only public entry) ──────────────────────
+        # A valid same-meeting notes:read grant reads the notes read-only. Drafts
+        # are NEVER returned to a token bearer (§4.6: "token = notes only").
+        grant = verify_capability_token(token, meeting_id)
+        if grant is not None:
+            resp = await m_handler(meeting_id, session={"cap_grant": True}, db=db)
+            return _to_response(resp)
+
+        # ── Session path (a signed-in tenant member) ───────────────────────────
         try:
             session = request.session.get("user")
         except (AssertionError, AttributeError):
             session = None  # no SessionMiddleware installed → treated as no session
         resp = await m_handler(meeting_id, session=session, db=db)
+        # No grant AND no session ⇒ Not found (the generic refusal), never a 401 that
+        # would tell an anonymous caller the meeting exists.
+        if not session and resp.status_code == 401:
+            return Response(status_code=404)
         return _to_response(resp)
 
 

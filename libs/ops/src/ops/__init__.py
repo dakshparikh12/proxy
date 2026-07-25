@@ -11,6 +11,36 @@ from . import check_secret_bindings as check_secret_bindings
 from . import sandbox as sandbox
 from . import sandbox_provider as sandbox_provider
 from .affinity import route_to_owner as route_to_owner
+from .capability import (
+    AuthzDecision as AuthzDecision,
+)
+from .capability import (
+    CapabilityToken as CapabilityToken,
+)
+from .capability import (
+    authorize as authorize,
+)
+from .capability import (
+    bump_meeting_epoch as bump_meeting_epoch,
+)
+from .capability import (
+    decode_capability_token as decode_capability_token,
+)
+from .capability import (
+    encode_capability_token as encode_capability_token,
+)
+from .capability import (
+    is_revoked as is_revoked,
+)
+from .capability import (
+    mint_capability_token as mint_capability_token,
+)
+from .capability import (
+    revoke_capability_token as revoke_capability_token,
+)
+from .capability import (
+    verify_capability_token as verify_capability_token,
+)
 from .claim import (
     MEETING_HARNESS_OP as MEETING_HARNESS_OP,
 )
@@ -59,10 +89,20 @@ from .sentry import before_send as before_send
 
 __all__ = [
     "MEETING_HARNESS_OP",
+    "AuthzDecision",
+    "CapabilityToken",
     "DispatchDecision",
     "MeetingCost",
     "OperationHandle",
+    "authorize",
     "before_send",
+    "bump_meeting_epoch",
+    "decode_capability_token",
+    "encode_capability_token",
+    "is_revoked",
+    "mint_capability_token",
+    "revoke_capability_token",
+    "verify_capability_token",
     "check_meeting_budget",
     "check_secret_bindings",
     "claim_meeting",
