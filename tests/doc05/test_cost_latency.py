@@ -87,24 +87,71 @@ def test_env_override_flows_through_the_imported_resolver(monkeypatch: pytest.Mo
 
 
 def test_no_hardcoded_model_string_in_workroom_source() -> None:
-    """NOT-done guard: no ``claude-*`` model literal in agent_config / session (§3.2 invariant).
+    """NOT-done guard: NO ``claude-*`` model literal ANYWHERE in the workroom service (§3.2).
 
     The model table MUST be imported from ``llm.routing`` — a hard-coded ``claude-…`` id in
-    the service is exactly the invariant this node forbids. Docstrings/comments naming the
-    id family (``Haiku/Sonnet-class``) are prose; a real quoted ``claude-<name>`` id in code
-    is the violation. We scan for the quoted-id pattern in executable lines only.
+    the service is exactly the invariant this node forbids. This scans the WHOLE
+    ``services/workroom`` source tree (every ``.py``), not just agent_config/session, because
+    the last violation lived in ``sandbox_transport.py`` (a Sonnet literal as the
+    ``get_agent_tool_config`` default) — a module the old narrower scan never covered. The sole
+    sanctioned home for a model id is ``libs/llm/src/llm/routing.py``; no workroom source line
+    may spell a quoted ``claude-<name>`` id. Docstrings/prose naming the id family
+    (``Haiku/Sonnet-class``) are fine — we match only a real quoted model literal.
     """
     import re
 
     quoted_model = re.compile(r"""['"]claude-(opus|sonnet|haiku|fable)-[0-9]""")
-    for mod in (agent_config, __import__("workroom.session", fromlist=["x"])):
-        src_path = Path(inspect.getsourcefile(mod))  # type: ignore[arg-type]
+    workroom_src = Path(inspect.getsourcefile(agent_config)).parent  # type: ignore[arg-type]
+    scanned = 0
+    for src_path in sorted(workroom_src.rglob("*.py")):
+        scanned += 1
         for raw in src_path.read_text().splitlines():
             line = raw.split("#", 1)[0]  # drop trailing comments
             stripped = line.strip()
-            # skip pure docstring/prose lines (no assignment / call of a model literal)
+            # A docstring line inside triple quotes can still hold a quoted id; but a real
+            # violation is a quoted model id in code. We fail on ANY quoted claude-<name>-<n>
+            # occurrence in a non-comment line — the sanctioned id home is llm.routing alone.
             if quoted_model.search(line):
                 pytest.fail(f"hard-coded model id in {src_path.name}: {stripped!r}")
+    assert scanned >= 3, "the workroom source scan must cover the whole service tree"
+
+
+def test_transport_default_model_resolves_via_the_imported_routing_table() -> None:
+    """``get_agent_tool_config`` with NO explicit model resolves its default from the IMPORTED
+    ``llm.routing`` table (the WORKROOM/Sonnet-class seat) — never a ``claude-*`` literal (D-014).
+
+    This is the regression wall for the exact prior violation: a hard-coded Sonnet id as the
+    transport default. The default model on the built options MUST equal ``model_for("WORKROOM")``
+    (table-routed) and MUST be a real seat model, so a bare registration can never smuggle a
+    literal past the seat table. An env override on that seat flows through too (the one config
+    surface env may touch), proving the value comes from ``model_for``, not a constant."""
+    from libs.ops import sandbox_provider
+    from workroom.sandbox_transport import get_agent_tool_config
+
+    sandbox_provider._reset_for_test()
+    handle = sandbox_provider.provision(meeting_id="m-transport-default-model")
+    cfg = get_agent_tool_config(handle, access="readwrite")  # NO explicit model → table default
+    assert cfg.options.model == model_for("WORKROOM"), (
+        "the transport's default model must be resolved from the imported routing table "
+        "(model_for('WORKROOM')), never a hard-coded claude-* literal"
+    )
+    assert cfg.options.model in set(SEATS.values()), "the default must be a real seat model id"
+
+
+def test_transport_default_model_honors_the_seat_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The transport default is genuinely ``model_for('WORKROOM')`` — a ``PROXY_MODEL_WORKROOM``
+    env override changes it, which a hard-coded literal could NOT do (§3.2). This proves the id
+    is read from the imported resolver at call time, not baked in."""
+    from libs.ops import sandbox_provider
+    from workroom.sandbox_transport import get_agent_tool_config
+
+    monkeypatch.setenv("PROXY_MODEL_WORKROOM", "claude-sonnet-4-6")
+    sandbox_provider._reset_for_test()
+    handle = sandbox_provider.provision(meeting_id="m-transport-default-env")
+    cfg = get_agent_tool_config(handle, access="readwrite")
+    assert cfg.options.model == "claude-sonnet-4-6"  # the override the resolver returned
 
 
 # --------------------------------------------------------------------------- #

@@ -73,6 +73,15 @@ from typing import Any, Literal
 
 import jwt as _jwt
 
+# D-014 / §3.2: the model id NEVER lives here as a literal — it is resolved from the ONE
+# canonical seat table in ``llm.routing``. The transport's DEFAULT model resolves the
+# Sonnet-class WORKROOM seat through ``model_for`` (the sole sanctioned home for model ids),
+# so a caller that doesn't pass an explicit per-role model still gets a table-routed id, never
+# a hard-coded ``claude-*`` string. The live session driver ALWAYS passes an explicit per-role
+# model (``session._resolve_model`` via ``seat_for_disposition`` → ``model_for``); this default
+# is the honest fallback for the transport's own callers (tests / a bare registration).
+from llm.routing import model_for
+
 from libs.db import sandbox_jwt_refresh_margin_s, sandbox_jwt_ttl_s, sandbox_mcp_port
 from libs.ops import sandbox_provider
 
@@ -386,7 +395,7 @@ def get_agent_tool_config(
     handle: sandbox_provider.SandboxHandle,
     *,
     access: Access = "readwrite",
-    model: str = "claude-sonnet-4-5",
+    model: str | None = None,
     max_turns: int = 1,
     resume: str | None = None,
     system_prompt: str | None = None,
@@ -400,7 +409,17 @@ def get_agent_tool_config(
     advertised only for ``access="readwrite"`` and BLOCKED via ``disallowed_tools`` for
     ``access="readonly"`` (``allowed_tools`` does not filter MCP tools). Every config rides
     the §3.4 isolation triad via :func:`workroom.agent_config.workroom_options`.
+
+    ``model`` (D-014 / §3.2): the per-role model id, ALWAYS a value resolved from the imported
+    ``llm.routing`` seat table — NEVER a ``claude-*`` literal here. The live session driver
+    passes the disposition's seat-resolved id explicitly; an omitted ``model`` (``None``)
+    falls back to ``model_for("WORKROOM")`` (the Sonnet-class seat) so even a bare registration
+    is table-routed, not hard-coded.
     """
+    # Resolve the model from the ONE sanctioned table when the caller didn't pin a per-role id
+    # (the live driver always does). No model literal is ever spelled in this module (D-014).
+    if model is None:
+        model = model_for("WORKROOM")
     provider = make_token_provider(handle)
     url = sandbox_mcp_url(handle)
     code_server: dict[str, Any] = {
