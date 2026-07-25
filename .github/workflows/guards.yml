@@ -89,3 +89,19 @@ jobs:
       # field-contract: the contracts registry closure (assert_registry_closed).
       - name: field-contract
         run: python -m ops.check_field_contract
+
+      # naming-lint: the §14 naming law — no internal component name
+      # (Orchestrator/Scribe/workroom) may appear in a user-visible string. Scans
+      # committed product source; fails loud, naming the file:line. Guard parity:
+      # same hook in .pre-commit-config.yaml. Runs beside the copy guide below.
+      - name: naming-lint
+        run: python -m lint.naming
+
+      # copy-guide: Doc 08 §2.1/§2.3 — the user-visible-copy law. FAILS (never
+      # warns) on any banned pattern ("As an AI", filler, exclamation-theatre) in
+      # committed copy, AND asserts the three honesty shapes (recuse/unknown/partial)
+      # exist as canonical seed strings. The seed artifact
+      # (libs/ops/src/lint/copy_seeds.json) is the SINGLE source the check reads.
+      # Guard parity: same hook in .pre-commit-config.yaml; runs alongside naming-lint.
+      - name: copy-guide
+        run: python -m lint.copy_guide

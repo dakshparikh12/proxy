@@ -55,3 +55,21 @@ repos:
         entry: python -m ops.check_field_contract
         language: system
         pass_filenames: false
+
+      # naming-lint: no internal component name (Orchestrator/Scribe/workroom) in a
+      # user-visible string (§14 naming law). Runs beside the copy guide below.
+      - id: naming-lint
+        name: naming-lint
+        entry: python -m lint.naming
+        language: system
+        pass_filenames: false
+
+      # copy-guide: Doc 08 §2.1/§2.3 — fail (never warn) on a banned user-visible-copy
+      # pattern ("As an AI", filler, exclamation-theatre) AND assert the three honesty
+      # shapes (recuse/unknown/partial) exist as canonical seed strings. The seed
+      # artifact (libs/ops/src/lint/copy_seeds.json) is the single source it reads.
+      - id: copy-guide
+        name: copy-guide
+        entry: python -m lint.copy_guide
+        language: system
+        pass_filenames: false

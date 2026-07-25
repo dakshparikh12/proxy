@@ -1,0 +1,28 @@
+{
+  "_doc": "Doc 08 §2.1/§2.3 — the canonical user-visible-copy seed artifact. The SINGLE source the copy guide (lint/copy_guide.py) reads. Edit here, never inline in code. honesty_shapes are lifted verbatim from §2.3 bullet 11; banned_patterns from §2.1 the copy voice.",
+  "honesty_shapes": {
+    "recuse": "that's outside what I can judge",
+    "unknown": "I don't know",
+    "partial": "here's the part I can prove — the rest I can't"
+  },
+  "banned_patterns": [
+    {
+      "id": "as-an-ai",
+      "law": "§2.1 never \"As an AI…\"",
+      "regex": "\\bas an ai\\b",
+      "flags": "i"
+    },
+    {
+      "id": "filler",
+      "law": "§2.1 no filler (\"Certainly!\", \"Great question!\")",
+      "regex": "\\b(?:certainly|great question|of course|no problem|happy to help|absolutely|sure thing)\\b\\s*!",
+      "flags": "i"
+    },
+    {
+      "id": "exclamation-theatre",
+      "law": "§2.1 no exclamation marks (exclamation-theatre)",
+      "regex": "!",
+      "flags": ""
+    }
+  ]
+}
