@@ -1,59 +1,128 @@
-# Cloud Build pipeline: build -> Artifact Registry -> migrate -> deploy.
+# Cloud Build pipeline: build (x3) -> Artifact Registry -> migrate (once) -> deploy (x3).
 #
 # Dev auto-deploys from a Cloud Build TRIGGER on push to main. Prod is never
 # pushed to directly; it ships via deploy/promote.sh, which re-tags the exact
 # image digest that already passed dev and promotes it to the prod service.
 #
+# Three per-service deployable images are built, one per Dockerfile under
+# deploy/<service>/Dockerfile, each tagged with its own service name:
+#   * proxy-control-plane   (deploy/control_plane/Dockerfile   -> control_plane.server)
+#   * proxy-meeting-runtime (deploy/meeting_runtime/Dockerfile -> harness.server)
+#   * proxy-code-intel      (deploy/code_intel/Dockerfile      -> code_intel.server)
+#
 # Migrations run as their OWN separate step (id: migrate-db) between build and
 # deploy, so schema changes are applied exactly once, distinct from the image
-# build and the Cloud Run deploy.
+# builds and the Cloud Run deploys. The migrate step uses the control_plane image
+# (it carries the Alembic env + migrations) and its advisory lock serializes any
+# concurrent boot-time migrations.
 
 substitutions:
   _REGION: us-central1
   _AR_REPO: us-central1-docker.pkg.dev/${PROJECT_ID}/proxy
-  _SERVICE: proxy-control-plane
+  _SVC_CONTROL_PLANE: proxy-control-plane
+  _SVC_MEETING_RUNTIME: proxy-meeting-runtime
+  _SVC_CODE_INTEL: proxy-code-intel
 
 steps:
-  # 1. build the container image
-  - id: 'build'
+  # 1a. build the control_plane image
+  - id: 'build-control-plane'
     name: 'gcr.io/cloud-builders/docker'
     args:
       - 'build'
       - '-t'
-      - '${_AR_REPO}/${_SERVICE}:${SHORT_SHA}'
+      - '${_AR_REPO}/${_SVC_CONTROL_PLANE}:${SHORT_SHA}'
       - '-f'
-      - 'deploy/Dockerfile'
+      - 'deploy/control_plane/Dockerfile'
       - '.'
 
-  # 2. push the image to Artifact Registry
-  - id: 'push-artifact-registry'
+  # 1b. build the meeting_runtime image
+  - id: 'build-meeting-runtime'
     name: 'gcr.io/cloud-builders/docker'
     args:
-      - 'push'
-      - '${_AR_REPO}/${_SERVICE}:${SHORT_SHA}'
-    waitFor: ['build']
+      - 'build'
+      - '-t'
+      - '${_AR_REPO}/${_SVC_MEETING_RUNTIME}:${SHORT_SHA}'
+      - '-f'
+      - 'deploy/meeting_runtime/Dockerfile'
+      - '.'
 
-  # 3. run database migrations as a SEPARATE step (alembic upgrade head)
+  # 1c. build the code_intel image
+  - id: 'build-code-intel'
+    name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - '${_AR_REPO}/${_SVC_CODE_INTEL}:${SHORT_SHA}'
+      - '-f'
+      - 'deploy/code_intel/Dockerfile'
+      - '.'
+
+  # 2a. push control_plane to Artifact Registry
+  - id: 'push-control-plane'
+    name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_AR_REPO}/${_SVC_CONTROL_PLANE}:${SHORT_SHA}']
+    waitFor: ['build-control-plane']
+
+  # 2b. push meeting_runtime to Artifact Registry
+  - id: 'push-meeting-runtime'
+    name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_AR_REPO}/${_SVC_MEETING_RUNTIME}:${SHORT_SHA}']
+    waitFor: ['build-meeting-runtime']
+
+  # 2c. push code_intel to Artifact Registry
+  - id: 'push-code-intel'
+    name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_AR_REPO}/${_SVC_CODE_INTEL}:${SHORT_SHA}']
+    waitFor: ['build-code-intel']
+
+  # 3. run database migrations ONCE as a SEPARATE step (alembic upgrade head).
+  #    Uses the control_plane image, which carries the Alembic env + migrations.
   - id: 'migrate-db'
-    name: '${_AR_REPO}/${_SERVICE}:${SHORT_SHA}'
+    name: '${_AR_REPO}/${_SVC_CONTROL_PLANE}:${SHORT_SHA}'
     entrypoint: 'python'
     args: ['-m', 'alembic', 'upgrade', 'head']
-    waitFor: ['push-artifact-registry']
+    waitFor: ['push-control-plane']
 
-  # 4. deploy the freshly migrated image to the dev Cloud Run service
-  - id: 'deploy'
+  # 4a. deploy the freshly migrated control_plane image to the dev Cloud Run service
+  - id: 'deploy-control-plane'
     name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'gcloud'
     args:
       - 'run'
       - 'deploy'
-      - '${_SERVICE}-dev'
-      - '--image=${_AR_REPO}/${_SERVICE}:${SHORT_SHA}'
+      - '${_SVC_CONTROL_PLANE}-dev'
+      - '--image=${_AR_REPO}/${_SVC_CONTROL_PLANE}:${SHORT_SHA}'
       - '--region=${_REGION}'
     waitFor: ['migrate-db']
 
+  # 4b. deploy the meeting_runtime image
+  - id: 'deploy-meeting-runtime'
+    name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_SVC_MEETING_RUNTIME}-dev'
+      - '--image=${_AR_REPO}/${_SVC_MEETING_RUNTIME}:${SHORT_SHA}'
+      - '--region=${_REGION}'
+    waitFor: ['migrate-db', 'push-meeting-runtime']
+
+  # 4c. deploy the code_intel image
+  - id: 'deploy-code-intel'
+    name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_SVC_CODE_INTEL}-dev'
+      - '--image=${_AR_REPO}/${_SVC_CODE_INTEL}:${SHORT_SHA}'
+      - '--region=${_REGION}'
+    waitFor: ['migrate-db', 'push-code-intel']
+
 images:
-  - '${_AR_REPO}/${_SERVICE}:${SHORT_SHA}'
+  - '${_AR_REPO}/${_SVC_CONTROL_PLANE}:${SHORT_SHA}'
+  - '${_AR_REPO}/${_SVC_MEETING_RUNTIME}:${SHORT_SHA}'
+  - '${_AR_REPO}/${_SVC_CODE_INTEL}:${SHORT_SHA}'
 
 # NOTE: this config is wired to a Cloud Build TRIGGER (dev, push to main).
 # Prod promotion is a separate, manual step — see deploy/promote.sh (promote).
