@@ -105,7 +105,11 @@ def _transcript_body(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _dispatch_meeting_event(
-    payload: dict[str, Any], *, db: Database, registry: Any
+    payload: dict[str, Any],
+    *,
+    db: Database,
+    registry: Any,
+    launch: Any | None = None,
 ) -> None:
     """Start/stop a meeting's notes engine from a Recall bot-status callback.
 
@@ -114,12 +118,25 @@ async def _dispatch_meeting_event(
     delivery returns the already-running runtime). On a ``call_ended``/removed
     event we END it. Any other event, or an unresolvable bot, is a safe no-op so
     the drain still marks the row processed (never a poison row).
+
+    ``launch`` is the ``meeting_runtime`` deployable's provisioner seam (§3.6/§3.2):
+    when supplied, an ``in_call`` event is routed THROUGH it — atomic-claim the meeting
+    and launch the full run-loop spine — instead of the control_plane's Scribe-only
+    ``start_meeting``. ``launch=None`` keeps the control_plane drain behaviour (notes
+    engine only), so the two deployables share this one drain without either changing.
     """
     name = _event_name(payload)
     is_start = name in _IN_CALL_EVENTS
     is_end = name in _CALL_ENDED_EVENTS
     is_transcript = name in _TRANSCRIPT_EVENTS
     if not (is_start or is_end or is_transcript):
+        return
+
+    # The meeting_runtime deployable: an in_call claims + launches the full harness
+    # through the provisioner (atomic claim, one-scope assembly, loop launch). The
+    # provisioner resolves the bot itself and no-ops on a loss / unknown bot.
+    if is_start and launch is not None:
+        await launch(payload)
         return
 
     bot_id = _bot_id(payload)
@@ -180,7 +197,9 @@ async def _dispatch_meeting_event(
         await registry.end_meeting(meeting_id)
 
 
-async def drain_pending_webhooks(db: Database, *, registry: Any | None = None) -> int:
+async def drain_pending_webhooks(
+    db: Database, *, registry: Any | None = None, launch: Any | None = None
+) -> int:
     """Drain every pending webhook_events row (idempotent processing).
 
     When a ``registry`` (the boot ``MeetingRuntimeRegistry``) is supplied, a Recall
@@ -189,6 +208,10 @@ async def drain_pending_webhooks(db: Database, *, registry: Any | None = None) -
     real join path. Processing then marks the row processed regardless (idempotent;
     a dispatch that no-ops still drains). ``registry=None`` keeps the pure-drain
     behaviour for callers that only need durability accounting.
+
+    ``launch`` (the ``meeting_runtime`` deployable's provisioner seam) routes an
+    ``in_call`` through the atomic-claim + loop-launch provisioner instead of the
+    control_plane's Scribe-only start; ``launch=None`` preserves the existing drain.
     """
     drained = 0
     async with db.acquire() as conn:
@@ -204,7 +227,9 @@ async def drain_pending_webhooks(db: Database, *, registry: Any | None = None) -
                     payload = json.loads(payload)
                 except Exception:
                     payload = {}
-            await _dispatch_meeting_event(payload, db=db, registry=registry)
+            await _dispatch_meeting_event(
+                payload, db=db, registry=registry, launch=launch
+            )
         async with db.acquire() as conn:
             await repos.webhooks.mark_processed(conn, event["id"])
         drained += 1

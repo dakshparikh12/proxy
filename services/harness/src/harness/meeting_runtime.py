@@ -79,6 +79,8 @@ class MeetingRuntime:
     _hearing: Any = field(default=None, init=False)
     _run_loop: RunLoop | None = field(default=None, init=False)
     _stt_refresh: "asyncio.Task[None] | None" = field(default=None, init=False)
+    _orchestrator_pipe: StandingPipe | None = field(default=None, init=False)
+    _meeting_ended: "asyncio.Event | None" = field(default=None, init=False)
 
     def start(self) -> ScribeRuntimeHandle:
         """Launch the join-time standing-pipe plumbing on this meeting's carrier (§2/§3).
@@ -181,7 +183,7 @@ class MeetingRuntime:
         return self._run_loop
 
     def wire_orchestrator_pipe(self) -> StandingPipe:
-        """Wire (synchronously) the transport→orchestrator standing pipe (§3.2).
+        """Wire (synchronously) the transport→orchestrator standing pipe ONCE (§3.2).
 
         Subscribing to the carrier is done HERE, synchronously, so the pipe is
         registered as a subscriber the instant this returns — before any signal is
@@ -191,30 +193,74 @@ class MeetingRuntime:
         :class:`~harness.run_loop.MeetingEvent` and routes each THROUGH the loop —
         PURE forwarding, no decision, no branch, no agent (the routing IS the wake
         turn). Builds a default (silent) loop if none was wired.
+
+        **Idempotent (subscribe-once at join, §3.2).** The pipe — and thus the
+        carrier subscription — is created exactly once and cached; a second call
+        returns the already-wired pipe rather than registering a second subscriber.
+        This is the invariant the provisioner leans on: assembly wires the pipe once
+        at join, and launching the loop reuses it (never a per-event re-wire).
         """
+        if self._orchestrator_pipe is not None:
+            return self._orchestrator_pipe
         loop = self._run_loop if self._run_loop is not None else self.build_run_loop()
+        self._meeting_ended = asyncio.Event()
 
         async def _route(signal: Any) -> None:
             # The ask id keys in-flight bookkeeping (dedupe/attach, correction-inject,
             # detach): a spoken/typed line carries one; ambient signals do not.
             ask_id = self._ask_id_for(signal)
             await loop.route(MeetingEvent(payload=signal, ask_id=ask_id))
+            # Meeting end is EXPLICIT (§3.1): the MeetingEnd signal — routed through the
+            # loop like everything else, never a per-type dispatch branch on the routing
+            # decision — trips the end event so the launched spine returns. Detected by a
+            # structural marker (the signal's own class name), not an action mapping.
+            if type(signal).__name__ == "MeetingEnd" and self._meeting_ended is not None:
+                self._meeting_ended.set()
 
         # subscribe() registers this consumer's queue synchronously (no await),
         # so the pipe is live before run_orchestrator_loop is even scheduled.
-        return StandingPipe(source=self.carrier.subscribe(), sink=_route)
+        self._orchestrator_pipe = StandingPipe(
+            source=self.carrier.subscribe(), sink=_route
+        )
+        return self._orchestrator_pipe
 
     async def run_orchestrator_loop(self) -> None:
         """Run the transport→orchestrator standing pipe until the carrier closes (§3.2).
 
-        The RUN-block spine for one meeting: it wires the standing pipe (if not
-        already) and forwards carrier signals onto the run loop, routing each
-        through the loop. Runs until meeting end closes the carrier and drains the
-        subscriber. A silent meeting is just this pipe forwarding ambient signals
-        while the loop makes zero wake turns.
+        The RUN-block spine for one meeting: it forwards carrier signals onto the run
+        loop, routing each through the loop. Runs until meeting end closes the carrier
+        and drains the subscriber. A silent meeting is just this pipe forwarding
+        ambient signals while the loop makes zero wake turns. Reuses the pipe wired at
+        join (subscribe-once) rather than opening a second subscription.
         """
         pipe = self.wire_orchestrator_pipe()
         await pipe.run()
+
+    async def run_until_meeting_end(self) -> None:
+        """Launch the run-loop spine; return when the explicit MeetingEnd signal lands.
+
+        The provisioner's launch seam (§3.2 RUN block). Runs the transport→orchestrator
+        pipe (wired ONCE at join) as a task so every carrier signal routes THROUGH the
+        loop, and returns the instant a ``MeetingEnd`` signal has routed through — end is
+        EXPLICIT (§3.1), never inferred from silence. On return the carrier is closed and
+        the pump cancelled so both carrier subscribers (Scribe + orchestrator) drain; the
+        caller then runs the ordered close/teardown.
+        """
+        pipe = self.wire_orchestrator_pipe()
+        ended = self._meeting_ended
+        pump = asyncio.ensure_future(pipe.run())
+        try:
+            if ended is not None:
+                await ended.wait()
+        finally:
+            # Close the carrier + stop the pump so the pipe's async-for drains and both
+            # carrier subscribers (Scribe consumer + this pipe) terminate cleanly.
+            close = getattr(self.carrier, "close", None)
+            if close is not None:
+                close()
+            pump.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await pump
 
     @staticmethod
     def _ask_id_for(signal: Any) -> str | None:
