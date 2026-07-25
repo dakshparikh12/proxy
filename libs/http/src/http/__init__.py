@@ -46,6 +46,12 @@ from .safe_error import (
 from .safe_error import (
     safe_error_handler as safe_error_handler,
 )
+from .webhook import (
+    WebhookVerificationError as WebhookVerificationError,
+)
+from .webhook import (
+    verify_recall_signature as verify_recall_signature,
+)
 
 __all__ = [
     "AuthzCtx",
@@ -55,6 +61,7 @@ __all__ = [
     "PerConnectionRateLimiter",
     "PublicAuthzCtx",
     "RejectUpgrade",
+    "WebhookVerificationError",
     "authorize_upgrade",
     "classify_route",
     "dispatch",
@@ -63,4 +70,5 @@ __all__ = [
     "public",
     "resolve_entity_tenant",
     "safe_error_handler",
+    "verify_recall_signature",
 ]

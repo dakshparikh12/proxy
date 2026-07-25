@@ -47,6 +47,11 @@ from .src.http.registry import public as public
 from .src.http.safe_error import install_safe_error_handler as install_safe_error_handler
 from .src.http.safe_error import safe_error_handler as safe_error_handler
 
+# The §4.6 Recall webhook HMAC verifier, re-exported off the clean package seam so
+# the live control_plane webhook route binds it without the ``src`` deep path.
+from .src.http.webhook import WebhookVerificationError as WebhookVerificationError
+from .src.http.webhook import verify_recall_signature as verify_recall_signature
+
 __all__ = [
     "AuthzCtx",
     "Connection",
@@ -54,6 +59,7 @@ __all__ = [
     "PUBLIC_ROUTES",
     "PublicAuthzCtx",
     "RejectUpgrade",
+    "WebhookVerificationError",
     "authorize_upgrade",
     "classify_route",
     "dispatch",
@@ -67,4 +73,5 @@ __all__ = [
     "resolve_entity_tenant",
     "run_dispatch",
     "safe_error_handler",
+    "verify_recall_signature",
 ]

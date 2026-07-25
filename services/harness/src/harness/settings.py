@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     database_url: str = Field(default="", validation_alias="DATABASE_URL")
     gcs_bucket: str = Field(default="", validation_alias="GCS_BUCKET")
     recall_api_key: str = Field(default="", validation_alias="RECALL_API_KEY")
+    # The Recall webhook signing secret (whsec_<base64>, §11.10) — the HMAC key the
+    # §4.6 verifier proves the caller with. Sourced from Secret Manager as env, never
+    # a literal. Not a boot hard-gate (a deployment without inbound Recall webhooks
+    # still boots); the webhook route fails CLOSED (401) when it is unset, so an
+    # unverifiable delivery is never accepted.
+    recall_webhook_secret: str = Field(
+        default="", validation_alias="RECALL_WEBHOOK_SECRET"
+    )
     aes_key_recall: str = Field(default="", validation_alias="AES_KEY_RECALL")
     aes_key_stt: str = Field(default="", validation_alias="AES_KEY_STT")
     aes_key_calendar: str = Field(default="", validation_alias="AES_KEY_CALENDAR")
