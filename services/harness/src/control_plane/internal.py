@@ -153,11 +153,18 @@ def install_internal_reconcile_route(app: Any) -> None:
 
     @app.post(INTERNAL_RECONCILE_PATH, include_in_schema=True)
     async def internal_reconcile(request: Request) -> Response:
+        # The token gate is checked FIRST — the route is mounted OUTSIDE the user
+        # auth wall (§12.1) and must refuse a missing/bad internal token regardless
+        # of substrate availability. Only an authenticated internal caller ever
+        # reaches the DB acquire (a token gate that only bites when the DB is up
+        # would be no gate at all).
+        provided = request.headers.get(INTERNAL_TOKEN_HEADER)
+        expected = os.environ.get("PROXY_INTERNAL_TOKEN") or "internal-token-good"
+        if not expected or provided != expected:
+            return Response(status_code=401)  # no/bad internal token → refused
         db = _acquirer(request.app)
         if db is None:
             return Response(status_code=503)
-        provided = request.headers.get(INTERNAL_TOKEN_HEADER)
-        expected = os.environ.get("PROXY_INTERNAL_TOKEN") or "internal-token-good"
         status = await handle_internal_reconcile(
             db, provided_token=provided, expected_token=expected
         )

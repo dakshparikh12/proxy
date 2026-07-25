@@ -2,15 +2,19 @@
 
 Called by BOTH the prod scale-to-zero-safe scheduler (every ~5 min, via the
 token-gated POST /internal/reconcile) and the dev in-process interval — one
-function, never two code paths. It (1) sweeps every stale running operation_runs
-row to 'interrupted' and (2) destroys any sandbox found past its TTL. Running it
-twice over the same state yields the same end state.
+function, never two code paths (§3.8). The async persisted sweep runs THREE
+ISOLATED steps, each in its OWN try/except so one bad step never aborts the rest:
+(1) ``stale-harnesses`` — reap orphaned operation_runs (the redelivered-join
+dedup reaper); (2) ``meeting-sandboxes`` — list live sandboxes and destroy any
+orphaned/past-TTL (§3.9); (3) ``notes-retention`` — the retention hook. Every
+step is idempotent, so running the sweep twice over the same state yields the
+same end state.
 
 Dual-path (mirrors ``libs.ops.cost``): the first argument's type selects the
 path.
 
   * a :class:`~libs.db.Database` → the async persisted sweep (returns a coroutine
-    the harness boundary awaits);
+    the harness boundary awaits, resolving to the ``{"steps", "errors"}`` report);
   * a raw psycopg connection → the synchronous sweep. Two synchronous shapes
     share this seam:
       - ``run_reconcile_sweep(conn, token=...)`` the token-gated /internal
@@ -25,9 +29,9 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from libs.db import Database, sandbox_ttl_s, stale_after_s
+from libs.db import Database, stale_after_s
 
-from .sandbox_provider import destroy
+from . import sandbox_provider
 
 # The dev/test default for the /internal/reconcile token; production binds the
 # real value via the ``INTERNAL_RECONCILE_TOKEN`` secret (Secret Manager).
@@ -36,24 +40,63 @@ _DEV_INTERNAL_TOKEN = "internal-secret"  # nosec B105 - dev default, prod uses t
 _UNSET: Any = object()
 
 
-async def _sandboxes_past_ttl(db: Database, ttl_s: int) -> list[Any]:
-    """Sandboxes whose age exceeds the TTL (E2B list; empty for the MVP stub)."""
-    # No sandbox registry table exists (no warm pool, no FSM); the reconcile
-    # cron reconciles against the E2B API's live-sandbox list. For the local
-    # substrate build this returns no leaked sandboxes.
-    _ = (db, ttl_s)
-    return []
+async def _step_stale_harnesses(db: Database) -> None:
+    """Reap orphaned operation_runs (the §3.7 reaper — redelivered-join dedup).
+
+    Flips every stale 'running' row to 'interrupted' so a redelivered join can
+    re-claim the meeting rather than double-run it. Idempotent — a second pass
+    over the same state finds nothing stale left to flip.
+    """
+    await db.sweep_stale_operation_runs()
 
 
-async def _run_reconcile_sweep_async(db: Database) -> int:
-    """Idempotently reap stale runs and destroy any TTL-expired sandbox."""
-    swept = await db.sweep_stale_operation_runs()
+async def _step_meeting_sandboxes(db: Database) -> None:
+    """Reap orphaned/past-TTL sandboxes (§3.9 defence #3 — list live, kill orphans).
 
-    ttl = sandbox_ttl_s()
-    for handle in await _sandboxes_past_ttl(db, ttl):
-        await destroy(handle)  # kill any sandbox past its TTL
+    Cross-checks the live-sandbox list against ended meetings and the TTL; destroy
+    tolerates a 404. Idempotent — a second pass over the reaped state is a no-op.
+    """
+    _ = db  # the live-sandbox view is the provider's (E2B list in prod), not the DB
+    await sandbox_provider.reconcile_sandboxes()
 
-    return swept
+
+async def _step_notes_retention(db: Database) -> None:
+    """Notes-retention reconcile step (§3.8 third step).
+
+    The core V0 notes plane is the append-only ``note_deltas`` ledger (the durable
+    source of truth, §11.4); there is no separate retention sweep to run in V0 (the
+    Tier-2 session mirror + its retention sweep were CUT per §6). This step exists
+    as an isolated, idempotent no-op so the sweep's three-step shape and its
+    per-step error isolation hold — a future retention policy slots in here without
+    changing the sweep contract.
+    """
+    _ = db
+
+
+# The three isolated reconcile steps, in order (§3.8). Each runs in its OWN
+# try/except at the call site so one bad step never aborts the rest.
+_RECONCILE_STEPS: tuple[tuple[str, Any], ...] = (
+    ("stale-harnesses", _step_stale_harnesses),
+    ("meeting-sandboxes", _step_meeting_sandboxes),
+    ("notes-retention", _step_notes_retention),
+)
+
+
+async def _run_reconcile_sweep_async(db: Any) -> dict[str, Any]:
+    """Run the three isolated reconcile steps idempotently (§3.8).
+
+    Each step runs in its own try/except — a failure in one is captured and
+    reported by name, never aborting the others. Returns the §3.8 report:
+    ``{"steps": [...], "errors": [...]}``. Running the sweep twice over the same
+    state yields the same end state (every step is idempotent).
+    """
+    errors: list[str] = []
+    for name, step in _RECONCILE_STEPS:
+        try:
+            await step(db)
+        except Exception as exc:  # noqa: BLE001 - per-step isolation is the contract
+            errors.append(f"{name}: {exc}")
+    return {"steps": [name for name, _ in _RECONCILE_STEPS], "errors": errors}
 
 
 def _valid_internal_token(token: Any) -> bool:
