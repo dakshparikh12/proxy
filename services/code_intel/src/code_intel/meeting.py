@@ -58,12 +58,35 @@ class MeetingSession:
         return session
 
     # -- cache-aware tool dispatch --------------------------------------- #
+    def _tenant_id(self) -> str:
+        """The tenant that owns this session's answers, drawn from the bound
+        server (the per-tenant :class:`CodeIntelMCPServer`), falling back to the
+        pipeline. Every cache key is scoped by it so one tenant's cached result
+        can never be served to another (isolation triad — no cross-tenant cache
+        collision). Re-read on every call because a session's bound server may be
+        rebound (a pooled/shared session boundary), and the cache MUST follow the
+        currently-bound tenant, never a stale one."""
+        server_tid = getattr(self._server, "tenant_id", None) if self._server is not None else None
+        if server_tid:
+            return str(server_tid)
+        pipeline_tid = getattr(self._pipeline, "tenant_id", None) if self._pipeline is not None else None
+        if pipeline_tid:
+            return str(pipeline_tid)
+        return ""
+
+    def _cache_key(self, tool: str, args: dict[str, Any]) -> tuple[Any, ...]:
+        """The per-meeting result cache key — ALWAYS tenant-scoped. Keying on
+        ``(tool, sorted(args))`` alone (no tenant_id) let two tenants issuing the
+        identical ``(tool, args)`` call collide on a shared cache; the tenant_id
+        is the first key component so tenant-B never reads tenant-A's value."""
+        return (self._tenant_id(), tool, tuple(sorted(args.items())))
+
     def tool_call(self, tool: str, **args: Any) -> Any:
         gen = self._server.cache_generation if self._server is not None else 0
         if gen != self._cache_gen:
             self._cache.clear()
             self._cache_gen = gen
-        key = (tool, tuple(sorted(args.items())))
+        key = self._cache_key(tool, args)
         if key in self._cache:
             return self._cache[key]
         result = self._invoke(tool, args)
