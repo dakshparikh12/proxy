@@ -304,18 +304,32 @@ class MeetingRuntime:
         with contextlib.suppress(asyncio.TimeoutError, Exception):
             await asyncio.wait_for(self._scribe.wait(), timeout=_DRAIN_TIMEOUT_S)
 
-    async def run_close(self, close_config: CloseConfig) -> Any:
-        """Drain the consumer, then run the ordered close pass BEFORE teardown.
+    async def run_close(
+        self,
+        close_config: CloseConfig,
+        *,
+        teardown: Callable[[], Awaitable[None]] | None = None,
+    ) -> Any:
+        """Drain the consumer (FREEZE), then run the close pass BEFORE teardown.
 
-        This is the wired meeting-end deliverable: the consumer drains, the durable
-        ledger is folded + reduced through the strong-model close, the permanent
-        markdown notes are written to GCS create-only, the chat link is posted, and
-        ONLY THEN is the runtime torn down (``aclose`` IS the close pass's teardown
-        step, so the mandatory render->GCS->chat->teardown order is preserved).
+        This is the wired meeting-end deliverable: the consumer drains — which
+        FREEZES the durable ``note_deltas`` ledger (no delta is appended past the
+        MeetingEnd sentinel) — the ledger is folded + reduced through the
+        strong-model close, the permanent markdown notes are written to GCS
+        create-only, the chat link is posted, and ONLY THEN is ``teardown`` run.
+
+        ``teardown`` is the close pass's final step. The ordered close (§3.16) passes
+        its ordered TAIL here — destroy-sandbox → complete-harness-row →
+        teardown-pipes LAST — so the pipes come down only after the harness row is
+        completed. Defaults to :meth:`aclose` (the bare pipe teardown) for callers
+        that only need the render->GCS->chat->teardown order.
         """
         await self._drain()
         return await run_meeting_close(
-            self.header, self.db, close_config, teardown=self.aclose
+            self.header,
+            self.db,
+            close_config,
+            teardown=teardown if teardown is not None else self.aclose,
         )
 
     async def aclose(self) -> None:
@@ -422,7 +436,15 @@ class MeetingRuntimeRegistry:
             return
         try:
             if self._close_config is not None:
-                await runtime.run_close(self._close_config)
+                # The §3.16 ordered close over Doc 03's close pass: freeze (drain) →
+                # close-pass (notes GCS create-only + chat link) → destroy-sandbox →
+                # complete-harness-row → teardown-pipes LAST. run_ordered_close owns
+                # the ordered tail so the pipes come down only after the harness row
+                # is completed and the sandbox destroyed — nothing reads a torn-down
+                # store, and the close is idempotent on re-run (create-only notes).
+                from .close import run_ordered_close
+
+                await run_ordered_close(runtime, self._close_config)
             else:
                 # No close config bound: still signal meeting end + drain the serial
                 # consumer so the trailing window lands in the ledger BEFORE teardown,
@@ -430,9 +452,9 @@ class MeetingRuntimeRegistry:
                 await runtime._drain()
                 await runtime.aclose()
         finally:
-            # run_close's teardown IS aclose; a no-notes/empty-ledger close returns
-            # without tearing down, and any close failure must still release the
-            # engine — so ensure the runtime is closed exactly once here too.
+            # The ordered close's teardown-pipes is aclose; a no-notes/empty-ledger
+            # close or any close failure must still release the engine — so ensure the
+            # runtime is closed exactly once here too (aclose is idempotent).
             await runtime.aclose()
 
 
