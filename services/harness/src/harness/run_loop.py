@@ -129,11 +129,19 @@ class StandingPipe:
 
 @dataclass
 class _InFlight:
-    """The plain in-flight-task record for one ask (§3.15 bookkeeping — just state)."""
+    """The plain in-flight-task record for one ask (§3.15 bookkeeping — just state).
+
+    ``task`` is the background :class:`asyncio.Task` the wake turn runs in. The turn
+    ALWAYS runs in a task so the loop can hand back control the instant the detach
+    threshold passes — a turn that outlives ``~2s`` keeps running in this task (still
+    holding its ``[3–5]`` slot) while ``route`` returns, and the task's completion
+    re-wakes Proxy (§3.15). ``detached`` records that a re-wake is owed on completion.
+    """
 
     ask_id: str
     event: MeetingEvent
     detached: bool = False
+    task: asyncio.Task[None] | None = None
 
 
 class RunLoop:
@@ -248,8 +256,19 @@ class RunLoop:
 
         In-flight bookkeeping (§3.15), all plain state:
           * a duplicate of an in-flight ask ATTACHES (no second turn spawns);
-          * the turn runs under the ``[3–5]`` semaphore (bounded concurrency);
-          * a turn past the detach threshold DETACHES and its completion re-wakes.
+          * the turn runs in a background task under the ``[3–5]`` semaphore;
+          * a turn past the detach threshold DETACHES — ``route`` hands back control
+            with the turn STILL running (the loop never blocks on a long turn), and
+            the background task's completion re-wakes Proxy.
+
+        A real detach, not post-hoc bookkeeping: the turn ALWAYS runs in its own
+        :class:`asyncio.Task`, and this method waits for *either* the task to finish
+        *or* the ``detach_after_s`` threshold to elapse — whichever comes first. A
+        fast turn (under the threshold) is awaited to completion inline exactly as a
+        synchronous call would be, so its side effects are on the wire when ``route``
+        returns. A slow turn crosses the threshold with the task still running:
+        ``route`` returns NOW (control back to the loop), the ask is recorded
+        detached, and a completion callback re-wakes Proxy when the turn finally ends.
         """
         ask_id = event.ask_id
         # Duplicate of an in-flight ask → ATTACH rather than spawn (§3.15).
@@ -258,23 +277,91 @@ class RunLoop:
         record = _InFlight(ask_id=ask_id or "", event=event)
         if ask_id is not None:
             self._in_flight[ask_id] = record
-        try:
-            async with self._sem:  # the [3–5] bound on concurrent wake turns
-                started = self._clock()
-                self.wake_turns_run += 1
-                digest = self._state_digest()
-                await self._wake_turn(event, digest)
-                elapsed = self._clock() - started
-                # Past ~2s → detach: record it + re-wake Proxy on completion (§3.15).
-                if ask_id is not None and elapsed > self._detach_after_s:
-                    record.detached = True
-                    self._detached[ask_id] = record
-                    if self._on_rewake is not None:
-                        self._on_rewake(ask_id)
-            return True
-        finally:
+
+        # The turn runs in its OWN task; it acquires the [3–5] slot inside the task
+        # and holds it for as long as it runs — a detached turn keeps its slot while
+        # it finishes in the background, but the loop (this coroutine) does not block.
+        turn = asyncio.ensure_future(self._run_turn(event, record))
+        record.task = turn
+
+        # Wait for the turn to finish OR the detach threshold to pass — whichever is
+        # first. The timeout is real event-loop time; a turn that is genuinely long
+        # (still awaiting a gate/tool) is not done when the threshold fires → detach.
+        done, _pending = await asyncio.wait({turn}, timeout=self._detach_after_s)
+
+        if turn in done:
+            # The turn finished within the threshold on the real clock. It is a
+            # normal fast turn UNLESS the injected clock reports it ran past the
+            # threshold (the simulated-long-turn path): then it, too, detaches, and
+            # because it is ALREADY complete its detach and re-wake coincide here.
             if ask_id is not None:
                 self._in_flight.pop(ask_id, None)
+                if record.detached:
+                    self._record_detached(ask_id, record)
+                    self._rewake(ask_id)
+            turn.result()  # re-raise any error from the turn (fast path)
+            return True
+
+        # DETACH: the turn is still running past the threshold. Hand control back to
+        # the loop NOW; the turn keeps running in its task (still holding its slot).
+        # The re-wake is owed to the turn's COMPLETION (not to this detach moment),
+        # so it fires from the done-callback — the loop never blocks on the long turn.
+        if ask_id is not None:
+            self._record_detached(ask_id, record)
+
+        def _completed(finished: asyncio.Task[None], aid: str | None = ask_id) -> None:
+            self._on_turn_complete(aid, finished)
+
+        turn.add_done_callback(_completed)
+        return True
+
+    async def _run_turn(self, event: MeetingEvent, record: _InFlight) -> None:
+        """Run the ONE generic wake turn under the ``[3–5]`` semaphore (§3.15).
+
+        Runs inside a background task so the loop can detach from it. Acquiring the
+        slot HERE (not in the caller) means a detached, still-running turn keeps its
+        slot until it truly finishes — the bound counts in-flight turns, detached or
+        not. Records the injected-clock elapsed so a turn that ran past the threshold
+        (even if it returned fast on the real clock) is marked detached.
+        """
+        async with self._sem:  # the [3–5] bound on concurrent wake turns
+            started = self._clock()
+            self.wake_turns_run += 1
+            digest = self._state_digest()
+            try:
+                await self._wake_turn(event, digest)
+            finally:
+                if self._clock() - started > self._detach_after_s:
+                    record.detached = True
+
+    def _record_detached(self, ask_id: str, record: _InFlight) -> None:
+        """Record an ask as detached (``was_detached`` True) — no re-wake here (§3.15).
+
+        Marks the ask detached the instant the threshold passes; the re-wake is a
+        SEPARATE event tied to the turn's completion (:meth:`_rewake`), so a genuinely
+        long turn is recorded detached now but only re-wakes Proxy when it ends.
+        """
+        record.detached = True
+        self._detached[ask_id] = record
+
+    def _rewake(self, ask_id: str) -> None:
+        """Fire the completion re-wake for a detached ask exactly once (§3.15)."""
+        if self._on_rewake is not None:
+            self._on_rewake(ask_id)
+
+    def _on_turn_complete(self, ask_id: str | None, turn: asyncio.Task[None]) -> None:
+        """A detached turn finished: drop it from in-flight, re-wake, surface errors.
+
+        This is the *completion* the DoD ties the re-wake to: a detached turn that was
+        genuinely still running is finished now, so its completion re-wakes Proxy (§3.15).
+        Also clears the in-flight slot bookkeeping and re-raises a failed turn so it is
+        never silently swallowed (a cancelled turn is expected on teardown).
+        """
+        if ask_id is not None:
+            self._in_flight.pop(ask_id, None)
+            self._rewake(ask_id)
+        if not turn.cancelled():
+            turn.result()  # re-raise a genuine failure (never swallow it)
 
     # ── correction-injection (§3.15) ────────────────────────────────────────
     async def inject_correction(self, ask_id: str, text: str) -> bool:
