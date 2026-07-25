@@ -2,6 +2,18 @@
 from __future__ import annotations
 
 from .bundle import Bundle as Bundle
+from .capabilities import (
+    CAPABILITIES as CAPABILITIES,
+)
+from .capabilities import (
+    Action as Action,
+)
+from .capabilities import (
+    Capability as Capability,
+)
+from .capabilities import (
+    OutputKind as OutputKind,
+)
 from .channels import ChannelReport as ChannelReport
 from .chunks import (
     AGENT_CHUNK_METADATA_KEYS as AGENT_CHUNK_METADATA_KEYS,
@@ -74,6 +86,10 @@ from .registry import (
 
 __all__ = [
     "AGENT_CHUNK_METADATA_KEYS",
+    "CAPABILITIES",
+    "Action",
+    "Capability",
+    "OutputKind",
     "AgentChunk",
     "Bundle",
     "CHANNEL_REGISTRY",
