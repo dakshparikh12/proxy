@@ -4,7 +4,7 @@
     "title": "SDK-isolation triad on every query()",
     "region": "05-WORKROOM",
     "disposition": "rebuild",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "05-WORKROOM.md#3.4",
       "05-WORKROOM.md#3.3",
@@ -53,7 +53,7 @@
     "title": "Verify per-meeting E2B sandbox provision + per-sandbox JWT secret",
     "region": "05-WORKROOM",
     "disposition": "verify",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "05-WORKROOM.md#3.9",
       "05-WORKROOM.md#3.1",
@@ -100,7 +100,7 @@
     "title": "JWT-gated MCP-over-HTTP sidecar inside E2B (:8081)",
     "region": "05-WORKROOM",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "05-WORKROOM.md#3.5",
       "05-WORKROOM.md#3.13-step-2",
@@ -151,7 +151,7 @@
     "title": "8 sandbox tools (7 core + ast_grep) with validate_path + atomic writes",
     "region": "05-WORKROOM",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "05-WORKROOM.md#3.5",
       "05-WORKROOM.md#3.13-step-2",
@@ -160,7 +160,7 @@
     "requirement_ids": [],
     "criterion_ids": [],
     "intent": "Realizes the \u00a73.5 sandbox toolbelt: read_file (offset/limit), list_files (glob), grep (regex, 100-match cap + totalMatches), glob (paginated), run_command (the shell workhorse \u2014 ls/grep/git/pytest/npm, output auto-truncated head-200+tail-300, 5-min default timeout), write_file, edit_file (unique-match string replace, replace_all opt), and ast_grep (structural syntax-aware search/refactor over the baked ast-grep binary via the same atomic-write path \u2014 CANONICAL \u00a711.11: WIRE it, don't cut it). Every tool is symlink-aware validate_path (reject null bytes \u2192 realpath \u2192 re-check against allowed roots \u2192 for a not-yet-existing file walk up to nearest existing ancestor) and atomic writes (wx exclusive-create for new, temp-file+rename for overwrite \u2192 no TOCTOU/partial writes), with full tools/call + tools/result journaling (100 KB cap) that IS part of Doc 07's trace.",
-    "definition_of_done": "All 8 tools callable through the sidecar; a path-traversal / symlink-escape attempt is rejected by validate_path; a write is atomic (no partial file on failure); run_command truncates output and returns exit codes; ast_grep performs a structural rewrite. NOT done if any tool skips validate_path, if writes are non-atomic, if the count is not exactly 8, or if journaling is absent. Additionally: Hard Rule 6 — every tool handler wraps errors and NEVER throws: an uncaught exception cannot kill the loop; all tool results are try/except-wrapped, logged, and returned as is_error:true (Doc 05 §3.3).",
+    "definition_of_done": "All 8 tools callable through the sidecar; a path-traversal / symlink-escape attempt is rejected by validate_path; a write is atomic (no partial file on failure); run_command truncates output and returns exit codes; ast_grep performs a structural rewrite. NOT done if any tool skips validate_path, if writes are non-atomic, if the count is not exactly 8, or if journaling is absent. Additionally: Hard Rule 6 \u2014 every tool handler wraps errors and NEVER throws: an uncaught exception cannot kill the loop; all tool results are try/except-wrapped, logged, and returned as is_error:true (Doc 05 \u00a73.3).",
     "consumes": [
       "workroom.sandbox_transport"
     ],
@@ -196,7 +196,7 @@
     "title": "Host-observed structured receipts from tool transport",
     "region": "05-WORKROOM",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "05-WORKROOM.md#3.5",
       "05-WORKROOM.md#3.7-2",
@@ -241,7 +241,7 @@
     "title": "Quick-vs-deep disposition + curated per-disposition toolbelt",
     "region": "05-WORKROOM",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "05-WORKROOM.md#2.1",
       "05-WORKROOM.md#2.2",

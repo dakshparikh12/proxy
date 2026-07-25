@@ -3985,7 +3985,7 @@
       "title": "SDK-isolation triad on every query()",
       "region": "05-WORKROOM",
       "disposition": "rebuild",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "05-WORKROOM.md#3.4",
         "05-WORKROOM.md#3.3",
@@ -4086,7 +4086,7 @@
       "title": "JWT-gated MCP-over-HTTP sidecar inside E2B (:8081)",
       "region": "05-WORKROOM",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "05-WORKROOM.md#3.5",
         "05-WORKROOM.md#3.13-step-2",
@@ -4137,7 +4137,7 @@
       "title": "8 sandbox tools (7 core + ast_grep) with validate_path + atomic writes",
       "region": "05-WORKROOM",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "05-WORKROOM.md#3.5",
         "05-WORKROOM.md#3.13-step-2",
@@ -4182,7 +4182,7 @@
       "title": "Host-observed structured receipts from tool transport",
       "region": "05-WORKROOM",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "05-WORKROOM.md#3.5",
         "05-WORKROOM.md#3.7-2",
@@ -4227,7 +4227,7 @@
       "title": "Quick-vs-deep disposition + curated per-disposition toolbelt",
       "region": "05-WORKROOM",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "05-WORKROOM.md#2.1",
         "05-WORKROOM.md#2.2",
