@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Connect Proxy</title>
+    <link rel="stylesheet" href="./src/connect.css" />
+  </head>
+  <body>
+    <!-- The one out-of-meeting door (Doc 08 §2.7): install flow + REST readiness poll
+         rendering all five states + invite instructions. A public URL, nothing more. -->
+    <main class="connect" role="main">
+      <header class="connect__brand">
+        <span class="connect__orb" aria-hidden="true"></span>
+        <h1 class="connect__title">Proxy</h1>
+      </header>
+
+      <!-- 1 · Connect: launch the GitHub-App install flow (Doc 01). -->
+      <section class="card" id="install-card">
+        <h2>Connect your codebase</h2>
+        <p class="muted">
+          Install the GitHub App so Proxy can read your repository. Proxy has
+          read-only access and never pushes.
+        </p>
+        <form id="install-form">
+          <label for="repo-url">Repository</label>
+          <input
+            id="repo-url"
+            name="repo-url"
+            type="text"
+            inputmode="url"
+            placeholder="https://github.com/acme/checkout"
+            autocomplete="off"
+          />
+          <button type="submit" id="install-button">Install the GitHub App</button>
+        </form>
+      </section>
+
+      <!-- 2 · Watch it get ready: the honest readiness poll (REST, §4.6). -->
+      <section class="card" id="readiness-card" hidden>
+        <h2>Getting ready</h2>
+        <div id="readiness" class="readiness" aria-live="polite"></div>
+      </section>
+
+      <!-- 3 · Invite instructions. -->
+      <section class="card" id="invite-card">
+        <h2>Invite Proxy to a meeting</h2>
+        <p class="muted">Bring Proxy in like a person — no one has to install anything.</p>
+        <ol class="invite">
+          <li>Paste your meeting link when you schedule or start a meeting.</li>
+          <li>
+            Or add Proxy's calendar address to the invite:
+            <code class="invite__addr">proxy@meet.proxy.dev</code>
+          </li>
+        </ol>
+      </section>
+    </main>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
