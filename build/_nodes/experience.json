@@ -4,7 +4,7 @@
     "title": "ProxyMessage import-time registry \u2014 render-frame + channel_action set (CANONICAL, replaces pre-canonical)",
     "region": "08-EXPERIENCE",
     "disposition": "rebuild",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "08-EXPERIENCE.md#4.1",
       "08-EXPERIENCE.md#3",
@@ -47,7 +47,7 @@
     "title": "ChannelAction + render-frame Pydantic models (meeting_id UUID, Field(max_length), Literal selectors)",
     "region": "08-EXPERIENCE",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "08-EXPERIENCE.md#4.2",
       "08-EXPERIENCE.md#4.4",
@@ -95,7 +95,7 @@
     "title": "Typed CAPABILITIES catalog + build-time UI manifest (never fetches, service-strings never ship to browser)",
     "region": "08-EXPERIENCE",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "08-EXPERIENCE.md#4.7",
       "08-EXPERIENCE.md#2.4",
@@ -143,7 +143,7 @@
     "title": "The one dispatch funnel \u2014 rate-limit \u2192 registry-lookup \u2192 validate \u2192 meeting/entity isolation \u2192 route",
     "region": "08-EXPERIENCE",
     "disposition": "rebuild",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "08-EXPERIENCE.md#4.3",
       "08-EXPERIENCE.md#4.4",
@@ -198,7 +198,7 @@
     "title": "ChannelProjector \u2014 AgentChunk delta stream \u2192 registered render frames (pure rendering, two event types)",
     "region": "08-EXPERIENCE",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "08-EXPERIENCE.md#4.5",
       "CANONICAL-DECISIONS.md#12.3",
@@ -252,7 +252,7 @@
     "title": "Contract-registry HTTP wrappers \u2014 protected()/PublicAuthzCtx + allowlist + route-scope test + safeError",
     "region": "08-EXPERIENCE",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "08-EXPERIENCE.md#4.6",
       "08-EXPERIENCE.md#4.8",
@@ -706,7 +706,7 @@
     "title": "Per-field produce/consume contract diff \u2014 flags a field produced by one side, consumed by neither (CI, un-trimmed)",
     "region": "08-EXPERIENCE",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "08-EXPERIENCE.md#4.1",
       "08-EXPERIENCE.md#4.8",
@@ -797,7 +797,7 @@
     "title": "Copy guide CI check (banned patterns) + three honesty shapes + seed-string artifact",
     "region": "08-EXPERIENCE",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "08-EXPERIENCE.md#2.1",
       "08-EXPERIENCE.md#2.3"
