@@ -107,16 +107,31 @@ class MeetingRuntime:
         await self._hearing.ingest_wire_transcript(msg)
 
     async def _drain(self) -> None:
-        """Wait for the serial consumer to drain on meeting end (bounded).
+        """Signal meeting end onto the carrier, then wait for the consumer to drain (bounded).
 
-        The transport MeetingEnd signal pushes the None sentinel through the pump so
-        the consumer drains and the ledger is complete before the close pass folds
-        it. A consumer that does not drain within the bound is left to be cancelled
-        by teardown — the close still runs off the durable note_deltas committed so
-        far (§3.8: a stuck path degrades honestly, never deadlocks meeting end).
+        Meeting end is EXPLICIT, never inferred from silence (§3.1): the runtime emits a
+        transport ``MeetingEnd`` signal onto :attr:`carrier` — the SAME stream the pump
+        consumes — so the pump flushes the trailing partial window (the last speaker's
+        turn, which no mid-stream boundary cut) and pushes the ``None`` sentinel. The
+        serial consumer then drains that sentinel and stops, so the ledger is complete
+        before the close pass folds it. Without this emit the pump would block forever on
+        the carrier (no signal ever tells it the meeting ended) and the trailing window —
+        often the ONLY window on a short meeting — would never reach the notes engine.
+
+        A consumer that does not drain within the bound is left to be cancelled by
+        teardown — the close still runs off the durable note_deltas committed so far
+        (§3.8: a stuck path degrades honestly, never deadlocks meeting end).
         """
         if self._scribe is None:
             return
+        # Emit MeetingEnd onto the carrier the pump subscribes to (explicit end, §3.1).
+        # Import lazily so the harness imports without transport resolved (same seam the
+        # HearingStage bind uses). A carrier already closed/failed must not block teardown,
+        # so the emit is best-effort — the bounded wait below still drains what landed.
+        with contextlib.suppress(Exception):
+            from transport.signals import MeetingEnd
+
+            await self.carrier.emit(MeetingEnd(reason="call_ended"))
         with contextlib.suppress(asyncio.TimeoutError, Exception):
             await asyncio.wait_for(self._scribe.wait(), timeout=_DRAIN_TIMEOUT_S)
 
@@ -206,8 +221,13 @@ class MeetingRuntimeRegistry:
         permanent markdown notes record (GCS create-only), posts the chat link, and
         ONLY THEN tears down — in that order (the close pass's own teardown step is
         the runtime ``aclose``). Without a close config it falls back to a bare
-        teardown. The runtime is dropped from the table regardless, so a close-pass
-        failure (surfaced for a human to observe, §3.8) never leaks the runtime.
+        teardown — but STILL drains first: meeting end signals the transcript pump so
+        the trailing window (often the only window on a short meeting) reaches the
+        notes engine and the ledger is complete, then the engine is released. Cancelling
+        an un-drained consumer here would drop that trailing window on the floor (the
+        very transcript->ledger bridge gap). The runtime is dropped from the table
+        regardless, so a close-pass failure (surfaced for a human to observe, §3.8)
+        never leaks the runtime.
         """
         runtime = self._runtimes.pop(meeting_id, None)
         if runtime is None:
@@ -216,6 +236,10 @@ class MeetingRuntimeRegistry:
             if self._close_config is not None:
                 await runtime.run_close(self._close_config)
             else:
+                # No close config bound: still signal meeting end + drain the serial
+                # consumer so the trailing window lands in the ledger BEFORE teardown,
+                # then release the engine. (run_close does this drain itself.)
+                await runtime._drain()
                 await runtime.aclose()
         finally:
             # run_close's teardown IS aclose; a no-notes/empty-ledger close returns

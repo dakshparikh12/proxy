@@ -10,6 +10,7 @@ from . import cost as cost
 from . import drafts as drafts
 from . import identity as identity
 from . import meetings as meetings
+from . import notes as notes
 from . import sessions as sessions
 from . import transcript as transcript
 from . import webhooks as webhooks
@@ -19,6 +20,7 @@ __all__ = [
     "drafts",
     "identity",
     "meetings",
+    "notes",
     "sessions",
     "transcript",
     "webhooks",
