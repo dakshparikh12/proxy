@@ -80,6 +80,14 @@ class MeetingRuntime:
     # in-process asyncio interval (below) — never the scale-to-zero reconcile cron.
     stt_refresh_fn: Callable[[], Awaitable[None]] = _noop_refresh
     stt_refresh_interval_s: float | None = None
+    # The per-meeting consent hard-gate (§3.1, AC-JOIN-04, Law 3) the LIVE ``HearingStage``
+    # reads. Starts CLOSED (fail-closed): until :meth:`grant_consent` opens it — done by the
+    # provisioner once the confirmed ``in_call`` join proves the consent notice posted — the
+    # live stage DROPS every record (records_before_consent_allowed=0). It is NEVER left as
+    # ``can_observe=None`` on the live path (that would default the stage to always-allow and
+    # silently observe pre-consent audio, F-RECORD-BEFORE-CONSENT). Defaults to a fresh closed
+    # gate so a bare runtime is fail-closed, not always-allow.
+    consent_gate: Any = None
     _scribe: ScribeRuntimeHandle | None = field(default=None, init=False)
     _hearing: Any = field(default=None, init=False)
     _run_loop: RunLoop | None = field(default=None, init=False)
@@ -91,6 +99,25 @@ class MeetingRuntime:
     # §3.11 model-loop cancel. None until :func:`harness.live_brain.assemble_live_brain`
     # wires it (a bare runtime with no brain still tears down cleanly).
     live_brain: Any = field(default=None, init=False)
+
+    def __post_init__(self) -> None:
+        # Fail-closed by default: a runtime with no explicit consent gate gets a fresh CLOSED
+        # one so the live HearingStage drops every record until :meth:`grant_consent` opens it.
+        # (Never left None — a None gate would give the live stage can_observe=None = always-allow.)
+        if self.consent_gate is None:
+            from transport.join import ConsentGate
+
+            self.consent_gate = ConsentGate()
+
+    def grant_consent(self) -> None:
+        """Open the consent hard-gate — consent notice confirmed posted (§3.1, AC-JOIN-04).
+
+        Called by the provisioner once the confirmed ``in_call`` join proves the consent
+        notice posted (the bot reaches ``in_call`` only after :meth:`JoinSession.join` posted
+        the notice as its first observable action). After this the live ``HearingStage`` stops
+        dropping records and observation begins; before it, every record is dropped (Law 3).
+        """
+        self.consent_gate.grant()
 
     def start(self) -> ScribeRuntimeHandle:
         """Launch the join-time standing-pipe plumbing on this meeting's carrier (§2/§3).
@@ -124,7 +151,14 @@ class MeetingRuntime:
             # Import lazily so the harness imports without transport resolved.
             from transport.hearing import HearingStage
 
-            self._hearing = HearingStage(carrier=self.carrier)
+            # Wire the consent hard-gate into the LIVE HearingStage (§3.1, AC-JOIN-04, Law 3):
+            # the stage reads ``consent_gate.can_observe`` and DROPS every record until consent
+            # is granted (records_before_consent_allowed=0). NEVER can_observe=None on the live
+            # path — that defaults the stage to always-allow and silently observes pre-consent
+            # audio (F-RECORD-BEFORE-CONSENT).
+            self._hearing = HearingStage(
+                carrier=self.carrier, can_observe=self.consent_gate.can_observe
+            )
         if self._stt_refresh is None:
             # The STT-credential refresh runs on its OWN in-process interval task, wired
             # once at join and torn down at meeting end — never on the reconcile cron

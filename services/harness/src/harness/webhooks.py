@@ -173,7 +173,13 @@ async def _dispatch_meeting_event(
         # code orientation (§3.4) — the fix for DOC03-REFERENT-CORPUS-UNWIRED-IN-PRODUCTION.
         # Threads start_meeting -> MeetingRuntime -> build_real_seams -> the applier.
         referent_corpus = await _resolve_referent_corpus(resolved, db=db)
-        registry.start_meeting(header, carrier, referent_corpus=referent_corpus)
+        runtime = registry.start_meeting(header, carrier, referent_corpus=referent_corpus)
+        # Open the consent hard-gate on this (Scribe-only) live path too (§3.1, AC-JOIN-04):
+        # an ``in_call`` event means the bot joined and posted the consent notice first, so
+        # the live HearingStage may observe. Without this the notes bridge would drop every
+        # transcript (fail-closed by default) — the grant is what turns a confirmed join into
+        # a recording meeting, and it never defaults to always-allow.
+        runtime.grant_consent()
     elif is_transcript:
         # The live transcript reaches the notes engine: feed the passthrough body onto
         # the meeting's carrier (transport's emit end) so it flows carrier->coalescer->

@@ -194,6 +194,14 @@ def _assemble_runtime(
     carrier = SignalCarrier()
     # start_meeting subscribes the Scribe consumer to the carrier ONCE at join.
     runtime = registry.start_meeting(header, carrier)
+    # Open the consent hard-gate on the LIVE hearing path (§3.1, AC-JOIN-04, Law 3): reaching
+    # this assembly means the bot won the claim on a confirmed ``in_call`` event, and a bot is
+    # only ``in_call`` after ``JoinSession.join`` posted the consent notice as its FIRST
+    # observable action (consent-notice-first is a hard gate, not a courtesy). Before this grant
+    # the live ``HearingStage`` DROPS every record (records_before_consent_allowed=0); it never
+    # defaults to always-allow. An un-granted runtime (a partial/other assembly path) stays
+    # fail-closed rather than silently observing pre-consent audio (F-RECORD-BEFORE-CONSENT).
+    runtime.grant_consent()
     # Bind the claimed row's fencing handle so the gated emitter reads is_owner off this
     # handle (a fenced-out harness emits nothing).
     runtime.operation_handle = handle

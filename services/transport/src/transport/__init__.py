@@ -18,7 +18,7 @@ from .events import (
 )
 from .external import CallExternal
 from .fakes import FakeOutputMediaSink, FakeTTS
-from .join import Action, JoinResult, JoinSession, JoinSource, JoinState
+from .join import Action, ConsentGate, JoinResult, JoinSession, JoinSource, JoinState
 from .media import AudioChunk, CanvasFrame
 from .recall import RecallTransport
 from .resolution import MeetingRef, MeetingResolver, UnknownBotError, resolve_meeting
@@ -62,6 +62,7 @@ __all__ = [
     "CanvasFrame",
     "CartesiaTTS",
     "ChannelReportSignal",
+    "ConsentGate",
     "ChatMessage",
     "EMITTED_SIGNAL_NAMES",
     "FakeOutputMediaSink",
