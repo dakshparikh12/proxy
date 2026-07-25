@@ -315,7 +315,7 @@ class SessionDriver:
             result_meta, wrote_paths = await self._drive_query(prompt, options, controller, task_id)
             # §3.1: persist the SDK session id per task (immediately, fire-and-forget) so a
             # follow-up or a RESTART resumes THIS conversation — into the SAME row's
-            # ``progress`` on the durable substrate, never a bespoke workroom_tasks table.
+            # ``progress`` on the durable substrate, never a bespoke per-task table.
             await self._persist_session_id(run_id, result_meta.get("session_id"))
             # §3.9: record the per-task total_cost + cache-read/creation split through the
             # cost meter into the SAME meeting_cost row Doc 04's circuit-breaker gates against.
@@ -360,7 +360,7 @@ class SessionDriver:
         if not bool(sandbox_provider.health_check(handle)):
             return PreflightResult(
                 healthy=False,
-                reason="sandbox for this meeting is not alive (expired/reaped) — refusing to burn meeting-time against a dead sandbox",
+                reason="sandbox not alive for this meeting (expired/reaped) — refusing to run against a dead sandbox",
             )
 
         # (2) The full code-hash /health check — only for a big build (an expected hash) with a
@@ -374,7 +374,7 @@ class SessionDriver:
         except Exception as exc:  # noqa: BLE001 - Rule 6: a down sidecar fails fast, never crashes the run
             return PreflightResult(
                 healthy=False,
-                reason=f"sandbox MCP /health unreachable ({type(exc).__name__}) — refusing to launch against an unreachable sandbox",
+                reason=f"sandbox MCP /health unreachable ({type(exc).__name__}) — refusing to launch against it",
             )
 
         if not bool(health.get("clone_ready", True)):
@@ -386,7 +386,7 @@ class SessionDriver:
         if baked != expected_code_hash:
             return PreflightResult(
                 healthy=False,
-                reason=f"sandbox code-hash mismatch (baked {baked!r} != expected {expected_code_hash!r}) — the sandbox is stale",
+                reason=f"sandbox code-hash mismatch (baked {baked!r} != expected {expected_code_hash!r}) — stale",
                 code_hash=str(baked) if baked is not None else None,
             )
         return PreflightResult(healthy=True, code_hash=str(baked))
@@ -742,7 +742,7 @@ class SessionDriver:
         """Persist the SDK ``session_id`` per task so a follow-up / RESTART resumes it (§3.1).
 
         The id rides the SAME ``operation_runs`` row's ``progress`` jsonb (the durable
-        substrate, §12.10) — NEVER a bespoke ``workroom_tasks`` table. Best-effort by
+        substrate, §12.10) — NEVER a bespoke per-task table. Best-effort by
         construction (a persist fault must never crash the run): an absent id (a fault before
         the first INIT) is a no-op. Two sinks: the in-process ``store`` (host-fake path) or a
         real ``libs.db.Database`` (the durable Postgres jsonb merge)."""

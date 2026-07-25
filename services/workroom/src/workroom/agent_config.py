@@ -303,6 +303,38 @@ _DISPOSITION_ROLE: dict[str, str] = {
     "worker": "workroom-worker",  # sandbox-edit path — thinking OFF
 }
 
+# ---------------------------------------------------------------------------
+# Per-role model seats (§3.2 — cheap-first, per-role, IMPORTED not redefined).
+# ---------------------------------------------------------------------------
+# The Workroom uses exactly two seats of the ONE canonical ``llm.routing`` table (D-014):
+# the big-build worker rides the Opus-class ``BIG_BUILD`` seat (the spend lives there); the
+# quick/plan/critic/verifier dispositions ride the Sonnet-class ``WORKROOM`` seat (fast +
+# grounded judgment, cheap). This maps a disposition NAME to a SEAT NAME — the actual model
+# id is resolved by ``llm.routing.model_for(seat)`` at the call site, so NO ``claude-*``
+# literal ever lives here (the §3.2 invariant: import the table, never redefine it). An
+# unknown disposition fails closed rather than defaulting to the spendy seat.
+_DISPOSITION_SEAT: dict[str, str] = {
+    "quick": "WORKROOM",  # Sonnet-class — fast + grounded (§3.2 quick-ask row)
+    "plan": "WORKROOM",  # Sonnet-class — judgment, cheap (§3.2 plan/critic/replan row)
+    "critic": "WORKROOM",  # Sonnet-class — the plan-verify critic
+    "verifier": "WORKROOM",  # Sonnet-class — the ONE core verifier
+    "worker": "BIG_BUILD",  # Opus-class — the big-build worker (the spend lives here)
+}
+
+
+def seat_for_disposition(disposition: str) -> str:
+    """The ``llm.routing`` SEAT NAME a disposition resolves its model through (§3.2 / D-014).
+
+    Returns a key of ``llm.routing.SEATS`` — never a model id — so the caller resolves the
+    real model via the imported table (``model_for(seat_for_disposition(d))``) and no model
+    literal lives in this service. Fails closed on an unknown disposition (never silently
+    the spendy Opus seat).
+    """
+    seat = _DISPOSITION_SEAT.get(disposition)
+    if seat is None:
+        raise ValueError(f"unknown disposition {disposition!r}")
+    return seat
+
 
 @dataclass(frozen=True)
 class DispositionPolicy:
@@ -333,14 +365,25 @@ def disposition_role(disposition: str) -> str:
     return role
 
 
-def disposition_extended_thinking_enabled(disposition: str, *, model: str = "claude-opus-4-8") -> bool:
+def disposition_extended_thinking_enabled(disposition: str, *, model: str | None = None) -> bool:
     """Does extended thinking ride this disposition? Delegates to the shared thinking_policy.
 
     The quick fast path and the critic/verifier/worker paths run thinking OFF (§2.2 —
     latency-toxic on the quick path); only the deliberate ``plan`` turn earns it, and only on
     an Opus-class model. Delegating to the ONE shared table means the Workroom's decision can
     never drift from every other seat's.
+
+    ``model`` defaults to the Opus-class ``BIG_BUILD`` seat resolved through the IMPORTED
+    ``llm.routing`` table (§3.2) — never a hard-coded id here. Extended thinking is
+    fundamentally an Opus-tier capability (D-022), so this probes the ROLE's eligibility at
+    its Opus ceiling: only the deliberate ``plan-artifact`` role clears it, every fast/verify
+    role stays OFF regardless. A caller may pass the actual resolved ``model`` at the call
+    site (the real per-role seat) for a model-accurate decision.
     """
+    if model is None:
+        from llm.routing import model_for
+
+        model = model_for("BIG_BUILD")  # the Opus-class thinking ceiling (imported, not a literal)
     enabled, _budget = thinking_policy(model, disposition_role(disposition))
     return bool(enabled)
 
