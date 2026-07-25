@@ -67,10 +67,18 @@ DEFAULT_DETACH_AFTER_S: float = 2.0
 #: The per-task HARD timeout (§3.11 "a hard per-task timeout … Orchestrator answer
 #: ~4–5s") — RESCALED to seconds for the interactive loop (not the SDK's 5-min).
 #: A wake that overruns this bound has its :class:`AbortController` fired: a stalled
-#: meeting is worse than a dropped note. This is the answer-turn bound; a Scribe/
-#: dispatch turn passes its own (~3–4s) via ``wake_timeout_s``. Distinct from the
-#: detach threshold (~2s) — detach hands control back, the timeout ABORTS the turn.
+#: meeting is worse than a dropped note. This is the answer-turn bound (in-window for
+#: the [4s, 5s] answer p95); a Scribe/dispatch turn passes its own (~3–4s) via
+#: ``wake_timeout_s``. Distinct from the detach threshold (~2s) — detach hands control
+#: back, the timeout ABORTS the turn.
 DEFAULT_WAKE_TIMEOUT_S: float = 4.0
+
+#: The watchdog's poll cadence (seconds of REAL event-loop time between two reads of the
+#: injected clock). The watchdog measures the bound against the INJECTED clock — not by
+#: sleeping the whole bound — so a mocked clock drives the boundary deterministically and
+#: the abort's latency is recorded off that clock. Small enough that the live monotonic
+#: clock crosses the bound promptly (sub-poll overshoot), yet a real yield each tick.
+_WATCHDOG_POLL_S: float = 0.01
 
 #: The injected clock/predicate/callback seam types — all default to sensible
 #: real implementations so the loop runs live, but each is injectable so the
@@ -104,6 +112,13 @@ class MeetingEvent:
     #: ``.aborted`` to break its SDK loop) — never the bare ``_Abort()`` that never fires.
     #: ``None`` on an ambient event that never wakes Proxy.
     abort: Any = None
+    #: The measured elapsed (MILLISECONDS, on the loop's injected clock) from turn-start
+    #: to the moment the per-task hard timeout fired this wake's abort (§3.11). ``None``
+    #: until/unless the WATCHDOG fires — a turn that finishes under its bound never sets
+    #: it. This is the latency oracle the boundary criterion reads: an answer wake lands
+    #: in [4000, 5000], a Scribe wake in [3000, 4000]. Recorded off the INJECTED clock so
+    #: the window is measured deterministically, not against wall-clock jitter.
+    abort_fired_after_ms: float | None = None
     _inject: Callable[[str], Any] | None = field(default=None, repr=False)
 
     def on_inject(self, channel: Callable[[str], Any]) -> None:
@@ -223,6 +238,10 @@ class RunLoop:
         # ask_id → the registry key of its live controller, so the barge-in / "Proxy,
         # quiet" path can cancel the addressed in-flight model loop by ask_id (§3.11).
         self._task_keys: dict[str, str] = {}
+        # ask_id → the measured elapsed (ms, on the injected clock) at which its per-task
+        # hard timeout fired the abort (§3.11). Outlives the turn (the controller retires on
+        # completion) so the boundary-value latency oracle / reconcile can read it.
+        self._abort_latency_ms: dict[str, float] = {}
         # Plain in-flight bookkeeping (§3.15) — a task list, nothing more.
         self._in_flight: dict[str, _InFlight] = {}
         self._detached: dict[str, _InFlight] = {}
@@ -417,7 +436,7 @@ class RunLoop:
             started = self._clock()
             self.wake_turns_run += 1
             digest = self._state_digest()
-            watchdog = self._start_timeout_watchdog(event)
+            watchdog = self._start_timeout_watchdog(event, started)
             try:
                 await self._wake_turn(event, digest)
             finally:
@@ -428,23 +447,84 @@ class RunLoop:
                 if self._clock() - started > self._detach_after_s:
                     record.detached = True
 
-    def _start_timeout_watchdog(self, event: MeetingEvent) -> "asyncio.Task[None] | None":
+    def _start_timeout_watchdog(
+        self, event: MeetingEvent, started: float
+    ) -> "asyncio.Task[None] | None":
         """Arm the per-task hard-timeout WATCHDOG for a wake (§3.11), or None if disabled.
 
-        The watchdog sleeps the ``wake_timeout_s`` bound then fires the wake's controller
-        abort — it does NOT cancel the turn's task, so a cooperative turn unwinds on its
-        own (the model loop polls ``.aborted``) and runs exactly once. Cancelled the instant
-        the turn returns under the bound (the fast path never fires the abort)."""
+        The watchdog fires the wake's controller abort once the ``wake_timeout_s`` bound
+        elapses **on the loop's injected clock** — it POLLS ``clock()`` (yielding a real
+        event-loop tick each poll) rather than sleeping the whole bound, so the boundary is
+        measured against the SAME clock the loop uses for detach. That makes the abort
+        latency deterministic under a mocked clock (the boundary-value oracle for
+        AC-CTRL-014/-014-B: answer in [4s,5s], Scribe in [3s,4s]) and, on the live monotonic
+        clock, fires the abort within one poll of the true bound.
+
+        It records the MEASURED elapsed at abort on ``event.abort_fired_after_ms`` (the
+        latency the oracle reads) and does NOT cancel the turn's task — a cooperative turn
+        unwinds on its own (the model loop polls ``.aborted``) and runs exactly once.
+        Cancelled the instant the turn returns under the bound (the fast path never fires)."""
         if not (self._wake_timeout_s and self._wake_timeout_s > 0) or event.abort is None:
             return None
 
+        bound = self._wake_timeout_s
+
         async def _fire() -> None:
-            await asyncio.sleep(self._wake_timeout_s)
-            # The hard bound elapsed: fire the abort so the model loop halts (final).
+            # Fire the abort once the hard bound elapses on the INJECTED clock — the same
+            # clock the loop measures detach against — so the boundary is deterministic
+            # under a mocked clock (the [4s,5s] answer / [3s,4s] Scribe window oracle).
+            #
+            # Cadence: yield tightly (``sleep(0)``) so the watchdog re-checks right after
+            # each cooperative turn tick — a turn advancing a MOCKED clock crosses the bound
+            # with overshoot bounded by the turn's OWN step, not the poll cadence. That tight
+            # yield only spins while the injected clock is running AHEAD of wall time (a
+            # virtual clock, which crosses the bound in milliseconds); on the LIVE monotonic
+            # clock, where the injected clock tracks wall time, the watchdog instead sleeps a
+            # real ``_WATCHDOG_POLL_S`` each tick (≈bound/poll wakeups, never a CPU spin) and
+            # fires within one poll of the true bound.
+            while self._clock() - started < bound:
+                clock_before = self._clock()
+                real_before = time.monotonic()
+                await asyncio.sleep(0)
+                injected_delta = self._clock() - clock_before
+                real_delta = time.monotonic() - real_before
+                # If the injected clock ran well AHEAD of wall time across that bare yield, a
+                # cooperative turn is driving a virtual clock → keep yielding tightly so we
+                # catch the boundary crossing with turn-step overshoot (the mocked-clock
+                # oracle path). If the injected clock merely TRACKED wall time, the turn is
+                # blocked on real I/O (the live path) → back off to a real poll so the
+                # watchdog never CPU-spins for the whole bound.
+                if injected_delta <= real_delta + _WATCHDOG_POLL_S:
+                    remaining = bound - (self._clock() - started)
+                    if remaining > 0:
+                        await asyncio.sleep(min(_WATCHDOG_POLL_S, remaining))
+            elapsed = self._clock() - started
+            # The hard bound elapsed: fire the abort so the model loop halts (final), and
+            # record the MEASURED elapsed (ms) so the latency-window oracle can read it.
             if event.abort is not None:
+                event.abort_fired_after_ms = elapsed * 1000.0
+                self._record_abort_latency(event.ask_id, event.abort_fired_after_ms)
                 event.abort.abort()
 
         return asyncio.ensure_future(_fire())
+
+    def _record_abort_latency(self, ask_id: str | None, fired_after_ms: float) -> None:
+        """Stash a wake's hard-timeout abort latency (ms) so it outlives the turn (§3.11).
+
+        The wake's controller retires from the registry the instant its turn completes, so
+        the boundary-value oracle cannot read the latency off a live controller after the
+        fact. Recording it here (keyed by ask) lets :meth:`last_abort_fired_after_ms`
+        surface WHEN the abort fired for reconcile/telemetry and the acceptance oracle."""
+        if ask_id is not None:
+            self._abort_latency_ms[ask_id] = fired_after_ms
+
+    def last_abort_fired_after_ms(self, ask_id: str) -> float | None:
+        """The measured elapsed (ms) at which the hard timeout aborted this ask, or None.
+
+        None if the ask never hit its per-task timeout (finished under the bound) or is
+        unknown. Read off the injected clock, so an answer wake reads in [4000, 5000] and a
+        Scribe wake in [3000, 4000] — the AC-CTRL-014/-014-B latency-window oracle (§3.11)."""
+        return self._abort_latency_ms.get(ask_id)
 
     def _record_detached(self, ask_id: str, record: _InFlight) -> None:
         """Record an ask as detached (``was_detached`` True) — no re-wake here (§3.15).
