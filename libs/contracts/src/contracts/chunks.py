@@ -10,6 +10,8 @@ from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field
 
+from .registry import register_field_consumer
+
 ChunkType = Literal["INIT", "TEXT", "TOOL_USE", "TOOL_RESULT", "RESULT", "ERROR"]
 # Expose each member as an attribute (ChunkType.TEXT == "TEXT") without losing
 # get_args() introspection. Literal aliases accept attribute assignment.
@@ -23,6 +25,15 @@ class AgentChunk(BaseModel):
     type: ChunkType
     text: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+# ── the LIVE AgentChunk consumers name the fields they read (§4.8 field-diff) ──
+# ``services/harness/provider.py`` maps every SDK message into an ``AgentChunk`` and its
+# downstream consumers discriminate on ``.type`` (provider.py:261), read the accumulated
+# ``.text`` (provider.py:166), and inspect ``.metadata`` (provider.py:263). Naming the
+# fields the REAL consumer reads is what makes the ``.kind``→``.type`` drift a build
+# failure: a consumer stuck on ``.kind`` would leave ``.type`` produced-but-unconsumed.
+register_field_consumer("AgentChunk", "type", "text", "metadata")
 
 
 # Per-variant metadata keys (RESULT carries total_cost_usd — the cost-meter seam).

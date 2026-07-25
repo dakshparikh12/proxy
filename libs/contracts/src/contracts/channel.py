@@ -35,7 +35,7 @@ from uuid import UUID
 
 from pydantic import Field
 
-from .registry import ProxyMessage
+from .registry import CHANNEL_REGISTRY, ProxyMessage, register_field_consumer
 
 # ── §2 render channels / §4.2 inbound-origin selectors ────────────────────────
 # The five render channels (§2). The tile is one of them — but only as an OUTBOUND
@@ -155,6 +155,17 @@ class DraftCard(ProxyMessage):
     type: Literal["draft.card"] = "draft.card"
     draft_id: UUID
     summary: Annotated[str, Field(max_length=2_000)]
+
+
+# ── render-frame WIRE consumption (§4.5): every registered ProxyMessage is
+# serialized WHOLE by ``send()`` (``model_dump()``) onto the surface wire, so its
+# entire declared field set is consumed by construction. Registered structurally by
+# walking each model's ``model_fields`` — NEVER a hand list — so a new frame field is
+# consumed the moment it exists and can never orphan itself. (The §4.8 field-diff over
+# ``MESSAGE_FIELD_CONSUMERS`` then only surfaces the DELIBERATE-drift cases: a standalone
+# contract — AgentChunk/Envelope/ChannelReport — whose consumer reads a stale name.)
+for _frame_model in CHANNEL_REGISTRY.values():
+    register_field_consumer(_frame_model.__name__, *_frame_model.model_fields)
 
 
 __all__ = [

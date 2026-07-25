@@ -82,6 +82,12 @@ from .registry import (
     INBOUND as INBOUND,
 )
 from .registry import (
+    MESSAGE_FIELD_CONSUMERS as MESSAGE_FIELD_CONSUMERS,
+)
+from .registry import (
+    MESSAGE_FIELD_PRODUCERS as MESSAGE_FIELD_PRODUCERS,
+)
+from .registry import (
     MESSAGE_HANDLERS as MESSAGE_HANDLERS,
 )
 from .registry import (
@@ -103,10 +109,19 @@ from .registry import (
     ProxyMessage as ProxyMessage,
 )
 from .registry import (
+    assert_contract_fields_consumed as assert_contract_fields_consumed,
+)
+from .registry import (
     assert_fields_consumed as assert_fields_consumed,
 )
 from .registry import (
     assert_registry_closed as assert_registry_closed,
+)
+from .registry import (
+    collect_produced_fields as collect_produced_fields,
+)
+from .registry import (
+    register_field_consumer as register_field_consumer,
 )
 from .registry import (
     register_handler as register_handler,
@@ -144,6 +159,8 @@ __all__ = [
     "channel",
     "CHANNEL_REGISTRY",
     "INBOUND",
+    "MESSAGE_FIELD_CONSUMERS",
+    "MESSAGE_FIELD_PRODUCERS",
     "MESSAGE_HANDLERS",
     "MESSAGE_PRODUCERS",
     "MESSAGE_PROJECTORS",
@@ -162,8 +179,11 @@ __all__ = [
     "Readiness",
     "ReadinessReport",
     "SIGNAL_SURFACE_EVENTS",
+    "assert_contract_fields_consumed",
     "assert_fields_consumed",
     "assert_registry_closed",
+    "collect_produced_fields",
+    "register_field_consumer",
     "register_handler",
     "register_producer",
     "register_projector",

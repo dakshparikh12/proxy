@@ -10,6 +10,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from .registry import register_field_consumer
+
 EnvelopeStatus = Literal[
     "done", "partial", "failed", "needs_clarification", "needs_review"
 ]
@@ -49,3 +51,24 @@ class ProgressEvent(BaseModel):
     artifact: dict[str, Any] | None = None
     receipts: list[str] = Field(default_factory=list)
     task_id: UUID
+
+
+# ── the LIVE Envelope consumers name the fields they read (§4.8 field-diff) ──
+# The 05→04 result ``Envelope`` is built with every field set (workroom/envelope.py,
+# harness/orchestrator.py:87) and the orchestrator renders the terminal result whole
+# (``status`` gates finality, ``verification`` marks grounded-vs-unverified per Law 2,
+# ``draft_id`` links the /m/ accept route, ``receipts`` carry the ✓-tagged citations).
+# Naming the fields the REAL consumer reads is what makes the ``verified|draft``→
+# ``EnvelopeStatus`` drift a build failure: a consumer reading a bare ``verified``/``draft``
+# field would leave the real ``status``/``verification`` produced-but-unconsumed.
+register_field_consumer(
+    "Envelope",
+    "headline",
+    "detail",
+    "artifact",
+    "receipts",
+    "status",
+    "verification",
+    "draft_id",
+    "task_id",
+)

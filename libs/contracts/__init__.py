@@ -13,6 +13,12 @@ from .src.contracts import (
     INBOUND as INBOUND,
 )
 from .src.contracts import (
+    MESSAGE_FIELD_CONSUMERS as MESSAGE_FIELD_CONSUMERS,
+)
+from .src.contracts import (
+    MESSAGE_FIELD_PRODUCERS as MESSAGE_FIELD_PRODUCERS,
+)
+from .src.contracts import (
     MESSAGE_HANDLERS as MESSAGE_HANDLERS,
 )
 from .src.contracts import (
@@ -106,12 +112,21 @@ from .src.contracts import (
     VoiceSpeak as VoiceSpeak,
 )
 from .src.contracts import (
+    assert_contract_fields_consumed as assert_contract_fields_consumed,
+)
+from .src.contracts import (
     assert_fields_consumed as assert_fields_consumed,
 )
 from .src.contracts import (
     assert_registry_closed as assert_registry_closed,
 )
 from .src.contracts import channel as channel  # re-export the §4.2/§4.5 model module
+from .src.contracts import (
+    collect_produced_fields as collect_produced_fields,
+)
+from .src.contracts import (
+    register_field_consumer as register_field_consumer,
+)
 from .src.contracts import (
     register_handler as register_handler,
 )
@@ -144,6 +159,8 @@ __all__ = [
     "channel",
     "CHANNEL_REGISTRY",
     "INBOUND",
+    "MESSAGE_FIELD_CONSUMERS",
+    "MESSAGE_FIELD_PRODUCERS",
     "MESSAGE_HANDLERS",
     "MESSAGE_PRODUCERS",
     "MESSAGE_PROJECTORS",
@@ -162,8 +179,11 @@ __all__ = [
     "Readiness",
     "ReadinessReport",
     "SIGNAL_SURFACE_EVENTS",
+    "assert_contract_fields_consumed",
     "assert_fields_consumed",
     "assert_registry_closed",
+    "collect_produced_fields",
+    "register_field_consumer",
     "register_handler",
     "register_producer",
     "register_projector",

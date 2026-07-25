@@ -117,6 +117,20 @@ MESSAGE_HANDLERS: dict[MessageType, Handler] = {}  # inbound  → EXACTLY 1 hand
 MESSAGE_PROJECTORS: dict[MessageType, list[Projector]] = {}  # outbound → ≥1 projector
 MESSAGE_PRODUCERS: dict[MessageType, list[str]] = {}  # who EMITS each type (field-diff, §4.8)
 
+# ── the per-FIELD produce/consume registries (§4.8, CANONICAL §11.11 — un-trimmed) ──
+# The type-level maps above answer "who emits this message"; these answer the finer
+# question the field-diff needs: "which FIELDS of each contract model does anyone
+# actually read." ``MESSAGE_FIELD_PRODUCERS`` is populated by walking the REAL Pydantic
+# models (``collect_produced_fields`` below) — never a hand-list, which would itself
+# drift. ``MESSAGE_FIELD_CONSUMERS`` is populated by the live consumers naming, at
+# import, each field they read (``register_field_consumer``). The gate
+# (``assert_contract_fields_consumed``) diffs the two and NAMES every orphan — a field
+# produced by the model but read by no consumer, OR read under a name no model produces.
+# This is what catches the three drifts this project already paid for: AgentChunk
+# ``.kind``→``.type``, the envelope ``verified|draft``→``EnvelopeStatus``, ``dm``→``dm_available``.
+MESSAGE_FIELD_PRODUCERS: dict[str, set[str]] = {}  # contract model name → the fields it PRODUCES
+MESSAGE_FIELD_CONSUMERS: dict[str, set[str]] = {}  # contract model name → the fields anyone CONSUMES
+
 
 def register_handler(message_type: MessageType, handler: Handler) -> None:
     """Bind the single handler for an inbound client type (§4.3 dispatch funnel).
@@ -149,6 +163,19 @@ def register_producer(message_type: MessageType, producer: str) -> None:
     bucket = MESSAGE_PRODUCERS.setdefault(message_type, [])
     if producer not in bucket:
         bucket.append(producer)
+
+
+def register_field_consumer(model_name: str, *fields: str) -> None:
+    """Record that a live consumer reads ``fields`` of the contract model ``model_name``.
+
+    The field-level half of the produce/consume graph (§4.8, CANONICAL §11.11): a
+    consumer names each field it reads so :func:`assert_contract_fields_consumed` can
+    prove no produced field is orphaned and no field is read under a name the model
+    never produces (the ``.kind``→``.type`` / ``dm``→``dm_available`` drift class).
+    Idempotent and additive — re-registering the same field is a no-op.
+    """
+    bucket = MESSAGE_FIELD_CONSUMERS.setdefault(model_name, set())
+    bucket.update(fields)
 
 
 def _default_channel_action_handler(message: ProxyMessage) -> ProxyMessage:
@@ -277,4 +304,95 @@ def assert_fields_consumed(
         seen = set(consumed.get(signal, set()))
         for orphan in sorted(set(fields) - seen):
             violations.append(f"{signal}.{orphan} produced but never consumed")
+    return violations
+
+
+# ── the field-diff CONTRACT MODELS the graph walks ─────────────────────────────
+# The shared wire/behavior contracts whose FIELDS the produce/consume diff covers.
+# These are the models that already proved field-level drift (§4.8): the AgentChunk
+# streaming union, the Workroom result Envelope, and the channel-report signal — plus
+# every registered client ``ProxyMessage`` render frame. Listed by dotted path so the
+# collector walks the REAL Pydantic ``model_fields`` and never a hand-maintained field
+# list (which would itself drift — the very failure this gate exists to prevent).
+_FIELD_DIFF_CONTRACT_MODELS: tuple[tuple[str, str], ...] = (
+    ("contracts.chunks", "AgentChunk"),
+    ("contracts.envelopes", "Envelope"),
+    ("contracts.channels", "ChannelReport"),
+)
+
+
+def collect_produced_fields() -> dict[str, set[str]]:
+    """Populate the produced-field graph by walking the REAL contract models (§4.8).
+
+    Returns ``{model_name: {field, ...}}`` read straight off each live Pydantic model's
+    ``model_fields`` — for the standalone contracts (AgentChunk / Envelope / ChannelReport)
+    AND for every registered client ``ProxyMessage`` render frame in ``CHANNEL_REGISTRY``.
+    A field a model no longer carries (the migrated ``.kind``, ``dm``, bare ``verified``)
+    is absent BY CONSTRUCTION, so a consumer still reading it shows up as an orphan.
+
+    The result is also written into ``MESSAGE_FIELD_PRODUCERS`` so the registry mirrors
+    the live model shape (single source of truth — CANONICAL §11.5).
+    """
+    import importlib
+
+    produced: dict[str, set[str]] = {}
+
+    for module_path, model_name in _FIELD_DIFF_CONTRACT_MODELS:
+        module = importlib.import_module(module_path)
+        model = getattr(module, model_name)
+        produced[model_name] = set(model.model_fields)
+
+    # every registered render frame / channel_action contributes its produced fields too.
+    for model in CHANNEL_REGISTRY.values():
+        produced[model.__name__] = set(model.model_fields)
+
+    MESSAGE_FIELD_PRODUCERS.clear()
+    MESSAGE_FIELD_PRODUCERS.update({name: set(fields) for name, fields in produced.items()})
+    return produced
+
+
+def assert_contract_fields_consumed(
+    *,
+    produced: dict[str, set[str]] | None = None,
+    consumed: dict[str, set[str]] | None = None,
+    strict: bool = False,
+) -> list[str]:
+    """The §4.8 / CANONICAL §11.11 per-FIELD produce/consume gate — the un-trimmed field-diff.
+
+    Beyond the §4.1 set-equality (type-registered ↔ model-exists), this walks each
+    contract model's real fields and flags any field **produced by the model but read
+    by no consumer**, OR **read by a consumer under a name the model never produces**.
+    Both directions are named — that is what catches the drift class this project
+    already paid for (AgentChunk ``.kind``→``.type``, envelope ``verified|draft``→
+    ``EnvelopeStatus``, ``dm``→``dm_available``): a rename orphans the OLD name on the
+    consumer side and the NEW name on the producer side, and both appear in the report.
+
+    ``produced`` defaults to the live models (:func:`collect_produced_fields`);
+    ``consumed`` defaults to the live consumer registry (``MESSAGE_FIELD_CONSUMERS``,
+    populated at import by each service naming the fields it reads). ``strict=True``
+    RAISES ``AssertionError`` (naming every orphan) instead of returning the list — the
+    form the CI/boot gate uses to FAIL THE BUILD.
+    """
+    if produced is None:
+        produced = collect_produced_fields()
+    if consumed is None:
+        consumed = {k: set(v) for k, v in MESSAGE_FIELD_CONSUMERS.items()}
+
+    # produced-but-never-consumed (the shipped one-directional primitive).
+    violations = assert_fields_consumed(produced=produced, consumed=consumed)
+
+    # consumed-but-never-produced (the reverse orphan — a field read under a name no
+    # model produces; this is the OLD-name half of every rename drift).
+    for model_name, fields in consumed.items():
+        produced_fields = set(produced.get(model_name, set()))
+        for orphan in sorted(set(fields) - produced_fields):
+            violations.append(f"{model_name}.{orphan} consumed but never produced")
+
+    violations.sort()
+    if strict and violations:
+        raise AssertionError(
+            "contract field-diff not closed (§4.8 / CANONICAL §11.11) — "
+            "each field is produced by one side and consumed by neither:\n  "
+            + "\n  ".join(violations)
+        )
     return violations
