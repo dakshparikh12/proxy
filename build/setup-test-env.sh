@@ -10,6 +10,11 @@ psql -h localhost -p 5432 -U postgres -d postgres -tc "SELECT 1 FROM pg_database
 LOCALDB="postgresql://$U:$P@localhost:5432/$D"
 while IFS= read -r l; do eval "export $l"; done < <($V/python -c "from dotenv import dotenv_values;import shlex;[print(f'{k}={shlex.quote(v)}') for k,v in dotenv_values('.env').items() if v is not None]")
 export DATABASE_URL="$LOCALDB" TEST_DATABASE_URL="$LOCALDB" DOC03_STORE_SPEC_DB="$LOCALDB"
-export DOC03_STORE_GCS_BUCKET="${GCS_BUCKET:-}" DOC03_STORE_GCS_BUCKET_UNVERSIONED="${GCS_BUCKET:-}" DOC03_CLOSE_GCS_BUCKET="${GCS_BUCKET:-}"
+export DOC03_STORE_GCS_BUCKET="${GCS_BUCKET:-}" DOC03_CLOSE_GCS_BUCKET="${GCS_BUCKET:-}"
+# The unversioned bucket is a SEPARATE, real bucket with Object Versioning OFF (AC-STORE-09-NEG needs
+# history-collapse, which the versioned notes bucket can never show). Honour the value already exported
+# from .env (DOC03_STORE_GCS_BUCKET_UNVERSIONED); if unset the test skips cleanly. NEVER alias it to the
+# versioned GCS_BUCKET — that made the negative test assert the opposite of the truth and fail.
+export DOC03_STORE_GCS_BUCKET_UNVERSIONED="${DOC03_STORE_GCS_BUCKET_UNVERSIONED:-}"
 $V/alembic upgrade head >/dev/null 2>&1 || true
 exec "$@"
