@@ -18,7 +18,7 @@ and the model makes that selection (D-023).
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
-from typing import Any
+from typing import Any, cast
 
 from libs.contracts import AgentChunk
 
@@ -135,8 +135,21 @@ class BehaviorRunner:
             target = behavior_or_name
         if target is None:
             raise ValueError("no behavior to run (pass a name, a Behavior, or construct with a config)")
-        config = target.config if isinstance(target, Behavior) else target
-        return target, config
+        # Duck-type, don't identity-check: a Behavior is "a thing carrying a typed
+        # ``.config``". Under the src-layout workspace, ``agentkit.Behavior`` (product
+        # code: ``from agentkit import Behavior``) and ``libs.agentkit.Behavior`` (the
+        # facade the tests import) are DISTINCT class objects, so ``isinstance(target,
+        # Behavior)`` is False across that boundary and would mis-treat a Behavior as a
+        # BehaviorConfig — and ``isinstance(inner, BehaviorConfig)`` fails the same
+        # way. A Behavior carries a ``.config`` that exposes ``.mounted_tools``; a
+        # BehaviorConfig exposes ``.mounted_tools`` itself. Resolving on that shape is
+        # boundary-proof and keeps selecting-by-name the only branch (D-023).
+        inner = getattr(target, "config", None)
+        config = inner if hasattr(inner, "mounted_tools") else target
+        # ``config`` is structurally a BehaviorConfig (it exposes ``.mounted_tools`` /
+        # ``.model`` / ``.max_turns``); the cast keeps the annotation honest across the
+        # workspace's twin-module boundary where nominal ``isinstance`` cannot narrow.
+        return target, cast(BehaviorConfig, config)
 
     def build_query(
         self,

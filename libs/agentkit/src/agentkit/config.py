@@ -69,14 +69,19 @@ class Behavior:
     inputs: tuple[str, ...] = ()
 
 
-_REGISTRY: dict[str, BehaviorConfig] = {}
+_REGISTRY: dict[str, Behavior | BehaviorConfig] = {}
 
 
-def register(config: BehaviorConfig) -> BehaviorConfig:
-    """Register a behavior config by name and return it."""
+def register(config: Behavior | BehaviorConfig) -> Behavior | BehaviorConfig:
+    """Register a behavior by name and return it (§3.4 — one ``register()`` line each).
+
+    Accepts either a :class:`Behavior` (the normative C3 wake-behavior sample, which
+    carries its ``BehaviorConfig`` envelope on ``.config``) or a bare
+    :class:`BehaviorConfig`. The name is read from ``.name`` in both shapes.
+    """
     _REGISTRY[config.name] = config
     return config
 
 
-def get_behavior(name: str) -> BehaviorConfig | None:
+def get_behavior(name: str) -> Behavior | BehaviorConfig | None:
     return _REGISTRY.get(name)
