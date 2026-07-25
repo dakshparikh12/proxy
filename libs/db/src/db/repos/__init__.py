@@ -6,6 +6,7 @@ matched to the canonical DDL in the Alembic migration.
 """
 from __future__ import annotations
 
+from . import connect as connect
 from . import cost as cost
 from . import drafts as drafts
 from . import identity as identity
@@ -16,6 +17,7 @@ from . import transcript as transcript
 from . import webhooks as webhooks
 
 __all__ = [
+    "connect",
     "cost",
     "drafts",
     "identity",

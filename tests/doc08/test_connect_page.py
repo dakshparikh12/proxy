@@ -310,3 +310,156 @@ def test_connect_app_readiness_renderer_renders_all_five_states_headless() -> No
     )
     assert proc.returncode == 0, f"headless render check failed:\n{proc.stdout}\n{proc.stderr}"
     assert "RENDER CHECK OK" in proc.stdout
+
+
+# --------------------------------------------------------------------------- #
+# 6 · db:postgres INTEGRATION tier — readiness is a DURABLE Postgres row, and the
+#     public poll degrades HONESTLY when the substrate is unreachable.
+#
+# These bind to the REAL ``connect_readiness`` Postgres row per the mock_boundary
+# ("real Postgres; MUST NOT stub the Readiness row value directly in the route
+# handler"). They NEVER seed an in-memory store — the value the poll returns is
+# read back FROM Postgres. Skip-gated on TEST_DATABASE_URL, so they run verbatim
+# under build/setup-test-env.sh (which provisions + migrates the local DB) and
+# skip cleanly offline; a fake pass on an absent DB is forbidden.
+# --------------------------------------------------------------------------- #
+import os
+
+_PG_DSN = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL") or ""
+requires_pg = pytest.mark.skipif(
+    _PG_DSN == "",
+    reason=(
+        "integration tier: a Postgres carrying the connect_readiness schema is not "
+        "available this session; run under build/setup-test-env.sh (sets TEST_DATABASE_URL)"
+    ),
+)
+
+
+def _pg_conn() -> Any:
+    """One fresh autocommit psycopg connection to the integration-tier Postgres."""
+    import psycopg
+
+    return psycopg.connect(_PG_DSN, autocommit=True)
+
+
+@requires_pg
+@pytest.mark.integration
+def test_status_reads_a_real_postgres_readiness_row_unauthenticated(live_app) -> None:
+    """AC-CONN-010 (integration): an unauthenticated GET /connect/status returns 200 with a
+    canonical readiness value SOURCED FROM a real Postgres ``connect_readiness`` row — not
+    an in-memory stub. We write the row through the raw db.repos.connect seam (as the trigger
+    does), then poll the LIVE app with no session cookie / no Authorization header and assert
+    the value came back from the durable row."""
+    from db.repos import connect as connect_repo
+
+    install_id = "itest-" + os.urandom(6).hex()
+    # Land the durable row directly via the Postgres repo — never the route/store in-memory.
+    with _pg_conn() as conn:
+        connect_repo.insert_install(
+            conn, install_id=install_id, tenant_id="itest-tenant", repo_url="local"
+        )
+        connect_repo.set_ready(
+            conn, install_id=install_id, coverage_pct=0.42, flagged=[("g.min.js", "generated")]
+        )
+
+    client = TestClient(live_app)
+    # No cookie, no Authorization header — a purely public poll.
+    resp = client.get("/connect/status", params={"install_id": install_id}, headers={})
+    assert resp.status_code == 200  # never 401/403 for a missing session
+    assert "application/json" in resp.headers.get("content-type", "")  # not a WS upgrade
+    body = resp.json()
+    assert body["status"] in {"connecting", "cloning", "indexing", "ready", "not_ready"}
+    # The value the poll returned is the one stored in the Postgres row (not a handler literal).
+    assert body["status"] == "ready"
+    assert body["coverage_pct"] == pytest.approx(0.42)
+    with _pg_conn() as conn:
+        row = connect_repo.read_row(conn, install_id)
+    assert row is not None and row["coverage_pct"] == pytest.approx(body["coverage_pct"])
+
+
+@requires_pg
+@pytest.mark.integration
+def test_status_coverage_pct_equals_the_stored_postgres_row_value(live_app) -> None:
+    """AC-CONN-008 (integration): coverage_pct in the /connect/status response equals the
+    value stored in the Postgres readiness record — proving the handler sources it from the
+    durable DB row, never a hardcoded/literal default."""
+    from db.repos import connect as connect_repo
+
+    install_id = "itest-" + os.urandom(6).hex()
+    stored_pct = 0.8137  # a distinctive, non-default fraction only the DB row carries
+    with _pg_conn() as conn:
+        connect_repo.insert_install(
+            conn, install_id=install_id, tenant_id="itest-tenant", repo_url="local"
+        )
+        connect_repo.set_ready(conn, install_id=install_id, coverage_pct=stored_pct, flagged=[])
+        db_pct = connect_repo.read_row(conn, install_id)["coverage_pct"]
+
+    client = TestClient(live_app)
+    body = client.get("/connect/status", params={"install_id": install_id}).json()
+    assert body["coverage_pct"] == pytest.approx(stored_pct)
+    assert body["coverage_pct"] == pytest.approx(db_pct)
+
+
+@requires_pg
+@pytest.mark.negative
+def test_status_degrades_honestly_when_postgres_unreachable(live_app) -> None:
+    """AC-CONN-010-NEG (negative): when Postgres is unreachable the poll degrades HONESTLY —
+    it NEVER returns readiness=ready with fabricated data. It returns a not_ready payload with
+    a named gap (and a 5xx), never a silent proceed to a stale/invented ready state.
+
+    We fault the substrate by pointing the store's connection factory at an unroutable DSN
+    (the real psycopg connect fails) — never by stubbing the row value, which the mock_boundary
+    forbids."""
+    from control_plane.connect import ConnectStore, get_connect_store
+
+    unroutable = "postgresql://proxy@127.0.0.1:1/nonexistent"
+    # Replace the app's store with one whose real connection attempt will fail (fault at the
+    # connect layer, not a stubbed row) — the seam that proves the honest-degrade path.
+    live_app.state.connect_store = ConnectStore(dsn=unroutable)
+    assert isinstance(get_connect_store(live_app), ConnectStore)
+
+    client = TestClient(live_app)
+    resp = client.get("/connect/status", params={"install_id": "anything"})
+    body = resp.json()
+    assert body["status"] != "ready", "MUST NOT fabricate ready when Postgres faults"
+    assert body["status"] == "not_ready"
+    assert body["coverage_pct"] == 0.0
+    assert body["gaps"], "an honest degrade names the gap"
+    assert resp.status_code == 503, "an unreachable substrate is an honest service-unavailable"
+
+
+@requires_pg
+@pytest.mark.integration
+@pytest.mark.e2e
+def test_golden_path_ready_coverage_matches_postgres_row_over_real_pipeline(live_app) -> None:
+    """AC-CONN-020 (e2e golden path): the connect→index trigger runs the REAL pipeline on a
+    local git-repo fixture, readiness lands in the ``connect_readiness`` Postgres row as
+    ``ready`` with a REAL coverage_pct, and an unauthenticated GET /connect/status returns
+    readiness=ready with coverage_pct EQUAL to the value stored in the Postgres row (not a
+    hardcoded value). Then AC-CONN-020-NEG's honest-degrade is exercised by the sibling
+    negative test."""
+    from control_plane.connect import get_connect_store, trigger_connect_index
+    from db.repos import connect as connect_repo
+    from tests.fixtures.repos import small_repo_fixture
+
+    fixture = small_repo_fixture()
+    store = get_connect_store(live_app)  # the durable Postgres-backed store on the live app
+    install_id = store.new_install(tenant_id="e2e-tenant", repo_url=fixture.url)
+
+    # Run the REAL pipeline end-to-end; the trigger writes the terminal ready row to Postgres.
+    trigger_connect_index(store, install_id, tenant_id="e2e-tenant", repo_url=fixture.url)
+
+    # The durable Postgres row is ready with a REAL (non-zero, non-100) coverage fraction.
+    with _pg_conn() as conn:
+        row = connect_repo.read_row(conn, install_id)
+    assert row is not None
+    assert row["status"] == "ready"
+    assert 0.0 < row["coverage_pct"] <= 1.0
+
+    # The unauthenticated poll returns ready with coverage_pct EQUAL to the Postgres row value.
+    client = TestClient(live_app)
+    resp = client.get("/connect/status", params={"install_id": install_id})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ready"
+    assert body["coverage_pct"] == pytest.approx(row["coverage_pct"])
