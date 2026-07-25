@@ -48,10 +48,16 @@ The ``check-sdk-isolation-triad`` guard (``libs/ops``) requires the markers
 bare ``query()`` call (CANONICAL §11.11); this module names all three so a downstream
 ``query()`` site importing from here is covered.
 """
+
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Literal
 
+# The shared extended-thinking policy (D-022 / CANONICAL §10.6). We reuse it — never
+# re-implement — so the Workroom's thinking decision can NEVER drift from the one table
+# every seat reads. It keeps thinking OFF for every fast path (the quick disposition here).
+from agentkit import thinking_policy as thinking_policy
 from claude_agent_sdk import ClaudeAgentOptions
 
 # The Workroom agent's sanctioned staged-draft write. Referenced (never blocked) so the
@@ -68,15 +74,26 @@ from .drafts import propose_change as propose_change
 # a new built-in not added here is a silent isolation hole (node risk / §3.4 comment).
 SDK_LOCAL_TOOLS: tuple[str, ...] = (
     # File/shell — run on the host filesystem; blocked so the agent uses the sandbox MCP tools.
-    "Bash", "BashOutput", "KillShell", "Read", "Write", "Edit",
-    "Glob", "Grep", "NotebookEdit",
+    "Bash",
+    "BashOutput",
+    "KillShell",
+    "Read",
+    "Write",
+    "Edit",
+    "Glob",
+    "Grep",
+    "NotebookEdit",
     # Subagent — spawns a host subprocess with its OWN unrestricted tools. disallowed_tools
     # does NOT propagate to child agents → a sandbox-isolation ESCAPE. Block it. (§3.4)
     "Task",
     # Plan/skill — could invoke host skills or shell ops.
-    "EnterPlanMode", "ExitPlanMode", "Skill", "SlashCommand",
+    "EnterPlanMode",
+    "ExitPlanMode",
+    "Skill",
+    "SlashCommand",
     # Network — execute on the host, not the sandbox.
-    "WebFetch", "WebSearch",
+    "WebFetch",
+    "WebSearch",
 )
 
 # The isolation permission mode pinned on every Workroom call: a headless server agent runs
@@ -94,14 +111,52 @@ disallowed_tools: tuple[str, ...] = SDK_LOCAL_TOOLS
 # prefix so a meeting reuses it cheaply. (AC-INV-001, D-021)
 WORKROOM_CACHE_TTL_SECONDS = 3600
 
+# ---------------------------------------------------------------------------
+# The disposition (§2.2 — where the single moment of judgment lives).
+# ---------------------------------------------------------------------------
+# The quick-vs-deep decision is the ENGINE's first moment of judgment, steered by ONE
+# standing instruction in the cached system prompt — the SDK equivalent of a CLAUDE.md,
+# set once per session and prompt-cached. There is NO task-kind router and NO request
+# pre-classifier: the opener biases the engine, the engine decides. Its opening line is
+# VERBATIM from §2.2 (character-for-character — the acceptance test pins it):
+DISPOSITION_OPENER = (
+    "If this can be answered with a straight lookup, a single tool call, or one step — "
+    "answer it quickly and simply, now. Otherwise: plan, build, and verify."
+)
+
+# The standing law (§2.2) that follows the opener: decide the cheapest correct path
+# yourself and NEVER classify into task types; orient from the map and read only what you
+# need; ask ONE clarifying question only when the alternatives would change what you do;
+# cite file:line (or say "not found by this method"); run the check and say plainly what
+# you couldn't prove; never fabricate; anything world-touching is produced fully then
+# STAGED as a draft behind a human click; your answer is spoken in a meeting — make
+# headlines speakable; stop at your budget and return the honest state.
+STANDING_LAW = (
+    "Decide the cheapest correct path yourself; never classify the ask into task types. "
+    "Orient from the map; read only what you need; prefer parallel tool calls; put big "
+    "outputs in files. Ask ONE clarifying question only when the alternatives would change "
+    "what you do. Cite file:line for every claim, or say 'not found by this method'; run "
+    "the check; say plainly what you couldn't prove — a partial receipt beats a false "
+    "claim. Never fabricate; missing data becomes a clearly-marked default. Anything "
+    "world-touching is produced fully, then staged as a draft behind a human click. Your "
+    "answer will be spoken in a meeting — make the headline speakable. Stop at your budget "
+    "and return the honest state."
+)
+
 # The stable, cacheable system-prompt prefix. Does not change within a meeting → a
-# prompt-cache breakpoint carrying the 1-hour TTL. No internal component name is user-
-# visible here (Hard Rule: naming); the product and the agent are Proxy.
+# prompt-cache breakpoint carrying the 1-hour TTL. Opens with the VERBATIM disposition
+# instruction (§2.2), then the standing law, then the grounding line. No internal
+# component name is user-visible here (Hard Rule: naming); the product and the agent are
+# Proxy.
 WORKROOM_SYSTEM_PREFIX = (
-    "You are Proxy, grounding on this company's codebase. Cite file:line from "
-    "the current clone or say 'not found by this method'. Never push, write, or "
-    "run shell commands directly: the only sanctioned change is a staged draft "
-    "(propose_change) placed behind a human click."
+    DISPOSITION_OPENER
+    + "\n\n"
+    + STANDING_LAW
+    + "\n\n"
+    + "You are Proxy, grounding on this company's codebase. Cite file:line from "
+    + "the current clone or say 'not found by this method'. Never push, write, or "
+    + "run shell commands directly: the only sanctioned change is a staged draft "
+    + "placed behind a human click."
 )
 
 
@@ -116,11 +171,7 @@ def compute_builtin_tools(allowed_tools: list[str] | tuple[str, ...]) -> list[st
     ``bypassPermissions``. (Mirrors platform AgentService:223.)
     """
     disallowed_set = set(SDK_LOCAL_TOOLS)
-    return [
-        t
-        for t in allowed_tools
-        if t != "none" and not t.startswith("mcp__") and t not in disallowed_set
-    ]
+    return [t for t in allowed_tools if t != "none" and not t.startswith("mcp__") and t not in disallowed_set]
 
 
 def workroom_options(
@@ -154,14 +205,192 @@ def workroom_options(
         max_turns=max_turns,
         resume=resume,
         system_prompt=system_prompt,
-        allowed_tools=list(allowed_tools),      # permission gate (curated MCP subset, §10.5)
+        allowed_tools=list(allowed_tools),  # permission gate (curated MCP subset, §10.5)
         # The COMPUTED built-in allow-list — [] in sandbox mode. THE REAL GATE: it is what
         # removes host built-ins under bypassPermissions, not disallowed_tools.
         tools=compute_builtin_tools(allowed_tools),
         disallowed_tools=list(SDK_LOCAL_TOOLS),  # belt: backstop behind the empty tools list
-        mcp_servers=mcp_servers,                 # type: ignore[arg-type]  # curated sandbox MCP
-        strict_mcp_config=True,                  # triad: ignore discovered .mcp.json/connectors
-        setting_sources=[],                      # triad: load NO host fs settings
+        mcp_servers=mcp_servers,  # type: ignore[arg-type]  # curated sandbox MCP
+        strict_mcp_config=True,  # triad: ignore discovered .mcp.json/connectors
+        setting_sources=[],  # triad: load NO host fs settings
         env=dict(env) if env is not None else {},  # curated env (§3.10)
-        permission_mode=permission_mode,         # headless server agent → tools=[] is the gate
+        permission_mode=permission_mode,  # headless server agent → tools=[] is the gate
+    )
+
+
+# ===========================================================================
+# The per-disposition curated toolbelt (§3.5 / CANONICAL §10.5).
+# ===========================================================================
+# The disposition is the ENGINE's own judgment (§2.2, biased by DISPOSITION_OPENER in the
+# cached prompt) — there is NO router and NO request pre-classifier here. This section owns only
+# the *physics* of the choice once made: given a disposition NAME, compute EXACTLY that
+# disposition's curated tool subset (never the union) and the structural block-list for the
+# tools it must not reach. Tool-selection accuracy degrades with every extra advertised
+# tool, so each disposition advertises a curated subset — never the whole-Proxy union.
+#
+# The five dispositions (§2.2/§3.5):
+#   quick    — a straight lookup / single tool call / one step: read + map ONLY.
+#   plan     — the read-only planning turn: read + map ONLY (it reads to plan, never edits).
+#   critic   — the plan-verify critic (§3.7): read + map + run_command; NO write/edit/propose.
+#   verifier — the independent verifier (§3.7): read + map + run_command; NO write/edit/propose
+#              (it re-runs the check as evidence but NEVER edits the artifact it grades).
+#   worker   — the readwrite build worker (§3.6): the full read + map + sandbox-write set
+#              PLUS the host-side propose_change (the one sanctioned write, §3.8).
+
+Disposition = Literal["quick", "plan", "critic", "verifier", "worker"]
+
+# The ordered tuple of every valid disposition — the closed set (an unknown name fails closed).
+DISPOSITIONS: tuple[Disposition, ...] = ("quick", "plan", "critic", "verifier", "worker")
+
+# The host-side code_intel MAP tools (CANONICAL §7 — read-only, advertised-not-forced):
+# blast-radius + write-sites + entry points + native grep/read on the clone. Mounted on
+# EVERY disposition (orienting from the map is always allowed).
+MAP_TOOLS: tuple[str, ...] = (
+    "mcp__code_intel__get_dependents",
+    "mcp__code_intel__who_writes",
+    "mcp__code_intel__list_entry_points",
+    "mcp__code_intel__grep",
+    "mcp__code_intel__read",
+)
+
+# The sandbox `code` transport READ tools (§3.5) — mounted on every disposition.
+SANDBOX_READ_TOOLS: tuple[str, ...] = (
+    "mcp__code__read_file",
+    "mcp__code__list_files",
+    "mcp__code__grep",
+    "mcp__code__glob",
+)
+
+# The sandbox shell workhorse — re-run tests/typecheck as EVIDENCE. It is a read-tier action
+# for a verifier (it re-runs, never edits) but a write-tier action for a worker; carried by
+# critic/verifier/worker, blocked for quick/plan.
+SANDBOX_RUN_COMMAND: str = "mcp__code__run_command"
+
+# The sandbox `code` transport WRITE tools (§3.5) — the mutating set. ``run_command`` is
+# included because for a worker it is a write-tier action (git/pytest/npm that mutate the
+# tree); ``ast_grep`` is the structural-edit write tool (§11.11). Advertised ONLY for the
+# worker; BLOCKED via disallowed_tools for every read-only disposition.
+SANDBOX_WRITE_TOOLS: tuple[str, ...] = (
+    "mcp__code__run_command",
+    "mcp__code__write_file",
+    "mcp__code__edit_file",
+    "mcp__code__ast_grep",
+)
+
+# The HOST-side propose_change MCP tool (CANONICAL §11.7 — security-load-bearing). It writes
+# GCS + staged_drafts (Postgres), impossible from the egress-denied, credential-less E2B
+# sandbox, so it runs on the trusted host — it is NEVER a sandbox `code` tool. Advertised
+# ONLY for the worker (the one sanctioned write, §3.8); blocked for every read-only
+# disposition.
+PROPOSE_CHANGE_TOOL: str = "mcp__propose_change__propose_change"
+
+# Every mutating tool the read-only dispositions must be blocked from reaching. ``allowed_tools``
+# does NOT filter MCP tools (SDK design), so a read-only disposition's write block MUST go
+# through ``disallowed_tools`` (§3.8) — this is that set (the sandbox write set + the host
+# propose_change).
+_MUTATING_TOOLS: tuple[str, ...] = (*SANDBOX_WRITE_TOOLS, PROPOSE_CHANGE_TOOL)
+
+# Disposition → the role the shared thinking_policy keys off (D-022 / CANONICAL §10.6). Only
+# the deliberate planning turn earns extended thinking (and only on an Opus-class model); the
+# quick fast path and the critic/verifier/worker paths run thinking OFF (latency-toxic on the
+# quick path, §2.2). "plan" maps to the shared "plan-artifact" thinking role; every other
+# disposition maps to a role the shared table never enables.
+_DISPOSITION_ROLE: dict[str, str] = {
+    "quick": "workroom-quick",  # fast path — never a thinking role
+    "plan": "plan-artifact",  # the ONE deliberate turn that earns thinking (Opus only)
+    "critic": "workroom-critic",  # verify path — thinking OFF
+    "verifier": "workroom-verifier",  # verify path — thinking OFF
+    "worker": "workroom-worker",  # sandbox-edit path — thinking OFF
+}
+
+
+@dataclass(frozen=True)
+class DispositionPolicy:
+    """The curated tool policy for ONE disposition (§3.5 / §10.5) — the computed subset.
+
+    ``disposition`` — the disposition name this policy is for.
+    ``allowed_tools`` — EXACTLY this disposition's curated advertised subset (never the union).
+    ``disallowed_tools`` — the §3.4 host-built-in block-list PLUS, for a read-only disposition,
+        the mutating tools it must not reach (blocked structurally because ``allowed_tools``
+        does not filter MCP tools, §3.8).
+    ``plan`` — whether this disposition fires a plan turn. False for ``quick`` (§2.1 fast path).
+    ``extended_thinking`` — whether extended thinking rides this disposition (D-022); False on
+        the quick fast path and the verify paths.
+    """
+
+    disposition: Disposition
+    allowed_tools: tuple[str, ...]
+    disallowed_tools: tuple[str, ...]
+    plan: bool
+    extended_thinking: bool
+
+
+def disposition_role(disposition: str) -> str:
+    """The shared-``thinking_policy`` role for a disposition (D-022). Fails closed on unknown."""
+    role = _DISPOSITION_ROLE.get(disposition)
+    if role is None:
+        raise ValueError(f"unknown disposition {disposition!r}")
+    return role
+
+
+def disposition_extended_thinking_enabled(disposition: str, *, model: str = "claude-opus-4-8") -> bool:
+    """Does extended thinking ride this disposition? Delegates to the shared thinking_policy.
+
+    The quick fast path and the critic/verifier/worker paths run thinking OFF (§2.2 —
+    latency-toxic on the quick path); only the deliberate ``plan`` turn earns it, and only on
+    an Opus-class model. Delegating to the ONE shared table means the Workroom's decision can
+    never drift from every other seat's.
+    """
+    enabled, _budget = thinking_policy(model, disposition_role(disposition))
+    return bool(enabled)
+
+
+def disposition_tool_policy(disposition: str) -> DispositionPolicy:
+    """Compute EXACTLY one disposition's curated tool policy (§3.5 / CANONICAL §10.5).
+
+    NOT a router: this takes an EXPLICIT disposition name (the engine already decided, biased
+    by the cached prompt's opener, §2.2) and returns the curated subset for it — it never
+    inspects an ask or maps a request to a task type. An unknown disposition fails closed
+    (never silently falls through to the write set).
+
+    Per disposition (never the union):
+      * quick / plan     — read + map only (no write, no propose_change); the mutating set is
+        blocked via ``disallowed_tools`` (``allowed_tools`` does not filter MCP tools, §3.8).
+      * critic / verifier — read + map + ``run_command`` (re-run the check as evidence); the
+        rest of the write set + ``propose_change`` are blocked (a verifier never edits what it
+        grades, §3.7).
+      * worker           — read + map + the full sandbox write set + the host ``propose_change``
+        (§3.8); nothing extra is blocked beyond the §3.4 host-built-in backstop.
+    """
+    if disposition not in _DISPOSITION_ROLE:
+        raise ValueError(f"unknown disposition {disposition!r}")
+
+    read_and_map: tuple[str, ...] = (*SANDBOX_READ_TOOLS, *MAP_TOOLS)
+    # The §3.4 host-built-in block-list rides EVERY disposition as the backstop.
+    base_block: tuple[str, ...] = tuple(SDK_LOCAL_TOOLS)
+
+    if disposition in ("quick", "plan"):
+        # Read + map ONLY. The whole mutating set is blocked structurally.
+        allowed = read_and_map
+        disallowed = base_block + _MUTATING_TOOLS
+        plan = disposition == "plan"
+    elif disposition in ("critic", "verifier"):
+        # Read + map + run_command (re-run the check). NEVER write/edit/ast_grep/propose_change.
+        allowed = read_and_map + (SANDBOX_RUN_COMMAND,)
+        editing = tuple(t for t in _MUTATING_TOOLS if t != SANDBOX_RUN_COMMAND)
+        disallowed = base_block + editing
+        plan = False
+    else:  # "worker"
+        # The full read + map + sandbox-write set + the host propose_change. Nothing extra
+        # blocked beyond the §3.4 host-built-in backstop (the worker owns the write set).
+        allowed = read_and_map + SANDBOX_WRITE_TOOLS + (PROPOSE_CHANGE_TOOL,)
+        disallowed = base_block
+        plan = True
+
+    return DispositionPolicy(
+        disposition=disposition,  # type: ignore[arg-type]  # guarded above
+        allowed_tools=allowed,
+        disallowed_tools=disallowed,
+        plan=plan,
+        extended_thinking=disposition_extended_thinking_enabled(disposition),
     )
