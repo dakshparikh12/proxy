@@ -4280,7 +4280,7 @@
       "title": "One SDK session per task on a shared warm sandbox",
       "region": "05-WORKROOM",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "05-WORKROOM.md#3.1",
         "05-WORKROOM.md#3.13-step-4",
@@ -4337,7 +4337,7 @@
       "title": "The Envelope out + tool-boundary progress events",
       "region": "05-WORKROOM",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "05-WORKROOM.md#3.12",
         "05-WORKROOM.md#3.13-step-5",
@@ -4711,7 +4711,7 @@
       "title": "Task durability via operation_runs (no workroom_tasks table)",
       "region": "05-WORKROOM",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "05-WORKROOM.md#3.1",
         "CANONICAL-DECISIONS.md#12.10"
@@ -4756,7 +4756,7 @@
       "title": "Session resume + stale-session replay (imported from agentkit)",
       "region": "05-WORKROOM",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "05-WORKROOM.md#3.1",
         "05-WORKROOM.md#3.11",
