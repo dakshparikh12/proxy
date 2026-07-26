@@ -131,6 +131,17 @@ def create_app() -> FastAPI:
     # the durable webhook_events insert, so a forged/missing signature is a 401 with
     # NO row landed (a forged delivery can never dedupe-poison the table).
     install_recall_webhook_route(app)
+    # §3.6: the LIVE GitHub push webhook ingress — PUBLIC_ROUTES-allowlisted but HMAC-gated
+    # (X-Hub-Signature-256, verified over the RAW body BEFORE any rebuild). This is the LIVE
+    # caller of the freshness WebhookHandler: a verified push is routed by its SIGNED
+    # repository (resolved server-side to the pipeline the connect trigger registered) into
+    # WebhookHandler.handle, which dedups + pulls the delta once + does a full drop/re-extract
+    # + invalidates caches + notifies live meetings. Closes the freshness live-wiring gap so
+    # the push→reindex path is real, not isolation-only. A forged/missing signature is a 401
+    # that triggers NO rebuild; the tenant is NEVER read from the request.
+    from .github_webhook import install_github_webhook_route
+
+    install_github_webhook_route(app)
     # The §4.6 internal-token trust plane: the /internal/* routes are gated by the
     # X-Internal-Token header (a server-to-server bearer, NEVER the user session
     # cookie), so they are tenant-scoped by a different gate than protected(). Stamp

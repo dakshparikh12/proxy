@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     recall_webhook_secret: str = Field(
         default="", validation_alias="RECALL_WEBHOOK_SECRET"
     )
+    # The GitHub-App webhook signing secret — the raw-UTF-8 HMAC key the §3.6
+    # freshness push-ingress verifier (X-Hub-Signature-256) proves the caller with.
+    # Sourced from Secret Manager as env, never a literal. Not a boot hard-gate; the
+    # /webhooks/github route fails CLOSED (401) when it is unset, so an unverifiable
+    # push delivery is never accepted (and never triggers a rebuild).
+    github_webhook_secret: str = Field(
+        default="", validation_alias="GITHUB_WEBHOOK_SECRET"
+    )
     aes_key_recall: str = Field(default="", validation_alias="AES_KEY_RECALL")
     aes_key_stt: str = Field(default="", validation_alias="AES_KEY_STT")
     aes_key_calendar: str = Field(default="", validation_alias="AES_KEY_CALENDAR")

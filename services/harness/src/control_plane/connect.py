@@ -275,6 +275,7 @@ def trigger_connect_index(
     tenant_id: str,
     repo_url: str,
     sha: str | None = None,
+    registry: Any = None,
 ) -> Any:
     """The connect→index TRIGGER — the product spine (first live run_full_pipeline caller).
 
@@ -285,9 +286,17 @@ def trigger_connect_index(
       1. sets ``pipeline.lsp = MultiLangResolver(clone_root)`` so ``find_references``
          returns a RESOLVED result (closes precise_nav) and RE-MINTS the query factory over
          it (the factory reads ``pipeline.lsp`` at construction, so it must be re-bound);
-      2. leaves the pipeline's freshness webhook handler live (closes freshness);
+      2. leaves the pipeline's freshness webhook handler live AND registers the pipeline in
+         the live push-ingress ``registry`` (keyed by repo) so a real GitHub push delivery
+         reaches THIS pipeline's ``webhook_handler.handle`` — closing freshness end-to-end
+         (a live caller, not isolation-only);
       3. writes the terminal readiness — ``ready`` with the REAL ``coverage_pct`` + flagged
          files, or ``not_ready`` naming the gaps.
+
+    ``registry`` is the per-host :class:`~control_plane.github_webhook.LivePipelineRegistry`
+    off ``app.state`` (passed by the install/start route). It is optional so a direct caller
+    (a test / a script) may drive the trigger without an app; when present the built pipeline
+    is registered so ``POST /webhooks/github`` can find it.
 
     Returns the built :class:`Pipeline` (the caller may retain it; the route fires this in a
     background task and discards it). Never raises out to the caller — a pipeline failure is
@@ -323,7 +332,15 @@ def trigger_connect_index(
             pipeline.server._lsp = pipeline.lsp
 
     # freshness: the pipeline's webhook handler is already registered by run_full_pipeline;
-    # it stays live on the pipeline so a push delivery drives a delta-pull + rebuild.
+    # it stays live on the pipeline so a push delivery drives a delta-pull + rebuild. Register
+    # the pipeline in the live push-ingress registry (keyed by repo) so POST /webhooks/github
+    # can resolve THIS tenant's pipeline server-side and drive its handler — the LIVE caller
+    # that turns a real GitHub push into a delta-pull + full drop/re-extract (not iso-only).
+    if registry is not None:
+        try:
+            registry.register(repo_url, pipeline)
+        except Exception:  # noqa: BLE001 - a registry hiccup never fails the connect flow
+            pass
 
     # Terminal readiness — read the REAL result off the pipeline (never a faked number).
     record = pipeline.readiness_record
@@ -472,7 +489,12 @@ def install_connect_routes(app: "FastAPI") -> None:
                 {"error": "readiness substrate unavailable; try again shortly"},
                 status_code=503,
             )
-        _spawn_trigger(store, install_id, tenant_id=tenant_id, repo_url=repo_url)
+        from .github_webhook import get_pipeline_registry
+
+        registry = get_pipeline_registry(request.app)
+        _spawn_trigger(
+            store, install_id, tenant_id=tenant_id, repo_url=repo_url, registry=registry
+        )
         return JSONResponse(
             {"install_id": install_id, "install_url": github_app_install_url(repo_url)},
             status_code=200,
@@ -490,18 +512,27 @@ def _tenant_for_install(repo_url: str) -> str:
     return "connect-" + uuid.uuid5(uuid.NAMESPACE_URL, repo_url).hex[:16]
 
 
-def _spawn_trigger(store: ConnectStore, install_id: str, tenant_id: str, repo_url: str) -> None:
+def _spawn_trigger(
+    store: ConnectStore,
+    install_id: str,
+    tenant_id: str,
+    repo_url: str,
+    registry: Any = None,
+) -> None:
     """Fire the connect→index trigger in a background thread (never blocks the response).
 
     The install/start route returns immediately with a pollable handle; the trigger runs
     off-thread and streams readiness into the durable store the GET /connect/status poll
-    reads. A trigger failure is captured as an honest ``not_ready`` inside the trigger — it
-    never surfaces as an unhandled crash on the request path.
+    reads, and registers the built pipeline in the live push-ingress ``registry`` so a real
+    GitHub push reaches it. A trigger failure is captured as an honest ``not_ready`` inside
+    the trigger — it never surfaces as an unhandled crash on the request path.
     """
 
     def _run() -> None:
         try:
-            trigger_connect_index(store, install_id, tenant_id=tenant_id, repo_url=repo_url)
+            trigger_connect_index(
+                store, install_id, tenant_id=tenant_id, repo_url=repo_url, registry=registry
+            )
         except Exception:  # noqa: BLE001 - already recorded as not_ready inside the trigger
             pass
 

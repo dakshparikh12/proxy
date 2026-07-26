@@ -85,6 +85,7 @@ class PublicAuthzCtx:
 PUBLIC_ROUTES: frozenset[str] = frozenset(
     {
         "POST /webhooks/recall",  # Recall bot lifecycle — HMAC-signature-gated (§4.6)
+        "POST /webhooks/github",  # GitHub push freshness ingress — X-Hub-Signature-256-gated (§3.6)
         "GET /connect/status",  # connect-page readiness poll (no meeting exists yet)
         "POST /connect/install/start",  # launch the GitHub-App install flow
         "GET /m/{meeting_id}",  # notes home — public ONLY with a valid capability token

@@ -50,6 +50,9 @@ from .webhook import (
     WebhookVerificationError as WebhookVerificationError,
 )
 from .webhook import (
+    verify_github_signature as verify_github_signature,
+)
+from .webhook import (
     verify_recall_signature as verify_recall_signature,
 )
 
@@ -70,5 +73,6 @@ __all__ = [
     "public",
     "resolve_entity_tenant",
     "safe_error_handler",
+    "verify_github_signature",
     "verify_recall_signature",
 ]

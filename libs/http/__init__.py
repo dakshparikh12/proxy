@@ -47,9 +47,11 @@ from .src.http.registry import public as public
 from .src.http.safe_error import install_safe_error_handler as install_safe_error_handler
 from .src.http.safe_error import safe_error_handler as safe_error_handler
 
-# The §4.6 Recall webhook HMAC verifier, re-exported off the clean package seam so
-# the live control_plane webhook route binds it without the ``src`` deep path.
+# The §4.6 Recall + §3.6 GitHub webhook HMAC verifiers, re-exported off the clean
+# package seam so the live control_plane webhook routes bind them without the ``src``
+# deep path.
 from .src.http.webhook import WebhookVerificationError as WebhookVerificationError
+from .src.http.webhook import verify_github_signature as verify_github_signature
 from .src.http.webhook import verify_recall_signature as verify_recall_signature
 
 __all__ = [
@@ -73,5 +75,6 @@ __all__ = [
     "resolve_entity_tenant",
     "run_dispatch",
     "safe_error_handler",
+    "verify_github_signature",
     "verify_recall_signature",
 ]

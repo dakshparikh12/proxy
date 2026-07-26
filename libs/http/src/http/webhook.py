@@ -184,4 +184,60 @@ def verify_recall_signature(
     return True
 
 
-__all__ = ["verify_recall_signature", "WebhookVerificationError"]
+# --------------------------------------------------------------------------- #
+# GitHub webhook HMAC verifier — the freshness push ingress earns its exemption. #
+# --------------------------------------------------------------------------- #
+# GitHub signs a webhook with ``X-Hub-Signature-256: sha256=<hexdigest>`` where the
+# digest is HMAC-SHA256 over the EXACT raw request body, keyed by the App's webhook
+# secret used as raw UTF-8 bytes (NOT a whsec_/base64 secret — that is Svix/Recall).
+# Wire shape confirmed against GitHub docs (Securing your webhooks / validating
+# deliveries): the header carries the lowercase-hex digest after ``sha256=``, and the
+# recommended verification is a constant-time compare over the raw body.
+_GITHUB_SIGNATURE_HEADER = "x-hub-signature-256"
+_GITHUB_SIG_PREFIX = "sha256="
+
+
+def verify_github_signature(
+    secret: str,
+    *,
+    headers: Mapping[str, str],
+    raw_body: Union[bytes, bytearray],
+) -> bool:
+    """Verify a GitHub webhook's ``X-Hub-Signature-256`` over the RAW body — 401 on fail.
+
+    Recomputes ``HMAC-SHA256(secret, raw_body)`` (secret as raw UTF-8 key bytes,
+    lowercase-hex digest) and compares it in **constant time** via
+    :func:`hmac.compare_digest` against the ``sha256=<hex>`` header. A missing secret,
+    a missing/malformed header, or a mismatch raises :class:`WebhookVerificationError`
+    (``status_code = 401``) — we NEVER accept an unverifiable delivery (fail closed).
+
+    The comparison is over the exact raw bytes passed in; the caller MUST hand the
+    request body it received, never a re-serialised dict (a JSON round-trip would
+    reorder bytes and break the signature).
+    """
+    if not secret:
+        # No configured secret ⇒ we cannot prove the caller ⇒ fail closed.
+        raise WebhookVerificationError("webhook secret not configured")
+
+    low = _lower_headers(headers)
+    header = low.get(_GITHUB_SIGNATURE_HEADER)
+    if not header:
+        raise WebhookVerificationError("missing signature header")
+    if not header.startswith(_GITHUB_SIG_PREFIX):
+        raise WebhookVerificationError("malformed signature header")
+    provided = header[len(_GITHUB_SIG_PREFIX):]
+
+    key = secret.encode("utf-8")
+    body = bytes(raw_body)
+    expected = hmac.new(key, body, hashlib.sha256).hexdigest()
+
+    if not hmac.compare_digest(provided, expected):
+        raise WebhookVerificationError("bad signature")
+    return True
+
+
+__all__ = [
+    "verify_recall_signature",
+    "verify_github_signature",
+    "WebhookVerificationError",
+]
