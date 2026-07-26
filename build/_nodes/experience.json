@@ -602,7 +602,7 @@
     "title": "The tile \u2014 orb bloom + \u00a72.2 state machine, each state bound to a real system event (no state without a source)",
     "region": "08-EXPERIENCE",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "08-EXPERIENCE.md#2.2",
       "08-EXPERIENCE.md#3",
