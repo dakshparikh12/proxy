@@ -30,11 +30,11 @@ import asyncio
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Protocol, TypeVar
+from typing import Any
 
 from libs.llm.src.llm.routing import model_for
 
-T = TypeVar("T")
+from ._seams import CallExternal as CallExternal
 
 _SCRIBE_SEAT = "SCRIBE"  # same cheap Haiku seat as the Scribe (§3.2)
 _SERVICE = "anthropic"
@@ -67,18 +67,6 @@ ROLLING_SUMMARY_PROMPT: str = (
     "Order entries by their stable id; do NOT include timestamps, wall-clock, or counts. "
     "Prose only — no preamble, no headers."
 )
-
-
-class CallExternal(Protocol):
-    """Structural type of ``libs.http.call_external`` — the sole external-call seam."""
-
-    async def __call__(
-        self,
-        op: Callable[[], Awaitable[T]],
-        *,
-        service: str,
-        unit_cost_usd: float = 0.0,
-    ) -> Any: ...
 
 
 @dataclass

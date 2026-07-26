@@ -46,12 +46,12 @@ from __future__ import annotations
 import json
 import os
 import random
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Protocol, TypeVar
+from typing import Any, Protocol
 
 from libs.llm.src.llm.routing import model_for
 
+from ._seams import CallExternal as CallExternal
 from .parse import parse_scribe_result
 from .schema import (
     AddOp,
@@ -61,8 +61,6 @@ from .schema import (
     PatchOp,
     Reversibility,
 )
-
-T = TypeVar("T")
 
 # --- Pinned defaults (AC-QGATE-13 / §3.2.2). All four live here, once. ---
 
@@ -414,18 +412,6 @@ class TranscriptPlane:
 # ---------------------------------------------------------------------------
 # Injected seams — the vendor call funnel, the applier, and re-extraction.
 # ---------------------------------------------------------------------------
-
-
-class CallExternal(Protocol):
-    """Structural type of ``libs.http.call_external`` — the sole external-call seam."""
-
-    async def __call__(
-        self,
-        op: Callable[[], Awaitable[T]],
-        *,
-        service: str,
-        unit_cost_usd: float = 0.0,
-    ) -> Any: ...
 
 
 class CorrectionApplier(Protocol):

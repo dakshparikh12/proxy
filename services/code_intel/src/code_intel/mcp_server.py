@@ -473,7 +473,7 @@ class MCPServerFactory:
 
     A minted server is a *cheap wrapper* rebound per query over an **immutable,
     shared** grounding context — the pipeline's pinned graph + clone + host-side
-    warm LSP (§3.5 ``make_code_intel_server(graph, lsp, overview)``; SDK MCP
+    warm LSP (§3.5 ``make_code_intel_server(graph, lsp)``; SDK MCP
     servers are connection-bound, so callers store the factory and resolve one
     fresh instance at the query chokepoint). Bind the factory to the real
     pipeline via :meth:`for_pipeline` so every minted-per-query instance is
@@ -532,16 +532,15 @@ class MCPServerFactory:
 def make_code_intel_server(
     graph: Graph | None = None,
     lsp: Any = None,
-    overview: Any = None,
     *,
     clone_path: Path | None = None,
     exclusion_manager: ExclusionManager | None = None,
     tenant_id: str = "",
     db_counter: Any = None,
 ) -> CodeIntelMCPServer:
-    """Spec factory (§3.5): mint a queryable server over immutable graph/overview
-    + a warm host-side LSP. ``graph``/``overview`` are shared and immutable; only
-    this cheap wrapper is rebuilt per query. Returns a bound, queryable server.
+    """Spec factory (§3.5): mint a queryable server over the immutable graph + a
+    warm host-side LSP. ``graph`` is shared and immutable; only this cheap wrapper
+    is rebuilt per query. Returns a bound, queryable server.
     """
     return CodeIntelMCPServer(
         graph=graph,

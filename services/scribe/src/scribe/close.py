@@ -61,6 +61,7 @@ from typing import Any, Optional, Protocol
 
 from pydantic import BaseModel, Field
 
+from ._seams import CallExternal as CallExternal
 from .notes_artifact import (
     NotesGenerationConflictError as NotesGenerationConflictError,
 )
@@ -735,14 +736,6 @@ class InMemoryOperationRunSink:
         self.rows[str(meeting_id)].update(status="failed", error_type=error_type)
 
 
-class CallExternal(Protocol):
-    """Structural type of ``libs.http.call_external`` — the sole external seam."""
-
-    async def __call__(
-        self, op: Callable[[], Awaitable[Any]], *, service: str, unit_cost_usd: float = 0.0
-    ) -> Any: ...
-
-
 # ── The structured close call (generateStructured → Pydantic re-validate) ────
 
 # Approximate Sonnet-class per-token USD prices, applied at the SDK-adapter boundary.
@@ -1045,7 +1038,6 @@ async def run_close_pass(
     trace.record(CloseStep.RENDER, "rendered markdown")
 
     # ── Step 2: GCS write — create-only (if_generation_match=0), EXACTLY once ─
-    recovered = False
     try:
         generation = write_finalized_notes(
             bucket, str(meeting_id), markdown, if_generation_match=0
@@ -1055,7 +1047,6 @@ async def run_close_pass(
         # (no second GCS object). Reuse the existing URL to post the link if the
         # earlier run crashed before posting (AC-CLOSE-14). Generation is unknown
         # here (we did not read it) — reported as 0 and the URL is reused.
-        recovered = True
         generation = 0
         trace.record(CloseStep.GCS_WRITE, "existing object detected (create-only rejected)")
     except CloseError:
@@ -1108,7 +1099,6 @@ async def run_close_pass(
         trace=trace,
         final_notes=final_notes,
     )
-    _ = recovered  # retained for readability; recovery re-uses the URL above
 
 
 __all__ = [

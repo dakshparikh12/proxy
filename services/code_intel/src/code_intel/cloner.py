@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from .config import get_int
 from .exclusions import ExclusionManager
@@ -18,18 +18,17 @@ from .gitio import run_git
 from .paths import repo_name_from_url, tenant_repo_dir
 
 
-class CountProvider(Protocol):
-    def count(self) -> int: ...
-
-
 class Cloner:
     def __init__(
         self,
         git_interceptor: Any = None,
-        file_count_provider: CountProvider | None = None,
+        file_count_provider: Any = None,
         exclusion_manager: ExclusionManager | None = None,
     ) -> None:
         self._interceptor = git_interceptor
+        # Optional file-count seam: a duck-typed ``.count() -> int`` source. When
+        # present and above the config threshold the clone goes blobless (§3.2);
+        # absent (the production default), the clone is a normal full clone.
         self._file_count = file_count_provider
         self._exclusions = exclusion_manager
         self._by_url: dict[str, Path] = {}
@@ -37,7 +36,8 @@ class Cloner:
     def _blobless(self) -> bool:
         if self._file_count is None:
             return False
-        return self._file_count.count() > get_int("blobless_file_threshold")
+        count: int = self._file_count.count()
+        return count > get_int("blobless_file_threshold")
 
     def clone(self, tenant_id: str, repo_url: str, sha: str | None = None) -> Path:
         repo_dir = tenant_repo_dir(tenant_id, repo_name_from_url(repo_url))
