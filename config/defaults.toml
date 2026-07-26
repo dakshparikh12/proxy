@@ -85,6 +85,11 @@ max_buffered_audio_ms = 120
 # Barge-in stop budget: human onset → TTS silence (§3.6/§4/Law-3; NOT §12.8-pinned, so
 # home here). unit: milliseconds. range: 100..200.
 barge_in_budget_ms = 200
+# Barge-in ONSET debounce (D-037/D-043): a non-Proxy speaker must sustain speech at least this
+# long before it counts as a real interruption — a shorter blip (cough / "mm" / chair scrape) is
+# NOT an interruption and never cuts Proxy. Once a real onset fires, the cut still lands within
+# barge_in_budget_ms. unit: milliseconds. range: 150..250.
+barge_in_onset_min_ms = 200
 # Headline-only spoken envelope (§3.3): a single spoken line over this soft cap is
 # detail — routed to chat, not synthesized. unit: characters. range: 120..320.
 headline_char_soft_cap = 240
@@ -101,6 +106,14 @@ outbound_sends_per_second = 4
 bot_usd_per_hr = 0.50    # Recall bot. range: 0.40..0.60
 stt_usd_per_hr = 0.15    # AssemblyAI via Recall BYOK passthrough. range: 0.10..0.20
 tts_usd_per_hr = 0.15    # Cartesia Sonic 3, within the $0.10-0.20 band. range: 0.10..0.20
+# Rejoin budget is PER-EPISODE (D-038/D-043): a drop spends a rejoin, but after the bot
+# stays connected for this long the budget RESETS — so a later, unrelated Wi-Fi hiccup can
+# rejoin again. A total per-meeting cap bounds rapid flapping to an honest terminal stop.
+# unit: seconds of sustained connection before the budget re-arms. range: 300..1800.
+rejoin_reset_after_connected_s = 900
+# Hard ceiling on total auto-rejoins in one meeting; the (cap+1)-th drop is an honest stop,
+# never an unbounded retry loop (bounds abuse). unit: count. range: 2..5.
+rejoin_cap_per_meeting = 3
 
 [scribe]
 # Notes freshness flag threshold (03 §3.8/§4): if the newest note-delta's fold

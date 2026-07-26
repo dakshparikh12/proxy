@@ -395,8 +395,9 @@ def test_w09_dm_privacy_and_broadcast_parity():
 
 # ── W10 ───────────────────────────────────────────────────────────────────────
 
-def test_w10_bot_drop_rejoin_once_gap_announced():
-    """W10: bot drop -> one rejoin -> gap announced; second drop -> honest stop.
+def test_w10_bot_drop_rejoin_per_episode_gap_announced():
+    """W10: bot drop -> rejoin -> gap announced; a later drop after a SUSTAINED clean stretch
+    rejoins AGAIN (per-episode, D-038/D-043) — a transient hiccup never permanently kills Proxy.
 
     Chains: AC-FAIL-01, AC-FAIL-02, AC-FAIL-03, AC-FAIL-04, AC-FAIL-05, AC-FAIL-06.
     """
@@ -419,14 +420,15 @@ def test_w10_bot_drop_rejoin_once_gap_announced():
         await handler.on_drop(drop_id="d1", dropped_ts=1000.0)
         assert len(rejoins) == 1
 
-        # Rejoin acknowledged
+        # Rejoin acknowledged; the honest gap is announced
         await handler.on_rejoin(drop_id="d1", rejoined_ts=1060.0)
         assert announcements, "gap must be announced on rejoin"
 
-        # Second drop: no more auto-rejoin, honest stop
+        # Second drop 940s later (>15min sustained connection): the per-episode budget has
+        # RE-ARMED, so this unrelated drop rejoins AGAIN rather than ending Proxy.
         await handler.on_drop(drop_id="d2", dropped_ts=2000.0)
-        assert len(rejoins) == 1, "must not exceed one auto-rejoin"
-        assert stops, "second drop must produce honest stop"
+        assert len(rejoins) == 2, "a drop after a sustained clean stretch must rejoin again"
+        assert stops == [], "a re-armed episode must not honest-stop"
 
     _run(run())
 

@@ -4945,22 +4945,26 @@
   blocking: true
   golden_path: false
   behavior:
-    given: The event emitter wired to a mock Doc 04 sink, with seven distinct synthetic deltas each matching
-      one material-change type
+    given: The event emitter wired to a mock Doc 04 sink, with distinct synthetic deltas covering
+      every material-change type, including a contradicting claim (a claim carrying a contradicts link)
     when: Each delta is applied in sequence
     then:
-    - Exactly one claim-landed event is emitted for the claim-landed delta
+    - Exactly one claim-landed event is emitted for the bare claim-landed delta
     - Exactly one decision-forming event is emitted for the decision-forming delta
     - Exactly one decision-final event is emitted for the decision-final delta
-    - Exactly one contradiction-detected event is emitted for the contradiction-detected delta
+    - The contradicting-claim delta emits BOTH a claim-landed event AND a contradiction-detected
+      event (D-036/D-043 F4b — the disputed claim is exactly what the Proactive judge should later
+      verify, so its checkable landing is never suppressed by the contradiction), in that order
     - Exactly one action-item-created event is emitted for the action-item-created delta
     - Exactly one question-opened event is emitted for the question-opened delta
     - Exactly one question-closed event is emitted for the question-closed delta
-    - No event other than these seven types is emitted during the run
+    - No event of any type OUTSIDE the closed seven material-change kinds is emitted during the run
   primary_oracle:
     type: state_machine_assertion
-    artifact: assert emitted_events == [claim-landed, decision-forming, decision-final, contradiction-detected,
-      action-item-created, question-opened, question-closed] each count == 1
+    artifact: assert emitted_events == [claim-landed, decision-forming, decision-final, claim-landed,
+      contradiction-detected, action-item-created, question-opened, question-closed]; claim-landed count == 2
+      (a bare claim + the contradicting claim's landing), contradiction-detected count == 1, and no
+      kind outside the closed seven appears
   thresholds:
     events_missing_allowed: 0
     unexpected_event_types_allowed: 0

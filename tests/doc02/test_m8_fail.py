@@ -37,22 +37,43 @@ def test_bot_drop_triggers_exactly_one_rejoin():
 
 # ── FAIL-02 ───────────────────────────────────────────────────────────────────
 
-def test_rejoin_bounded_to_one_never_loop():
-    """AC-FAIL-02: rejoin-once FSM: after one rejoin, second drop -> honest stop.
+def test_rejoin_budget_is_per_episode_resets_after_sustained_connection():
+    """AC-FAIL-02: per-episode rejoin (D-038/D-043) — the budget RE-ARMS after a sustained
+    clean stretch, so a later unrelated drop rejoins again; but a rapid re-drop with NO
+    sustained reconnect does NOT (it is an honest stop, never an unbounded loop).
 
     criterion_id: AC-FAIL-02
     """
     from transport.events import BotDropHandler
 
+    # (a) drop -> rejoin -> LONG clean stretch (>15min) -> drop -> rejoin AGAIN.
     rejoins = []
+    stops = []
     async def rejoin_fn(): rejoins.append(1)
+    async def honest_stop_fn(r): stops.append(r)
 
-    handler = BotDropHandler(rejoin_fn=rejoin_fn)
-    _run(handler.on_drop(drop_id="d1", dropped_ts=100.0))
-    # Simulate rejoin fail then second drop
-    _run(handler.on_drop(drop_id="d2", dropped_ts=200.0))
-    # Must still be only 1 auto-rejoin (second drop -> honest stop)
-    assert len(rejoins) <= 1, f"rejoin loop: {len(rejoins)} rejoins issued"
+    handler = BotDropHandler(rejoin_fn=rejoin_fn, honest_stop_fn=honest_stop_fn)
+    _run(handler.on_drop(drop_id="d1", dropped_ts=100.0))          # first drop -> rejoin
+    _run(handler.on_rejoin(drop_id="d1", rejoined_ts=160.0))       # reconnected
+    # 940s (>15min) of sustained connection re-arms the per-episode budget.
+    _run(handler.on_drop(drop_id="d2", dropped_ts=1100.0))         # unrelated later drop
+    assert len(rejoins) == 2, (
+        f"a drop after a sustained clean stretch must rejoin again (per-episode); got "
+        f"{len(rejoins)} rejoins"
+    )
+    assert stops == [], "a re-armed episode must not honest-stop"
+
+    # (b) a RAPID second drop with NO sustained reconnect must NOT rejoin — honest stop, no loop.
+    rejoins2 = []
+    stops2 = []
+    async def rejoin_fn2(): rejoins2.append(1)
+    async def honest_stop_fn2(r): stops2.append(r)
+
+    handler2 = BotDropHandler(rejoin_fn=rejoin_fn2, honest_stop_fn=honest_stop_fn2)
+    _run(handler2.on_drop(drop_id="d1", dropped_ts=100.0))         # first drop -> rejoin
+    _run(handler2.on_drop(drop_id="d2", dropped_ts=200.0))         # rapid re-drop, no reconnect
+    assert len(rejoins2) == 1, f"rapid re-drop must not loop: {len(rejoins2)} rejoins issued"
+    assert stops2, "a rapid re-drop with no sustained reconnect must produce an honest stop"
 
 
 # ── FAIL-03 ───────────────────────────────────────────────────────────────────
@@ -129,8 +150,10 @@ def test_never_pretend_continuity_gap_marked():
 
 # ── FAIL-06 ───────────────────────────────────────────────────────────────────
 
-def test_second_drop_after_rejoin_honest_stop():
-    """AC-FAIL-06: second drop after one rejoin -> honest stop, not infinite retry.
+def test_second_drop_after_short_reconnect_honest_stop():
+    """AC-FAIL-06: a second drop after a SHORT (non-sustained) reconnect -> honest stop,
+    not an infinite retry. Per-episode (D-038): the budget only re-arms after a SUSTAINED
+    clean stretch, so a quick reconnect-then-drop stays a single episode -> honest stop.
 
     criterion_id: AC-FAIL-06
     """
@@ -143,12 +166,46 @@ def test_second_drop_after_rejoin_honest_stop():
     async def honest_stop_fn(reason): stops.append(reason)
 
     handler = BotDropHandler(rejoin_fn=rejoin_fn, honest_stop_fn=honest_stop_fn)
-    _run(handler.on_drop(drop_id="d1", dropped_ts=100.0))  # auto-rejoin fires
-    _run(handler.on_rejoin(drop_id="d1", rejoined_ts=110.0))
-    _run(handler.on_drop(drop_id="d2", dropped_ts=200.0))  # second drop
+    _run(handler.on_drop(drop_id="d1", dropped_ts=100.0))   # auto-rejoin fires
+    _run(handler.on_rejoin(drop_id="d1", rejoined_ts=110.0))  # only 10s connected (< 15min)
+    _run(handler.on_drop(drop_id="d2", dropped_ts=200.0))   # second drop, same episode
 
-    assert len(rejoins) == 1, "only one auto-rejoin allowed"
-    assert stops, "second drop must produce honest stop announcement"
+    assert len(rejoins) == 1, "a short (non-sustained) reconnect must not re-arm the budget"
+    assert stops, "a same-episode second drop must produce an honest stop announcement"
+
+
+def test_rapid_flapping_hits_the_cap_then_honest_stop():
+    """AC-FAIL-06: rapid flapping (rejoin, sustained, drop, ...) is bounded by a per-meeting
+    cap — after the cap of rejoins is spent, the next drop is an honest terminal stop, never
+    an unbounded loop (D-038/D-043 abuse bound).
+
+    criterion_id: AC-FAIL-06
+    """
+    from transport.events import BotDropHandler
+
+    rejoins = []
+    stops = []
+    async def rejoin_fn(): rejoins.append(1)
+    async def honest_stop_fn(reason): stops.append(reason)
+
+    # cap=2 for a tight, deterministic assertion; sustained stretch = 15min re-arms each time.
+    handler = BotDropHandler(
+        rejoin_fn=rejoin_fn, honest_stop_fn=honest_stop_fn,
+        reset_after_connected_s=900.0, cap=2,
+    )
+    t = 0.0
+    # Two full drop->rejoin->sustained cycles spend the whole cap (each re-arms the episode).
+    for _ in range(2):
+        _run(handler.on_drop(drop_id=f"d{t}", dropped_ts=t))
+        t += 60.0
+        _run(handler.on_rejoin(drop_id=f"d{t - 60.0}", rejoined_ts=t))
+        t += 1000.0  # >15min sustained: budget re-arms, but the TOTAL cap keeps counting
+    assert len(rejoins) == 2, f"cap=2 must allow exactly two rejoins; got {len(rejoins)}"
+
+    # The 3rd drop — even after a sustained stretch — exceeds the per-meeting cap: honest stop.
+    _run(handler.on_drop(drop_id="d_final", dropped_ts=t))
+    assert len(rejoins) == 2, "flapping past the cap must NOT rejoin again"
+    assert stops, "exceeding the per-meeting rejoin cap must produce an honest terminal stop"
 
 
 # ── FAIL-07 ───────────────────────────────────────────────────────────────────

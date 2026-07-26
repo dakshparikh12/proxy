@@ -3,8 +3,12 @@
 Every failure mode has an honest, non-silent path — Proxy is never both broken *and*
 pretending (AC-FAIL-17):
 
-- **Bot drop → rejoin exactly once**, then an honest terminal stop; a second drop after
-  the one rejoin is an honest stop, never an unbounded retry (AC-FAIL-01/02/06).
+- **Bot drop → rejoin (per-episode budget)** (D-038/D-043): a drop spends a rejoin; but
+  once the bot stays connected for ``reset_after_connected_s`` (default ~15min) the budget
+  RE-ARMS, so a later, unrelated Wi-Fi hiccup rejoins again. A per-meeting ``cap`` (default 3)
+  bounds rapid flapping to an honest terminal stop — never an unbounded retry (AC-FAIL-01/02/06).
+  A second drop that follows a rejoin WITHOUT a sustained clean stretch (the budget has not
+  re-armed and the cap is spent) is still an honest stop.
 - **On rejoin, state the gap plainly**: the announced interval equals the real
   ``[dropped_ts, rejoined_ts]`` window — never fabricated, padded, or shrunk — and the
   record is never presented as continuous across the drop (AC-FAIL-03/04/05). The gap
@@ -30,6 +34,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
 
+from .config import get_int
 from .signals import BotStatus
 
 #: The bot-status signal is exactly this enum — no out-of-enum value is ever emitted (AC-FAIL-07).
@@ -66,19 +71,40 @@ HONEST_STOP_REJOIN_FAILED = "I couldn't rejoin — I've stopped; the notes have 
 
 
 class RejoinPolicy:
-    """Rejoin exactly once on a drop; every terminal state is announced, never silent.
+    """Rejoin per drop-episode; every terminal state is announced, never silent.
 
-    The auto-rejoin budget is **one** for the meeting. A drop with the budget intact
-    issues exactly one rejoin attempt; a rejoin that never reconnects, or a second drop
-    after the budget is spent, transitions to an honest stop — never a retry loop, never a
-    silent giveup (AC-FAIL-01/02/06).
+    The auto-rejoin budget is **per-episode** (D-038/D-043), not once-per-meeting. A drop
+    with budget intact issues one rejoin attempt; once the bot has then stayed connected for
+    ``reset_after_connected_s`` (a sustained clean stretch, ~15min), the budget **re-arms**,
+    so a later, unrelated drop can rejoin again — a transient Wi-Fi hiccup hours apart never
+    permanently kills Proxy. Total rejoins are capped at ``cap`` per meeting: the (cap+1)-th
+    drop, or a drop while the budget is spent and has not re-armed, is an honest terminal stop
+    — never a retry loop, never a silent giveup (AC-FAIL-01/02/06).
     """
 
-    def __init__(self, *, rejoin: Callable[[], Awaitable[None]]) -> None:
+    def __init__(
+        self,
+        *,
+        rejoin: Callable[[], Awaitable[None]],
+        reset_after_connected_s: float | None = None,
+        cap: int | None = None,
+    ) -> None:
         self._rejoin = rejoin
         self._state = RecoveryState.LIVE
+        # Rejoins spent in the CURRENT episode (reset to 0 after a sustained clean stretch)
+        # and TOTAL across the meeting (bounded by the cap, never reset).
         self._rejoins_used = 0
+        self._rejoins_total = 0
         self.rejoin_attempts = 0
+        self._reset_after_connected_s = (
+            reset_after_connected_s
+            if reset_after_connected_s is not None
+            else float(get_int("rejoin_reset_after_connected_s"))
+        )
+        self._cap = cap if cap is not None else get_int("rejoin_cap_per_meeting")
+        # When the bot last (re)connected — the anchor a subsequent drop measures its
+        # sustained-connection stretch against to decide whether the budget re-arms.
+        self._connected_since: float | None = None
 
     @property
     def state(self) -> RecoveryState:
@@ -87,21 +113,33 @@ class RejoinPolicy:
     async def on_status(self, status: BotStatus) -> RejoinOutcome:
         """Drive the FSM from one bot-status transition."""
         if status.status == "dropped":
-            return await self._on_drop()
+            return await self._on_drop(status.t)
         if status.status in ("connected", "rejoined"):
             if self._state is RecoveryState.REJOINING:
-                self._state = RecoveryState.LIVE  # the one rejoin reconnected
+                self._state = RecoveryState.LIVE  # this rejoin reconnected
+            # Anchor the sustained-connection clock for the per-episode reset check.
+            self._connected_since = status.t
             return RejoinOutcome(state=self._state, rejoin_attempted=False)
         return RejoinOutcome(state=self._state, rejoin_attempted=False)
 
-    async def _on_drop(self) -> RejoinOutcome:
-        if self._rejoins_used == 0:
+    async def _on_drop(self, dropped_ts: float) -> RejoinOutcome:
+        # PER-EPISODE reset: if the bot held a connection for the sustained window since the
+        # last reconnect, this drop starts a FRESH episode with the rejoin budget re-armed.
+        if (
+            self._connected_since is not None
+            and dropped_ts - self._connected_since >= self._reset_after_connected_s
+        ):
+            self._rejoins_used = 0
+        self._connected_since = None  # dropped: the connection clock stops until we reconnect
+        if self._rejoins_used == 0 and self._rejoins_total < self._cap:
             self._rejoins_used = 1
+            self._rejoins_total += 1
             self.rejoin_attempts += 1
             self._state = RecoveryState.REJOINING
-            await self._rejoin()  # exactly one auto-rejoin attempt
+            await self._rejoin()  # one auto-rejoin attempt for this episode
             return RejoinOutcome(state=self._state, rejoin_attempted=True)
-        # Budget spent (rejoin failed to hold, or a second drop): honest stop, no loop.
+        # Budget spent for this episode (no sustained reconnect) or the per-meeting cap is
+        # reached (rapid flapping): honest terminal stop, never a loop.
         self._state = RecoveryState.HONEST_STOP
         return RejoinOutcome(
             state=self._state,

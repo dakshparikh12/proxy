@@ -32,6 +32,7 @@ from agentkit.abort import AbortRegistry
 
 from .boundary import BoundarySource
 from .carrier import SignalCarrier
+from .config import get_int
 from .hearing import PROXY_SPEAKER
 from .seams import OutputMediaSink, TTSProvider
 from .signals import BargeIn, Boundary, Speaking
@@ -63,26 +64,58 @@ def boundary_opened(message: dict[str, Any]) -> bool:
 class SpeakingDetector:
     """VAD → ``speaking(on/off)`` + human speech-onset (the barge-in source, AC-TURN-01).
 
-    Barge-in onset is scoped to **non-Proxy** speakers, so Proxy's own output audio never
-    triggers it (AC-TURN-11); a silence frame is never an onset. The room ``speaking``
-    signal flips on the silent↔speech edge of the whole room.
+    Barge-in onset fires only on **actual sustained talking** — a real interruption — never on a
+    brief non-speech noise (a cough, an "mm", a chair scrape) that isn't someone taking the floor
+    (D-037 / D-043). A non-Proxy speaker must sustain speech for at least ``min_onset_s`` before
+    ``human_onset`` fires; a blip that ends before that threshold is forgotten and never cuts Proxy.
+    Once a real onset fires, the mid-word cut still lands within the ~200ms barge-in budget — so a
+    genuine interruption stops Proxy fast while a cough is ignored. Onset is scoped to non-Proxy
+    speakers (Proxy's own output audio never triggers it, AC-TURN-11) and fires at most once per
+    speech run. The room ``speaking`` signal still flips on the whole-room silent↔speech edge.
+
+    ``min_onset_s=0`` restores the legacy fire-on-first-frame behaviour (used by callers that
+    pre-gate the onset themselves).
     """
 
-    def __init__(self, *, proxy_speaker: str = PROXY_SPEAKER) -> None:
+    def __init__(self, *, proxy_speaker: str = PROXY_SPEAKER, min_onset_s: float | None = None) -> None:
         self._proxy = proxy_speaker
         self._active: set[str] = set()
+        # Per non-Proxy speaker: when their CURRENT speech run began, and whether its onset has
+        # already fired — so onset fires once, only after the run outlasts the debounce.
+        self._run_started_at: dict[str, float] = {}
+        self._fired: set[str] = set()
+        self._min_onset_s = (
+            min_onset_s if min_onset_s is not None else get_int("barge_in_onset_min_ms") / 1000.0
+        )
 
     def observe(self, frame: VadFrame) -> tuple[Speaking | None, bool]:
         """Fold one VAD frame; return (room speaking-edge signal or None, human_onset)."""
         was_active = bool(self._active)
         human_onset = False
         if frame.is_speech:
-            new_speaker = frame.speaker_id not in self._active
-            if new_speaker and frame.speaker_id != self._proxy:
-                human_onset = True  # a human began speaking — sourced purely from VAD
-            self._active.add(frame.speaker_id)
+            is_human = frame.speaker_id != self._proxy
+            if frame.speaker_id not in self._active:
+                # A new speech run begins. Record its start; do NOT fire yet — a single frame
+                # could be a cough. Only sustained speech past the debounce is an interruption.
+                self._active.add(frame.speaker_id)
+                if is_human:
+                    self._run_started_at[frame.speaker_id] = frame.t
+            # A human whose sustained speech has now outlasted the debounce IS taking the floor:
+            # fire the onset once (a blip that ended before this never reaches here — the cough case).
+            started = self._run_started_at.get(frame.speaker_id)
+            if (
+                is_human
+                and started is not None
+                and frame.speaker_id not in self._fired
+                and frame.t - started >= self._min_onset_s
+            ):
+                human_onset = True
+                self._fired.add(frame.speaker_id)
         else:
+            # The run ended — forget it, so a below-threshold blip can never retroactively cut Proxy.
             self._active.discard(frame.speaker_id)
+            self._run_started_at.pop(frame.speaker_id, None)
+            self._fired.discard(frame.speaker_id)
         now_active = bool(self._active)
         signal = Speaking(on=now_active, t=frame.t) if now_active != was_active else None
         return signal, human_onset

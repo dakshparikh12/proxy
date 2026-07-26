@@ -22,6 +22,7 @@ from typing import Any, Protocol
 from contracts.registry import assert_registry_closed
 
 from .carrier import SignalCarrier
+from .config import get_int
 from .signals import BotStatus, MeetingEnd, MeetingMetadata, RosterEvent, Signal
 
 # Confirmed Recall webhook event tags (pinned at build, §3.9-2).
@@ -287,12 +288,20 @@ class _DropInterval:
 
 
 class BotDropHandler:
-    """Rejoin-once FSM: first drop fires one auto-rejoin; second drop is an honest stop.
+    """Per-episode rejoin FSM (D-038/D-043): a drop fires one auto-rejoin; the budget
+    RE-ARMS after a sustained clean stretch, so a later unrelated drop rejoins again; a
+    per-meeting cap bounds rapid flapping to an honest terminal stop.
+
+    A drop spends the episode's rejoin budget. Once the bot then stays connected for
+    ``reset_after_connected_s`` (default ~15min), the budget re-arms — so a transient Wi-Fi
+    hiccup hours apart never permanently kills Proxy. Total rejoins are capped at ``cap``
+    (default 3) per meeting: the (cap+1)-th drop, or a drop while the budget is spent and has
+    not re-armed, is an honest terminal stop — never an unbounded retry, never silent.
 
     Injected callbacks (all optional):
-    - ``rejoin_fn``: called once on first drop to attempt reconnect.
+    - ``rejoin_fn``: called to attempt a reconnect when the episode budget allows.
     - ``announce_fn``: called on rejoin with the disconnected interval.
-    - ``honest_stop_fn``: called on second drop with a reason string.
+    - ``honest_stop_fn``: called when the budget is spent (no reset) or the cap is hit.
     """
 
     def __init__(
@@ -301,32 +310,57 @@ class BotDropHandler:
         rejoin_fn: Callable[[], Awaitable[None]] | None = None,
         announce_fn: Callable[[Any], Awaitable[None]] | None = None,
         honest_stop_fn: Callable[[str], Awaitable[None]] | None = None,
+        reset_after_connected_s: float | None = None,
+        cap: int | None = None,
     ) -> None:
         self._rejoin_fn = rejoin_fn
         self._announce_fn = announce_fn
         self._honest_stop_fn = honest_stop_fn
-        self._rejoin_attempted = False  # set on first drop; second drop fires honest_stop
-        self._rejoined_once = False     # set by on_rejoin
+        # Rejoins spent in the CURRENT episode (re-armed to 0 after a sustained clean stretch)
+        # and the TOTAL across the meeting (bounded by the cap, never reset).
+        self._rejoins_used = 0
+        self._rejoins_total = 0
         self._drops: dict[str, float] = {}
+        # When the bot last (re)connected — the anchor a later drop measures its sustained
+        # clean stretch against to decide whether the per-episode budget re-arms.
+        self._connected_since: float | None = None
+        self._reset_after_connected_s = (
+            reset_after_connected_s
+            if reset_after_connected_s is not None
+            else float(get_int("rejoin_reset_after_connected_s"))
+        )
+        self._cap = cap if cap is not None else get_int("rejoin_cap_per_meeting")
 
     async def on_drop(self, *, drop_id: str, dropped_ts: float) -> None:
-        """Handle a bot-drop event; auto-rejoin on first drop, honest stop on second."""
+        """Handle a bot-drop: auto-rejoin if the per-episode budget allows, else honest stop."""
         self._drops[drop_id] = dropped_ts
-        if not self._rejoin_attempted:
-            self._rejoin_attempted = True
+        # PER-EPISODE reset: a drop that follows a SUSTAINED clean stretch starts a fresh
+        # episode with the rejoin budget re-armed (D-038).
+        if (
+            self._connected_since is not None
+            and dropped_ts - self._connected_since >= self._reset_after_connected_s
+        ):
+            self._rejoins_used = 0
+        self._connected_since = None  # the connection clock stops until we reconnect
+        if self._rejoins_used == 0 and self._rejoins_total < self._cap:
+            self._rejoins_used = 1
+            self._rejoins_total += 1
             if self._rejoin_fn is not None:
                 result = self._rejoin_fn()
                 if inspect.isawaitable(result):
                     await result
         else:
+            # Budget spent for this episode (no sustained reconnect) or the per-meeting cap is
+            # reached (rapid flapping): honest terminal stop, never a loop.
             if self._honest_stop_fn is not None:
-                result = self._honest_stop_fn("second_drop")
+                result = self._honest_stop_fn("rejoin_budget_spent")
                 if inspect.isawaitable(result):
                     await result
 
     async def on_rejoin(self, *, drop_id: str, rejoined_ts: float) -> None:
-        """Record a successful rejoin and announce the disconnected interval."""
-        self._rejoined_once = True
+        """Record a successful rejoin, anchor the sustained-connection clock, announce the gap."""
+        # Anchor the clean-stretch clock: a subsequent drop measures against this to re-arm.
+        self._connected_since = rejoined_ts
         if self._announce_fn is not None:
             dropped_ts = self._drops.get(drop_id, rejoined_ts)
             interval = _DropInterval(dropped_ts=dropped_ts, rejoined_ts=rejoined_ts)

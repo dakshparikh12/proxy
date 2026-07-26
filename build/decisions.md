@@ -263,3 +263,26 @@ Stage C landed ~25 fixes green (commit 2bbdc7b). The residual items are NOT auto
 - **F2 / D-034 + C-BUDGETWIRE:** unifying the cost breaker onto the listening baseline that survives a recycle needs a FORWARD MIGRATION adding a `meeting_cost` listening/task split column (or wiring into `operation_runs.progress`) + `projected_hours` reconstruction — migration is human-gated per the constitution. Without the persisted split, any reload reconstruction over-counts (a Workroom Opus build would trip the listening SLA breaker — exactly what D-034 forbids). No cluster/composition test exercises the reload basis, so VERIFY can't prove it. C-BUDGETWIRE (live breaker consumption) depends on the same split infra. **Founder: greenlight the meeting_cost split migration; then F2 + C-BUDGETWIRE are buildable + testable.**
 
 **Confirmed already-correct (dropped, no change):** A1b (D-030 keeps the DEFAULT), A9 (CanvasSurface is the live path; CanvasDelivery is a sealed-test shim), A10 (live path wires the stricter ConsentGate), A21 (close reads SDK cost; the residual token-math is the unavoidable raw-Messages-API conversion, D-010 deferred), R12/R13/R14/R16/R17.
+
+## D-043  Founder rulings on the D-042 blockers (2026-07-26) — re-seal authorized for 3, defer 2  [product-answered]
+The founder ruled the D-042 blockers. These AUTHORIZE the specific sealed-test updates (re-seal to
+the improved behavior) — the ONLY sanctioned reason to edit a sealed test: the founder decided the
+behavior should change, so the test's expectation changes with it (never to make broken code pass).
+- **F5 / D-037 (barge-in) — IMPLEMENT.** Ruling refined: barge-in fires only on ACTUAL sustained
+  talking (a real interruption); a brief non-speech noise / cough that isn't an interruption must
+  NOT cut Proxy. Update the sealed `test_m7_turn_barge_latency.py` onset assertions to the
+  sustained-speech gate; keep the <200ms-after-a-real-onset budget.
+- **F6 / D-038 (reconnect) — IMPLEMENT.** Keep attempting to rejoin; do not give up after one drop
+  (per-episode reset + a cap). Update the sealed `test_w9` / `test_m8_fail` rejoin assertions.
+- **F4b / D-036 (contradiction fires BOTH events) — IMPLEMENT.** Update sealed `AC-EVENT-01` /
+  `test_event_01` to expect CONTRADICTION + CLAIM_LANDED_CHECKABLE for a contradicting claim.
+- **A18 (close-drain) — DEFER** (founder). Rare crash-path; revisit later.
+- **F2 / D-034 + C-BUDGETWIRE (cost-breaker split migration) — SKIP for now** (founder). No
+  `meeting_cost` migration; the breaker stays on its current basis until revisited.
+
+## D-044  Product-presence mandate (2026-07-26)  [product — standing bar]
+Beyond spec-compliance: every Proxy interaction must MAKE SENSE as a *presence in the meeting*, not
+a mechanical tool. The small nuances are the product — natural barge-in (stop for real talking, not
+a cough), a follow-up/answer ready, sharing its screen while it works, graceful recovery, reading
+the room. This is a STANDING bar for all further work: elevate tool → colleague. A dedicated
+"presence review" walks every interaction from the human's POV and drives an enhancement backlog.

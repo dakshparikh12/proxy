@@ -54,6 +54,7 @@ __all__ = [
     "CollectingSink",
     "DeltaPersister",
     "TargetResolver",
+    "add_entry_kinds",
     "classify_add_entry",
     "classify_closed_entry",
     "classify_op",
@@ -131,38 +132,56 @@ def _entry_of(op: AddOp | PatchOp | CloseOp) -> Optional[Entry]:
     return None
 
 
-def classify_add_entry(entry: Entry) -> Optional[MaterialChangeKind]:
-    """Map a freshly-added entry to its material-change kind, or None (no event).
+def add_entry_kinds(entry: Entry) -> list[MaterialChangeKind]:
+    """Map a freshly-added entry to ALL its material-change kinds, in emit order.
 
     The mapping is total and deterministic:
 
-    * ``Claim`` — a checkable claim landed → ``CLAIM_LANDED_CHECKABLE``. If it also
-      carries a ``contradicts`` link, the contradiction is the material change →
-      ``CONTRADICTION`` (a detected conflict outranks the bare landing).
+    * ``Claim`` — a checkable claim landed → ``CLAIM_LANDED_CHECKABLE``. If it ALSO
+      carries a ``contradicts`` link, the added claim is BOTH a checkable landing
+      **and** a detected conflict, so it fires BOTH ``CLAIM_LANDED_CHECKABLE`` **and**
+      ``CONTRADICTION`` (D-036 / D-043 / F4b): the disputed claim is exactly the one
+      the Proactive judge should later verify, so its checkable landing is never
+      suppressed by the contradiction. Emit order: landing first, then contradiction.
     * ``Decision`` — ``forming`` → ``DECISION_FORMING``; ``final`` → ``DECISION_FINAL``.
     * ``ActionItem`` — ``ACTION_ITEM``.
     * ``OpenQuestion`` — an added question opens → ``QUESTION_OPEN`` (a
       question added already ``resolved`` closes → ``QUESTION_CLOSED``).
-    * ``ContextLine`` — chitchat/color → **None**: the emitter fires nothing
+    * ``ContextLine`` — chitchat/color → **[]**: the emitter fires nothing
       (AC-EVENT-03 / AC-EVENT-10), even though the line is still persisted.
     """
     if isinstance(entry, Claim):
+        kinds = [MaterialChangeKind.CLAIM_LANDED_CHECKABLE]
         if entry.contradicts is not None:
-            return MaterialChangeKind.CONTRADICTION
-        return MaterialChangeKind.CLAIM_LANDED_CHECKABLE
+            # BOTH events: the checkable landing AND the contradiction (D-036 F4b) —
+            # no early return that would drop the checkable landing.
+            kinds.append(MaterialChangeKind.CONTRADICTION)
+        return kinds
     if isinstance(entry, Decision):
         if entry.status is DecisionStatus.final:
-            return MaterialChangeKind.DECISION_FINAL
-        return MaterialChangeKind.DECISION_FORMING
+            return [MaterialChangeKind.DECISION_FINAL]
+        return [MaterialChangeKind.DECISION_FORMING]
     if isinstance(entry, ActionItem):
-        return MaterialChangeKind.ACTION_ITEM
+        return [MaterialChangeKind.ACTION_ITEM]
     if isinstance(entry, OpenQuestion):
         if entry.resolved:
-            return MaterialChangeKind.QUESTION_CLOSED
-        return MaterialChangeKind.QUESTION_OPEN
+            return [MaterialChangeKind.QUESTION_CLOSED]
+        return [MaterialChangeKind.QUESTION_OPEN]
     if isinstance(entry, ContextLine):
-        return None
-    return None
+        return []
+    return []
+
+
+def classify_add_entry(entry: Entry) -> Optional[MaterialChangeKind]:
+    """The PRIMARY material-change kind for a freshly-added entry, or None.
+
+    Retained as the single-kind view for callers that want one kind; the emit path uses
+    :func:`add_entry_kinds` so a contradicting claim fires BOTH its checkable-landing and
+    contradiction events (D-036 F4b). For a contradicting ``Claim`` the primary kind is the
+    checkable landing (the base fact); the contradiction is the second emitted kind.
+    """
+    kinds = add_entry_kinds(entry)
+    return kinds[0] if kinds else None
 
 
 def classify_closed_entry(entry: Entry) -> Optional[MaterialChangeKind]:
@@ -285,25 +304,32 @@ def emit_events_for_delta(
     for op in delta.ops:
         if isinstance(op, CloseOp):
             kind, entry = _resolve_close(op, resolve_target)
+            kinds = [kind] if kind is not None else []
+        elif isinstance(op, AddOp):
+            # An AddOp may map to MORE than one kind: a contradicting claim is both a
+            # checkable landing AND a contradiction (D-036 F4b) — both events fire.
+            entry = op.entry
+            kinds = add_entry_kinds(entry)
         else:
-            kind = classify_op(op)
-            entry = _entry_of(op)
-        if kind is None or entry is None:
+            # PatchOp: no standalone inline-entry event (patches never over-emit).
+            kinds, entry = [], None
+        if not kinds or entry is None:
             # Not a material change (chitchat / patch / running-context), OR a
             # close with no resolvable entry — no event from this path.
             continue
         context_slice = focused_context_slice(entry, surrounding)
-        event = MaterialChangeEvent(
-            kind=kind,
-            entry=entry,
-            context_slice=context_slice,
-            meeting_revision=meeting_revision,
-        )
-        # Never emit an incomplete payload (AC-EVENT-02).
-        if not event.is_complete():
-            continue
-        sink.emit(event)
-        emitted.append(event)
+        for kind in kinds:
+            event = MaterialChangeEvent(
+                kind=kind,
+                entry=entry,
+                context_slice=context_slice,
+                meeting_revision=meeting_revision,
+            )
+            # Never emit an incomplete payload (AC-EVENT-02).
+            if not event.is_complete():
+                continue
+            sink.emit(event)
+            emitted.append(event)
         # A newly-added entry becomes part of the surrounding context for any
         # later op in the same delta.
         surrounding.append(entry)

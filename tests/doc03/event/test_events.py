@@ -91,12 +91,16 @@ def delta(*ops: object, current_goal: str | None = None) -> NoteDelta:
 
 
 # --------------------------------------------------------------------------- #
-# T-EVENT-01 — AC-EVENT-01: all seven kinds fire, nothing else.               #
+# T-EVENT-01 — AC-EVENT-01: all seven kinds fire; a contradicting claim fires  #
+# BOTH claim-landed AND contradiction (D-036 F4b); no OTHER type is emitted.   #
 # --------------------------------------------------------------------------- #
 def test_event_01_all_seven_material_change_kinds_fire_and_nothing_else() -> None:
     sink = CollectingSink()
 
-    # Seven distinct synthetic deltas, each matching exactly one kind.
+    # Distinct synthetic deltas covering every material-change kind. The contradiction delta
+    # is a contradicting claim, which is BOTH a checkable landing AND a contradiction (F4b) —
+    # the disputed claim is exactly the one the Proactive judge should later verify, so its
+    # checkable landing is never suppressed by the contradiction.
     d_claim = delta(AddOp(entry=a_claim()))
     d_forming = delta(AddOp(entry=a_forming_decision()))
     d_final = delta(AddOp(entry=a_final_decision()))
@@ -109,19 +113,55 @@ def test_event_01_all_seven_material_change_kinds_fire_and_nothing_else() -> Non
         apply_delta(d, sink=sink, meeting_revision=1)
 
     kinds = [e.kind for e in sink.events]
+    # The contradicting claim fires BOTH events (landing then contradiction), in op order.
+    assert kinds == [
+        MaterialChangeKind.CLAIM_LANDED_CHECKABLE,   # d_claim
+        MaterialChangeKind.DECISION_FORMING,         # d_forming
+        MaterialChangeKind.DECISION_FINAL,           # d_final
+        MaterialChangeKind.CLAIM_LANDED_CHECKABLE,   # d_contradiction — checkable landing (F4b)
+        MaterialChangeKind.CONTRADICTION,            # d_contradiction — AND the contradiction
+        MaterialChangeKind.ACTION_ITEM,              # d_action
+        MaterialChangeKind.QUESTION_OPEN,            # d_qopen
+        MaterialChangeKind.QUESTION_CLOSED,          # d_qclosed
+    ]
+    # Every one of the seven kinds fired; CLAIM_LANDED_CHECKABLE fires TWICE (a bare claim +
+    # the contradicting claim's landing), and no kind OUTSIDE the closed seven is ever emitted.
+    assert set(kinds) == set(MaterialChangeKind)
+    assert kinds.count(MaterialChangeKind.CLAIM_LANDED_CHECKABLE) == 2
+    assert kinds.count(MaterialChangeKind.CONTRADICTION) == 1
+    for k in MaterialChangeKind:
+        assert k in kinds  # closure both ways: only these seven kinds, all present
+    assert len(sink.events) == 8  # 6 single-kind deltas + the contradiction delta's 2 events
+
+
+def test_event_01_contradicting_claim_fires_both_landing_and_contradiction() -> None:
+    """D-036 / D-043 (F4b): a contradicting claim emits BOTH CLAIM_LANDED_CHECKABLE and
+    CONTRADICTION — the checkable landing is never suppressed (removed early-return), and no
+    other event type is emitted for the single op.
+
+    criterion_id: AC-EVENT-01
+    """
+    sink = CollectingSink()
+    apply_delta(
+        delta(AddOp(entry=a_claim(text="ships Monday", contradicts="c1"))),
+        sink=sink,
+        meeting_revision=1,
+    )
+    kinds = [e.kind for e in sink.events]
     assert kinds == [
         MaterialChangeKind.CLAIM_LANDED_CHECKABLE,
-        MaterialChangeKind.DECISION_FORMING,
-        MaterialChangeKind.DECISION_FINAL,
         MaterialChangeKind.CONTRADICTION,
-        MaterialChangeKind.ACTION_ITEM,
-        MaterialChangeKind.QUESTION_OPEN,
-        MaterialChangeKind.QUESTION_CLOSED,
     ]
-    # Exactly one of each of the seven; no other type present.
-    for k in MaterialChangeKind:
-        assert kinds.count(k) == 1
-    assert len(sink.events) == 7
+    # Closure: EXACTLY these two kinds for the contradicting claim, nothing else.
+    assert len(sink.events) == 2
+    assert set(kinds) == {
+        MaterialChangeKind.CLAIM_LANDED_CHECKABLE,
+        MaterialChangeKind.CONTRADICTION,
+    }
+    # Both events carry the SAME triggering (disputed) entry.
+    assert sink.events[0].entry is sink.events[1].entry
+    assert isinstance(sink.events[0].entry, Claim)
+    assert sink.events[0].entry.contradicts == "c1"
 
 
 def test_event_01_question_closed_also_fires_via_close_op() -> None:

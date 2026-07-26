@@ -23,12 +23,22 @@ _DEFAULTS: dict[str, Any] = {
     "tts_chunk_ms": 120,
     "max_buffered_audio_ms": 120,
     "barge_in_budget_ms": 200,
+    # D-037/D-043 — a non-Proxy speaker must SUSTAIN speech for at least this long before it
+    # counts as a real interruption (barge-in onset). A brief blip below this (a cough / "mm" /
+    # a chair scrape) is NOT an interruption and must never cut Proxy; once a real onset fires,
+    # the mid-word cut still lands within barge_in_budget_ms. ~[150-250ms]; 200 is the floor.
+    "barge_in_onset_min_ms": 200,
     "headline_char_soft_cap": 240,
     "max_spoken_chars_per_hour": 4000,
     "outbound_sends_per_second": 4,
     "bot_usd_per_hr": 0.50,
     "stt_usd_per_hr": 0.15,
     "tts_usd_per_hr": 0.15,
+    # D-038/D-043 — rejoin budget is PER-EPISODE. After the bot stays connected for this many
+    # seconds the budget re-arms (a later unrelated drop can rejoin again); a per-meeting cap
+    # bounds rapid flapping to an honest terminal stop.
+    "rejoin_reset_after_connected_s": 900,
+    "rejoin_cap_per_meeting": 3,
 }
 
 
