@@ -63,6 +63,23 @@ async def _resolve_session_from_request(request: Request) -> dict[str, Any] | No
     401s an absent/invalid session. A missing SessionMiddleware (an app built
     without the optional dep) reads as no session ⇒ 401 — fail-closed.
     """
+    # Prefer the DURABLE session — the HMAC 'session' cookie ``auth_callback`` writes via
+    # ``complete_signin`` (the sessions row is the source of truth the WS gateway + /m read).
+    # The real OAuth flow produces ONLY this cookie, so reading it is what lets a signed-in
+    # member accept/reject a draft (before this, protected() read the never-populated
+    # SessionMiddleware dict → every real member 401'd on the Law-3 accept path).
+    db = getattr(request.app.state, "db", None)
+    if db is not None:
+        try:
+            from harness.session import resolve_session
+
+            resolved = await resolve_session(db, request.cookies)
+        except Exception:  # noqa: BLE001 - a resolution fault falls through to the middleware read
+            resolved = None
+        if isinstance(resolved, dict) and resolved.get("user_id") is not None:
+            return {"user_id": resolved["user_id"], "tenant_id": resolved.get("tenant_id")}
+    # Fallback: the Starlette SessionMiddleware dict — retained for back-compat with a caller
+    # that carries a middleware session cookie (no durable row). Fail-closed to None.
     try:
         session = request.session.get("user")
     except (AssertionError, AttributeError):

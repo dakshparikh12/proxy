@@ -184,3 +184,68 @@ CANONICAL §12.12 + Doc00 §15: V0 has ZERO runtime flags — plain env vars, on
 - **The code_intel mount fix (7ff6c77) is clean/additive:** it only ADDED an optional `code_intel_ctx` field + kwarg to `MeetingRuntime`/`start_meeting` (all defaulting `None`); `start_meeting(header, carrier, ...)`'s positional signature and the `HearingStage`↔carrier bind + Scribe subscribe order are unchanged. The test drives the control_plane drain (`launch=None`), so code_intel never enters its path.
 - **Positive proof the PRODUCT path is intact:** (1) the deterministic sibling `tests/doc03/e2e/test_transcript_bridge_reaches_carrier.py` (the docstring's own "bridge proven deterministically") is **GREEN (2 passed)** — it proves transport→carrier without a funded LLM. (2) Stubbing ONLY the vendor `scribe_call` seam to return a valid `NoteDelta` (what a funded call yields), leaving every other seam real, drives the full webhook→drain→carrier→coalescer→`run_scribe`→`apply_delta` chain to **3 `note_deltas` rows** (c1/c2/c3, one per live transcript). The only missing ingredient is Anthropic credit.
 - **Why this is a founder gate, not an auto-fix:** the sealed test's own skip guard (`requires_funded_llm`) checks only that `ANTHROPIC_API_KEY` is NON-EMPTY, not that it is FUNDED — so an unfunded key runs the reality body instead of skipping. The test is a correct reality-tier assertion; the build is correct; there is no sealed-test edit and no product edit that lawfully turns this green. Options for the founder: (a) fund the `ANTHROPIC_API_KEY` (the reality tier then passes for real — the deterministic + funded-stub proofs above show it will); (b) tighten the sealed guard to skip on an unfunded/invalid key (a sealed-test edit → founder-gated); (c) accept it as a known env-gated reality red alongside the csread 401-vs-404 flag. **RAISED for founder resolution — no sealed artifact, `_baseline.json`, product code, or `chain.json` edited to chase this red.**
+
+---
+
+# Phase 1 Stage-A — FROZEN founder rulings (D-033..D-040)
+
+The Structural-Convergence reconcile (190 raw records → 34 clusters) surfaced 8 high-blast-radius
+seams the spec left two-voiced. Founder ruled all 8 (2026-07-25) — recorded here as the frozen
+spec. Full package: `scratchpad/A_decisions.md`. These are LAW for Stage B/C/D and the composition
+proof; downstream fixes implement them. (23 auto-resolvable A1–A23 + 22 recommend-and-proceed
+R1–R22 are the lead's Stage-C backlog, not re-litigated here.)
+
+## D-033  Boot-reaper scope = heartbeat-gated (NOT unconditional)  [product-answered · F1 / C-REAP+C-STALE-RATIO]
+- Gap: Doc00 §5.2 literal ("every still-running row belongs to a now-dead process") vs the multi-instance fence model — an unconditional `reap_orphans` at boot lets a booting Cloud Run instance interrupt a live sibling's fresh claim (double-free of a live meeting).
+- Decision: **Option B — heartbeat-gated sweep, made explicit.** Keep `_real_reaper`→`sweep_stale_operation_runs`; leave `reap_orphans()` unwired. ADD the ordering invariant to the spec ("a booting instance never reaps a row whose heartbeat is fresh") and enforce a **minimum STALE_AFTER_S/HEARTBEAT_S ratio ≥3×** in config validation so a mis-config can't reap a live owner after one slow beat.
+- Rationale: the spec's "now dead" clause is written for a single-instance mental model contradicted by its own parallel-boot design; gated is the only cross-instance-safe reading. Most dangerous concurrency seam in the substrate.
+- Nodes: `foundation.boot-reaper` / `foundation.config-secrets` (ratio validator).
+
+## D-034  Cost-breaker input = listening baseline (§12.7), unified onto ONE reader  [product-answered · F2 / C-COSTRELOAD]
+- Gap: §3 (total spend) vs §12.7 (listening subset vs 0.8/1.0×projected-hours) describe the same breaker two ways; code does BOTH and diverges after a recycle (the persisted-reload path sums all five meters incl. the two cache columns §3 excludes AND loses `projected_hours`+the listening/task split → 2h default basis).
+- Decision: **Option A — listening baseline**, unified onto one reader. Persist `projected_hours` + the listening/task split on the `meeting_cost` row (or its progress jsonb) so a reload reconstructs the same basis. A legitimate Workroom build draws a separate disclosed task budget, never trips the listening SLA breaker.
+- Rationale: §12.7 is the more specific + more recent decision and explicitly rejects the arithmetically-false all-in-$1 reading; every S7 test must grade the same sum before vs after recycle.
+- Nodes: `orchestrator.cost-breaker` / `foundation.meeting-cost-repo`.
+
+## D-035  Evidence-gate match = normalized/canonicalized (NOT exact joined-argv)  [product-answered · F3 / C-EVIDENCE-ARGV]
+- Gap: the evidence gate keys receipts on BYTE-IDENTICAL `' '.join(receipt.argv)` vs the plan's verify line; the E2B backend runs `cd <root> && <command>` → never byte-identical → **every real build force-fails the gate and lands `needs_review` even when tests genuinely passed** (the verify-loop silently never verifies).
+- Decision: **Option B — normalized match with a pinned canonicalization rule**: strip a leading `cd <sandbox_root> &&`, collapse whitespace, require exit 0 (plan verify line ≡ canonicalized receipt argv). The rule is deterministic + spec-pinned so a normalization bug can't accept a wrong command.
+- Rationale: linchpin of the entire verify-loop; Option A converts every real pass to `needs_review`, reading as "the build never verifies."
+- Nodes: `workroom.evidence-gate`.
+
+## D-036  Dangling `contradicts`/target_id = honest degrade + fire BOTH events  [product-answered · F4+F4b / C-REFINT+C-CONTRADICT-EVENT]
+- Gap: when the cheap-Haiku Scribe emits a Claim whose `contradicts` points to no existing entry, the applier is internally SPLIT — `parse.py` RAISES (unused), the production fold silently creates an empty base. Coupled: a contradicting claim fires only CONTRADICTION (CLAIM_LANDED_CHECKABLE early-return-suppressed).
+- Decision: **Option B — degrade honestly**: strip the dangling link, keep the claim, record an honest "unbound reference" (never drop the window, never fabricate a phantom entry). Run `check_referential_integrity` in the applier so the degrade is deliberate, not a silent fold artifact. **AND fire BOTH events** (remove the early return) — the disputed claim is exactly the one the Proactive judge should verify.
+- Rationale: the "live entries are good + correctable, close pass cleans up" philosophy (§3.2) favors not crashing on a cheap-model artifact; §1/§3 walkthroughs point to two distinct triggers.
+- Nodes: `scribe.applier` / `scribe.event-classifier`.
+
+## D-037  Barge-in trigger = debounced (≥150–250ms sustained non-Proxy speech)  [product-answered · F5 / C-BARGE-SCOPE]
+- Gap: `SpeakingDetector.observe` sets `human_onset` on the FIRST frame of ANY non-Proxy speaker (no floor/debounce) — in a lively room a cough/murmur/side-chatter cuts Proxy mid-sentence → "never talks over people" degrades to "never talks."
+- Decision: **Option B, minimally** — add a short debounce (≥150–250ms of sustained non-Proxy speech) before barge-in fires; a real interjection (which sustains) still stops Proxy within the <200ms-after-onset budget.
+- Rationale: the literal any-onset reading may make Proxy unusable in a real multi-person room; core UX call.
+- Nodes: `transport.speaking-detector` / `transport.barge-in`.
+
+## D-038  Rejoin budget = per-drop-episode with a cap (NOT per-meeting)  [product-answered · F6 / C-REJOIN]
+- Gap: `failure.py:80` sets `_rejoins_used=1` on first drop, NEVER reset even after a successful reconnect → a second Wi-Fi hiccup hours later loses Proxy permanently.
+- Decision: **Option B — per-episode**: reset the budget after N minutes of sustained connection; cap total rejoins per meeting (e.g. 3) to bound abuse.
+- Rationale: the spec's own Wi-Fi-hiccup vignette implies transient drops shouldn't permanently kill Proxy; "once" is the exact word two engineers read two ways.
+- Nodes: `transport.failure-rejoin`.
+
+## D-039  Accept/reject idempotency = durable across instances (NOT process-local)  [product-answered · F7 / C-ACCEPTIDEM]
+- Gap: `accept_route.py` keys a module-global per-instance dict; control_plane is multi-instance Cloud Run → a retry on a different instance re-runs the apply as a no-op but returns a FRESH `accept_id`/`idempotent_replay=false` (different body) and for a code-change bundle can re-expose the bundle → two accepts for one draft in the Law-3 audit.
+- Decision: **Option B — durable idempotency ledger**: persist `(meeting,draft,key)→response` (or derive replay from `staged_drafts` terminal status + a stored `accept_id`) so any instance replays the identical first response and the world-touching click audits exactly once.
+- Rationale: this is the product's ONE irreversible human click (Law 3); "probably idempotent, not provably" is exactly what the accept spine exists to eliminate.
+- Nodes: `experience.accept-route` / a forward migration (accept-response ledger column/table).
+
+## D-040  Verifier model = same Opus (BIG_BUILD) seat + fresh context, documented intentional  [product-answered · F8 / C-VERIFYSEAT]
+- Gap: §3.2 says the critic is "stronger than the worker," but the worker already rides the strongest seat (Opus/BIG_BUILD); `verify_gate.py:89` uses the same seat ("at least as strong").
+- Decision: **Option A — same seat + fresh context**, documented as intentional (no new stronger tier procured). §3.7① names anti-anchoring (fresh context) as "THE thing to copy"; Opus is genuinely the ceiling in the ONE canonical seat table.
+- Rationale: the fresh context, not a stronger model, is the load-bearing anti-anchoring property; the ONE canonical table has no stronger seat to point at.
+- Nodes: `workroom.verify-gate` (doc comment / invariant only — no behavior change).
+
+## D-041  session convergence — /m + accept/reject read the DURABLE session (P0 C-SESSIONREAD)  [technical]
+- Gap: `auth_callback` writes ONLY the durable HMAC `session` cookie (via `complete_signin`; the WS gateway + `resolve_session` read it), but the `/m` meeting-home route AND the Law-3 accept/reject routes read `request.session["user"]` (the Starlette SessionMiddleware dict) which the OAuth flow DELIBERATELY never populates — so a real signed-in tenant member was **unreachable on their own meeting home and could not accept/reject a draft** (P0). The app.py:210 comment acknowledged the half-done convergence.
+- Decision: converge every authenticated user surface onto the durable resolver `harness.session.resolve_session`. `/m` (`meeting_home.py`) now reads durable-only (its sealed tests use handler-direct `session=` or no-cookie/token, so no contradiction). The accept/reject reads (`app.py:_resolve_session_from_request` + `accept_route.py:_principal_and_key`, now async) read **durable-first with a SessionMiddleware fallback** — the union fixes the real OAuth flow while keeping the sealed `test_draft_accept_reject_routes` green (its `_signed_session_cookie` mints a middleware cookie the fallback still serves; no sealed-test edit).
+- Verified: meeting_home 18 + new positive/negative durable-member tests (`test_meeting_home_session_wired.py`) + accept/reject 7 + csread-mount — all green.
+- **Founder cleanup (deferred, NOT a blocker):** the sealed accept/reject tests authenticate via a SessionMiddleware cookie, a mechanism the real OAuth flow abandoned. A cleaner end-state migrates those sealed tests to a durable session (complete_signin) and drops the middleware fallback — a sealed-test edit, so founder-gated. Recorded so the fallback isn't mistaken for permanent.
+- Nodes: `experience.meeting-home` · `experience.accept-route` · `control_plane.app`.

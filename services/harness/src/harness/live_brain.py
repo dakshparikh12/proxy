@@ -245,6 +245,7 @@ def make_wake_adapter(
     wake_turn: WakeTurn,
     *,
     select: Callable[[str], str] | None = None,
+    driver: Any = None,
 ) -> Callable[[MeetingEvent, dict[str, Any]], Awaitable[None]]:
     """The ``async def wake(event, digest)`` the run loop drives on an addressed event.
 
@@ -256,6 +257,14 @@ def make_wake_adapter(
     delta stream and emits each projected render frame THROUGH the runtime's gated emitter
     (is_owner fencing, §3.7): a fenced-out harness reaches the wire zero times.
 
+    A ``dispatch_workroom`` TOOL_USE chunk is INTERCEPTED before projection (§11.6 reactive
+    flow): the projector renders such a chunk only as a "working…" tile that ``_emit_frame``
+    drops — the real Workroom is never run. When ``driver`` is present the bridge instead
+    claims the durable ``workroom:<id>`` row, ACKs "on it: …", and drives the Workroom task in
+    a tracked background task on ``runtime._workroom_tasks`` (never GC'd mid-flight; close can
+    cancel it), delivering the terminal Envelope through the gated emitter (§3.2). The projector
+    stays PURE — it NEVER sees the dispatch chunk.
+
     The projector is the SOLE renderer on this live path — the same pure mapping the
     transport carrier drives — so the live product obeys the projector's own rendering law:
     only an explicit delivery tool (``speak`` / ``send_chat`` / ``show_screen``) reaches a
@@ -266,6 +275,8 @@ def make_wake_adapter(
     """
     from transport.projector import ChannelProjector
 
+    from .workroom_bridge import handle_dispatch, is_dispatch_tool_use
+
     selector = select if select is not None else select_behavior
 
     async def _wake(event: MeetingEvent, digest: dict[str, Any]) -> None:
@@ -274,6 +285,12 @@ def make_wake_adapter(
         wake_event = WakeEvent(text=text, speaker=speaker)
         projector = ChannelProjector()
         emitter = event.emitter
+        # The tracked set of in-flight Workroom-driver tasks lives on the runtime so nothing
+        # is GC'd mid-flight and meeting-end close can cancel them (§11.6). Built lazily once.
+        tasks = getattr(runtime, "_workroom_tasks", None)
+        if tasks is None:
+            tasks = set()
+            runtime._workroom_tasks = tasks
         # Thread the LIVE controller (event.abort) DOWN to the provider — it polls
         # ``.aborted`` and breaks its SDK loop on quiet / meeting-end / timeout (§3.11).
         # Each chunk is projected ONCE (the delta stream is already ``stream_deltas``
@@ -284,6 +301,21 @@ def make_wake_adapter(
             wake_event, read_notes=True, abort=event.abort, behavior=behavior
         ):
             if emitter is None:
+                continue
+            # §11.6 reactive flow: a dispatch_workroom tool call runs a REAL Workroom task and
+            # delivers the result back — it must NEVER reach the projector (which would only
+            # drop it as a "working…" tile). ``driver`` None (no bridge wired) falls through to
+            # the projector unchanged (backward compat).
+            if driver is not None and is_dispatch_tool_use(chunk):
+                await handle_dispatch(
+                    chunk,
+                    runtime=runtime,
+                    event=wake_event,
+                    driver=driver,
+                    emitter=emitter,
+                    db=runtime.db,
+                    tasks=tasks,
+                )
                 continue
             for frame in projector.project(chunk):
                 _emit_frame(emitter, frame)  # gated on is_owner (§3.7) — a zombie emits nothing
@@ -416,27 +448,42 @@ def assemble_live_brain(
     history_fn: Callable[[], Awaitable[Any]] | None = None,
     tts: Any = None,
     sink: Any = None,
+    workroom_driver: Any = None,
 ) -> LiveBrain:
     """Assemble the REAL brain onto ``runtime`` and wire it into the run loop (§3.2/§3.11).
 
     Closes the two live holes the adversarial verifier found: the run loop is built with a
     REAL wake adapter (not ``_noop_wake``) and the name-gate as the ``addressed`` predicate
     (not never-addressed). Also constructs the live barge-in seam on the SHARED abort
-    registry so "Proxy, quiet" halts the model loop. Redefines none of the primitives.
+    registry so "Proxy, quiet" halts the model loop, AND the harness→Workroom dispatch bridge
+    (§11.6) so a wake-turn ``dispatch_workroom`` tool call runs a real Workroom task and
+    delivers the result back to the meeting. Redefines none of the primitives.
 
     * ``provider`` — the model seam (defaults to the real Claude provider; a test injects a
       fake recording stub, so this assembles with NO live Anthropic call).
     * ``disambiguate`` — the name-gate's one bounded "addressed to me, or 'proxy server'?"
       call on a spoken hit (§3.1); defaults to accept a spoken hit as addressed (chat
       ``@proxy`` never disambiguates). The real bounded model call is injected by the caller.
+    * ``workroom_driver`` — the :class:`~workroom.session.SessionDriver` the dispatch bridge
+      drives ``run_task`` on (§11.6). Defaults to the real one built from this runtime +
+      ``provider`` via :func:`~harness.workroom_bridge.build_workroom_driver`; a test injects a
+      fake driver (``run_task`` → a canned Envelope) so the reactive flow is proved with no
+      sandbox and no live model call.
 
     Returns the :class:`LiveBrain` (stashed on the runtime by the provisioner) so the live
     VAD "Proxy, quiet" trigger can reach the model-loop cancel.
     """
+    from .workroom_bridge import build_workroom_driver
+
     wake_turn = build_wake_turn(
         runtime, provider=provider, notes_reader=notes_reader, history_fn=history_fn
     )
-    wake_adapter = make_wake_adapter(runtime, wake_turn)
+    driver = (
+        workroom_driver
+        if workroom_driver is not None
+        else build_workroom_driver(runtime, provider=provider)
+    )
+    wake_adapter = make_wake_adapter(runtime, wake_turn, driver=driver)
 
     disambig = disambiguate if disambiguate is not None else (lambda _line: True)
     name_gate = NameGate(disambiguate=disambig)

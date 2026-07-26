@@ -278,7 +278,7 @@ class _AuthzedRequest:
         self.csrf_valid = csrf_valid
 
 
-def _principal_and_key(request: Any) -> "tuple[_AuthzedRequest | None, str]":
+async def _principal_and_key(request: Any) -> "tuple[_AuthzedRequest | None, str]":
     """Derive the SERVER-SIDE principal (+ idempotency key) for a mutation route.
 
     Shared by the accept and reject route mounts so both derive the tenant/CSRF the
@@ -288,10 +288,26 @@ def _principal_and_key(request: Any) -> "tuple[_AuthzedRequest | None, str]":
     session (the caller maps that to a fail-closed 401) — a missing SessionMiddleware
     (an app built without the optional dep) reads as no session.
     """
-    try:
-        session = request.session.get("user")
-    except (AssertionError, AttributeError):
-        session = None  # no SessionMiddleware installed -> treated as no session
+    # Prefer the DURABLE session (the 'session' cookie ``auth_callback`` writes via
+    # ``complete_signin``) so a real OAuth-signed-in member can derive a principal on the
+    # Law-3 accept/reject path; fall back to the SessionMiddleware dict for a middleware-cookie
+    # caller. Fail-closed to no-session → 401.
+    session: Any = None
+    db = getattr(request.app.state, "db", None)
+    if db is not None:
+        try:
+            from harness.session import resolve_session
+
+            resolved = await resolve_session(db, request.cookies)
+        except Exception:  # noqa: BLE001 - a resolution fault falls through to the middleware read
+            resolved = None
+        if isinstance(resolved, dict) and resolved.get("user_id") is not None:
+            session = {"tenant_id": resolved.get("tenant_id"), "email": resolved.get("user_id")}
+    if session is None:
+        try:
+            session = request.session.get("user")
+        except (AssertionError, AttributeError):
+            session = None  # no SessionMiddleware installed -> treated as no session
     if not session:
         return None, ""
 
@@ -349,7 +365,7 @@ def install_accept_route(
         if db is None:
             return Response(status_code=503)  # no durable substrate handle -> honest 503
 
-        principal, idem_key = _principal_and_key(request)
+        principal, idem_key = await _principal_and_key(request)
         if principal is None:
             return Response(status_code=401)
 
@@ -413,7 +429,7 @@ def install_reject_route(
         if db is None:
             return Response(status_code=503)  # no durable substrate handle -> honest 503
 
-        principal, idem_key = _principal_and_key(request)
+        principal, idem_key = await _principal_and_key(request)
         if principal is None:
             return Response(status_code=401)
 

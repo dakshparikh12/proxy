@@ -212,10 +212,18 @@ def install_meeting_home_route(app: "FastAPI") -> None:
 
         session: Any = None
         if grant is None:
+            # Resolve the signed-in tenant member from the DURABLE session — the HMAC
+            # 'session' cookie ``auth_callback`` writes via ``complete_signin`` (the sessions
+            # row is the source of truth) — NOT the ``request.session["user"]`` SessionMiddleware
+            # dict, which the OAuth callback deliberately never populates (§2.8 convergence: one
+            # cookie, one source of truth). No/invalid cookie → None → Not found; the capability
+            # token path above is separate and unaffected.
             try:
-                session = request.session.get("user")
-            except (AssertionError, AttributeError):
-                session = None  # no SessionMiddleware installed → treated as no session
+                from harness.session import resolve_session
+
+                session = await resolve_session(db, request.cookies)
+            except Exception:  # noqa: BLE001 - a resolution fault is treated as no session (fail-closed)
+                session = None
 
         resp = await meeting_home_handler(
             str(meeting_id), session=session, cap_grant=grant, db=db
