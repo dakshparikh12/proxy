@@ -73,6 +73,12 @@ async def _destroy_sandbox(runtime: Any, sandbox: Any) -> None:
     Best-effort — a destroy failure must not block completing the row or the LAST
     pipe teardown. When no handle is threaded through, the live sandbox for this
     meeting is resolved from the provider's live view and destroyed there.
+
+    The meeting is also flipped DURABLY to ``status='ended'`` with an ``ended_at``
+    timestamp (CANONICAL §11.1) via ``repos.meetings.mark_ended`` — the substrate
+    record of the meeting's end, distinct from the in-process ``mark_meeting_ended``
+    set the sandbox reconcile reads. Idempotent (``COALESCE`` keeps the first
+    ``ended_at``) and best-effort so a DB blip never blocks the LAST pipe teardown.
     """
     meeting_id = getattr(getattr(runtime, "header", None), "meeting_id", None)
     with contextlib.suppress(Exception):
@@ -87,6 +93,14 @@ async def _destroy_sandbox(runtime: Any, sandbox: Any) -> None:
     if meeting_id is not None:
         with contextlib.suppress(Exception):
             sandbox_provider.mark_meeting_ended(str(meeting_id))
+        # Durable meeting-end: flip the meetings row status→'ended' + stamp ended_at.
+        db = getattr(runtime, "db", None)
+        if db is not None:
+            with contextlib.suppress(Exception):
+                from libs.db import repos as _repos
+
+                async with db.acquire() as conn:
+                    await _repos.meetings.mark_ended(conn, meeting_id=meeting_id)
 
 
 async def run_ordered_close(

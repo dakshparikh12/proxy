@@ -17,13 +17,17 @@ async def insert_meeting(
     pinned_sha: str | None,
     recall_bot_id: str | None,
     status: str = "live",
+    platform: str | None = None,
 ) -> dict[str, Any]:
+    # ``platform`` is the meeting platform (recall|zoom|teams|…) set at join (CANONICAL
+    # §11.1 meetings DDL). Nullable — the join path names it on new rows; a caller that
+    # does not know it yet stores NULL rather than a fabricated value.
     row = await conn.fetchrow(
         """
         INSERT INTO meetings
-            (tenant_id, repo_id, meeting_url, pinned_sha, recall_bot_id, status)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id, tenant_id, repo_id, pinned_sha, recall_bot_id, status
+            (tenant_id, repo_id, meeting_url, pinned_sha, recall_bot_id, status, platform)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id, tenant_id, repo_id, pinned_sha, recall_bot_id, status, platform
         """,
         tenant_id,
         repo_id,
@@ -31,8 +35,30 @@ async def insert_meeting(
         pinned_sha,
         recall_bot_id,
         status,
+        platform,
     )
     return dict(row)
+
+
+async def mark_ended(conn: Any, *, meeting_id: Any) -> dict[str, Any] | None:
+    """Flip a meeting to ``ended`` and stamp ``ended_at`` (the ordered-close, §3.16).
+
+    Called from the ordered close when the meeting ends (status→'ended'). Idempotent:
+    a meeting already ``ended`` keeps its FIRST ``ended_at`` (``COALESCE`` never
+    overwrites a recorded end time), so a re-run of a completed close is a no-op on the
+    timestamp. Returns the updated row, or ``None`` if no meeting matches.
+    """
+    row = await conn.fetchrow(
+        """
+        UPDATE meetings
+           SET status = 'ended',
+               ended_at = COALESCE(ended_at, now())
+         WHERE id = $1
+        RETURNING id, tenant_id, repo_id, status, ended_at
+        """,
+        meeting_id,
+    )
+    return dict(row) if row is not None else None
 
 
 async def update_bot_id(

@@ -80,6 +80,7 @@ async def invite_proxy(
             pinned_sha=head_sha,
             recall_bot_id=None,  # written back once the real bot launches
             status="live",
+            platform=_platform_for_url(meeting_url),  # set at join (CANONICAL §11.1)
         )
     meeting_id = row["id"]
 
@@ -106,6 +107,26 @@ async def invite_proxy(
         recall_bot_id=result.bot_id,
         notice_posted=result.notice_posted,
     )
+
+
+def _platform_for_url(meeting_url: str | None) -> str:
+    """Derive the meeting platform (recall|zoom|teams|meet) from the meeting URL.
+
+    Recall brokers Meet/Zoom/Teams behind one API with no per-platform branch on the join
+    path (AC-JOIN-09); the underlying platform is a property of the URL, recorded on the
+    ``meetings`` row (CANONICAL §11.1). An unrecognised URL is honestly reported as the
+    transport broker ``'recall'`` (the actual bot host) rather than a fabricated platform —
+    never a false 'zoom'/'teams'. Kept as pure string physics (Law 4): the mapping is a
+    URL fact, not a judgement.
+    """
+    url = (meeting_url or "").lower()
+    if "zoom.us" in url or "zoom.com" in url:
+        return "zoom"
+    if "teams.microsoft.com" in url or "teams.live.com" in url:
+        return "teams"
+    if "meet.google.com" in url:
+        return "meet"
+    return "recall"
 
 
 async def resolve_bot_id(db: Database, recall_bot_id: str) -> dict[str, Any] | None:

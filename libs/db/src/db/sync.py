@@ -36,6 +36,7 @@ class RepoRow:
     tenant_id: Any
     full_name: str | None
     default_branch: str | None
+    github_installation_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -94,18 +95,32 @@ class _SyncRepositories:
         self._conn = conn
 
     def create(
-        self, *, tenant_id: Any, full_name: str, default_branch: str
+        self,
+        *,
+        tenant_id: Any,
+        full_name: str,
+        default_branch: str,
+        github_installation_id: str | None = None,
     ) -> RepoRow:
+        # ``github_installation_id`` is the Nango GitHub-App grant link (CANONICAL §11.1
+        # binding-flow step 2 / §5.7) — recorded on the repos row when the install callback
+        # resolves the installation. Nullable: a connect flow that has not yet resolved the
+        # installation stores NULL (the truthful value), and the column is backfilled once
+        # the grant lands. It never carries a fabricated id.
         row = self._conn.execute(
             """
-            INSERT INTO repos (tenant_id, full_name, default_branch)
-            VALUES (%s, %s, %s)
-            RETURNING id, tenant_id, full_name, default_branch
+            INSERT INTO repos (tenant_id, full_name, default_branch, github_installation_id)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id, tenant_id, full_name, default_branch, github_installation_id
             """,
-            (tenant_id, full_name, default_branch),
+            (tenant_id, full_name, default_branch, github_installation_id),
         ).fetchone()
         return RepoRow(
-            id=row[0], tenant_id=row[1], full_name=row[2], default_branch=row[3]
+            id=row[0],
+            tenant_id=row[1],
+            full_name=row[2],
+            default_branch=row[3],
+            github_installation_id=row[4],
         )
 
 
