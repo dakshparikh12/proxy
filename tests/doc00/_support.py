@@ -157,7 +157,6 @@ _GOLDEN_DIRS = (
     _THIS.parent.parent.parent / "goldens",
     ROOT / "goldens",                       # <root>/goldens (post-promotion)
     ROOT / "acceptance" / "doc00" / "goldens",
-    ROOT / "staging" / "doc00" / "goldens",
 )
 
 
