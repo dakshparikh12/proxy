@@ -130,7 +130,7 @@ class TileStateMachine:
                 "driving system event does not exist (§3 build rule, Law 4)"
             )
         self._state = state
-        return TileState(state=state)  # type: ignore[arg-type]  # value is from the closed §2.2 set
+        return TileState(state=state)  # value is from the closed §2.2 set
 
     # --- the accessibility law (§2.2) --------------------------------------------------
 

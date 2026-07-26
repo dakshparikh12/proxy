@@ -18,6 +18,21 @@ line-length = 120
 extend-exclude = ["tests", ".venv"]
 force-exclude = true
 
+[tool.bandit]
+# The security gate is the services/ + libs/ PRODUCT surface; the sealed tests under any
+# ``tests/`` dir (incl. nested ``services/*/tests``) are not product code — they legitimately
+# use asserts + fixtures. The secret gate (B105) and shell-injection gate (B602) stay ACTIVE:
+# their few intentional hits are ``# nosec``'d PER LINE (verified false-positives / the
+# in-sandbox run_command), so a NEW hardcoded secret or host ``shell=True`` still trips.
+exclude_dirs = ["tests", ".venv", "build", "migrations"]
+# Systemically-benign categories, skipped with justification:
+#   B101 assert — invariant checks (the product runs without ``-O``)
+#   B110 try/except/pass — the Rule-6 fail-closed degradation idiom (handlers never throw)
+#   B404 import subprocess — subprocess is legitimately used (alembic/git + host sandbox tooling)
+#   B603 subprocess call, no shell — the SAFE list-arg form (host ``shell=True`` is separately gated)
+#   B607 partial executable path — PATH tools (alembic/git) invoked by name, by design
+skips = ["B101", "B110", "B404", "B603", "B607"]
+
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 ignore = ["E402"]
@@ -27,6 +42,12 @@ python_version = "3.12"
 namespace_packages = true
 explicit_package_bases = true
 mypy_path = "."
+# The ``libs/<pkg>/__init__.py`` facade shims are runtime ``sys.modules`` aliases to the
+# canonical bare package (one class identity) — they hold no static surface, so checking them
+# directly makes every ``from libs.<pkg> import X`` importer see an empty namespace. Exclude the
+# shims from the check TARGETS (the real source under ``libs/<pkg>/src/<pkg>`` stays fully
+# ``--strict``-checked); the ``libs.*`` override below then treats the facade as opaque on import.
+exclude = ['^libs/[^/]+/__init__\.py$']
 
 # Third-party packages that ship no type information.
 [[tool.mypy.overrides]]
@@ -40,6 +61,10 @@ module = [
     # Optional observability / AI SDK deps that ship no stubs.
     "langfuse", "langfuse.*", "sentry_sdk", "sentry_sdk.*", "structlog", "structlog.*",
     "httpx", "httpx.*", "anthropic", "anthropic.*",
+    # E2B sandbox SDK — the Workroom's raw client (libs/http is its sole home); ships no stubs
+    # and is an optional/integration-tier dep imported lazily, so it may be absent in the CI
+    # static env. The import is scoped to libs/http; no product module outside it imports e2b.
+    "e2b", "e2b.*", "e2b_code_interpreter", "e2b_code_interpreter.*",
     "fastapi", "fastapi.*", "starlette", "starlette.*",
     "cryptography", "cryptography.*",
     # GCS SDK — the finalized-notes Plane 2 store (§3.3); ships no type stubs and
@@ -59,6 +84,23 @@ ignore_missing_imports = true
 # it imports both ``contracts`` and ``agentkit`` — the AbortRegistry reused for barge-in.)
 [[tool.mypy.overrides]]
 module = ["contracts.*", "agentkit.*", "harness.*", "control_plane.*", "code_intel.*", "transport.*", "scribe.*", "workroom.*", "llm.*", "db.*"]
+ignore_missing_imports = true
+
+# ``libs.contracts`` binds itself to the canonical ``contracts`` package via a runtime
+# ``sys.modules`` alias (ONE class identity per wire shape — see ``libs/contracts/__init__.py``;
+# a second execution would split ``isinstance`` + the registry, the Doc-09 §2 re-drift). mypy
+# cannot follow that dynamic bind, so it sees an empty facade and reports spurious ``no
+# attribute`` on the ``from libs.contracts import X`` form. Treat it as opaque WHEN IMPORTED;
+# the canonical surface is still fully ``--strict``-checked under its bare name ``contracts.*``.
+[[tool.mypy.overrides]]
+module = ["libs.contracts", "libs.contracts.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
+
+# ``libs.llm`` / ``libs.lint`` facade submodules mypy can't resolve to a checked source (the
+# real code is checked under the bare ``llm.*`` name). Silence only the missing-import.
+[[tool.mypy.overrides]]
+module = ["libs.llm.*", "libs.lint.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

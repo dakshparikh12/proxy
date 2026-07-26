@@ -10,7 +10,7 @@ gate() { if "$@"; then echo "  [PASS]"; else echo "  [FAIL]"; FAIL=$((FAIL+1)); 
 
 [ -x "$V/ruff" ]  && gate "$V/ruff" check services libs scripts        || { echo "ruff missing";  FAIL=$((FAIL+1)); }
 [ -x "$V/mypy" ]  && gate "$V/mypy" --strict services libs             || { echo "mypy missing";  FAIL=$((FAIL+1)); }
-[ -x "$V/bandit" ]&& gate "$V/bandit" -qr services libs                || { echo "bandit missing";FAIL=$((FAIL+1)); }
+[ -x "$V/bandit" ]&& gate "$V/bandit" -c pyproject.toml -qr services libs || { echo "bandit missing";FAIL=$((FAIL+1)); }
 gate "$V/python" -m pytest -m "not reality and not e2e and not negative and not integration" \
      -p no:cacheprovider -p no:testmon -q
 [ -d build/scenarios ] && echo "== scenarios present — lead runs the corpus + deepeval on real infra =="

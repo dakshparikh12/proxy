@@ -517,7 +517,7 @@ class SandboxToolset:
         try:
             proc = subprocess.run(  # noqa: S602 - the sandbox shell workhorse (in-sandbox in prod)
                 command,
-                shell=True,
+                shell=True,  # nosec B602 - run_command executes INSIDE the isolated per-meeting E2B sandbox (its documented purpose, S3.5); no host shell
                 cwd=str(self._root),
                 capture_output=True,
                 text=True,
