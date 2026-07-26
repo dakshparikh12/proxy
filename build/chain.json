@@ -6531,7 +6531,7 @@
       "title": "Recall webhook HMAC-signature verifier \u2014 the public route earns its exemption by proving the caller",
       "region": "08-EXPERIENCE",
       "disposition": "fix",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "08-EXPERIENCE.md#4.6",
         "CANONICAL-DECISIONS.md#12.10",
@@ -6578,7 +6578,7 @@
       "title": "Capability-token verifier \u2014 signed, short-TTL, meeting-scoped, revocable, read-only notes (built)",
       "region": "08-EXPERIENCE",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "08-EXPERIENCE.md#2.8",
         "08-EXPERIENCE.md#4.6",
@@ -6618,7 +6618,7 @@
       "title": "The connect page \u2014 GitHub App install + REST readiness poll rendering all five states (build-new)",
       "region": "08-EXPERIENCE",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "08-EXPERIENCE.md#2.7",
         "08-EXPERIENCE.md#3",
@@ -6674,7 +6674,7 @@
       "title": "The \u00a72.6 notes-file template \u2014 attendees, 5-line worst-news-first summary, 'what Proxy did' + receipts",
       "region": "08-EXPERIENCE",
       "disposition": "fix",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "08-EXPERIENCE.md#2.6",
         "CANONICAL-DECISIONS.md#11.4"
@@ -6723,7 +6723,7 @@
       "title": "GET /m/{meeting_id} home \u2014 dual-mode read (session OR capability token): notes + staged-draft cards",
       "region": "08-EXPERIENCE",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "08-EXPERIENCE.md#2.8",
         "08-EXPERIENCE.md#4.6",
@@ -6784,7 +6784,7 @@
       "title": "POST /m/{meeting_id}/drafts/{draft_id}/{accept,reject} \u2014 CSRF + tenant + idempotent + audit, calls Doc 04 accept",
       "region": "08-EXPERIENCE",
       "disposition": "fix",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "08-EXPERIENCE.md#2.8",
         "08-EXPERIENCE.md#4.6",
