@@ -1,5 +1,0 @@
-pytest
-psycopg[binary]
-testing.postgresql
-structlog
-starlette
