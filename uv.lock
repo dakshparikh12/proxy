@@ -1912,6 +1912,7 @@ source = { editable = "libs/ops" }
 dependencies = [
     { name = "contracts" },
     { name = "db" },
+    { name = "http" },
     { name = "pydantic" },
     { name = "sentry-sdk" },
     { name = "structlog" },
@@ -1921,6 +1922,7 @@ dependencies = [
 requires-dist = [
     { name = "contracts", editable = "libs/contracts" },
     { name = "db", editable = "libs/db" },
+    { name = "http", editable = "libs/http" },
     { name = "pydantic", specifier = ">=2" },
     { name = "sentry-sdk", specifier = ">=2" },
     { name = "structlog", specifier = ">=24" },
