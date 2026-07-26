@@ -10,8 +10,6 @@ from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field
 
-from .registry import register_field_consumer
-
 ChunkType = Literal["INIT", "TEXT", "TOOL_USE", "TOOL_RESULT", "RESULT", "ERROR"]
 # Expose each member as an attribute (ChunkType.TEXT == "TEXT") without losing
 # get_args() introspection. Literal aliases accept attribute assignment.
@@ -27,13 +25,14 @@ class AgentChunk(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-# ── the LIVE AgentChunk consumers name the fields they read (§4.8 field-diff) ──
-# ``services/harness/provider.py`` maps every SDK message into an ``AgentChunk`` and its
-# downstream consumers discriminate on ``.type`` (provider.py:261), read the accumulated
-# ``.text`` (provider.py:166), and inspect ``.metadata`` (provider.py:263). Naming the
-# fields the REAL consumer reads is what makes the ``.kind``→``.type`` drift a build
-# failure: a consumer stuck on ``.kind`` would leave ``.type`` produced-but-unconsumed.
-register_field_consumer("AgentChunk", "type", "text", "metadata")
+# ── the LIVE AgentChunk consumer reads are DERIVED, not hand-listed (§4.8 field-diff) ──
+# The fields the real consumers read off an ``AgentChunk`` (``.type`` discriminator,
+# ``.text``, ``.metadata``) are NOT declared here — a hand-list co-located with the model
+# would be a tautology (it would just restate ``model_fields``) and could not fail when a
+# real consumer renames ``chunk.type``→``chunk.kind``. Instead ``contracts.contract_reads``
+# AST-sweeps ``services/*/src`` (e.g. provider.py:261 ``chunk.type``, projector.py:108,
+# session.py:840) and records the ATTRIBUTE reads the product code actually performs. That
+# is what makes the ``.kind``→``.type`` drift a real build failure on the real path.
 
 
 # Per-variant metadata keys (RESULT carries total_cost_usd — the cost-meter seam).

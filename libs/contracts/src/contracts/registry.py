@@ -176,14 +176,38 @@ def register_producer(message_type: MessageType, producer: str) -> None:
 def register_field_consumer(model_name: str, *fields: str) -> None:
     """Record that a live consumer reads ``fields`` of the contract model ``model_name``.
 
-    The field-level half of the produce/consume graph (§4.8, CANONICAL §11.11): a
-    consumer names each field it reads so :func:`assert_contract_fields_consumed` can
-    prove no produced field is orphaned and no field is read under a name the model
-    never produces (the ``.kind``→``.type`` / ``dm``→``dm_available`` drift class).
-    Idempotent and additive — re-registering the same field is a no-op.
+    The field-level half of the produce/consume graph (§4.8, CANONICAL §11.11). Idempotent
+    and additive — re-registering the same field is a no-op.
+
+    **This is NO LONGER the source of truth for the standalone-contract diff.** The real
+    consumer field-reads for ``AgentChunk`` / ``Envelope`` / ``ChannelReport`` are DERIVED
+    by AST-sweeping the live service source (:func:`collect_consumed_fields` →
+    ``contracts.contract_reads.sweep_consumer_reads``), because a hand-list co-located with
+    the model is a tautology (``model_fields == model_fields``): it cannot fail when a real
+    consumer renames ``chunk.type``→``chunk.kind``. This API remains for the render-frame
+    WHOLE-WIRE consumption (a registered ``ProxyMessage`` is serialized whole by ``send()``,
+    so its entire declared field-set genuinely is consumed on the wire — that is a true fact
+    about the frame, not a restatement of its fields) and for tests that drive the primitive.
     """
     bucket = MESSAGE_FIELD_CONSUMERS.setdefault(model_name, set())
     bucket.update(fields)
+
+
+# ── the produce/consume field-diff ALLOW-LIST (DoD: "empty ... or explicitly allow-listed") ──
+# A produced contract field that is deliberately NOT read off the model by any consumer
+# attribute access — it is threaded through by CONSTRUCTION and correlated out-of-band, so
+# the AST sweep (which records attribute READS) will never see it and would otherwise flag
+# it as a produced-but-unconsumed orphan. Each entry names the field AND why it is exempt;
+# the gate still flags every OTHER orphan, so this is a narrow, audited carve-out, not a rug.
+_FIELD_DIFF_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        # The 05→04 result Envelope's task_id is a CORRELATION key: it is set at construction
+        # from ``bundle.task_id`` (workroom/envelope.py) and matched against the operation-runs
+        # row / abort-controller key (``meeting_id|task_id``, session.py) — never read as
+        # ``envelope.task_id`` off the model. It is consumed by identity, not by field-read.
+        "Envelope.task_id",
+    }
+)
 
 
 def _default_channel_action_handler(message: ProxyMessage) -> ProxyMessage:
@@ -359,6 +383,48 @@ def collect_produced_fields() -> dict[str, set[str]]:
     return produced
 
 
+def collect_consumed_fields() -> dict[str, set[str]]:
+    """Populate the consumed-field graph from the REAL consumer source (§4.8) — no hand-list.
+
+    Two grounded sources, unioned into ``MESSAGE_FIELD_CONSUMERS``:
+
+    1. **AST sweep of the live services** — for the standalone contracts
+       (``AgentChunk`` / ``Envelope`` / ``ChannelReport``) this walks every
+       ``services/*/src`` + ``libs/*/src`` module and records which fields the product code
+       actually READS off a contract-typed value (``contracts.contract_reads``). A consumer
+       renaming ``chunk.type``→``chunk.kind`` now surfaces ``AgentChunk.kind`` as
+       consumed-but-never-produced — the diff FAILS on the real path, which the old hand-list
+       could not do.
+    2. **Render-frame whole-wire consumption** — every registered ``ProxyMessage`` is
+       serialized whole by ``send()`` (``model_dump()``) onto the surface wire, so its entire
+       field-set genuinely is consumed. Registered by walking each frame's ``model_fields``.
+
+    Fail-soft: in a DEPLOYED wheel the source tree is absent, so the sweep returns nothing and
+    only the whole-wire frames populate — the gate is a CI/test-time check and never crashes a
+    production import. Returns ``{model_name: {consumed_field, ...}}`` and also writes it into
+    ``MESSAGE_FIELD_CONSUMERS`` (the record the doc-08 acceptance reads).
+    """
+    from .contract_reads import sweep_consumer_reads
+
+    consumed: dict[str, set[str]] = {}
+
+    # (1) the real, swept consumer reads for the standalone contracts.
+    try:
+        swept = sweep_consumer_reads()
+    except Exception:  # noqa: BLE001 — a missing/unreadable source tree must not crash import
+        swept = {}
+    for model_name, fields in swept.items():
+        consumed.setdefault(model_name, set()).update(fields)
+
+    # (2) every registered render frame is consumed WHOLE on the wire (model_dump()).
+    for model in CHANNEL_REGISTRY.values():
+        consumed.setdefault(model.__name__, set()).update(model.model_fields)
+
+    MESSAGE_FIELD_CONSUMERS.clear()
+    MESSAGE_FIELD_CONSUMERS.update({name: set(fields) for name, fields in consumed.items()})
+    return consumed
+
+
 def assert_contract_fields_consumed(
     *,
     produced: dict[str, set[str]] | None = None,
@@ -376,21 +442,29 @@ def assert_contract_fields_consumed(
     consumer side and the NEW name on the producer side, and both appear in the report.
 
     ``produced`` defaults to the live models (:func:`collect_produced_fields`);
-    ``consumed`` defaults to the live consumer registry (``MESSAGE_FIELD_CONSUMERS``,
-    populated at import by each service naming the fields it reads). ``strict=True``
-    RAISES ``AssertionError`` (naming every orphan) instead of returning the list — the
-    form the CI/boot gate uses to FAIL THE BUILD.
+    ``consumed`` defaults to the REAL consumer surface (:func:`collect_consumed_fields` —
+    the AST sweep of the live services + the render-frame whole-wire set), NOT a hand-list.
+    A produced field on the narrow, documented ``_FIELD_DIFF_ALLOWLIST`` (a construction-
+    threaded correlation key no consumer reads by attribute) is exempt from the
+    produced-but-unconsumed direction only. ``strict=True`` RAISES ``AssertionError`` (naming
+    every orphan) instead of returning the list — the form the CI/boot gate uses to FAIL THE BUILD.
     """
     if produced is None:
         produced = collect_produced_fields()
     if consumed is None:
-        consumed = {k: set(v) for k, v in MESSAGE_FIELD_CONSUMERS.items()}
+        consumed = collect_consumed_fields()
 
-    # produced-but-never-consumed (the shipped one-directional primitive).
-    violations = assert_fields_consumed(produced=produced, consumed=consumed)
+    # produced-but-never-consumed (the shipped one-directional primitive) — minus the
+    # explicitly allow-listed construction-threaded correlation keys (DoD: "or allow-listed").
+    violations = [
+        v
+        for v in assert_fields_consumed(produced=produced, consumed=consumed)
+        if v.split(" ", 1)[0] not in _FIELD_DIFF_ALLOWLIST
+    ]
 
     # consumed-but-never-produced (the reverse orphan — a field read under a name no
-    # model produces; this is the OLD-name half of every rename drift).
+    # model produces; this is the OLD-name half of every rename drift). NEVER allow-listed:
+    # a consumer reading a name the model does not carry is always real drift.
     for model_name, fields in consumed.items():
         produced_fields = set(produced.get(model_name, set()))
         for orphan in sorted(set(fields) - produced_fields):

@@ -572,6 +572,7 @@ dependencies = [
     { name = "contracts" },
     { name = "cryptography" },
     { name = "pydantic" },
+    { name = "starlette" },
     { name = "tree-sitter" },
     { name = "tree-sitter-language-pack" },
 ]
@@ -581,6 +582,7 @@ requires-dist = [
     { name = "contracts", editable = "libs/contracts" },
     { name = "cryptography", specifier = ">=42" },
     { name = "pydantic", specifier = ">=2" },
+    { name = "starlette" },
     { name = "tree-sitter", specifier = "==0.25.2" },
     { name = "tree-sitter-language-pack", specifier = "==0.13.0" },
 ]
@@ -1213,12 +1215,14 @@ version = "0.0.0"
 source = { editable = "libs/http" }
 dependencies = [
     { name = "contracts" },
+    { name = "limits" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "contracts", editable = "libs/contracts" },
+    { name = "limits", specifier = ">=5" },
     { name = "pydantic", specifier = ">=2" },
 ]
 
@@ -3243,6 +3247,7 @@ version = "0.0.0"
 source = { editable = "services/workroom" }
 dependencies = [
     { name = "agentkit" },
+    { name = "code-intel" },
     { name = "contracts" },
     { name = "db" },
     { name = "ops" },
@@ -3252,6 +3257,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "agentkit", editable = "libs/agentkit" },
+    { name = "code-intel", editable = "services/code_intel" },
     { name = "contracts", editable = "libs/contracts" },
     { name = "db", editable = "libs/db" },
     { name = "ops", editable = "libs/ops" },

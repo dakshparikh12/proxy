@@ -118,6 +118,9 @@ from .registry import (
     assert_registry_closed as assert_registry_closed,
 )
 from .registry import (
+    collect_consumed_fields as collect_consumed_fields,
+)
+from .registry import (
     collect_produced_fields as collect_produced_fields,
 )
 from .registry import (
@@ -182,9 +185,19 @@ __all__ = [
     "assert_contract_fields_consumed",
     "assert_fields_consumed",
     "assert_registry_closed",
+    "collect_consumed_fields",
     "collect_produced_fields",
     "register_field_consumer",
     "register_handler",
     "register_producer",
     "register_projector",
 ]
+
+# Populate ``MESSAGE_FIELD_CONSUMERS`` from the REAL consumer surface at import (the AST
+# sweep of the live services + the render-frame whole-wire set) so the record is grounded
+# and non-vacuous the moment the package is imported. Fail-soft: a deployed wheel has no
+# source tree, so this leaves the render-frame set only and never crashes a production import.
+try:
+    collect_consumed_fields()
+except Exception:  # noqa: BLE001 — the field-diff is a CI/test gate; never break an import
+    pass

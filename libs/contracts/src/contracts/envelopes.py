@@ -10,8 +10,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from .registry import register_field_consumer
-
 EnvelopeStatus = Literal[
     "done", "partial", "failed", "needs_clarification", "needs_review"
 ]
@@ -53,22 +51,13 @@ class ProgressEvent(BaseModel):
     task_id: UUID
 
 
-# ── the LIVE Envelope consumers name the fields they read (§4.8 field-diff) ──
-# The 05→04 result ``Envelope`` is built with every field set (workroom/envelope.py,
-# harness/orchestrator.py:87) and the orchestrator renders the terminal result whole
-# (``status`` gates finality, ``verification`` marks grounded-vs-unverified per Law 2,
-# ``draft_id`` links the /m/ accept route, ``receipts`` carry the ✓-tagged citations).
-# Naming the fields the REAL consumer reads is what makes the ``verified|draft``→
-# ``EnvelopeStatus`` drift a build failure: a consumer reading a bare ``verified``/``draft``
-# field would leave the real ``status``/``verification`` produced-but-unconsumed.
-register_field_consumer(
-    "Envelope",
-    "headline",
-    "detail",
-    "artifact",
-    "receipts",
-    "status",
-    "verification",
-    "draft_id",
-    "task_id",
-)
+# ── the LIVE Envelope consumer reads are DERIVED, not hand-listed (§4.8 field-diff) ──
+# The 05→04 result ``Envelope`` is rendered by the terminal-result consumers, which read
+# ``status`` (finality gate), ``verification`` (grounded-vs-unverified, Law 2), ``draft_id``
+# (the /m/ accept route), ``headline``/``detail``/``artifact``/``receipts`` — see
+# control_plane/screen_modes.py:162-222 and transport/chat.py:349-356. Those attribute reads
+# are DERIVED by the ``contracts.contract_reads`` AST sweep, not restated here, so a
+# ``verified|draft``→``EnvelopeStatus`` drift (a consumer reading a bare ``verified``/``draft``
+# the model never carries) shows up as a real consumed-but-never-produced orphan. ``task_id``
+# is a construction-threaded correlation key no consumer reads by attribute — it is the one
+# entry on the documented ``registry._FIELD_DIFF_ALLOWLIST``.
