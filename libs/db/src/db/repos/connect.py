@@ -31,11 +31,28 @@ _VALID_STATES: frozenset[str] = frozenset(
 )
 
 
+def ensure_tenant(conn: Any, *, tenant_id: str) -> None:
+    """Provision the ``tenants`` root row a connect install binds to (idempotent).
+
+    ``connect_readiness.tenant_id`` is a DECLARED FK to ``tenants(id)`` (AC-TEN-001 /
+    isolation invariant R-INV-09), so the referenced tenants row MUST exist before a
+    readiness row can land. The connect/start flow provisions a real uuid tenant server-side
+    (the install IS how a tenant is provisioned — no session exists yet); this upsert makes
+    that provisioning idempotent, so a redelivered install never double-creates the tenant.
+    """
+    conn.execute(
+        "INSERT INTO tenants (id) VALUES (%s) ON CONFLICT (id) DO NOTHING",
+        (tenant_id,),
+    )
+
+
 def insert_install(
     conn: Any, *, install_id: str, tenant_id: str, repo_url: str
 ) -> None:
     """Insert a fresh connect install at state ``connecting`` (the initial durable row).
 
+    ``tenant_id`` is a DECLARED FK to ``tenants(id)``; :func:`ensure_tenant` must have
+    provisioned the referenced tenants row first (the install/start flow does this).
     Idempotent on the ``install_id`` PK — a re-insert of the same opaque handle is a silent
     no-op (a redelivered install/start never clobbers live progress).
     """

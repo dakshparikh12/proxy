@@ -23,6 +23,7 @@ before ``control_plane/connect.py`` exists.
 """
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 import pytest
@@ -40,9 +41,10 @@ def test_trigger_runs_real_pipeline_and_reaches_ready_with_real_coverage() -> No
 
     fixture = small_repo_fixture()
     store = ConnectStore()
-    install_id = store.new_install(tenant_id="tenant-connect-1", repo_url=fixture.url)
+    tenant_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "tenant-connect-1"))
+    install_id = store.new_install(tenant_id=tenant_id, repo_url=fixture.url)
 
-    pipeline = trigger_connect_index(store, install_id, tenant_id="tenant-connect-1", repo_url=fixture.url)
+    pipeline = trigger_connect_index(store, install_id, tenant_id=tenant_id, repo_url=fixture.url)
 
     report = store.status(install_id)
     assert report.status == "ready", f"expected ready, got {report.status!r} (states={store.states(install_id)})"
@@ -61,9 +63,10 @@ def test_trigger_emits_all_four_progress_states_in_order() -> None:
 
     fixture = small_repo_fixture()
     store = ConnectStore()
-    install_id = store.new_install(tenant_id="tenant-connect-2", repo_url=fixture.url)
+    tenant_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "tenant-connect-2"))
+    install_id = store.new_install(tenant_id=tenant_id, repo_url=fixture.url)
 
-    trigger_connect_index(store, install_id, tenant_id="tenant-connect-2", repo_url=fixture.url)
+    trigger_connect_index(store, install_id, tenant_id=tenant_id, repo_url=fixture.url)
 
     states = store.states(install_id)
     assert "mapping" not in states, "there is NO 'mapping' state (CANONICAL §1.5)"
@@ -84,9 +87,10 @@ def test_trigger_sets_multilang_resolver_so_find_references_is_resolved() -> Non
 
     fixture = small_repo_fixture()
     store = ConnectStore()
-    install_id = store.new_install(tenant_id="tenant-connect-3", repo_url=fixture.url)
+    tenant_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "tenant-connect-3"))
+    install_id = store.new_install(tenant_id=tenant_id, repo_url=fixture.url)
 
-    pipeline = trigger_connect_index(store, install_id, tenant_id="tenant-connect-3", repo_url=fixture.url)
+    pipeline = trigger_connect_index(store, install_id, tenant_id=tenant_id, repo_url=fixture.url)
 
     # The warm resolver is set on the pipeline (the seam the factory reads).
     assert isinstance(pipeline.lsp, MultiLangResolver)
@@ -110,9 +114,10 @@ def test_trigger_registers_freshness_webhook_handler() -> None:
 
     fixture = small_repo_fixture()
     store = ConnectStore()
-    install_id = store.new_install(tenant_id="tenant-connect-4", repo_url=fixture.url)
+    tenant_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "tenant-connect-4"))
+    install_id = store.new_install(tenant_id=tenant_id, repo_url=fixture.url)
 
-    pipeline = trigger_connect_index(store, install_id, tenant_id="tenant-connect-4", repo_url=fixture.url)
+    pipeline = trigger_connect_index(store, install_id, tenant_id=tenant_id, repo_url=fixture.url)
 
     assert pipeline.webhook_handler is not None, "freshness webhook handler must be registered"
 
@@ -134,7 +139,7 @@ def test_status_route_renders_ready_with_coverage_and_flagged_files(live_app) ->
     from control_plane.connect import get_connect_store
 
     store = get_connect_store(live_app)
-    install_id = store.new_install(tenant_id="t-ready", repo_url="local")
+    install_id = store.new_install(tenant_id=str(uuid.uuid5(uuid.NAMESPACE_URL, "t-ready")), repo_url="local")
     # Seed a terminal ready report exactly as the trigger writes it, including flagged files.
     store.set_ready(install_id, coverage_pct=0.94, flagged=[("gen/thing.min.js", "generated")])
 
@@ -156,7 +161,7 @@ def test_status_route_renders_not_ready_with_named_gaps(live_app) -> None:
     from control_plane.connect import get_connect_store
 
     store = get_connect_store(live_app)
-    install_id = store.new_install(tenant_id="t-notready", repo_url="local")
+    install_id = store.new_install(tenant_id=str(uuid.uuid5(uuid.NAMESPACE_URL, "t-notready")), repo_url="local")
     store.set_not_ready(install_id, gaps=["submodule vendor/ could not be cloned", "3 files failed to parse"])
 
     client = TestClient(live_app)
@@ -174,7 +179,7 @@ def test_status_route_renders_each_progress_state(live_app, state) -> None:
     from control_plane.connect import get_connect_store
 
     store = get_connect_store(live_app)
-    install_id = store.new_install(tenant_id=f"t-{state}", repo_url="local")
+    install_id = store.new_install(tenant_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"t-{state}")), repo_url="local")
     store.mark_state(install_id, state)
 
     client = TestClient(live_app)
@@ -188,7 +193,7 @@ def test_status_route_never_returns_a_mapping_state(live_app) -> None:
     from control_plane.connect import ConnectStore, get_connect_store
 
     store = get_connect_store(live_app)
-    install_id = store.new_install(tenant_id="t-map", repo_url="local")
+    install_id = store.new_install(tenant_id=str(uuid.uuid5(uuid.NAMESPACE_URL, "t-map")), repo_url="local")
     with pytest.raises((ValueError, KeyError)):
         store.mark_state(install_id, "mapping")
 
@@ -353,10 +358,12 @@ def test_status_reads_a_real_postgres_readiness_row_unauthenticated(live_app) ->
     from db.repos import connect as connect_repo
 
     install_id = "itest-" + os.urandom(6).hex()
+    tenant_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "itest-tenant"))
     # Land the durable row directly via the Postgres repo — never the route/store in-memory.
     with _pg_conn() as conn:
+        conn.execute("INSERT INTO tenants (id) VALUES (%s) ON CONFLICT (id) DO NOTHING", (tenant_id,))
         connect_repo.insert_install(
-            conn, install_id=install_id, tenant_id="itest-tenant", repo_url="local"
+            conn, install_id=install_id, tenant_id=tenant_id, repo_url="local"
         )
         connect_repo.set_ready(
             conn, install_id=install_id, coverage_pct=0.42, flagged=[("g.min.js", "generated")]
@@ -386,10 +393,12 @@ def test_status_coverage_pct_equals_the_stored_postgres_row_value(live_app) -> N
     from db.repos import connect as connect_repo
 
     install_id = "itest-" + os.urandom(6).hex()
+    tenant_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "itest-tenant"))
     stored_pct = 0.8137  # a distinctive, non-default fraction only the DB row carries
     with _pg_conn() as conn:
+        conn.execute("INSERT INTO tenants (id) VALUES (%s) ON CONFLICT (id) DO NOTHING", (tenant_id,))
         connect_repo.insert_install(
-            conn, install_id=install_id, tenant_id="itest-tenant", repo_url="local"
+            conn, install_id=install_id, tenant_id=tenant_id, repo_url="local"
         )
         connect_repo.set_ready(conn, install_id=install_id, coverage_pct=stored_pct, flagged=[])
         db_pct = connect_repo.read_row(conn, install_id)["coverage_pct"]
@@ -444,10 +453,11 @@ def test_golden_path_ready_coverage_matches_postgres_row_over_real_pipeline(live
 
     fixture = small_repo_fixture()
     store = get_connect_store(live_app)  # the durable Postgres-backed store on the live app
-    install_id = store.new_install(tenant_id="e2e-tenant", repo_url=fixture.url)
+    tenant_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "e2e-tenant"))
+    install_id = store.new_install(tenant_id=tenant_id, repo_url=fixture.url)
 
     # Run the REAL pipeline end-to-end; the trigger writes the terminal ready row to Postgres.
-    trigger_connect_index(store, install_id, tenant_id="e2e-tenant", repo_url=fixture.url)
+    trigger_connect_index(store, install_id, tenant_id=tenant_id, repo_url=fixture.url)
 
     # The durable Postgres row is ready with a REAL (non-zero, non-100) coverage fraction.
     with _pg_conn() as conn:

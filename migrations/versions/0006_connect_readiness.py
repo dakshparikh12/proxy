@@ -15,7 +15,11 @@ never a rebuildable cache (CLAUDE.md §"Source of truth vs cache").
 
 This revision adds the ``connect_readiness`` table: one row per connect install, keyed by
 the opaque ``install_id`` poll handle (a uuid4 minted server-side, NOT an authorization
-token). ``status`` is constrained to the canonical Readiness enum (CANONICAL §1.5) — there
+token). ``tenant_id`` is a DECLARED FK to ``tenants(id)`` (a real uuid, provisioned by the
+install/start flow before the readiness row lands) so the table reaches the tenancy root
+like every other durable tenant-scoped table (AC-TEN-001 / isolation invariant R-INV-09) —
+never a bare unscoped string. ``status`` is constrained to the canonical Readiness enum
+(CANONICAL §1.5) — there
 is deliberately NO ``mapping`` value, so a 'mapping' state is unrepresentable at the
 substrate. ``coverage_pct`` is the REAL indexed/(indexed+flagged) fraction the pipeline
 computed; ``flagged``/``gaps``/``states`` are jsonb so the honest happy-path detail and the
@@ -36,7 +40,7 @@ def upgrade() -> None:
         """
         CREATE TABLE connect_readiness (
             install_id   text PRIMARY KEY,
-            tenant_id    text NOT NULL,
+            tenant_id    uuid NOT NULL REFERENCES tenants(id),
             repo_url     text NOT NULL,
             status       text NOT NULL DEFAULT 'connecting'
                          CHECK (status IN

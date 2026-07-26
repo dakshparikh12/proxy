@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import uuid
 from typing import Any
 
 import pytest
@@ -61,9 +62,10 @@ def test_bad_hmac_push_is_401_and_triggers_no_rebuild(live_app) -> None:
     fixture = small_repo_fixture()
     registry = get_pipeline_registry(live_app)
     store = ConnectStore()
-    install_id = store.new_install(tenant_id="tenant-gh-bad", repo_url=fixture.url)
+    tenant_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "tenant-gh-bad"))
+    install_id = store.new_install(tenant_id=tenant_id, repo_url=fixture.url)
     pipeline = trigger_connect_index(
-        store, install_id, tenant_id="tenant-gh-bad", repo_url=fixture.url, registry=registry
+        store, install_id, tenant_id=tenant_id, repo_url=fixture.url, registry=registry
     )
     sha_before = pipeline.current_sha
 
@@ -91,9 +93,10 @@ def test_valid_hmac_push_drives_the_registered_pipeline_reindex(live_app) -> Non
     fixture = small_repo_fixture()
     registry = get_pipeline_registry(live_app)
     store = ConnectStore()
-    install_id = store.new_install(tenant_id="tenant-gh-ok", repo_url=fixture.url)
+    tenant_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "tenant-gh-ok"))
+    install_id = store.new_install(tenant_id=tenant_id, repo_url=fixture.url)
     pipeline = trigger_connect_index(
-        store, install_id, tenant_id="tenant-gh-ok", repo_url=fixture.url, registry=registry
+        store, install_id, tenant_id=tenant_id, repo_url=fixture.url, registry=registry
     )
     assert pipeline.webhook_handler is not None
 
@@ -126,9 +129,10 @@ def test_push_delivery_is_deduped_on_the_live_route(live_app) -> None:
     fixture = small_repo_fixture()
     registry = get_pipeline_registry(live_app)
     store = ConnectStore()
-    install_id = store.new_install(tenant_id="tenant-gh-dup", repo_url=fixture.url)
+    tenant_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "tenant-gh-dup"))
+    install_id = store.new_install(tenant_id=tenant_id, repo_url=fixture.url)
     pipeline = trigger_connect_index(
-        store, install_id, tenant_id="tenant-gh-dup", repo_url=fixture.url, registry=registry
+        store, install_id, tenant_id=tenant_id, repo_url=fixture.url, registry=registry
     )
     # Attach a rebuild counter to the pipeline's persistent handler to count reindexes.
     counter = GraphRebuildCounter()

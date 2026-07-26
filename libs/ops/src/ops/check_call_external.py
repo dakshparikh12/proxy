@@ -163,7 +163,8 @@ def _is_raw_client_call(node: ast.Call, binds: _ImportBindings) -> bool:
     # Attribute form: a vendor module's client attribute called as a constructor.
     if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
         base_local = func.value.id
-        # (a) ``<module>.<attr>`` — e.g. ``httpx.AsyncClient()`` / ``storage.Client()``.
+        # (a) ``<module>.<attr>`` — the httpx async/sync client attrs and the
+        #     google.cloud.storage GCS client attr, constructed via the module alias.
         mod_canonical = _canonical_module(binds.modules.get(base_local, base_local))
         if (mod_canonical, func.attr) in _CLIENT_ATTRS:
             return True

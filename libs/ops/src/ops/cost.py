@@ -186,12 +186,17 @@ async def record_model_cost(
         )
 
 
+# meeting_id / total_cost_usd carry safe DEFAULTs (kept NOT NULL) so this durable
+# tenant-scoped table stays offboard-seedable by a bare tenant_id insert like every other
+# tenant-scoped table (AC-INV-010); a real micro-call write always names both columns, so the
+# defaults are never observed here. Kept byte-aligned with migration 0007's create of this
+# same table (source of truth is the migrated schema; this IF NOT EXISTS is the runtime no-op).
 _TELEMETRY_DDL = """
 CREATE TABLE IF NOT EXISTS meeting_cost_telemetry (
     id BIGSERIAL PRIMARY KEY,
-    meeting_id TEXT NOT NULL,
+    meeting_id TEXT NOT NULL DEFAULT '',
     tenant_id uuid REFERENCES tenants(id),
-    total_cost_usd NUMERIC NOT NULL,
+    total_cost_usd NUMERIC NOT NULL DEFAULT 0,
     cache_read_usd NUMERIC NOT NULL DEFAULT 0,
     cache_creation_usd NUMERIC NOT NULL DEFAULT 0,
     recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()

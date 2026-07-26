@@ -157,9 +157,16 @@ class ConnectStore:
                 conn.close()
 
     def new_install(self, tenant_id: str, repo_url: str) -> str:
-        """Register a fresh install (state ``connecting``) and return its opaque poll id."""
+        """Register a fresh install (state ``connecting``) and return its opaque poll id.
+
+        ``connect_readiness.tenant_id`` is a DECLARED FK to ``tenants(id)`` (AC-TEN-001), so
+        the referenced tenants root row is provisioned first (idempotent) in the SAME borrowed
+        connection before the readiness row lands — the install IS how a tenant is provisioned
+        (no session exists yet), so the tenant is created server-side, never client-supplied.
+        """
         install_id = uuid.uuid4().hex
         with self._conn() as conn:
+            connect_repo.ensure_tenant(conn, tenant_id=tenant_id)
             connect_repo.insert_install(
                 conn, install_id=install_id, tenant_id=tenant_id, repo_url=repo_url
             )
@@ -502,14 +509,17 @@ def install_connect_routes(app: "FastAPI") -> None:
 
 
 def _tenant_for_install(repo_url: str) -> str:
-    """The tenant a fresh install binds to — a deterministic, opaque per-repo id.
+    """The tenant a fresh install binds to — a deterministic per-repo uuid.
 
     The install/start caller is anonymous (no session yet — the install IS how a tenant is
     provisioned), so the tenant is derived server-side from the repo binding, never a
-    client-supplied field. A real deployment resolves the GitHub installation → tenant on
-    the install callback; here the repo url is the stable binding key.
+    client-supplied field. A real deployment resolves the GitHub installation → tenant on the
+    install callback; here the repo url is the stable binding key. It is a real uuid5 (a valid
+    ``tenants.id`` value) because ``connect_readiness.tenant_id`` is a DECLARED FK to
+    ``tenants(id)`` (AC-TEN-001) — the same repo url always maps to the same tenant uuid, so
+    the ``ensure_tenant`` upsert is idempotent across redeliveries.
     """
-    return "connect-" + uuid.uuid5(uuid.NAMESPACE_URL, repo_url).hex[:16]
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, repo_url))
 
 
 def _spawn_trigger(

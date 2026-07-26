@@ -107,8 +107,37 @@ SDK_LOCAL_TOOLS: tuple[str, ...] = (
 permission_mode: Literal["bypassPermissions"] = "bypassPermissions"
 
 # The block-list, aliased to the guard's expected marker name. Pinned into every options
-# object's ``disallowed_tools`` as the backstop behind the computed built-in list.
-disallowed_tools: tuple[str, ...] = SDK_LOCAL_TOOLS
+# object's ``disallowed_tools`` as the backstop behind the computed built-in list. Spelled
+# as an INLINE literal (not a bare ``= SDK_LOCAL_TOOLS`` alias) so a static disallowed_tools
+# scan can read the world-touching primitives (``Bash``/``Write``/``Edit`` …) directly on the
+# query()-driving config, and confirm ``propose_change`` (the one sanctioned staged-draft
+# write, §3.8) is NEVER blocked. The tuple is kept byte-identical to ``SDK_LOCAL_TOOLS`` by
+# the assertion below, so the single source of truth stays the ``SDK_LOCAL_TOOLS`` list above.
+disallowed_tools = (
+    "Bash",
+    "BashOutput",
+    "KillShell",
+    "Read",
+    "Write",
+    "Edit",
+    "Glob",
+    "Grep",
+    "NotebookEdit",
+    "Task",
+    "EnterPlanMode",
+    "ExitPlanMode",
+    "Skill",
+    "SlashCommand",
+    "WebFetch",
+    "WebSearch",
+)  # type: tuple[str, ...]
+# Drift guard: the inline literal above must stay identical to the canonical block-list.
+# A real raise (not ``assert``, which ``python -O`` would strip) keeps the invariant load-
+# bearing even in optimized bytecode — a drift is an isolation hole, never silently tolerated.
+if disallowed_tools != SDK_LOCAL_TOOLS:  # pragma: no cover - load-time invariant
+    raise RuntimeError(
+        "disallowed_tools literal drifted from SDK_LOCAL_TOOLS — keep the two in lock-step"
+    )
 
 # 1-hour TTL for the stable-prefix prompt cache (seconds). The default provider cache TTL
 # is 5 minutes; we widen it to one hour for the large, rarely-changing repo-grounding
