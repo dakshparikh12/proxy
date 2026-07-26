@@ -5,7 +5,9 @@ hardened (§3.16.1, CANONICAL §12.9): an unauthenticated caller is rejected; an
 invalid CSRF token is rejected; a member of a DIFFERENT tenant is rejected by a
 SERVER-SIDE draft->meeting->tenant check (a client-supplied tenant is NEVER trusted);
 a correct tenant member succeeds and the SAME idempotency key replays the first result
-instead of double-applying; and every accept is audited with the acting tenant member.
+instead of double-applying; and every accept is audited with the acting tenant member —
+the route mounts install a default audit sink (the durable audit-log channel), so the
+audit fires on the LIVE route path, not only when a caller hand-passes an ``audit_sink``.
 
 The apply reads DURABLE storage (the persisted ``staged_drafts`` row + its GCS body),
 never the dead in-memory review session (post-teardown safe). It is kind-aware: a core
@@ -20,16 +22,44 @@ against ``app.state.db``.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+
+# Module-scope Starlette request/response types: the route mounts annotate their
+# handlers with these, and ``from __future__ import annotations`` stringizes those
+# annotations — FastAPI resolves them via the MODULE globals, so ``Request`` MUST live
+# here (a function-local import leaves it unresolvable and FastAPI misreads ``request``
+# as a query param → a spurious 422 on the first real POST). Matches the module-scope
+# convention every other control_plane route mount (internal/meeting_home/connect) uses.
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
 from . import accept as _accept
 from . import authz as _authz
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
+
+# The audit trail for the one world-touching pair (accept/reject). A structured line
+# on this channel IS the durable audit record in deployment (Cloud Logging), so the
+# DoD's "a world-touching action is recorded" holds on the LIVE route path — not only
+# when a caller hand-passes an ``audit_sink`` (§2.8, CANONICAL §12.9).
+_AUDIT_LOG = logging.getLogger("services.harness.control_plane.audit")
+
+
+def _default_audit_sink(record: Any) -> None:
+    """Record a world-touching accept/reject on the durable audit channel.
+
+    The default sink the LIVE route mounts install so audit fires on every real POST.
+    It logs the acting-tenant-member record at INFO (never a secret — the record
+    carries only meeting/draft/tenant/user/kind/id). A test may inject a capturing
+    sink instead to bind + assert the audit property directly.
+    """
+    _AUDIT_LOG.info("%s", record)
+
 
 # Idempotency ledger: (meeting, draft, key) -> the first apply's AcceptResponse fields.
 # The same key replays the FIRST result and never re-runs the apply (§3.16.1, §12.9).
@@ -280,7 +310,10 @@ def _principal_and_key(request: Any) -> "tuple[_AuthzedRequest | None, str]":
 
 
 def install_accept_route(
-    app: "FastAPI", *, dependencies: "list[Any] | None" = None
+    app: "FastAPI",
+    *,
+    dependencies: "list[Any] | None" = None,
+    audit_sink: "Callable[[Any], None] | None" = None,
 ) -> None:
     """Mount POST /m/{meeting_id}/drafts/{draft_id}/accept BEHIND the auth wall.
 
@@ -297,13 +330,18 @@ def install_accept_route(
     server-side tenant checks as defense-in-depth (the accept is the one
     world-touching click, Law 3).
 
+    ``audit_sink`` is the world-touching-action recorder threaded into
+    :func:`handle_accept` so every REAL green POST is audited (§2.8, CANONICAL §12.9,
+    a hard DoD requirement). It defaults to :func:`_default_audit_sink` (the durable
+    audit-log channel) — so the LIVE mount audits by default; a test may inject a
+    capturing sink to bind + assert the audit record on the real route path.
+
     ``app`` is the concrete :class:`fastapi.FastAPI` ``create_app`` builds; the
     annotation gives ``app.post`` a typed signature so the route decorator is a
     typed decorator under ``mypy --strict`` (an ``app: Any`` would make the mounted
     handler untyped — ``[untyped-decorator]``).
     """
-    from starlette.requests import Request
-    from starlette.responses import JSONResponse, Response
+    sink = audit_sink if audit_sink is not None else _default_audit_sink
 
     @app.post(ACCEPT_PATH, include_in_schema=True, dependencies=dependencies or [])
     async def accept_draft_route(meeting_id: str, draft_id: str, request: Request) -> Response:
@@ -326,6 +364,7 @@ def install_accept_route(
                 meeting_id=meeting_id,
                 draft_id=draft_id,
                 idempotency_key=idem_key,
+                audit_sink=sink,
             )
         if resp.status != 200:
             return Response(status_code=resp.status)
@@ -344,13 +383,17 @@ def install_accept_route(
 
 
 def install_reject_route(
-    app: "FastAPI", *, dependencies: "list[Any] | None" = None
+    app: "FastAPI",
+    *,
+    dependencies: "list[Any] | None" = None,
+    audit_sink: "Callable[[Any], None] | None" = None,
 ) -> None:
     """Mount POST /m/{meeting_id}/drafts/{draft_id}/reject BEHIND the auth wall.
 
     The symmetric twin of :func:`install_accept_route` (spec §2.8, CANONICAL §12.9):
     same ``protected()`` wall (via ``dependencies``), same server-side session/tenant/
-    CSRF derivation, same durable-connection acquire — but it delegates to
+    CSRF derivation, same durable-connection acquire, same defaulted ``audit_sink`` so
+    a REAL green reject POST is audited on the LIVE path — but it delegates to
     :func:`handle_reject`, which flips the persisted row to ``rejected`` and applies
     NOTHING (no notes-edit, no push). A missing substrate handle is an honest 503; an
     anonymous caller is a fail-closed 401 (defense-in-depth behind the ``protected()``
@@ -362,8 +405,7 @@ def install_reject_route(
     (Law 3). ``app`` is the concrete :class:`fastapi.FastAPI` so the decorator is typed
     under ``mypy --strict``.
     """
-    from starlette.requests import Request
-    from starlette.responses import JSONResponse, Response
+    sink = audit_sink if audit_sink is not None else _default_audit_sink
 
     @app.post(REJECT_PATH, include_in_schema=True, dependencies=dependencies or [])
     async def reject_draft_route(meeting_id: str, draft_id: str, request: Request) -> Response:
@@ -382,6 +424,7 @@ def install_reject_route(
                 meeting_id=meeting_id,
                 draft_id=draft_id,
                 idempotency_key=idem_key,
+                audit_sink=sink,
             )
         if resp.status != 200:
             return Response(status_code=resp.status)

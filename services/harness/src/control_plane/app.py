@@ -139,7 +139,9 @@ def create_app() -> FastAPI:
     # The authenticated draft-accept surface (§12.9): POST /m/{id}/drafts/{id}/accept
     # BEHIND the auth wall, reading durable storage (post-teardown safe). It declares
     # the §4.6 protected() wrapper so a fail-closed 401/403 fires server-side BEFORE
-    # the handler — the marker the route-scope test reads to prove it is not raw.
+    # the handler — the marker the route-scope test reads to prove it is not raw. The
+    # mount defaults its audit_sink to the durable audit-log channel, so EVERY real
+    # green accept POST records the world-touching action (§2.8 audit, a hard DoD req).
     from libs.http import protected
 
     install_accept_route(app, dependencies=[protected(_resolve_session_from_request)])

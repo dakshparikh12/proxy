@@ -231,6 +231,69 @@ def test_code_change_records_approval_and_exposes_bundle_without_pushing():
 
 
 @pytest.mark.integration
+def test_accept_emits_an_audit_record_with_the_acting_tenant_member():
+    """Audit is a HARD requirement (§2.8, CANONICAL §12.9): a world-touching accept is
+    recorded with the acting tenant member. Pass an audit_sink and assert it captured
+    exactly one record naming the accepting tenant + user + the applied draft.
+    """
+    from control_plane.accept_route import handle_accept
+
+    with S.pg_conn() as conn:
+        _require_schema(conn)
+        tenant, meeting = _seed_meeting(conn, tenant_name=f"t-{uuid.uuid4().hex[:8]}")
+        draft = _seed_draft(conn, meeting_id=meeting, kind="notes-edit", body="body")
+
+        records: list[str] = []
+        resp = handle_accept(
+            conn, meeting_id=meeting, draft_id=draft, idempotency_key="audit-1",
+            request=_request(tenant=tenant, user="alice@t"),
+            audit_sink=records.append,
+        )
+        assert resp.status == 200 and resp.accepted is True
+        assert len(records) == 1, f"a successful accept must emit exactly one audit record, got {records}"
+        rec = str(records[0])
+        assert "accept" in rec, "the audit record must name the action"
+        assert str(tenant) in rec, "the audit record must name the acting tenant"
+        assert "alice@t" in rec, "the audit record must name the acting user (member)"
+        assert str(draft) in rec, "the audit record must name the applied draft"
+        assert resp.accept_id and resp.accept_id in rec, "the audit record must carry the accept id"
+
+
+@pytest.mark.integration
+def test_accept_denials_and_replay_do_not_double_audit():
+    """A refused accept (cross-tenant/CSRF) emits NO audit record, and a replay does
+    NOT re-audit — audit fires once, only on the first world-touching apply.
+    """
+    from control_plane.accept_route import handle_accept
+
+    with S.pg_conn() as conn:
+        _require_schema(conn)
+        tenant, meeting = _seed_meeting(conn, tenant_name=f"t-{uuid.uuid4().hex[:8]}")
+        draft = _seed_draft(conn, meeting_id=meeting, kind="notes-edit", body="body")
+
+        denied_records: list[str] = []
+        denied = handle_accept(
+            conn, meeting_id=meeting, draft_id=draft, idempotency_key="k",
+            request=_request(tenant=str(uuid.uuid4())),  # cross-tenant → refused
+            audit_sink=denied_records.append,
+        )
+        assert denied.status == 403
+        assert denied_records == [], "a refused accept must NOT be audited as an apply"
+
+        records: list[str] = []
+        first = handle_accept(
+            conn, meeting_id=meeting, draft_id=draft, idempotency_key="same",
+            request=_request(tenant=tenant), audit_sink=records.append,
+        )
+        replay = handle_accept(
+            conn, meeting_id=meeting, draft_id=draft, idempotency_key="same",
+            request=_request(tenant=tenant), audit_sink=records.append,
+        )
+        assert first.status == 200 and replay.idempotent_replay is True
+        assert len(records) == 1, f"a replay must NOT re-audit; audit fires once, got {records}"
+
+
+@pytest.mark.integration
 def test_durable_idempotency_survives_lost_in_memory_ledger():
     """Post-restart safe: a replay after the in-memory ledger is gone still no-ops.
 

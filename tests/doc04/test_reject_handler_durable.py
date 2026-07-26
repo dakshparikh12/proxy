@@ -204,6 +204,69 @@ def test_reject_code_change_declines_without_pushing():
 
 
 @pytest.mark.integration
+def test_reject_emits_an_audit_record_with_the_acting_tenant_member():
+    """Audit is a HARD requirement (§2.8, CANONICAL §12.9): a world-touching reject is
+    recorded with the acting tenant member — symmetric to the accept audit. Pass an
+    audit_sink and assert it captured exactly one record naming the tenant + user + draft.
+    """
+    from control_plane.accept_route import handle_reject
+
+    with S.pg_conn() as conn:
+        _require_schema(conn)
+        tenant, meeting = _seed_meeting(conn, tenant_name=f"t-{uuid.uuid4().hex[:8]}")
+        draft = _seed_draft(conn, meeting_id=meeting, kind="notes-edit", body="body")
+
+        records: list[str] = []
+        resp = handle_reject(
+            conn, meeting_id=meeting, draft_id=draft, idempotency_key="audit-r",
+            request=_request(tenant=tenant, user="bob@t"),
+            audit_sink=records.append,
+        )
+        assert resp.status == 200 and resp.rejected is True
+        assert len(records) == 1, f"a reject must emit exactly one audit record, got {records}"
+        rec = str(records[0])
+        assert "reject" in rec, "the audit record must name the action"
+        assert str(tenant) in rec, "the audit record must name the acting tenant"
+        assert "bob@t" in rec, "the audit record must name the acting user (member)"
+        assert str(draft) in rec, "the audit record must name the declined draft"
+        assert resp.reject_id and resp.reject_id in rec, "the audit record must carry the reject id"
+
+
+@pytest.mark.integration
+def test_reject_denials_and_replay_do_not_double_audit():
+    """A refused reject (cross-tenant) emits NO audit record, and a replay does NOT
+    re-audit — audit fires once, only on the first world-touching decline.
+    """
+    from control_plane.accept_route import handle_reject
+
+    with S.pg_conn() as conn:
+        _require_schema(conn)
+        tenant, meeting = _seed_meeting(conn, tenant_name=f"t-{uuid.uuid4().hex[:8]}")
+        draft = _seed_draft(conn, meeting_id=meeting, kind="notes-edit", body="body")
+
+        denied_records: list[str] = []
+        denied = handle_reject(
+            conn, meeting_id=meeting, draft_id=draft, idempotency_key="k",
+            request=_request(tenant=str(uuid.uuid4())),  # cross-tenant → refused
+            audit_sink=denied_records.append,
+        )
+        assert denied.status == 403
+        assert denied_records == [], "a refused reject must NOT be audited as a decline"
+
+        records: list[str] = []
+        first = handle_reject(
+            conn, meeting_id=meeting, draft_id=draft, idempotency_key="same-r",
+            request=_request(tenant=tenant), audit_sink=records.append,
+        )
+        replay = handle_reject(
+            conn, meeting_id=meeting, draft_id=draft, idempotency_key="same-r",
+            request=_request(tenant=tenant), audit_sink=records.append,
+        )
+        assert first.status == 200 and replay.idempotent_replay is True
+        assert len(records) == 1, f"a reject replay must NOT re-audit; audit fires once, got {records}"
+
+
+@pytest.mark.integration
 def test_reject_after_accept_is_a_noop_idempotent_belt():
     """A reject on an already-applied draft is a durable no-op, not a status flip-flop.
 
