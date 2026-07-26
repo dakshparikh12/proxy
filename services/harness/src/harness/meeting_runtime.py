@@ -70,6 +70,16 @@ class MeetingRuntime:
     db: Any
     host_budget: HostBudget
     referent_corpus: ReferentCorpus | None = None
+    # The meeting's resolved code_intel grounding (a ``code_intel.sdk_server.CodeIntelContext``):
+    # the tenant's durable per-repo ``graph.db`` index + pinned ``checkout`` clone, resolved
+    # once at join from the SAME repo row the referent corpus uses. The live wake turn builds
+    # THIS meeting's ``code_intel`` SDK MCP server from it so ``mcp__code_intel__*`` is mounted
+    # and Proxy can answer a grounded codebase question (its core premise). ``None`` when the
+    # repo is unindexed/unknown — the wake turn then mounts no code_intel server and degrades
+    # honestly (it still wakes; it just has no codebase tools this meeting). Never a shared/
+    # process-global handle — it is per-meeting-tenant, so one meeting can never read another
+    # tenant's volume (isolation triad, Hard Rule 4).
+    code_intel_ctx: Any = None
     operation_handle: Any = None
     # The ONE abort registry (§11.9) this meeting's run loop mints per-wake controllers
     # through, shared with the registry so meeting-end / "Proxy, quiet" reach the LIVE
@@ -446,12 +456,18 @@ class MeetingRuntimeRegistry:
         carrier: Any,
         *,
         referent_corpus: ReferentCorpus | None = None,
+        code_intel_ctx: Any = None,
     ) -> MeetingRuntime:
         """Create + start the runtime for one meeting; return the existing one on repeat.
 
         ``referent_corpus`` is the meeting's code index (overview areas + per-repo
         ``graph_nodes``): when supplied it flows to the applier so each marked referent
         binds to a real code node. Absent, referents stay honestly named-but-unbound.
+
+        ``code_intel_ctx`` is the meeting's resolved code_intel grounding (the tenant's
+        durable ``graph.db`` + pinned ``checkout``): when supplied the live wake turn builds
+        THIS meeting's ``code_intel`` SDK server from it so grounded codebase questions can be
+        answered. Absent, the wake turn mounts no code_intel server (honest degradation).
         """
         existing = self._runtimes.get(header.meeting_id)
         if existing is not None:
@@ -462,6 +478,7 @@ class MeetingRuntimeRegistry:
             db=self._db,
             host_budget=self._host_budget,
             referent_corpus=referent_corpus,
+            code_intel_ctx=code_intel_ctx,
             stt_refresh_fn=self._stt_refresh_fn,
             stt_refresh_interval_s=self._stt_refresh_interval_s,
             abort_registry=self._abort_registry,

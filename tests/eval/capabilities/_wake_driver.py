@@ -41,6 +41,28 @@ from ._fixture_repo import CODE_INTEL_TOOLS, make_code_intel_sdk_server
 # answer to the user is whatever it hands these tools; bare TEXT is reasoning.
 _DELIVERY_TOOLS = {"speak", "send_chat", "show_screen"}
 
+# ── ONE shared event loop for the whole battery ───────────────────────────────
+# The real ``ClaudeAgentProvider`` (and any subagent it spawns) opens an httpx async
+# connection pool. Calling ``asyncio.run`` PER scenario closes the loop between turns, and a
+# connection still finalizing on the just-closed loop raises "Event loop is closed" from its
+# transport ``__del__`` — flaky teardown noise, not a product fault. Running every driver call
+# on ONE persistent loop (drained gracefully at process exit) keeps the pools alive across
+# scenarios so no connection is finalized against a dead loop.
+_LOOP: asyncio.AbstractEventLoop | None = None
+
+
+def _shared_loop() -> asyncio.AbstractEventLoop:
+    global _LOOP
+    if _LOOP is None or _LOOP.is_closed():
+        _LOOP = asyncio.new_event_loop()
+        asyncio.set_event_loop(_LOOP)
+    return _LOOP
+
+
+def _run(coro: Any) -> Any:
+    """Run a coroutine to completion on the battery's ONE shared loop (never a fresh-loop close)."""
+    return _shared_loop().run_until_complete(coro)
+
 
 @dataclass
 class CapturedTurn:
@@ -125,7 +147,13 @@ def _digest() -> StateDigest:
 
 
 def drive_product_wake(question: str, *, speaker: str = "dev", max_turns: int = 4) -> CapturedTurn:
-    """Run the wake turn EXACTLY as the product assembles it (no code_intel mount)."""
+    """Run the wake turn EXACTLY as the product assembled it BEFORE the fix (no code_intel mount).
+
+    This is the hollow-assembly probe (scenario 0): a bare ``WakeTurn`` with no ``mcp_servers``,
+    the way ``live_brain.build_wake_turn`` assembled it before the code_intel server was wired in.
+    Kept as the regression anchor — its ``INIT`` shows ``mcp_servers=[]`` and the model has no
+    codebase tools. The FIXED product path is :func:`drive_live_brain_wake` below.
+    """
     provider = ClaudeAgentProvider(sandbox_mode=False)
     turn = WakeTurn(
         meeting_id="cap-eval-product",
@@ -134,7 +162,81 @@ def drive_product_wake(question: str, *, speaker: str = "dev", max_turns: int = 
         digest=_digest(),
     )
     event = WakeEvent(text=question, speaker=speaker)
-    return asyncio.run(_collect(turn.wake(event, behavior="answer-question")))
+    return _run(_collect(turn.wake(event, behavior="answer-question")))
+
+
+class _LiveBrainRuntime:
+    """A minimal stand-in for the meeting runtime that ``live_brain.build_wake_turn`` reads.
+
+    ``build_wake_turn`` reads exactly two things off the runtime: ``runtime.header.meeting_id``
+    (the meeting-scoped session id) and ``runtime.code_intel_ctx`` (the resolved tenant grounding
+    it builds the ``code_intel`` SDK server from). Everything else on the real ``MeetingRuntime``
+    (the carrier, the Scribe, the abort registry) is irrelevant to the wake-turn ASSEMBLY under
+    test here — the notes reader falls back to ``""`` when ``runtime.db`` is absent, which is the
+    honest no-notes case. This carries ONLY those two fields so the driver exercises the REAL
+    ``build_wake_turn`` assembly path (not a hand-wired ``BehaviorRunner(mcp_servers=…)``)."""
+
+    def __init__(self, code_intel_ctx: Any) -> None:
+        self.header = type("_H", (), {"meeting_id": "cap-eval-live-brain"})()
+        self.code_intel_ctx = code_intel_ctx
+        self.db = None
+
+
+def build_live_code_intel_ctx(fixture: Any) -> Any:
+    """Build a REAL ``CodeIntelContext`` from the capability fixture (graph.db + checkout clone).
+
+    Persists the fixture's REAL graph (built by the REAL structural indexer) to a per-repo
+    ``graph.db`` via the REAL ``code_intel.graph_store.GraphStore.write_graph`` and points the
+    context at that DB + the fixture clone — the EXACT durable artifacts the product resolves at
+    meeting time (``harness.webhooks`` / ``harness.code_intel_mount``). So the product path this
+    driver exercises loads its graph from disk the same way the live meeting does, not from an
+    in-memory handle."""
+    import tempfile
+    from pathlib import Path
+
+    from code_intel.graph_store import GraphStore
+    from code_intel.sdk_server import CodeIntelContext
+
+    repo_dir = Path(tempfile.mkdtemp(prefix="proxy-live-ci-"))
+    graph_db = repo_dir / "graph.db"
+    GraphStore(graph_db).write_graph(fixture.graph, drop_first=True)
+    return CodeIntelContext(
+        graph_db_path=graph_db, clone_path=Path(fixture.clone_path), tenant_id="cap-eval-tenant"
+    )
+
+
+def drive_live_brain_wake(
+    question: str, *, code_intel_ctx: Any, speaker: str = "dev"
+) -> CapturedTurn:
+    """Run the wake turn through the REAL ``live_brain.build_wake_turn`` product assembly.
+
+    This is the FIXED product path (the acceptance): NOT a hand-wired ``BehaviorRunner(...,
+    mcp_servers=…)`` (that was ``drive_wired_wake``), but the very function the provisioner calls
+    to assemble the live meeting brain — ``harness.live_brain.build_wake_turn`` — which now BUILDS
+    the meeting's ``code_intel`` SDK server from ``runtime.code_intel_ctx`` and mounts it into the
+    ``WakeTurn`` → its ``BehaviorRunner`` → every ``ProviderQuery.mcp_servers``. The behaviors'
+    ``mcp__code_intel__*`` ``allowed_tools`` now resolve to that mounted server. The provider is
+    the REAL ``ClaudeAgentProvider`` (the single Claude Agent SDK call site) — so ``INIT`` reports
+    ``mcp_servers=[{'name':'code_intel','status':'connected'}]`` on the PRODUCT assembly path.
+
+    The wake-behavior is selected the SAME way the live run loop selects it —
+    ``harness.live_brain.select_behavior`` (§3.4 / D-023): a "catch me up" ask routes to the
+    real ``catch-me-up`` behavior (deliver-only, grounded in the notes), a grounded lookup to
+    ``answer-question`` (code_intel mounted) — so the battery measures the ACTUAL product path,
+    not a single forced behavior.
+    """
+    from harness.live_brain import build_wake_turn, select_behavior
+
+    provider = ClaudeAgentProvider(sandbox_mode=False)
+    runtime = _LiveBrainRuntime(code_intel_ctx)
+    turn = build_wake_turn(runtime, provider=provider)
+    event = WakeEvent(text=question, speaker=speaker)
+    behavior = select_behavior(question)
+    # The live path reads the durable notes on the wake (``read_notes=True``, see
+    # ``harness.live_brain.make_wake_adapter``); on this driver ``runtime.db`` is absent so the
+    # notes reader yields ``""`` — the HONEST no-notes case a catch-up must degrade on (say it has
+    # nothing yet, never fabricate a status).
+    return _run(_collect(turn.wake(event, read_notes=True, behavior=behavior)))
 
 
 def _wired_answer_behavior() -> Behavior:
@@ -217,4 +319,4 @@ def drive_wired_wake(
         mcp_servers={"code_intel": sdk_server},
     )
     event = WakeEvent(text=question, speaker=speaker)
-    return asyncio.run(_collect(turn.wake(event, behavior="answer-question")))
+    return _run(_collect(turn.wake(event, behavior="answer-question")))

@@ -151,8 +151,27 @@ async def provision_meeting(
         # the instance swap (restart-not-resume, §3.10).
         resumed = await _resume_session(db, meeting_id, history_fn=history_fn)
 
+    # Resolve THIS meeting's code_intel grounding (the tenant's durable graph.db + pinned
+    # clone) from the SAME repo row the referent corpus uses (repo_id -> tenant + name) — the
+    # async chokepoint where a db read is allowed (the sync ``_assemble_runtime`` cannot).
+    # Fail-closed to None (an unindexed/unknown repo mounts no code_intel server; Proxy still
+    # wakes) — never a raise on the join path (§3.8 / Rule 6).
+    code_intel_ctx = None
+    try:
+        from .code_intel_mount import resolve_code_intel_context_from_row
+
+        code_intel_ctx = await resolve_code_intel_context_from_row(resolved, db=db)
+    except Exception:  # noqa: BLE001 - a resolution fault degrades to no code_intel, never blocks join
+        code_intel_ctx = None
+
     _assemble_runtime(
-        payload, resolved, db=db, registry=registry, handle=handle, provider=provider
+        payload,
+        resolved,
+        db=db,
+        registry=registry,
+        handle=handle,
+        provider=provider,
+        code_intel_ctx=code_intel_ctx,
     )
     return ProvisionOutcome(claimed=True, run_id=run_id, resumed=resumed)
 
@@ -165,6 +184,7 @@ def _assemble_runtime(
     registry: Any,
     handle: OperationHandle,
     provider: Any = None,
+    code_intel_ctx: Any = None,
 ) -> Any:
     """Instantiate all four subsystems in ONE scope + subscribe the carrier once.
 
@@ -192,8 +212,11 @@ def _assemble_runtime(
         participants=metadata.participants,
     )
     carrier = SignalCarrier()
-    # start_meeting subscribes the Scribe consumer to the carrier ONCE at join.
-    runtime = registry.start_meeting(header, carrier)
+    # start_meeting subscribes the Scribe consumer to the carrier ONCE at join. The resolved
+    # ``code_intel_ctx`` (this meeting's tenant graph.db + clone) rides onto the runtime so the
+    # live wake turn builds the meeting's ``code_intel`` SDK server and grounded codebase
+    # questions can be answered (§11.6). None ctx → no code_intel server (honest degradation).
+    runtime = registry.start_meeting(header, carrier, code_intel_ctx=code_intel_ctx)
     # Open the consent hard-gate on the LIVE hearing path (§3.1, AC-JOIN-04, Law 3): reaching
     # this assembly means the bot won the claim on a confirmed ``in_call`` event, and a bot is
     # only ``in_call`` after ``JoinSession.join`` posted the consent notice as its FIRST

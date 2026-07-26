@@ -65,6 +65,20 @@ async def get_by_bot_id(conn: Any, recall_bot_id: str) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
 
+async def get_by_id(conn: Any, meeting_id: Any) -> dict[str, Any] | None:
+    """Resolve a meeting row (``id``/``tenant_id``/``repo_id``) from its meeting id.
+
+    The Workroom's per-task code-intel mount needs the meeting's ``repo_id``/``tenant_id`` to
+    locate that repo's per-tenant ``graph.db`` index (§12.2) — but a Workroom task carries only
+    the ``meeting_id`` (``bundle.notes_ref``), not the bot id. Returns ``None`` when no meeting
+    matches (fail closed — the mount then degrades to no code_intel server)."""
+    row = await conn.fetchrow(
+        "SELECT id, tenant_id, repo_id FROM meetings WHERE id = $1",
+        meeting_id,
+    )
+    return dict(row) if row is not None else None
+
+
 async def get_repo_by_id(conn: Any, repo_id: Any) -> dict[str, Any] | None:
     """Resolve a repo row (``id``/``tenant_id``/``full_name``) from its id.
 

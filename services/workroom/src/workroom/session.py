@@ -92,6 +92,7 @@ from agentkit import (
     stream_deltas,
     thinking_policy,
 )
+from code_intel.sdk_server import CODE_INTEL_SERVER_NAME
 from contracts import AgentChunk, Bundle, Envelope
 
 # Import the MODULE (not the bound name) so the transport registration is resolved by
@@ -108,6 +109,7 @@ from . import sandbox_transport
 # policy + role give the curated ``mcp__code__*`` subset + the shared thinking role — the
 # SAME owner big_build.py reads, never redefined here (§3.5 / §10.5).
 from .agent_config import (
+    MAP_TOOLS,
     SDK_LOCAL_TOOLS,
     WORKROOM_CACHE_TTL_SECONDS,
     disposition_role,
@@ -329,10 +331,19 @@ class SessionDriver:
             handle = self._resolve_warm_sandbox(meeting_id)
             reader = self._reader_for(handle)
             prompt = self._render_bundle_prompt(bundle)
+            # Resolve THIS meeting's code_intel SDK server (the tenant graph.db + clone) so a
+            # Workroom task can query the codebase graph — its ``mcp__code_intel__*`` MAP tools
+            # currently resolve to nothing (the seam gap this closes). Async because the repo
+            # lookup is a db read; fail-closed to None (unindexed repo → no code_intel server).
+            code_intel_server = await self._resolve_code_intel_server(meeting_id)
             # Build the ProviderQuery WITH the abort threaded in (a frozen query can't be mutated
             # after construction) and the curated MCP servers mounted so the tools are reachable.
             options = self._build_query_options(
-                handle, access=access, controller=controller, meeting_id=meeting_id
+                handle,
+                access=access,
+                controller=controller,
+                meeting_id=meeting_id,
+                code_intel_server=code_intel_server,
             )
             result_meta, wrote_paths = await self._drive_query(prompt, options, controller, task_id)
             # §3.1: persist the SDK session id per task (immediately, fire-and-forget) so a
@@ -453,12 +464,20 @@ class SessionDriver:
             resume_id = await self._read_session_id(run_id)
             handle = self._resolve_warm_sandbox(meeting_id)
             reader = self._reader_for(handle)
+            # A resumed run reaches its tools exactly like a fresh one — including the meeting's
+            # code_intel SDK server (resolved from the tenant graph.db + clone). Fail-closed to None.
+            code_intel_server = await self._resolve_code_intel_server(meeting_id)
             # Build the ProviderQuery with the abort + the persisted resume id threaded in at
             # construction (a frozen query carries them); the curated MCP servers are mounted so
             # a resumed run reaches its tools exactly like a fresh one. The per-attempt
             # ``resume``/``preamble`` the fallback varies are folded in immutably by _ProviderRunner.
             options = self._build_query_options(
-                handle, access=access, controller=controller, resume=resume_id, meeting_id=meeting_id
+                handle,
+                access=access,
+                controller=controller,
+                resume=resume_id,
+                meeting_id=meeting_id,
+                code_intel_server=code_intel_server,
             )
             runner = _ProviderRunner(self._provider_for(options), options, task_id, self._on_progress)
             inputs: dict[str, Any] = {"prompt": self._render_bundle_prompt(bundle)}
@@ -546,6 +565,44 @@ class SessionDriver:
         real E2B backend's ``files.read`` (out of scope for the host-fake path; ``None``)."""
         return self._artifact_reader
 
+    async def _resolve_code_intel_server(self, meeting_id: str) -> Any:
+        """Resolve THIS meeting's ``code_intel`` SDK server from the tenant's durable index (§12.2).
+
+        Reads the meeting's ``repo_id``/``tenant_id`` off the durable ``meetings`` row
+        (``repos.meetings.get_by_id``), locates that repo's per-tenant ``graph.db`` + pinned
+        ``checkout`` clone (:meth:`CodeIntelContext.for_tenant_repo`), and builds the tenant-scoped
+        in-process ``code_intel`` SDK MCP server so a Workroom task can query the codebase graph.
+        Tenant-scoped by construction (one meeting can never read another tenant's volume —
+        isolation triad, Hard Rule 4).
+
+        Fail-closed (Rule 6): returns ``None`` when there is no db seam, no repo bound, the repo
+        is unindexed, or any resolution/build fault — the task then runs with no code_intel server
+        (honest degradation), never a crash. Never a shared/process-global server: it is built
+        fresh from THIS meeting's tenant context on every task.
+        """
+        if self._db is None or not meeting_id:
+            return None
+        try:
+            from code_intel.paths import repo_name_from_url
+            from code_intel.sdk_server import CodeIntelContext
+            from db import repos
+
+            async with self._db.acquire() as conn:
+                meeting = await repos.meetings.get_by_id(conn, meeting_id)
+            if meeting is None or meeting.get("repo_id") is None:
+                return None
+            async with self._db.acquire() as conn:
+                repo = await repos.meetings.get_repo_by_id(conn, meeting["repo_id"])
+            if repo is None or not repo.get("full_name"):
+                return None
+            ctx = CodeIntelContext.for_tenant_repo(
+                tenant_id=str(repo["tenant_id"]),
+                repo_name=repo_name_from_url(str(repo["full_name"])),
+            )
+            return ctx.build_server()
+        except Exception:  # noqa: BLE001 - Rule 6: a resolution/build fault degrades to no server
+            return None
+
     # -- (2) the volatile bundle rides the prompt; the prefix is cached -------
 
     def _render_bundle_prompt(self, bundle: Bundle) -> str:
@@ -575,6 +632,7 @@ class SessionDriver:
         controller: AbortController | None = None,
         resume: str | None = None,
         meeting_id: str | None = None,
+        code_intel_server: Any = None,
     ) -> ProviderQuery:
         """Build the immutable ``agentkit.ProviderQuery`` for this task's ``query()`` (§3.3).
 
@@ -615,6 +673,7 @@ class SessionDriver:
             system_prompt=self.stable_prefix(),
         )
         mcp_servers: dict[str, Any] = dict(config.mcp_servers)
+        allowed_tools: list[str] = list(config.allowed_tools)
         # The readwrite worker also gets the host-side ``propose_change`` server (§3.8) so the
         # one sanctioned staged-draft write is reachable; read-only dispositions never mount it.
         if access == "readwrite" and self._disposition == "worker":
@@ -622,13 +681,28 @@ class SessionDriver:
             mcp_servers[PROPOSE_CHANGE_SERVER_NAME] = make_propose_change_server(
                 conn=conn, meeting_id=meeting_id
             )
+        # Mount THIS meeting's ``code_intel`` SDK server (the tenant graph.db + clone) so a
+        # Workroom task can query the codebase graph (§12.2) — the ``mcp__code_intel__*`` MAP
+        # tools every disposition advertises (§10.5) currently resolve to nothing because no
+        # server provided them AND ``allowed_tools`` never carried the names. BOTH gaps close
+        # here: the server is mounted, and the MAP tool NAMES are added to ``allowed_tools``
+        # (which is the permission gate — ``allowed_tools`` does not auto-permit MCP tools).
+        # code_intel is a READ server, mounted on EVERY disposition (orienting from the map is
+        # always allowed, §3.5); it is NEVER the write-authority (that is propose_change, worker
+        # only). None server (unindexed repo) → mount nothing, advertise nothing (honest
+        # degradation). Tenant-scoped by construction (isolation triad, Hard Rule 4).
+        if code_intel_server is not None:
+            mcp_servers[CODE_INTEL_SERVER_NAME] = code_intel_server
+            for name in MAP_TOOLS:
+                if name not in allowed_tools:
+                    allowed_tools.append(name)
         # §3.2/§3.9: the min(env, model_ceiling) output-token self-clamp for THIS model, carried
         # on ``ProviderQuery.env`` so ``build_sdk_options`` threads it onto the SDK query() env —
         # a Sonnet request never asks for an Opus-sized output. Computed via the IMPORTED clamp.
         enabled, budget = thinking_policy(model, disposition_role(self._disposition))
         return ProviderQuery(
             model=model,
-            allowed_tools=tuple(config.allowed_tools),
+            allowed_tools=tuple(allowed_tools),
             system_prompt=self.stable_prefix(),
             max_turns=self._max_turns,
             tools=(),                        # computed built-in allow-list: [] in sandbox mode (§3.4)

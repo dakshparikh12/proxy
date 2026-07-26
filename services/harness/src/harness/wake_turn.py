@@ -165,11 +165,24 @@ class WakeTurn:
         history_fn: Callable[[], Awaitable[Any]] | None = None,
         compaction_every: int = DEFAULT_COMPACTION_EVERY,
         cost_meter: Any | None = None,
+        mcp_servers: Mapping[str, Any] | None = None,
     ) -> None:
         self.meeting_id = meeting_id
         self._behavior = behavior
         self._registry = self._resolve_registry(registry)
-        self._runner = BehaviorRunner(registry=self._registry, provider=provider, cost_meter=cost_meter)
+        # The curated MCP servers whose tools the mounted behaviors' ``allowed_tools`` name —
+        # e.g. this meeting's ``code_intel`` server, so ``mcp__code_intel__*`` is actually
+        # MOUNTED and the wake turn can answer a grounded codebase question (the seam gap this
+        # closes). Threaded straight to the runner (which threads it to every ProviderQuery).
+        # ``None`` = no servers (a behavior with only delivery verbs needs none) — the runner
+        # then builds queries with no mcp_servers, exactly as before.
+        self._mcp_servers = dict(mcp_servers) if mcp_servers else None
+        self._runner = BehaviorRunner(
+            registry=self._registry,
+            provider=provider,
+            cost_meter=cost_meter,
+            mcp_servers=self._mcp_servers,
+        )
         self._regenerate = regenerate_digest or _default_regenerate
         # The initial digest: an explicit one, else built from the regenerator.
         self._digest = digest if digest is not None else self._regenerate()

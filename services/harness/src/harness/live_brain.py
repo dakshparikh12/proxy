@@ -129,6 +129,7 @@ def build_wake_turn(
     notes_reader: Callable[[str], Awaitable[str]] | None = None,
     history_fn: Callable[[], Awaitable[Any]] | None = None,
     registry: dict[str, Any] | None = None,
+    mcp_servers: dict[str, Any] | None = None,
 ) -> WakeTurn:
     """Build the meeting's ONE real :class:`~harness.wake_turn.WakeTurn` (§3.2).
 
@@ -140,6 +141,12 @@ def build_wake_turn(
       to the runtime-backed durable read so the turn grounds in the live notes on demand.
     * ``history_fn`` — the §3.5 transcript-plane reader (the same durable meeting-history
       source ``provisioner._resume_session`` reads) so a recycle replays from it.
+    * ``mcp_servers`` — the curated MCP servers whose tools the mounted behaviors advertise;
+      when ``None`` (the default) it is BUILT from the runtime's ``code_intel_ctx`` so the
+      meeting's ``code_intel`` SDK server is mounted and ``mcp__code_intel__*`` resolves to real
+      tools (the seam gap this closes). A repo with no built index yields no server — the turn
+      still assembles, just without codebase tools (honest degradation). A caller may inject an
+      explicit mapping (a test wiring the fixture code_intel server).
 
     Constructs NO SDK client itself (the provider seam is the only model talker) and
     redefines nothing — it wires the built ``WakeTurn`` for this meeting.
@@ -150,13 +157,38 @@ def build_wake_turn(
         provider = ClaudeAgentProvider()
     reg = registry if registry is not None else behaviors.REGISTRY
     reader = notes_reader if notes_reader is not None else _durable_notes_reader(runtime)
+    servers = mcp_servers if mcp_servers is not None else _build_code_intel_servers(runtime)
     return WakeTurn(
         meeting_id=runtime.header.meeting_id,
         provider=provider,
         registry=reg,
         notes_reader=reader,
         history_fn=history_fn,
+        mcp_servers=servers,
     )
+
+
+def _build_code_intel_servers(runtime: Any) -> dict[str, Any] | None:
+    """Build the meeting's ``code_intel`` SDK server from the runtime's resolved context.
+
+    The live seam that mounts the codebase graph onto the wake turn (§11.6 / §12.2): the
+    provisioner resolved ``runtime.code_intel_ctx`` (this meeting's tenant graph.db + clone)
+    at join; here we build the tenant-scoped in-process ``code_intel`` SDK MCP server from it.
+    Returns ``{"code_intel": <server>}`` so the wake turn's ``mcp__code_intel__*`` tools are
+    reachable. Fail-closed (Rule 6): no context, an unindexed repo, or any build fault yields
+    ``None`` — Proxy still wakes, just without codebase tools this meeting (honest degradation),
+    never a crash and never a cross-tenant read (the server is scoped to this meeting's tenant).
+    """
+    ctx = getattr(runtime, "code_intel_ctx", None)
+    if ctx is None:
+        return None
+    try:
+        server = ctx.build_server()
+    except Exception:  # noqa: BLE001 - a build fault degrades to no-mount, never crashes the meeting
+        return None
+    if server is None:
+        return None
+    return {"code_intel": server}
 
 
 def _durable_notes_reader(runtime: Any) -> Callable[[str], Awaitable[str]]:

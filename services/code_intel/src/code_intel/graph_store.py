@@ -11,7 +11,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from .graph import Graph
+from .graph import Edge, Graph, Node
 
 
 class GraphStore:
@@ -91,3 +91,69 @@ class GraphStore:
             conn.commit()
         finally:
             conn.close()
+
+    def read_graph(self) -> Graph:
+        """Reconstitute the :class:`Graph` from the persisted ``graph_nodes``/``graph_edges``
+        (the read side of :meth:`write_graph`, canonical §12.2).
+
+        Symmetric with the write schema: nodes carry ``(id, kind, file_path, line, exported,
+        built_at_sha)``, edges carry ``(source, target, kind, file_path, line)``. The rebuilt
+        graph is INDEXED and PageRank is computed so it is immediately queryable by the
+        ``code_intel`` tools (mirrors ``GraphBuilder.build`` — index + compute_pagerank). A
+        missing DB file or absent tables yields an EMPTY graph (an unindexed repo answers
+        "not-found" honestly, never a crash) — the never-raise substrate the meeting path leans
+        on. Edge ``resolution`` is not persisted (the write schema predates it), so every loaded
+        edge keeps the default ``"name"`` (exact-referent) semantics; a dependent's confidence is
+        re-derived from the reverse-adjacency at query time.
+        """
+        if not self.db_path.exists():
+            return Graph()
+        conn = self._connect()
+        try:
+            cur = conn.cursor()
+            try:
+                node_rows = cur.execute(
+                    "SELECT id, kind, file_path, line, exported, built_at_sha FROM graph_nodes"
+                ).fetchall()
+                edge_rows = cur.execute(
+                    "SELECT source, target, kind, file_path, line FROM graph_edges"
+                ).fetchall()
+            except sqlite3.OperationalError:
+                # No canonical tables in this DB yet (never written / mid-build) — empty graph.
+                return Graph()
+        finally:
+            conn.close()
+        nodes = [
+            Node(
+                id=str(r[0]),
+                kind=str(r[1]),
+                path=str(r[2]),
+                line=int(r[3]),
+                exported=int(r[4]),
+                built_at_sha=str(r[5]),
+            )
+            for r in node_rows
+        ]
+        edges = [
+            Edge(
+                source=str(r[0]),
+                target=str(r[1]),
+                kind=str(r[2]),
+                file_path=str(r[3]),
+                line=int(r[4]),
+            )
+            for r in edge_rows
+        ]
+        graph = Graph(nodes=nodes, edges=edges)
+        graph.index()
+        graph.compute_pagerank()
+        return graph
+
+
+def read_graph(db_path: Path | str) -> Graph:
+    """Module-level convenience: load a queryable :class:`Graph` from a per-repo ``graph.db``.
+
+    The read counterpart of :meth:`GraphStore.write_graph` used by the meeting path to rebuild
+    the tenant's structural index from the durable per-repo SQLite artifact. A missing/empty DB
+    yields an empty graph (honest not-found, never a crash)."""
+    return GraphStore(Path(db_path)).read_graph()

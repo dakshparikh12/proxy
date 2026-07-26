@@ -39,7 +39,13 @@ SURFACE_RISK = Behavior(
         ),
         inputs=("event", "state_digest", "notes_ref"),
         # Curated subset (D-015): read-only structural tools + speak. No dispatch, no write.
-        tools=("grep", "read", "get_dependents", "speak"),
+        # The code-intel tools are MCP-namespaced ``mcp__code_intel__*`` so ``allowed_tools``
+        # resolves to the MOUNTED code_intel SDK server (a bare name would name no mounted tool).
+        # ``speak`` stays bare — it is a host-side SDK-local delivery verb, not an MCP tool.
+        tools=(
+            "mcp__code_intel__grep", "mcp__code_intel__read",
+            "mcp__code_intel__get_dependents", "speak",
+        ),
     ),
 )
 register(SURFACE_RISK)

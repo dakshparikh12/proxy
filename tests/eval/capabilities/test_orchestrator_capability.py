@@ -44,17 +44,25 @@ from ._battery import (
     run_battery,
 )
 from ._fixture_repo import build_fixture
-from ._wake_driver import CapturedTurn, drive_product_wake, drive_wired_wake
+from ._wake_driver import (
+    CapturedTurn,
+    build_live_code_intel_ctx,
+    drive_live_brain_wake,
+    drive_product_wake,
+)
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("CAPABILITY_LIVE_EVAL") != "1",
     reason="live capability eval — set CAPABILITY_LIVE_EVAL=1 (spends on the real provider + judge)",
 )
 
-_EVIDENCE = Path(
+_SCRATCH = Path(
     "/private/tmp/claude-501/-Users-daksh-Desktop-proxy/"
-    "1b60ab0b-612b-42a6-b957-bf9efecb577a/scratchpad/orchestrator_capability_evidence.txt"
+    "1b60ab0b-612b-42a6-b957-bf9efecb577a/scratchpad"
 )
+_EVIDENCE = _SCRATCH / "orchestrator_capability_evidence.txt"
+#: The acceptance artifact for the code_intel-mount fix (the brief's requested evidence path).
+_MOUNT_FIX_EVIDENCE = _SCRATCH / "code_intel_mount_fix_evidence.txt"
 
 
 # ── Context builders: the REAL graph facts the answer is grounded against ──────
@@ -111,9 +119,24 @@ def _no_error(result: ScenarioResult) -> tuple[bool, str]:
 def _build_scenarios(fx, tool_log: list[str]) -> list[Scenario]:
     graph_ctx = _graph_context(fx)
 
+    # Every grounded scenario drives the REAL product assembly: ``live_brain.build_wake_turn``
+    # builds the meeting's ``code_intel`` SDK server from THIS context (the fixture graph
+    # persisted to a real per-repo ``graph.db`` + the fixture clone) and mounts it into the wake
+    # turn — NOT a hand-wired ``BehaviorRunner(mcp_servers=…)``. So the battery measures the
+    # product path, and a real code_intel tool call is recorded in ``tool_log`` off the TOOL_USE
+    # chunks by ``_as_result`` (via ``turn.tool_calls``).
+    ctx = build_live_code_intel_ctx(fx)
+
+    def _drive(question: str) -> CapturedTurn:
+        turn = drive_live_brain_wake(question, code_intel_ctx=ctx)
+        for name in turn.tool_calls:
+            if "code_intel" in name:
+                tool_log.append(name)
+        return turn
+
     # 1. Grounded factual Q: who calls login? -> names handle_request with file:line.
     def run1() -> ScenarioResult:
-        turn = drive_wired_wake("Proxy, who calls login?", server=fx.server, tool_log=tool_log)
+        turn = _drive("Proxy, who calls login?")
         turn.transcript_lines.insert(0, "SCENARIO 1: who calls login")
         return _as_result(turn, graph_ctx)
 
@@ -140,7 +163,7 @@ def _build_scenarios(fx, tool_log: list[str]) -> list[Scenario]:
 
     # 2. where is save_user defined? -> correct file:line (db.py).
     def run2() -> ScenarioResult:
-        turn = drive_wired_wake("Proxy, where is save_user defined?", server=fx.server, tool_log=tool_log)
+        turn = _drive("Proxy, where is save_user defined?")
         turn.transcript_lines.insert(0, "SCENARIO 2: where is save_user defined")
         return _as_result(turn, graph_ctx)
 
@@ -164,24 +187,34 @@ def _build_scenarios(fx, tool_log: list[str]) -> list[Scenario]:
         must_work=True,
     )
 
-    # 3. catch me up -> coherent summary from the state digest, no fabrication.
+    # 3. catch me up -> the REAL catch-me-up behavior (grounds in the meeting NOTES, deliver-
+    # only, no code tools). This meeting has NO notes yet (the notes reader yields ""), so the
+    # ONLY honest answer is to say plainly there's nothing to catch up on yet — the Law-2
+    # honest-degradation contract the brief flagged. A FABRICATED "checkpoint ready" / invented
+    # doc/region/task status is the failure this pins.
     def run3() -> ScenarioResult:
-        turn = drive_wired_wake("Proxy, catch me up — where are we?", server=fx.server, tool_log=tool_log)
-        turn.transcript_lines.insert(0, "SCENARIO 3: catch me up")
-        return _as_result(turn, ["State digest: tasks in flight: indexing acme/webapp (done); "
-                                 "mouth: free; component health: all green."])
+        turn = _drive("Proxy, catch me up — where are we?")
+        turn.transcript_lines.insert(0, "SCENARIO 3: catch me up (real catch-me-up behavior; empty notes)")
+        return _as_result(turn, [
+            "Meeting notes for this meeting: (none yet — no decisions or discussion logged).",
+            "State digest: no tasks in flight; mouth free; component health: all green.",
+        ])
 
     s3 = Scenario(
         id="3-catch-me-up",
-        description="Catch-me-up: coherent status summary from the digest, no fabrication",
+        description="Catch-me-up on a meeting with NO notes: must say 'nothing yet', never fabricate a status",
         input="Proxy, catch me up — where are we?",
         run=run3,
         metrics=[
             geval_metric(
-                "GroundedSummary",
-                "The answer must be a coherent status summary consistent with the state digest "
-                "in the retrieval context (indexing done, all green). It must NOT invent tasks, "
-                "people, or events absent from the digest. Fabricated specifics score low.",
+                "HonestNoNotesDegradation",
+                "The meeting has NO notes logged yet (see retrieval context: notes are empty). "
+                "The ONLY correct answer is to say plainly there's nothing to catch up on / nothing "
+                "logged yet. It scores HIGH if it honestly reports there's nothing yet and does NOT "
+                "invent any status, checkpoint, task, decision, doc, or event. It scores 0 if it "
+                "FABRICATES a 'checkpoint ready' status or any specific progress/decision/task not "
+                "present in the (empty) notes. Correctly noting 'all green / no tasks in flight' from "
+                "the digest is fine; inventing content is not.",
             ),
         ],
         threshold=0.7,
@@ -190,7 +223,7 @@ def _build_scenarios(fx, tool_log: list[str]) -> list[Scenario]:
 
     # 4. ambiguous/underspecified -> asks for clarification or honest bounded answer.
     def run4() -> ScenarioResult:
-        turn = drive_wired_wake("Proxy, is it safe to change it?", server=fx.server, tool_log=tool_log)
+        turn = _drive("Proxy, is it safe to change it?")
         turn.transcript_lines.insert(0, "SCENARIO 4: ambiguous ask")
         return _as_result(turn, graph_ctx)
 
@@ -214,7 +247,7 @@ def _build_scenarios(fx, tool_log: list[str]) -> list[Scenario]:
 
     # 5. out-of-scope Q -> recuses / 'not found by this method', does NOT fabricate.
     def run5() -> ScenarioResult:
-        turn = drive_wired_wake("Proxy, who calls charge_card?", server=fx.server, tool_log=tool_log)
+        turn = _drive("Proxy, who calls charge_card?")
         turn.transcript_lines.insert(0, "SCENARIO 5: out-of-scope symbol")
         return _as_result(turn, graph_ctx + ["Note: `charge_card` does not exist anywhere in this repo."])
 
@@ -238,13 +271,9 @@ def _build_scenarios(fx, tool_log: list[str]) -> list[Scenario]:
 
     # 7. grounded Q requiring a real tool call -> the model ACTUALLY calls the tool.
     def run7() -> ScenarioResult:
-        local_log: list[str] = []
-        turn = drive_wired_wake(
-            "Proxy, what depends on save_user across the codebase?",
-            server=fx.server,
-            tool_log=local_log,
-        )
-        turn.transcript_lines.insert(0, f"SCENARIO 7: dependents of save_user (tools executed: {local_log})")
+        turn = _drive("Proxy, what depends on save_user across the codebase?")
+        executed = [t for t in turn.tool_calls if "code_intel" in t]
+        turn.transcript_lines.insert(0, f"SCENARIO 7: dependents of save_user (tools executed: {executed})")
         return _as_result(turn, graph_ctx)
 
     s7 = Scenario(
@@ -289,17 +318,30 @@ def test_orchestrator_capability_battery(fixture_repo):
     # is proven via the REAL name-gate front-gate, NOT by invoking the provider.
     zero_wake_ok, zero_wake_detail = _prove_zero_wake_on_unaddressed()
 
-    # ── Scenario 0: the PRODUCT path (as assembled today) — the hollow-assembly defect. ──
-    product_turn = drive_product_wake("Proxy, who calls login?")
-    product_mounted = "mcp_servers=[]" not in product_turn.transcript  # False == defect present
+    # ── Scenario 0a: the PRE-FIX hollow assembly — the regression anchor. ──
+    # A bare WakeTurn with no mcp_servers (the way build_wake_turn assembled it before the fix):
+    # its INIT shows mcp_servers=[] and the model has no codebase tools. Kept as the contrast.
+    prefix_turn = drive_product_wake("Proxy, who calls login?")
+    prefix_mounted = "mcp_servers=[]" not in prefix_turn.transcript
+
+    # ── Scenario 0b (THE ACCEPTANCE): the FIXED PRODUCT path — live_brain.build_wake_turn. ──
+    # Drives the REAL product assembly (the very function the provisioner calls): it builds the
+    # meeting's code_intel SDK server from runtime.code_intel_ctx and mounts it. INIT MUST now
+    # report code_intel connected on the PRODUCT path — the whole point of the fix.
+    ctx = build_live_code_intel_ctx(fx)
+    product_turn = drive_live_brain_wake("Proxy, who calls login?", code_intel_ctx=ctx)
+    product_mounted = _code_intel_connected(product_turn)  # True == fix present on the real path
     product_fabricated = _looks_fabricated(product_turn)
 
     # Render + persist full evidence BEFORE asserting (so a FAIL still leaves evidence).
     evidence = _render_full_evidence(
-        report, zero_wake_detail, product_turn, product_mounted, product_fabricated, tool_log
+        report, zero_wake_detail, product_turn, product_mounted, product_fabricated, tool_log,
+        prefix_turn=prefix_turn, prefix_mounted=prefix_mounted,
     )
     _EVIDENCE.parent.mkdir(parents=True, exist_ok=True)
     _EVIDENCE.write_text(evidence, encoding="utf-8")
+    # Also persist under the mount-fix evidence name (the acceptance artifact for this change).
+    _MOUNT_FIX_EVIDENCE.write_text(evidence, encoding="utf-8")
     print("\n" + evidence)
 
     # ── The battery gate (per the brief) ──────────────────────────────────────────
@@ -324,6 +366,14 @@ def test_orchestrator_capability_battery(fixture_repo):
 
     if not zero_wake_ok:
         failures.append(f"scenario 6 (un-addressed zero-wake) failed: {zero_wake_detail}")
+
+    # THE ACCEPTANCE (per the brief): the FIXED product path (live_brain.build_wake_turn) MUST
+    # mount code_intel — INIT reports it connected. Without this the whole fix is inert.
+    if not product_mounted:
+        failures.append(
+            "PRODUCT path (live_brain.build_wake_turn) did NOT mount code_intel — "
+            f"INIT never reported it connected. Product transcript:\n{product_turn.transcript}"
+        )
 
     assert not failures, (
         "Orchestrator capability battery FAILED:\n  - "
@@ -369,7 +419,22 @@ def _looks_fabricated(turn: CapturedTurn) -> bool:
     return denies
 
 
-def _render_full_evidence(report, zero_wake_detail, product_turn, product_mounted, product_fabricated, tool_log) -> str:
+def _code_intel_connected(turn: CapturedTurn) -> bool:
+    """True iff the turn's INIT reported the code_intel MCP server CONNECTED (the acceptance).
+
+    The INIT line is rendered ``INIT: session=… mcp_servers=[…] tools=[…]`` from the REAL SDK
+    ``SystemMessage(subtype='init')`` — so ``code_intel`` appearing in the mcp_servers block is
+    the SDK itself reporting the server mounted + connected on the live_brain product path."""
+    for line in turn.transcript_lines:
+        if line.startswith("INIT:") and "mcp_servers=" in line and "code_intel" in line:
+            return True
+    return False
+
+
+def _render_full_evidence(
+    report, zero_wake_detail, product_turn, product_mounted, product_fabricated, tool_log,
+    *, prefix_turn=None, prefix_mounted=None,
+) -> str:
     parts = [render_report(report)]
     parts.append("=" * 78)
     parts.append("SCENARIO 6 — un-addressed ambient event → ZERO wake (structural, zero model calls)")
@@ -377,16 +442,26 @@ def _render_full_evidence(report, zero_wake_detail, product_turn, product_mounte
     parts.append("  " + zero_wake_detail)
     parts.append("")
     parts.append("=" * 78)
-    parts.append("SCENARIO 0 — THE PRODUCT PATH AS ASSEMBLED TODAY (hollow-assembly probe)")
+    parts.append("SCENARIO 0a — PRE-FIX hollow assembly (regression anchor)")
     parts.append("=" * 78)
-    parts.append("  Built exactly as harness.live_brain.build_wake_turn assembles the live wake turn:")
-    parts.append("  real WakeTurn + real ClaudeAgentProvider + behaviors.REGISTRY, NO code_intel mount.")
-    parts.append(f"  code_intel MCP server MOUNTED on the product path? {product_mounted}")
+    parts.append("  A bare WakeTurn with NO mcp_servers (the way build_wake_turn assembled it before the fix).")
+    if prefix_turn is not None:
+        parts.append(f"  code_intel MOUNTED on the pre-fix bare path? {prefix_mounted} (expected False)")
+        for line in prefix_turn.transcript.splitlines():
+            if line.startswith("INIT:"):
+                parts.append(f"      | {line}")
+    parts.append("")
+    parts.append("=" * 78)
+    parts.append("SCENARIO 0b — THE FIXED PRODUCT PATH (harness.live_brain.build_wake_turn) — ACCEPTANCE")
+    parts.append("=" * 78)
+    parts.append("  Driven through the REAL product assembly (the function the provisioner calls): it")
+    parts.append("  builds the meeting's code_intel SDK server from runtime.code_intel_ctx and mounts it.")
+    parts.append(f"  code_intel MCP server CONNECTED on the product path (INIT)? {product_mounted}")
     parts.append(f"  product answer FABRICATED (denies a symbol that exists)? {product_fabricated}")
     parts.append(f"  product answer: {product_turn.answer!r}")
     parts.append("  product transcript:")
     for line in product_turn.transcript.splitlines():
         parts.append(f"      | {line}")
     parts.append("")
-    parts.append(f"  code_intel tools ACTUALLY executed across the wired battery: {tool_log}")
+    parts.append(f"  code_intel tools ACTUALLY executed across the battery: {tool_log}")
     return "\n".join(parts)

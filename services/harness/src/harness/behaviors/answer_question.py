@@ -32,6 +32,9 @@ ANSWER_QUESTION = Behavior(
         # Examples that prime judgment — NOT a decision table (D-023):
         "A simple grounded lookup usually deserves a direct code_intel answer spoken "
         "at the next boundary with the cited file and line.",
+        "For 'who calls X' / 'what depends on X', get_dependents names the calling symbols "
+        "directly — name the actual caller function (e.g. 'handle_request'), not just the "
+        "line, so the answer is grounded in the real symbol (Law 1), not a paraphrase.",
         "A large build usually deserves a detached workroom dispatch with an "
         "async-etiquette line. Decide per case; nothing here forces a tool.",
         "Never invent an answer. If the workroom needs a clarification, relay its one "
@@ -50,6 +53,9 @@ ANSWER_QUESTION = Behavior(
         rules=(
             "A simple grounded lookup usually deserves a direct code_intel answer spoken "
             "at the next boundary with the cited file and line.",
+            "For 'who calls X' / 'what depends on X', get_dependents names the calling symbols "
+            "directly — name the actual caller function (e.g. 'handle_request'), not just the "
+            "line, so the answer is grounded in the real symbol (Law 1), not a paraphrase.",
             "A large build usually deserves a detached workroom dispatch with an "
             "async-etiquette line. Decide per case; nothing here forces a tool.",
             "Never invent an answer. If the workroom needs a clarification, relay its one "
@@ -57,9 +63,15 @@ ANSWER_QUESTION = Behavior(
         ),
         inputs=("event", "state_digest", "notes_ref"),
         # DIRECT-ANSWER + dispatch envelope (D-015): the code_intel read tools so it can
-        # answer itself, PLUS the orchestration verbs. Curated subset, never the union.
+        # answer itself, PLUS the orchestration verbs. Curated subset, never the union. The
+        # code-intel tools are MCP-namespaced ``mcp__code_intel__*`` so ``allowed_tools`` resolves
+        # to the MOUNTED code_intel SDK server (``harness.live_brain._build_code_intel_servers``);
+        # a bare ``get_dependents`` would name no mounted tool (the seam gap this closes). The
+        # delivery/dispatch verbs stay bare — they are host-side SDK-local tools, not MCP tools.
         tools=(
-            "get_dependents", "who_writes", "list_entry_points", "grep", "read", "batch_read",
+            "mcp__code_intel__get_dependents", "mcp__code_intel__who_writes",
+            "mcp__code_intel__list_entry_points", "mcp__code_intel__grep",
+            "mcp__code_intel__read", "mcp__code_intel__batch_read",
             "dispatch_workroom", "speak", "send_chat", "show_screen", "ack", "cancel_task",
         ),
     ),

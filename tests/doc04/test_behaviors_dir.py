@@ -80,14 +80,23 @@ def test_no_yaml_loader_behaviors_are_python_constants():
 @pytest.mark.integration
 def test_d015_curated_tool_subsets_exact():
     reg = bdir.REGISTRY
-    # answer-question = code_intel read tools + speak/send_chat/dispatch_workroom.
+    # answer-question = code_intel read tools + speak/send_chat/dispatch_workroom. The
+    # code-intel tools are MCP-namespaced ``mcp__code_intel__*`` so ``allowed_tools`` resolves
+    # to the MOUNTED code_intel SDK server (a bare name would name no mounted tool).
     aq = set(reg["answer-question"].config.tools)
-    assert {"get_dependents", "who_writes", "list_entry_points", "grep", "read", "batch_read"} <= aq
+    assert {
+        "mcp__code_intel__get_dependents", "mcp__code_intel__who_writes",
+        "mcp__code_intel__list_entry_points", "mcp__code_intel__grep",
+        "mcp__code_intel__read", "mcp__code_intel__batch_read",
+    } <= aq
     assert {"speak", "send_chat", "dispatch_workroom"} <= aq
     # catchup = speak/send_chat only (D-015).
     assert set(reg["catchup"].config.tools) == {"speak", "send_chat"}
-    # surface-risk = grep/read/get_dependents + speak (D-015).
-    assert set(reg["surface-risk"].config.tools) == {"grep", "read", "get_dependents", "speak"}
+    # surface-risk = grep/read/get_dependents (MCP-namespaced) + speak (D-015).
+    assert set(reg["surface-risk"].config.tools) == {
+        "mcp__code_intel__grep", "mcp__code_intel__read",
+        "mcp__code_intel__get_dependents", "speak",
+    }
     # propose-action = dispatch_workroom only (D-015).
     assert set(reg["propose-action"].config.tools) == {"dispatch_workroom"}
 
@@ -100,8 +109,13 @@ def test_no_behavior_advertises_the_whole_proxy_tool_universe():
     # code_intel manifest. No single behavior may mount all of it — each advertises a
     # curated subset (D-015). This set is strictly larger than any one behavior's.
     proxy_universe = {
-        "get_dependents", "who_writes", "list_entry_points", "grep", "read", "batch_read",
-        "shares_table", "owner", "lookup_referent", "find_references",  # rest of the code_intel manifest
+        # The code_intel read tools, MCP-namespaced to the mounted ``code_intel`` SDK server.
+        "mcp__code_intel__get_dependents", "mcp__code_intel__who_writes",
+        "mcp__code_intel__list_entry_points", "mcp__code_intel__grep",
+        "mcp__code_intel__read", "mcp__code_intel__batch_read",
+        "mcp__code_intel__shares_table", "mcp__code_intel__owner",
+        "mcp__code_intel__lookup_referent", "mcp__code_intel__find_references",
+        # The host-side delivery/orchestration verbs (SDK-local, not MCP tools) stay bare.
         "dispatch_workroom", "speak", "send_chat", "show_screen", "ack", "cancel_task",
     }
     for name, b in reg.items():
@@ -138,8 +152,13 @@ def test_no_inline_model_id_literals_in_behavior_modules():
 @pytest.mark.integration
 def test_answer_question_mounts_code_intel_read_tools_for_direct_answer():
     aq = bdir.REGISTRY["answer-question"].config
-    code_intel_reads = {"get_dependents", "who_writes", "list_entry_points", "grep", "read", "batch_read"}
-    # It mounts the code_intel read tools so a grounded lookup is answered directly.
+    code_intel_reads = {
+        "mcp__code_intel__get_dependents", "mcp__code_intel__who_writes",
+        "mcp__code_intel__list_entry_points", "mcp__code_intel__grep",
+        "mcp__code_intel__read", "mcp__code_intel__batch_read",
+    }
+    # It mounts the code_intel read tools (MCP-namespaced to the mounted server) so a grounded
+    # lookup is answered directly.
     assert code_intel_reads <= set(aq.tools)
     # It ALSO keeps the orchestration verbs so it can dispatch when the ask is real work.
     assert "dispatch_workroom" in aq.tools
