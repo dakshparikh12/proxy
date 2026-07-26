@@ -61,12 +61,25 @@ def _default_audit_sink(record: Any) -> None:
     _AUDIT_LOG.info("%s", record)
 
 
-# Idempotency ledger: (meeting, draft, key) -> the first apply's AcceptResponse fields.
-# The same key replays the FIRST result and never re-runs the apply (§3.16.1, §12.9).
-_ACCEPTS: dict[tuple[str, str, str], "AcceptResponse"] = {}
+# D-039 — DURABLE, cross-instance idempotency. The world-touching apply is idempotent on
+# the durable ``staged_drafts`` terminal-status belt (``apply_accepted_draft`` /
+# ``reject_staged_draft`` short-circuit an ``applied``/``rejected`` row → ``already_applied``),
+# so a retry NEVER double-applies on ANY control_plane instance — not just the one holding a
+# process-local ledger. The accept/reject id is DERIVED from the durable (action, meeting,
+# draft), so a replay on a different Cloud Run instance returns the IDENTICAL id and the one
+# world-touching click audits exactly once. No process-local dict, no schema change.
+def _deterministic_id(action: str, meeting_id: Any, draft_id: Any) -> str:
+    """The stable accept/reject id for a durable (action, meeting, draft) — identical across
+    every instance + every retry (the replay returns the first id; §3.16.1 / §12.9 / D-039)."""
+    return uuid.uuid5(uuid.NAMESPACE_URL, f"proxy:{action}:{meeting_id}:{draft_id}").hex
 
-# The reject route's own idempotency ledger, keyed the same way. Reject and accept are
-# separate world-touching decisions, so each owns its own replay ledger (§12.9).
+
+# Retained ONLY as a compatibility surface for the recycle-simulation tests (which
+# ``.clear()`` these to prove idempotency survives a lost in-memory ledger). The handlers no
+# longer read or write them — idempotency is now entirely durable (the ``staged_drafts``
+# terminal-status belt + the deterministic id above), so clearing these is a no-op and the
+# durable belt still prevents a double-apply. D-039: no process-local idempotency state.
+_ACCEPTS: dict[tuple[str, str, str], "AcceptResponse"] = {}
 _REJECTS: dict[tuple[str, str, str], "AcceptResponse"] = {}
 
 
@@ -127,23 +140,12 @@ def handle_accept(
         # applied (the barrier is strictly upstream of the world-touching apply).
         return AcceptResponse(status=403, rejected=True)
 
-    # (4) Idempotency: the SAME key replays the first result, never double-applies.
-    key = (str(meeting_id), str(draft_id), str(idempotency_key))
-    prior = _ACCEPTS.get(key)
-    if prior is not None:
-        return AcceptResponse(
-            status=prior.status,
-            accepted=prior.accepted,
-            accept_id=prior.accept_id,
-            idempotent_replay=True,
-            kind=prior.kind,
-            applied_status=prior.applied_status,
-            bundle_url=prior.bundle_url,
-            pushed=prior.pushed,
-        )
-
-    # (5) Apply from DURABLE storage (kind-aware: notes-edit apply vs code-change
-    #     record+expose, never push).
+    # (4+5) Apply from DURABLE storage (kind-aware: notes-edit apply vs code-change
+    #       record+expose, never push). Idempotency is DURABLE + cross-instance (D-039):
+    #       apply_accepted_draft's staged_drafts terminal-status belt short-circuits a replay
+    #       (already_applied=True), so a retry NEVER double-applies — on ANY control_plane
+    #       instance, not just the one that minted the response. ``idempotency_key`` is
+    #       accepted for API compatibility; the durable row status is the real witness.
     try:
         applied = _accept.apply_accepted_draft(
             conn, meeting_id=meeting_id, draft_id=draft_id
@@ -151,21 +153,21 @@ def handle_accept(
     except LookupError:
         return AcceptResponse(status=404, rejected=True)
 
-    accept_id = uuid.uuid4().hex
+    # Deterministic accept id → a replay on any instance returns the IDENTICAL id.
+    accept_id = _deterministic_id("accept", meeting_id, draft_id)
     response = AcceptResponse(
         status=200,
         accepted=True,
         accept_id=accept_id,
-        idempotent_replay=False,
+        idempotent_replay=applied.already_applied,
         kind=applied.kind,
         applied_status=applied.applied_status,
         bundle_url=applied.bundle_url,
         pushed=applied.pushed,
     )
-    _ACCEPTS[key] = response
 
-    # (6) Audit: capture the accepting tenant member (never a secret).
-    if audit_sink is not None:
+    # (6) Audit the REAL world-touching apply exactly once — never re-audit a durable replay.
+    if audit_sink is not None and not applied.already_applied:
         audit_sink(
             f"accept meeting={meeting_id} draft={draft_id} "
             f"tenant={getattr(request, 'tenant', None)} "
@@ -212,21 +214,11 @@ def handle_reject(
         # A different tenant OR an unknown draft — refused, and NOTHING is changed.
         return AcceptResponse(status=403, rejected=True)
 
-    # (4) Idempotency: the SAME key replays the first result, never double-rejects.
-    key = (str(meeting_id), str(draft_id), str(idempotency_key))
-    prior = _REJECTS.get(key)
-    if prior is not None:
-        return AcceptResponse(
-            status=prior.status,
-            rejected=prior.rejected,
-            reject_id=prior.reject_id,
-            idempotent_replay=True,
-            kind=prior.kind,
-            applied_status=prior.applied_status,
-            pushed=prior.pushed,
-        )
-
-    # (5) Decline on DURABLE storage: flip the row to 'rejected', apply/push nothing.
+    # (4+5) Decline on DURABLE storage: flip the row to 'rejected', apply/push nothing.
+    #       Idempotency is DURABLE + cross-instance (D-039): reject_staged_draft's terminal
+    #       belt short-circuits a replay (already_applied=True) so a retry never double-rejects
+    #       on any instance. ``idempotency_key`` is accepted for API compatibility; the durable
+    #       row status is the real witness.
     try:
         declined = _accept.reject_staged_draft(
             conn, meeting_id=meeting_id, draft_id=draft_id
@@ -234,21 +226,21 @@ def handle_reject(
     except LookupError:
         return AcceptResponse(status=404, rejected=True)
 
-    reject_id = uuid.uuid4().hex
+    # Deterministic reject id → a replay on any instance returns the IDENTICAL id.
+    reject_id = _deterministic_id("reject", meeting_id, draft_id)
     response = AcceptResponse(
         status=200,
         rejected=True,
         accepted=False,
         reject_id=reject_id,
-        idempotent_replay=False,
+        idempotent_replay=declined.already_applied,
         kind=declined.kind,
         applied_status=declined.applied_status,
         pushed=declined.pushed,
     )
-    _REJECTS[key] = response
 
-    # (6) Audit: capture the rejecting tenant member (never a secret).
-    if audit_sink is not None:
+    # (6) Audit the REAL world-touching decline exactly once — never re-audit a durable replay.
+    if audit_sink is not None and not declined.already_applied:
         audit_sink(
             f"reject meeting={meeting_id} draft={draft_id} "
             f"tenant={getattr(request, 'tenant', None)} "
