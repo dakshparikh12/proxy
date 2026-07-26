@@ -207,6 +207,209 @@ def test_every_stream_deltas_call_wraps_a_raw_provider_stream() -> None:
 
 
 # ===========================================================================
+# Pillar 2c — THE DoD sweep: no consumer reads raw chunk .text OUTSIDE a delta loop
+# (binds "stream_deltas is the sole read path; no raw TEXT accumulation is read")
+# ===========================================================================
+def _enclosing_loops_over_stream_deltas(scope: ast.AST) -> set[str]:
+    """Every loop-variable name bound by ``for <v> in stream_deltas(...)`` / ``async for`` in
+    ``scope`` — i.e. the chunk variables that are provably DELTA-stream chunks, not raw ones.
+
+    A call is "over stream_deltas" iff its iterable is a ``stream_deltas(...)`` call, a name
+    bound to one, or a helper that takes a ``stream_deltas(...)`` result as an argument
+    (``emit_tool_boundary_progress(stream_deltas(raw), ...)`` — the Workroom progress tap).
+    """
+    deltaized_names: set[str] = set()
+    # names bound to a stream_deltas(...) result, directly OR via a wrapper call that forwards
+    # each delta chunk unchanged (``progressing = emit_tool_boundary_progress(stream_deltas(raw),…)``
+    # — the Workroom tool-boundary progress tap, a pure pass-through over the delta stream).
+    for stmt in ast.walk(scope):
+        if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Call):
+            v = stmt.value
+            binds_delta = isinstance(v.func, ast.Name) and v.func.id == "stream_deltas"
+            if not binds_delta:
+                binds_delta = any(
+                    isinstance(a, ast.Call) and isinstance(a.func, ast.Name) and a.func.id == "stream_deltas"
+                    for a in v.args
+                )
+            if binds_delta:
+                for tgt in stmt.targets:
+                    if isinstance(tgt, ast.Name):
+                        deltaized_names.add(tgt.id)
+
+    def _iterable_is_delta_stream(node: ast.expr) -> bool:
+        if isinstance(node, ast.Call):
+            # direct: for c in stream_deltas(...)
+            if isinstance(node.func, ast.Name) and node.func.id == "stream_deltas":
+                return True
+            # wrapped: for c in <helper>(stream_deltas(...), ...) — the progress tap forwards
+            # each delta chunk unchanged (proven by carry_turn's _aiter; same contract).
+            for a in node.args:
+                if isinstance(a, ast.Call) and isinstance(a.func, ast.Name) and a.func.id == "stream_deltas":
+                    return True
+                if isinstance(a, ast.Name) and a.id in deltaized_names:
+                    return True
+            return False
+        if isinstance(node, ast.Name):
+            return node.id in deltaized_names
+        return False
+
+    loop_vars: set[str] = set()
+    for node in ast.walk(scope):
+        if isinstance(node, (ast.For, ast.AsyncFor)) and _iterable_is_delta_stream(node.iter):
+            if isinstance(node.target, ast.Name):
+                loop_vars.add(node.target.id)
+    return loop_vars
+
+
+#: The ONE seam that legitimately reads raw accumulated ``.text`` — it is the delta-izer's own
+#: definition (``_DeltaState.feed`` converts accumulated→delta). Every OTHER read must be a delta.
+_DELTA_SEAM_FILE = "libs/agentkit/src/agentkit/deltas.py"
+
+
+def _delta_consumer_helpers() -> set[str]:
+    """Names of helper functions that are, BY CALL-SITE, always handed a delta-stream chunk:
+    a function ``foo(chunk, …)`` invoked as ``foo(<v>, …)`` where ``<v>`` is the loop variable of
+    an ``(async) for <v> in stream_deltas(...)`` iteration somewhere in the product.
+
+    This closes the one honest indirection in the real code: the Workroom drivers fold each delta
+    chunk via ``self._observe(chunk, …)`` / ``self._observe_chunk(chunk, …)`` CALLED from inside
+    the ``stream_deltas`` loop — so ``chunk`` inside that helper is provably a delta chunk. We
+    derive the helper set from the call sites (not a hand list), so a NEW raw-reading helper that
+    is NOT fed from a delta loop stays flagged."""
+    helpers: set[str] = set()
+    for f in _product_py_files():
+        try:
+            module = ast.parse(f.read_text(encoding="utf-8", errors="replace"))
+        except (SyntaxError, OSError):
+            continue
+        for scope in ast.walk(module):
+            if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
+                continue
+            delta_vars = _enclosing_loops_over_stream_deltas(scope)
+            if not delta_vars:
+                continue
+            for call in ast.walk(scope):
+                if not isinstance(call, ast.Call) or not call.args:
+                    continue
+                first = call.args[0]
+                if isinstance(first, ast.Name) and first.id in delta_vars:
+                    # foo(<delta-var>, …) or self.foo(<delta-var>, …) → foo is a delta consumer
+                    fn = call.func
+                    if isinstance(fn, ast.Name):
+                        helpers.add(fn.id)
+                    elif isinstance(fn, ast.Attribute):
+                        helpers.add(fn.attr)
+    return helpers
+
+
+def test_no_consumer_reads_raw_chunk_text_outside_a_stream_deltas_loop() -> None:
+    """THE node's own DoD, bound directly: sweep EVERY AgentChunk consumer in the product and
+    prove that no ``<chunk>.text`` accumulation is read off a variable that is NOT provably a
+    DELTA chunk — i.e. either the loop variable of an ``(async) for <chunk> in stream_deltas(...)``
+    iteration, or the parameter of a helper that is only ever CALLED with such a loop variable.
+
+    This is the "no raw TEXT accumulation is read / stream_deltas is the sole read path" clause
+    of 09-VERIFICATION §2. A consumer that iterated ``provider.stream(...)`` directly and read
+    ``chunk.text`` (the ACCUMULATED provider text) would re-speak the whole answer on every
+    chunk — exactly the bug this journey guards. We do NOT enumerate a hand-picked consumer
+    list (that is what left the gap); we sweep ALL ``.text`` reads on every chunk-typed variable
+    across ``services/*`` + ``libs/*`` and require each to be a delta chunk. The ONLY exempt read
+    is inside the delta-izer's own definition (``deltas.py`` — the seam that DOES the conversion)."""
+    # helper-consumer signatures whose parameter is, BY CONTRACT, already a delta stream — the
+    # projector/carrier take ``deltas`` (stream_deltas output applied once upstream, §11.3), and
+    # the fold helpers derived below are called only with a delta-loop variable.
+    delta_param_functions = {"carry_turn", "project"} | _delta_consumer_helpers()
+    violations: list[str] = []
+    reads_checked = 0
+    for f in _product_py_files():
+        rel = str(f.relative_to(ROOT))
+        if rel == _DELTA_SEAM_FILE:
+            continue  # the delta-izer itself is the seam that reads raw .text — by design
+        try:
+            module = ast.parse(f.read_text(encoding="utf-8", errors="replace"))
+        except (SyntaxError, OSError):
+            continue
+        for scope in ast.walk(module):
+            if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
+                continue
+            safe_vars = _enclosing_loops_over_stream_deltas(scope)
+            # A helper whose param is only ever a delta chunk: its chunk-typed params are safe,
+            # AND loop vars of `(async) for <v> in <that-param>` (or `_aiter(param)`) are safe.
+            is_delta_helper = (
+                isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and scope.name in delta_param_functions
+            )
+            if is_delta_helper:
+                param_names = {a.arg for a in scope.args.args + scope.args.posonlyargs}
+                safe_vars |= param_names
+                for node in ast.walk(scope):
+                    if isinstance(node, (ast.For, ast.AsyncFor)):
+                        it = node.iter
+                        base = it.args[0] if isinstance(it, ast.Call) and it.args else it
+                        if (
+                            isinstance(base, ast.Name)
+                            and base.id in param_names
+                            and isinstance(node.target, ast.Name)
+                        ):
+                            safe_vars.add(node.target.id)
+            # every `<name>.text` attribute READ (not the AgentChunk(...) constructor kwarg)
+            for node in ast.walk(scope):
+                if (
+                    isinstance(node, ast.Attribute)
+                    and node.attr == "text"
+                    and isinstance(node.ctx, ast.Load)
+                    and isinstance(node.value, ast.Name)
+                ):
+                    var = node.value.id
+                    # only chunk-shaped vars matter: those that also appear as `<var>.type`
+                    # somewhere in scope (the discriminator) — filters out unrelated `.text`.
+                    is_chunk_var = any(
+                        isinstance(o, ast.Attribute)
+                        and o.attr == "type"
+                        and isinstance(o.value, ast.Name)
+                        and o.value.id == var
+                        for o in ast.walk(scope)
+                    )
+                    if not is_chunk_var:
+                        continue
+                    reads_checked += 1
+                    if var not in safe_vars:
+                        violations.append(f"{rel}:{node.lineno} reads raw '{var}.text' outside a stream_deltas loop")
+    assert reads_checked >= 1, "sweep found no chunk.text reads at all — the consumer set must be non-empty"
+    assert not violations, (
+        "a consumer reads raw accumulated chunk .text without going through stream_deltas:\n  "
+        + "\n  ".join(violations)
+    )
+
+
+def test_no_consumer_iterates_a_raw_provider_stream_directly() -> None:
+    """The complementary DoD clause: no consumer iterates ``provider.stream(...)`` (the RAW
+    accumulated stream) directly — every ``(async) for … in provider.stream(...)`` MUST be
+    wrapped in ``stream_deltas(...)``. Bypassing the delta seam is the "consumer iterates raw
+    AgentChunk from the producer without going through stream_deltas" fault (AC-CMP-005 then#3)."""
+    offenders: list[str] = []
+    for f in _product_py_files():
+        try:
+            module = ast.parse(f.read_text(encoding="utf-8", errors="replace"))
+        except (SyntaxError, OSError):
+            continue
+        rel = str(f.relative_to(ROOT))
+        for node in ast.walk(module):
+            if isinstance(node, (ast.For, ast.AsyncFor)):
+                it = node.iter
+                # a bare `for c in provider.stream(...)` (NOT wrapped by stream_deltas) is the bug
+                if (
+                    isinstance(it, ast.Call)
+                    and isinstance(it.func, ast.Attribute)
+                    and it.func.attr == "stream"
+                ):
+                    offenders.append(f"{rel}:{node.lineno} iterates a raw provider.stream() without stream_deltas")
+    assert not offenders, "a consumer bypasses stream_deltas and reads the raw provider stream:\n  " + "\n  ".join(
+        offenders
+    )
+
+
+# ===========================================================================
 # Pillar 3 — the delta-vs-accumulation REGRESSION (double-application MUST corrupt)
 # ===========================================================================
 def test_stream_deltas_once_yields_true_deltas() -> None:
@@ -257,13 +460,18 @@ def test_double_application_corrupts_deltas_and_does_not_reproduce_single_pass()
 # ===========================================================================
 # Pillar 4 — the REAL consumers read the delta stream (.type/.metadata; .text as a delta)
 # ===========================================================================
-def test_transport_speak_path_consumes_deltas_without_reaccumulating() -> None:
+def test_transport_speak_path_forwards_delivery_tool_input_verbatim() -> None:
     """The transport speak path (``carry_turn`` → ``ChannelProjector.project``) is driven over
-    the REAL ``stream_deltas`` output and must forward each TEXT delta as-is — a consumer that
-    re-accumulated would re-speak the whole answer on every chunk (the barge-in/TTS bug).
+    the REAL ``stream_deltas`` output and must forward each delivery-tool ``input.text`` VERBATIM
+    to the voice surface — it must never re-derive, re-accumulate, or concatenate the delivery
+    text from any other field. A consumer that re-accumulated would re-speak the whole answer.
 
-    We drive the ACTUAL projector: the model delivers via a ``speak`` TOOL_USE whose ``input``
-    carries the streaming delta, exactly as the wake turn emits it."""
+    This drives the projector with the REAL provider TOOL_USE shape (``provider.py:167-172``
+    emits ONE completed ``speak`` ToolUseBlock per delivery, ``metadata['input']={'text':...}``),
+    interleaved with the raw ``TEXT`` reasoning the model streams alongside it. Because the model
+    streams its ACCUMULATED reasoning as ``TEXT`` and delivers each utterance as a DISTINCT
+    ``speak`` call, the two must never be conflated: the voice surface carries ONLY the delivery
+    inputs, each verbatim, and NONE of the (delta-ized, then dropped) reasoning text."""
     import asyncio
 
     from libs.agentkit import stream_deltas
@@ -283,19 +491,19 @@ def test_transport_speak_path_consumes_deltas_without_reaccumulating() -> None:
         # SERVER-owned meeting id (a client meeting_id never authorizes an entity — isolation).
         id = uuid.uuid4()
 
-    # RAW provider stream: the model streams accumulated delivery text via successive speak
-    # TOOL_USE chunks (the wake turn's shape). stream_deltas is applied ONCE by the driver.
-    def _speak(accumulated: str) -> AgentChunk:
-        return AgentChunk(
-            type="TOOL_USE",
-            metadata={"name": "speak", "input": {"text": accumulated}},
-        )
+    # REAL provider shape: one COMPLETED speak ToolUseBlock per delivery (provider.py:167-172),
+    # each carrying its OWN full utterance in metadata['input']['text'] — NOT an accumulating
+    # sequence of the same growing string. The model ALSO streams accumulated reasoning as TEXT
+    # (the raw shape stream_deltas actually diffs); that reasoning MUST NOT reach voice.
+    def _speak(utterance: str) -> AgentChunk:
+        return AgentChunk(type="TOOL_USE", metadata={"name": "speak", "input": {"text": utterance}})
 
     raw = [
         AgentChunk(type="INIT", metadata={"session_id": "s1"}),
-        _speak("The"),
-        _speak("The answer"),
-        _speak("The answer is 42"),
+        _text(AgentChunk, "Let me think.", "m1"),       # accumulated reasoning (raw TEXT) …
+        _speak("The answer"),                            # … a distinct delivery utterance …
+        _text(AgentChunk, "Let me think. Now answer.", "m1"),  # … more accumulated reasoning …
+        _speak("is 42."),                                # … a second distinct delivery utterance.
         AgentChunk(type="RESULT", metadata={"total_cost_usd": 0.02}),
     ]
 
@@ -305,12 +513,11 @@ def test_transport_speak_path_consumes_deltas_without_reaccumulating() -> None:
 
     asyncio.run(_drive())
 
-    # Each speak frame carried the model's own per-chunk delivery payload; the projector NEVER
-    # re-ran stream_deltas or re-accumulated .text (proven statically below + by pass-through here).
-    assert spoken, "the speak path must emit at least one voice.speak frame from the delivery tool"
-    # The projector forwards each delivery input as its own frame (no re-accumulation collapse
-    # to a single mega-frame, no dropping): one frame per delivering chunk.
-    assert spoken == ["The", "The answer", "The answer is 42"], f"speak frames not forwarded 1:1: {spoken}"
+    # The voice surface carries EXACTLY the two delivery inputs, each verbatim and in order —
+    # never the interleaved reasoning TEXT, never a re-accumulated concatenation of the two
+    # utterances into one, never a growing prefix. This binds "delivery text is read off the
+    # delivery tool's own input, never re-derived from the raw stream" (CANONICAL §12.3).
+    assert spoken == ["The answer", "is 42."], f"speak frames not forwarded verbatim: {spoken}"
 
 
 def test_transport_projector_never_reruns_stream_deltas() -> None:
