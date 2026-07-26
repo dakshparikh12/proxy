@@ -1751,7 +1751,7 @@
       "title": "Coverage read + Readiness gate \u2014 emits contracts.Readiness",
       "region": "01-CODE-INTELLIGENCE",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "01-CODE-INTELLIGENCE.md#3.7",
         "01-CODE-INTELLIGENCE.md#3.7.1",
@@ -1822,7 +1822,7 @@
       "title": "Freshness \u2014 push webhook, full rebuild, reconcile, SHA-pin + GC",
       "region": "01-CODE-INTELLIGENCE",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "01-CODE-INTELLIGENCE.md#3.6",
         "01-CODE-INTELLIGENCE.md#2.4",
@@ -1907,7 +1907,7 @@
       "title": "Precise navigation \u2014 warm host-side LSP (Serena/solid-lsp) + fallback",
       "region": "01-CODE-INTELLIGENCE",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "01-CODE-INTELLIGENCE.md#3.5-lsp",
         "01-CODE-INTELLIGENCE.md#3.8-step8",
@@ -1977,7 +1977,7 @@
       "title": "Pipeline orchestration + placement/static contracts + E2E estates",
       "region": "01-CODE-INTELLIGENCE",
       "disposition": "verify",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "01-CODE-INTELLIGENCE.md#3",
         "01-CODE-INTELLIGENCE.md#3.8",
@@ -7083,7 +7083,7 @@
       "title": "Contract check: assert_registry_closed() holds",
       "region": "09-VERIFICATION",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "09-VERIFICATION.md#2",
         "00-FOUNDATION.md#12",
@@ -7170,7 +7170,7 @@
       "title": "Contract check: exactly one operation_runs table; reconcile reaps duplicates",
       "region": "09-VERIFICATION",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "09-VERIFICATION.md#2",
         "CANONICAL-DECISIONS.md#2"
@@ -7252,7 +7252,7 @@
       "title": "Contract check: meeting_cost + staged_drafts survive a simulated process kill",
       "region": "09-VERIFICATION",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "09-VERIFICATION.md#2",
         "CANONICAL-DECISIONS.md#3",

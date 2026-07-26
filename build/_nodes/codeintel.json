@@ -435,7 +435,7 @@
     "title": "Coverage read + Readiness gate \u2014 emits contracts.Readiness",
     "region": "01-CODE-INTELLIGENCE",
     "disposition": "verify",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "01-CODE-INTELLIGENCE.md#3.7",
       "01-CODE-INTELLIGENCE.md#3.7.1",
@@ -506,7 +506,7 @@
     "title": "Freshness \u2014 push webhook, full rebuild, reconcile, SHA-pin + GC",
     "region": "01-CODE-INTELLIGENCE",
     "disposition": "verify",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "01-CODE-INTELLIGENCE.md#3.6",
       "01-CODE-INTELLIGENCE.md#2.4",
@@ -590,7 +590,7 @@
     "title": "Precise navigation \u2014 warm host-side LSP (Serena/solid-lsp) + fallback",
     "region": "01-CODE-INTELLIGENCE",
     "disposition": "verify",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "01-CODE-INTELLIGENCE.md#3.5-lsp",
       "01-CODE-INTELLIGENCE.md#3.8-step8",
@@ -658,7 +658,7 @@
     "title": "Pipeline orchestration + placement/static contracts + E2E estates",
     "region": "01-CODE-INTELLIGENCE",
     "disposition": "verify",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "01-CODE-INTELLIGENCE.md#3",
       "01-CODE-INTELLIGENCE.md#3.8",
