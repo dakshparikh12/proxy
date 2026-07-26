@@ -129,16 +129,27 @@ class ToolStart(ProxyMessage):
 
 
 class TileState(ProxyMessage):
-    """The tile lifecycle frame (§4.5): a closed Literal, driven server-side (Doc 04)."""
+    """The tile lifecycle frame (§4.5): a closed Literal, driven server-side (Doc 04).
+
+    The ``state`` set is EXACTLY the eight §2.2 tile states — the full presence range the
+    tile can be in — and no ninth/ad-hoc state exists (the renderer is handed only this
+    closed set, so it can never draw a state it decided on its own, §3 build rule). Each
+    state is entered ONLY by its named driving system event (``transport.tile_state``'s
+    ``TileStateMachine`` maps event→state); a state that cannot name its driving event
+    does not exist. The two states that carry a caption (``listening-to``, ``working``)
+    still carry their substance in chat/voice too — the accessibility law (§2.2).
+    """
 
     type: Literal["tile.state"] = "tile.state"
     state: Literal[
-        "listening",
-        "working",
-        "has-something",
-        "speaking",
-        "muted",
-        "checking",
+        "listening",      # default; the session is live (Doc 04 session state)
+        "listening-to",   # an address was detected (Doc 04 name-gate + roster)
+        "working",        # a real progress event from the task (Doc 05 envelopes)
+        "checking",       # an LSP-bound direct-answer ACK ≤500ms (CANONICAL §12.8)
+        "has-something",  # a finished result awaits a turn boundary (Doc 04) — raise-a-hand
+        "speaking",       # gentle pulse synced to its own audio (Doc 02 speaking signal)
+        "muted",          # dimmed orb; the hard mute — silence legible as chosen (Doc 02)
+        "reaction",       # a task completed + delivered — sparing by design (§2.2)
     ]
 
 

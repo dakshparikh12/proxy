@@ -258,18 +258,22 @@ def test_render_frames_field_discipline() -> None:
 
 
 def test_tile_state_lifecycle_is_closed_literal() -> None:
-    """TileState.state is the closed §4.5 lifecycle Literal (no open str)."""
+    """TileState.state is the closed §2.2 lifecycle Literal — EXACTLY the eight §2.2 tile
+    states, no open str and no ninth/ad-hoc member (node experience.tile-orb-state-machine
+    owns the full set; §2.2 mandates listening-to and reaction alongside the other six)."""
     from libs.contracts import channel
 
     ann = channel.TileState.model_fields["state"].annotation
     assert get_origin(_unwrap(ann)) is Literal
     assert set(get_args(_unwrap(ann))) == {
         "listening",
+        "listening-to",
         "working",
+        "checking",
         "has-something",
         "speaking",
         "muted",
-        "checking",
+        "reaction",
     }
 
 
