@@ -88,8 +88,8 @@ from agentkit import (
     AbortRegistry,
     ProviderError,
     ProviderQuery,
+    delta_stream,
     resume_with_fallback,
-    stream_deltas,
     thinking_policy,
 )
 from code_intel.sdk_server import CODE_INTEL_SERVER_NAME
@@ -805,9 +805,9 @@ class SessionDriver:
         result_meta: dict[str, Any] = {}
         wrote_paths: list[str] = []
         raw_stream = provider.stream(prompt, options)
-        # stream_deltas first (per-msg_id TEXT deltas), THEN the tool-boundary progress tap
+        # delta_stream first (per-msg_id TEXT deltas), THEN the tool-boundary progress tap
         # over the delta-ized stream — so progress is derived from the real tool-use stream.
-        progressing = emit_tool_boundary_progress(stream_deltas(raw_stream), task_id, self._on_progress)
+        progressing = emit_tool_boundary_progress(delta_stream(raw_stream), task_id, self._on_progress)
         async for chunk in progressing:
             if controller.aborted:
                 break
@@ -1191,7 +1191,7 @@ class _ProviderRunner:
         options = _with_knobs(self._options, per_attempt)
         raw_stream = self._provider.stream(prompt, options)
         progressing = emit_tool_boundary_progress(
-            stream_deltas(raw_stream), self._task_id, self._on_progress
+            delta_stream(raw_stream), self._task_id, self._on_progress
         )
         async for chunk in progressing:
             if chunk.type == "ERROR":

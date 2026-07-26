@@ -57,8 +57,8 @@ from typing import Any
 from agentkit import (
     ProviderError,
     ProviderQuery,
+    delta_stream,
     pick_provider,
-    stream_deltas,
     thinking_policy,
 )
 from contracts import AgentChunk, Bundle, EnvelopeStatus
@@ -427,7 +427,7 @@ class VerifyGate:
         )
         text_parts: list[str] = []
         try:
-            async for chunk in stream_deltas(provider.stream(prompt, options)):
+            async for chunk in delta_stream(provider.stream(prompt, options)):
                 if chunk.type == "ERROR":
                     # A verifier fault fails closed — NEVER a silent 'verified' (Rule 6 / §3.7①).
                     _LOG.warning("verifier provider fault → fail-closed unverified verdict")

@@ -10,6 +10,7 @@ from .config import register as register
 from .deltas import stream_deltas as stream_deltas
 from .execution import INJECTION_GUARDRAIL_MARK as INJECTION_GUARDRAIL_MARK
 from .execution import BehaviorRunner as BehaviorRunner
+from .execution import delta_stream as delta_stream
 from .execution import injection_guardrail_suffix as injection_guardrail_suffix
 from .execution import render_prompt as render_prompt
 from .execution import render_role as render_role
@@ -35,6 +36,7 @@ __all__ = [
     "ProviderError",
     "ProviderQuery",
     "compute_builtin_tools",
+    "delta_stream",
     "get_behavior",
     "injection_guardrail_suffix",
     "pick_provider",

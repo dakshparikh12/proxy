@@ -120,11 +120,23 @@ def test_stream_deltas_is_the_single_defined_delta_seam() -> None:
 # ===========================================================================
 # Pillar 2 — NO double-application anywhere (static AST over every consumer/driver)
 # ===========================================================================
+# The delta seam is now applied at ONE token — ``stream_deltas`` — reached everywhere through the
+# shared ``delta_stream`` passthrough (D-031 / AC-CMP-005: ``def delta_stream(raw): return
+# stream_deltas(raw)`` in the BehaviorRunner module). Every driver calls ``delta_stream`` and the
+# lone ``stream_deltas`` call lives inside it. Both names denote the SAME single delta application,
+# so the sweeps below treat them as equivalent seam tokens (a call to either deltaizes exactly once).
+_DELTA_SEAM_NAMES = frozenset({"stream_deltas", "delta_stream"})
+
+
+def _is_delta_seam_call(node: ast.expr) -> bool:
+    return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _DELTA_SEAM_NAMES
+
+
 def _stream_deltas_calls(tree: ast.AST) -> list[ast.Call]:
     return [
         n
         for n in ast.walk(tree)
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "stream_deltas"
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in _DELTA_SEAM_NAMES
     ]
 
 
@@ -154,34 +166,29 @@ def test_no_stream_deltas_call_wraps_another_stream_deltas_output() -> None:
                 continue
             deltaized_names: set[str] = set()
             for stmt in ast.walk(scope):
-                if isinstance(stmt, ast.Assign):
-                    val = stmt.value
-                    if (
-                        isinstance(val, ast.Call)
-                        and isinstance(val.func, ast.Name)
-                        and val.func.id == "stream_deltas"
-                    ):
-                        for tgt in stmt.targets:
-                            if isinstance(tgt, ast.Name):
-                                deltaized_names.add(tgt.id)
+                if isinstance(stmt, ast.Assign) and _is_delta_seam_call(stmt.value):
+                    for tgt in stmt.targets:
+                        if isinstance(tgt, ast.Name):
+                            deltaized_names.add(tgt.id)
             for call in _stream_deltas_calls(scope):
                 arg = _first_arg(call)
-                # (a) direct nesting: stream_deltas(stream_deltas(...))
-                if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name) and arg.func.id == "stream_deltas":
-                    violations.append(f"{rel}:{call.lineno} wraps stream_deltas() output directly")
-                # (b) indirect: stream_deltas(<name bound to a prior stream_deltas call>)
+                # (a) direct nesting: delta_stream(delta_stream(...)) / stream_deltas(stream_deltas(...))
+                if _is_delta_seam_call(arg):
+                    violations.append(f"{rel}:{call.lineno} wraps delta-seam output directly")
+                # (b) indirect: <seam>(<name bound to a prior delta-seam call>)
                 if isinstance(arg, ast.Name) and arg.id in deltaized_names:
                     violations.append(
-                        f"{rel}:{call.lineno} re-wraps '{arg.id}' which is already stream_deltas output"
+                        f"{rel}:{call.lineno} re-wraps '{arg.id}' which is already delta-seam output"
                     )
     assert not violations, "double-application of stream_deltas detected:\n  " + "\n  ".join(violations)
 
 
 def test_every_stream_deltas_call_wraps_a_raw_provider_stream() -> None:
-    """Positive shape check: every ``stream_deltas(...)`` call site takes a RAW provider stream —
-    a ``provider.stream(...)`` call or a name bound to one (``raw``/``raw_stream``) — never a
-    projector/progress-tap wrapper. This is the multi-driver reality the sealed test misses:
-    each of the N drivers deltaizes its OWN distinct raw stream exactly once."""
+    """Positive shape check: every delta-seam call site (``delta_stream(...)`` at the drivers and
+    the lone ``stream_deltas(raw)`` inside it) takes a RAW provider stream — a ``provider.stream(...)``
+    call or a name bound to one (``raw``/``raw_stream``/``chunks``) — never a projector/progress-tap
+    wrapper. Each of the N drivers deltaizes its OWN distinct raw stream exactly once through the
+    shared ``delta_stream`` seam (D-031)."""
     allowed_raw_names = {"raw", "raw_stream", "chunks"}
     offenders: list[str] = []
     call_count = 0
@@ -219,18 +226,15 @@ def _enclosing_loops_over_stream_deltas(scope: ast.AST) -> set[str]:
     (``emit_tool_boundary_progress(stream_deltas(raw), ...)`` — the Workroom progress tap).
     """
     deltaized_names: set[str] = set()
-    # names bound to a stream_deltas(...) result, directly OR via a wrapper call that forwards
-    # each delta chunk unchanged (``progressing = emit_tool_boundary_progress(stream_deltas(raw),…)``
+    # names bound to a delta-seam result, directly OR via a wrapper call that forwards
+    # each delta chunk unchanged (``progressing = emit_tool_boundary_progress(delta_stream(raw),…)``
     # — the Workroom tool-boundary progress tap, a pure pass-through over the delta stream).
     for stmt in ast.walk(scope):
         if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Call):
             v = stmt.value
-            binds_delta = isinstance(v.func, ast.Name) and v.func.id == "stream_deltas"
+            binds_delta = _is_delta_seam_call(v)
             if not binds_delta:
-                binds_delta = any(
-                    isinstance(a, ast.Call) and isinstance(a.func, ast.Name) and a.func.id == "stream_deltas"
-                    for a in v.args
-                )
+                binds_delta = any(_is_delta_seam_call(a) for a in v.args)
             if binds_delta:
                 for tgt in stmt.targets:
                     if isinstance(tgt, ast.Name):
@@ -238,13 +242,13 @@ def _enclosing_loops_over_stream_deltas(scope: ast.AST) -> set[str]:
 
     def _iterable_is_delta_stream(node: ast.expr) -> bool:
         if isinstance(node, ast.Call):
-            # direct: for c in stream_deltas(...)
-            if isinstance(node.func, ast.Name) and node.func.id == "stream_deltas":
+            # direct: for c in delta_stream(...) / stream_deltas(...)
+            if isinstance(node.func, ast.Name) and node.func.id in _DELTA_SEAM_NAMES:
                 return True
-            # wrapped: for c in <helper>(stream_deltas(...), ...) — the progress tap forwards
+            # wrapped: for c in <helper>(delta_stream(...), ...) — the progress tap forwards
             # each delta chunk unchanged (proven by carry_turn's _aiter; same contract).
             for a in node.args:
-                if isinstance(a, ast.Call) and isinstance(a.func, ast.Name) and a.func.id == "stream_deltas":
+                if _is_delta_seam_call(a):
                     return True
                 if isinstance(a, ast.Name) and a.id in deltaized_names:
                     return True

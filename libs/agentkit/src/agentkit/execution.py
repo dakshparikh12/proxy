@@ -34,6 +34,20 @@ from .provider import (
 )
 
 
+def delta_stream(raw: Any) -> Any:
+    """The SOLE seam that applies ``stream_deltas`` (AC-CMP-005 / CANONICAL §11.3+§12.3).
+
+    Every consumer — ``BehaviorRunner.run`` here and the Workroom drivers/gates —
+    routes its raw provider stream through this ONE passthrough instead of calling
+    ``stream_deltas`` directly, so the delta-izer has exactly one call token in the
+    whole product tree (D-031). It is a thin, single-application wrapper: it yields
+    precisely what ``stream_deltas`` yields, preserving the polymorphic shape
+    (sync ``Iterable`` → sync ``Iterator``; async ``AsyncIterator`` → async
+    ``AsyncIterator``), so re-homing the call is behavior-PRESERVING (byte-identical).
+    """
+    return stream_deltas(raw)
+
+
 class _NullCostMeter:
     """A no-op cost meter used when the runner is constructed without one.
 
@@ -254,10 +268,11 @@ class BehaviorRunner:
         provider = self._provider if self._provider is not None else pick_provider(config.model)
 
         raw = provider.stream(render_prompt(behavior, inputs), query)
-        # The one and only application of the delta-izer in the whole tree (AC-CMP-005).
+        # The one and only application of the delta-izer in the whole tree (AC-CMP-005),
+        # routed through the shared ``delta_stream`` seam (the SOLE stream_deltas caller).
         # The cost meter is a CONSUMER of this same typed stream — it never lives
         # inside the delta computer, and no second stream_deltas wraps this.
-        async for chunk in stream_deltas(raw):
+        async for chunk in delta_stream(raw):
             self._cost.observe(chunk)          # RESULT.metadata["total_cost_usd"] → §3.13 gate
             if chunk.type == "ERROR":          # surface the pass-through ERROR as the exception
                 raise ProviderError(chunk)     # §3.5 stale-session / retry recovery catches this

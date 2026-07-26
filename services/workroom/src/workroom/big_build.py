@@ -71,8 +71,8 @@ from agentkit import (
     AbortRegistry,
     ProviderError,
     ProviderQuery,
+    delta_stream,
     pick_provider,
-    stream_deltas,
     thinking_policy,
 )
 from contracts import AgentChunk, Bundle
@@ -425,7 +425,7 @@ class BigBuildPlanner:
         text_parts: list[str] = []
         session_id: str | None = None
         try:
-            async for chunk in stream_deltas(provider.stream(prompt, options)):
+            async for chunk in delta_stream(provider.stream(prompt, options)):
                 if chunk.type == "ERROR":
                     raise ProviderError(chunk)
                 session_id = self._observe(chunk, text_parts, session_id)
@@ -509,7 +509,7 @@ class BigBuildPlanner:
         prompt = self._render_critic_prompt(plan)
         text_parts: list[str] = []
         try:
-            async for chunk in stream_deltas(provider.stream(prompt, options)):
+            async for chunk in delta_stream(provider.stream(prompt, options)):
                 if chunk.type == "ERROR":
                     return None  # a critic fault keeps the existing plan (§3.6.3), never crashes
                 self._observe(chunk, text_parts, None)
@@ -1172,7 +1172,7 @@ class BigBuildExecutor:
         import contextlib
 
         with contextlib.suppress(ProviderError):
-            async for chunk in stream_deltas(provider.stream(prompt, options)):
+            async for chunk in delta_stream(provider.stream(prompt, options)):
                 if chunk.type == "ERROR":
                     return None  # a replan fault keeps the existing plan (§3.6.3), never crashes
                 if chunk.type == "TEXT" and chunk.text:
@@ -1267,10 +1267,10 @@ class BigBuildExecutor:
         provider = self._provider_for(options)
         prompt = self._render_subtask_prompt(unit)
         raw_stream = provider.stream(prompt, options)
-        # stream_deltas first (per-msg_id deltas, §1.1), THEN the tool-boundary progress tap —
+        # delta_stream first (per-msg_id deltas, §1.1), THEN the tool-boundary progress tap —
         # so tool_start streams from the REAL tool-use stream, never the model's prose (§3.12).
         progressing = emit_tool_boundary_progress(
-            stream_deltas(raw_stream), unit_task_id(unit), self._on_progress
+            delta_stream(raw_stream), unit_task_id(unit), self._on_progress
         )
         async for chunk in progressing:
             if controller.aborted:
