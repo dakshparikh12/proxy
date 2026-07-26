@@ -60,10 +60,8 @@ async def complete_signin(db: Database, *, email: str) -> SignInResult:
     )
 
 
-async def resolve_session(
-    db: Database, cookies: dict[str, Any]
-) -> dict[str, Any] | None:
-    """Resolve a signed session cookie → {user_id, tenant_id}, or None."""
+def _cookie_session_uuid(cookies: dict[str, Any]) -> uuid.UUID | None:
+    """Verify the ``session`` cookie's HMAC and return its session UUID, or None."""
     raw = cookies.get("session")
     if not raw:
         return None
@@ -71,11 +69,34 @@ async def resolve_session(
     if session_id is None:
         return None
     try:
-        session_uuid = uuid.UUID(session_id)
+        return uuid.UUID(session_id)
     except ValueError:
+        return None
+
+
+async def resolve_session(
+    db: Database, cookies: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Resolve a signed session cookie → {user_id, tenant_id}, or None."""
+    session_uuid = _cookie_session_uuid(cookies)
+    if session_uuid is None:
         return None
     async with db.acquire() as conn:
         row = await repos.sessions.get_session(conn, session_uuid)
     if row is None:
         return None
     return {"user_id": row["user_id"], "tenant_id": row["tenant_id"]}
+
+
+async def logout_session(db: Database, cookies: dict[str, Any]) -> None:
+    """Delete the durable ``sessions`` row named by a valid signed cookie.
+
+    Logout is complete when the durable record is gone: a subsequent
+    :func:`resolve_session` over the same cookie returns None (the row is the
+    single source of truth). A missing/tampered cookie is a no-op.
+    """
+    session_uuid = _cookie_session_uuid(cookies)
+    if session_uuid is None:
+        return
+    async with db.acquire() as conn:
+        await conn.execute("DELETE FROM sessions WHERE id = $1", session_uuid)

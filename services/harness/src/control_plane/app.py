@@ -19,6 +19,12 @@ from starlette.responses import JSONResponse, RedirectResponse
 # Google OpenID Connect discovery document (accounts.google.com well-known).
 GOOGLE_OIDC_DISCOVERY = "https://accounts.google.com/.well-known/openid-configuration"
 
+# The durable session cookie name. It carries the HMAC-signed ``sessions``-row id
+# that ``harness.session.resolve_session`` reads (the single source of truth is the
+# DB row, not the cookie). This MUST match the name ``resolve_session`` /
+# ``complete_signin`` already use — do not invent a new scheme.
+SESSION_COOKIE = "session"
+
 
 def _google_oauth() -> Any:
     """Build the Authlib OAuth registry for the Google OIDC (openid) client."""
@@ -190,13 +196,50 @@ def create_app() -> FastAPI:
     async def auth_callback(request: Request) -> Any:
         oauth = _google_oauth()
         token = await oauth.google.authorize_access_token(request)
-        request.session["user"] = token.get("userinfo")
-        return RedirectResponse(url="/")
+        userinfo = token.get("userinfo") or {}
+        response = RedirectResponse(url="/")
+        # Converge the two session mechanisms onto the DURABLE session. The OIDC
+        # userinfo carries the verified email; complete_signin creates/loads the
+        # users + tenants rows and the durable ``sessions`` row, and returns the
+        # HMAC-signed cookie that ``resolve_session`` reads — so a user who signs
+        # in over HTTP is authenticated on the WS ``/ws`` gateway and every
+        # ``resolve_session`` surface (before this, HTTP sign-in minted NO
+        # ``sessions`` row and those surfaces could not see them). The DB row is
+        # the single source of truth; the cookie only carries its id.
+        #
+        # We DELIBERATELY do NOT write ``request.session["user"]`` here: the
+        # Starlette SessionMiddleware and this durable cookie both use the cookie
+        # name ``session`` (the name resolve_session + the sealed WS/oracle tests
+        # pin), so writing the middleware session would emit a SECOND, colliding
+        # ``Set-Cookie: session=`` that a browser resolves last-wins — clobbering
+        # the durable cookie and breaking resolve_session. One cookie, one source
+        # of truth. (The /m + draft surfaces that read request.session["user"]
+        # keep their own mechanism; nothing here mutates it.)
+        email = userinfo.get("email")
+        db = getattr(request.app.state, "db", None)
+        if email and db is not None:
+            from harness.session import complete_signin
+
+            result = await complete_signin(db, email=email)
+            response.set_cookie(
+                SESSION_COOKIE, result.cookie, httponly=True, samesite="lax"
+            )
+        return response
 
     @app.get("/auth/logout")
     async def auth_logout(request: Request) -> Any:
         request.session.pop("user", None)
-        return RedirectResponse(url="/")
+        response = RedirectResponse(url="/")
+        # Complete logout: delete the durable ``sessions`` row (the source of
+        # truth) AND clear the ``session`` cookie so no ``resolve_session`` surface
+        # resolves the signed-out user any longer.
+        db = getattr(request.app.state, "db", None)
+        if db is not None:
+            from harness.session import logout_session
+
+            await logout_session(db, request.cookies)
+        response.delete_cookie(SESSION_COOKIE)
+        return response
 
     return app
 
