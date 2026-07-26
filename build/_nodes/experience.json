@@ -654,7 +654,7 @@
     "title": "Deterministic chat formatters \u2014 decision/action note-lines, correction ack, draft card, reconciliation card",
     "region": "08-EXPERIENCE",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "08-EXPERIENCE.md#2.4",
       "08-EXPERIENCE.md#2.3",
@@ -754,7 +754,7 @@
     "title": "V0 screen renders (structured-progress / pin-to-source / final-artifact-preview) + human-activated walkthrough/screen-share",
     "region": "08-EXPERIENCE",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "08-EXPERIENCE.md#2.5",
       "08-EXPERIENCE.md#2.4"
