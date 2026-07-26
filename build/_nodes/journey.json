@@ -46,7 +46,7 @@
     "title": "Contract check: every doc's wire shape resolves to libs/contracts",
     "region": "09-VERIFICATION",
     "disposition": "build-new",
-    "status": "pending",
+    "status": "verified",
     "spec_refs": [
       "09-VERIFICATION.md#2"
     ],
