@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from . import langs
 from .cloner import Cloner
 from .config import get_int
 from .coverage import CoverageRecord
@@ -250,12 +251,22 @@ def run_full_pipeline(
 
     indexed = coverage.count_by_status("indexed")
     flagged = coverage.count_by_status("flagged")
-    # The §3.7 gate is a conjunction: 100% classification (coverage) AND the graph
-    # smoke check. A repo whose classification is complete but whose graph came back
-    # empty / unresolvable is NOT joinable — withhold ``ready`` (never a silent join
-    # over a broken graph). ``simulate_coverage_gap`` forces the coverage arm false.
+    # The §3.7 gate is a conjunction of THREE arms (spec/intent: "100% files
+    # classified AND 100% parse on exact-supported files (excluding generated/
+    # vendor) AND the graph smoke check"):
+    #   1. classification is complete (indexed + flagged == git ls-files), AND
+    #   2. every exact-supported file (.py / a tree-sitter grammar) actually
+    #      parsed — a ``parse-error`` flag on such a file is a hole in the graph
+    #      the tools query, so the repo is NOT joinable even though the file is
+    #      accounted for. A grammarless / generated / vendor flag
+    #      (``unsupported-language`` / ``excluded``) is a legitimate, expected
+    #      classification and does NOT withhold (AC-M6-008), AND
+    #   3. the graph smoke check passes (known symbols resolve to a real
+    #      file:line — never a silent join over a broken/empty graph).
+    # ``simulate_coverage_gap`` forces arm 1 false.
     gate_ok = (
         _coverage_gate_ok(clone_path, indexed, flagged)
+        and _exact_supported_parse_ok(coverage)
         and not simulate_coverage_gap
         and _graph_smoke_ok(pipeline.graph, indexed)
     )
@@ -320,6 +331,37 @@ def _coverage_gate_ok(clone_path: Path, indexed: int, flagged: int) -> bool:
     if not tracked:
         return indexed + flagged > 0
     return indexed + flagged == len(tracked)
+
+
+def _is_exact_supported(path: str) -> bool:
+    """A file whose grammar we parse exactly: Python (stdlib ``ast``) or a
+    tree-sitter grammar in ``langs.LANG_BY_SUFFIX``. Contrast a *grammarless*
+    file (no exact parser), which is legitimately flagged, ripgrep-only, and
+    does not withhold ``ready``."""
+    suffix = Path(path).suffix.lower()
+    return suffix == ".py" or langs.supported(suffix)
+
+
+def _exact_supported_parse_ok(coverage: CoverageRecord) -> bool:
+    """Arm 2 of the §3.7 gate: 100% parse on exact-supported files.
+
+    An exact-supported file (``.py`` or a tree-sitter grammar) that failed to
+    parse is flagged ``parse-error`` (graph_builder.py) — it is accounted for by
+    the coverage arm, but it is a genuine hole in the structural graph the tools
+    query, so the repo is NOT joinable and ``ready`` must be withheld. A
+    grammarless / generated / vendor file (``unsupported-language`` /
+    ``excluded``) is an *expected* classification, not a failure, and never
+    withholds (AC-M6-008). Deterministic and model-free (Law 4). We gate on the
+    exact-supported file identity, not merely the reason string, so the property
+    stays bound to the real 'exact-supported' definition."""
+    for row in coverage.all_rows():
+        if (
+            row.status == "flagged"
+            and row.flag_reason == "parse-error"
+            and _is_exact_supported(row.path)
+        ):
+            return False
+    return True
 
 
 def _graph_smoke_ok(graph: Graph, indexed: int) -> bool:

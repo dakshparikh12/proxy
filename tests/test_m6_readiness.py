@@ -128,6 +128,42 @@ def test_ac_m6_005_parse_error_in_exact_supported_file_flagged_and_accounted():
     )
 
 
+def test_ac_m6_005_parse_error_in_exact_supported_file_withholds_ready():
+    """AC-M6-005 (readiness arm): a parse-error on an EXACT-supported file
+    (.py / a tree-sitter grammar) withholds 'ready'. The §3.7 gate is
+    "100% classified AND 100% parse on exact-supported files (excluding
+    generated/vendor)": accounting the broken file is necessary but not
+    sufficient — an unparsed exact-supported file is a hole in the graph the
+    tools query, so the repo is NOT joinable and must reach 'not_ready'.
+    Contrast AC-M6-008: a flagged grammarless/generated file does NOT withhold."""
+    from services.code_intel.pipeline import run_full_pipeline
+    from services.code_intel.readiness import ReadinessCollector
+    from tests.fixtures.repos import parse_error_fixture
+
+    fixture = parse_error_fixture()
+    collector = ReadinessCollector()
+
+    pipeline = run_full_pipeline(
+        tenant_id="tenant-test",
+        repo_url=fixture.url,
+        readiness_listener=collector,
+    )
+
+    assert "ready" not in collector.emitted_states, (
+        "Readiness must NOT reach 'ready' when an exact-supported file failed to "
+        f"parse (parse-error); emitted={collector.emitted_states}"
+    )
+    assert "not_ready" in collector.emitted_states, (
+        f"Expected 'not_ready' on an unparsed exact-supported file; "
+        f"emitted={collector.emitted_states}"
+    )
+    record = pipeline.readiness_record
+    assert record is not None
+    assert record.indexed_at is None, (
+        "A withheld (not_ready) record must not carry an indexed_at stamp"
+    )
+
+
 def test_ac_m6_006_who_writes_tier_present_on_django_fixture():
     """AC-M6-006: who_writes returns a result with a status indicating the tier-1 stack
     was recognized. Table nodes exist and carry the canonical id format for a Django ORM repo."""
