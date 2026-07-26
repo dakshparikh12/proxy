@@ -161,7 +161,9 @@ def test_csread_mount_db_outage_is_503() -> None:
 
 # -- /m/{meeting_id} user surface is behind the auth wall on the LIVE app ------
 def test_csread_mount_m_surface_requires_session(app_and_client) -> None:
-    # No session => the user surface denies (401), independent of the internal token.
+    # No session => the user surface denies. Founder decision (2026-07): the canonical
+    # unauth response is 404 "not found" (doc08 meeting-home anti-leak — never confirm a
+    # meeting exists to an anonymous caller), which supersedes the incidental 401 here.
     _, client = app_and_client
     resp = client.get(f"/m/{uuid.uuid4()}")
-    assert resp.status_code == 401
+    assert resp.status_code == 404
