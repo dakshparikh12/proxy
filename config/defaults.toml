@@ -101,3 +101,14 @@ outbound_sends_per_second = 4
 bot_usd_per_hr = 0.50    # Recall bot. range: 0.40..0.60
 stt_usd_per_hr = 0.15    # AssemblyAI via Recall BYOK passthrough. range: 0.10..0.20
 tts_usd_per_hr = 0.15    # Cartesia Sonic 3, within the $0.10-0.20 band. range: 0.10..0.20
+
+[scribe]
+# Notes freshness flag threshold (03 §3.8/§4): if the newest note-delta's fold
+# timestamp (as_of) is older than this many seconds relative to now, the notes
+# object is reported as freshness_lagging=true so a reader never treats a stale
+# object as current (§3.9 "readers see the object's freshness timestamp — never a
+# stale object pretending to be current"). This bool is computed server-side at
+# response time and rides OUTSIDE the byte-canonical notes body (so the fold stays
+# byte-stable). Env override: NOTES_FRESHNESS_LAG_THRESHOLD_S. unit: seconds.
+# range: 30..300.
+notes_freshness_lag_threshold_s = 90

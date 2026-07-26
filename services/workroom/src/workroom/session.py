@@ -330,7 +330,10 @@ class SessionDriver:
                 return envelope
             handle = self._resolve_warm_sandbox(meeting_id)
             reader = self._reader_for(handle)
-            prompt = self._render_bundle_prompt(bundle)
+            # C-NOTESREAD (§3.5): read the LIVE notes off the durable /internal/notes fold and
+            # embed them in the volatile prompt (the bundle carries only the meeting_id ref).
+            notes_text = await self._read_live_notes(meeting_id)
+            prompt = self._render_bundle_prompt(bundle, notes_text=notes_text)
             # Resolve THIS meeting's code_intel SDK server (the tenant graph.db + clone) so a
             # Workroom task can query the codebase graph — its ``mcp__code_intel__*`` MAP tools
             # currently resolve to nothing (the seam gap this closes). Async because the repo
@@ -480,7 +483,9 @@ class SessionDriver:
                 code_intel_server=code_intel_server,
             )
             runner = _ProviderRunner(self._provider_for(options), options, task_id, self._on_progress)
-            inputs: dict[str, Any] = {"prompt": self._render_bundle_prompt(bundle)}
+            # C-NOTESREAD (§3.5): the resumed task also orients on the LIVE notes fold, not the bare ref.
+            notes_text = await self._read_live_notes(meeting_id)
+            inputs: dict[str, Any] = {"prompt": self._render_bundle_prompt(bundle, notes_text=notes_text)}
             result_meta: dict[str, Any] = {}
             wrote_paths: list[str] = []
             # The IMPORTED replay seam (never redefined here, §11.9): resume the persisted
@@ -605,24 +610,57 @@ class SessionDriver:
 
     # -- (2) the volatile bundle rides the prompt; the prefix is cached -------
 
-    def _render_bundle_prompt(self, bundle: Bundle) -> str:
+    def _render_bundle_prompt(self, bundle: Bundle, *, notes_text: str | None = None) -> str:
         """Render ONLY the volatile bundle into the per-task ``prompt`` (§3.9 cache split).
 
         The stable prefix (the disposition + tool defs) is the cached SYSTEM prompt, placed
         BEFORE the cache breakpoint; everything volatile — the ask, the speaker, the
-        transcript tail, the notes ref — rides HERE, after the breakpoint, so it is the only
+        transcript tail, the LIVE notes — rides HERE, after the breakpoint, so it is the only
         fresh input a new task pays for. Transcript-derived content is DATA, never
         instructions (§3.10): the untrusted tail is embedded through the SHARED
         :func:`fence_transcript_tail` — a NON-ESCAPABLE per-call-nonce spotlight fence — so a
         malicious participant cannot spell a fixed, guessable delimiter to break out of the
         data block and inject an instruction (a fixed public close marker would be escapable).
+
+        C-NOTESREAD (05 §3.5): the bundle carries ``notes_ref = meeting_id`` (a UUID), NOT the
+        notes object. When the caller has already read the LIVE notes off ``GET /internal/notes/
+        {meeting_id}`` (the server-side durable fold, :meth:`_read_live_notes`), it passes the
+        rendered text as ``notes_text`` and it is embedded HERE so the Workroom orients on the
+        real current notes — never just the bare ref. When ``notes_text`` is None (no db wired /
+        a bare render), the ``notes_ref`` line is the honest fallback (the ref the room can read).
         """
+        notes_block = (
+            f"Live notes (read via GET /internal/notes/{bundle.notes_ref}):\n{notes_text}\n"
+            if notes_text is not None
+            else f"Notes ref (meeting): {bundle.notes_ref}\n"
+        )
         return (
             f"Ask (from {bundle.speaker}): {bundle.ask}\n"
             f"Task id: {bundle.task_id}\n"
-            f"Notes ref (meeting): {bundle.notes_ref}\n"
+            f"{notes_block}"
             f"{fence_transcript_tail(bundle.transcript_tail)}"
         )
+
+    async def _read_live_notes(self, meeting_id: str) -> str | None:
+        """Read the meeting's LIVE notes via the durable server-side fold (05 §3.5 / CANONICAL §11.4).
+
+        The Workroom does NOT read the Scribe's in-process ``NOTES_CACHE`` (a scribe-hot-path
+        optimization unreachable on another host). It reads the live notes object the internal
+        API ``GET /internal/notes/{meeting_id}`` exposes — the SAME durable fold, folding the
+        Postgres ``note_deltas`` into the notes object server-side (:func:`scribe.notes_reader.
+        read_notes`), rendered stable-ordered (:meth:`Notes.render_for_summary`). Fail-closed to
+        None (no db wired, an empty meeting, or a read fault) → the prompt falls back to the bare
+        ``notes_ref`` line (Rule 6 — a task never crashes because notes couldn't be read)."""
+        if self._db is None or not meeting_id:
+            return None
+        try:
+            from scribe.notes_reader import read_notes
+
+            notes = await read_notes(meeting_id, db=self._db)
+            rendered: str = notes.render_for_summary()
+            return rendered
+        except Exception:  # noqa: BLE001 - Rule 6: a notes-read fault degrades to the bare ref
+            return None
 
     def _build_query_options(
         self,

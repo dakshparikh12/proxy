@@ -62,6 +62,50 @@ def heartbeat_s() -> int:
     return _get("ops", "heartbeat_s")
 
 
+# Minimum safe ratio of the staleness window to the heartbeat cadence (D-033 / F1).
+# A booting instance reaps a running row only once its heartbeat is older than
+# STALE_AFTER_S; if STALE_AFTER_S is not comfortably larger than HEARTBEAT_S a
+# single slow/late beat could push a LIVE owner past the window and let a parallel
+# boot reap it (double-freeing a live meeting — the most dangerous concurrency seam
+# in the substrate). We require STALE_AFTER_S >= 3 × HEARTBEAT_S so an owner must
+# miss at least three consecutive beats before it is ever considered stale.
+MIN_REAPER_RATIO = 3
+
+
+class ReaperRatioError(ValueError):
+    """Raised when STALE_AFTER_S / HEARTBEAT_S drops below MIN_REAPER_RATIO."""
+
+
+def reaper_ratio() -> float:
+    """The current STALE_AFTER_S / HEARTBEAT_S ratio (heartbeats-before-stale)."""
+    hb = heartbeat_s()
+    if hb <= 0:
+        raise ReaperRatioError(f"heartbeat_s must be > 0; got {hb}")
+    return stale_after_s() / hb
+
+
+def assert_reaper_ratio() -> None:
+    """Fail closed if the reaper staleness/heartbeat ratio is unsafe (D-033).
+
+    Enforces the invariant that a booting instance can never reap a live owner
+    after one slow beat: STALE_AFTER_S must be at least MIN_REAPER_RATIO (3×) the
+    heartbeat cadence. Call at boot / config load so a mis-config is rejected
+    before any reaper runs — never silently tolerated.
+    """
+    stale = stale_after_s()
+    hb = heartbeat_s()
+    if hb <= 0:
+        raise ReaperRatioError(f"ops.heartbeat_s must be > 0; got {hb}")
+    if stale < MIN_REAPER_RATIO * hb:
+        raise ReaperRatioError(
+            "unsafe reaper config: ops.stale_after_s "
+            f"({stale}s) must be >= {MIN_REAPER_RATIO}× ops.heartbeat_s ({hb}s) "
+            f"= {MIN_REAPER_RATIO * hb}s so a booting instance never reaps a "
+            "live owner after one slow beat (D-033); "
+            f"current ratio {stale / hb:.2f}× < {MIN_REAPER_RATIO}×"
+        )
+
+
 def sandbox_timeout_s() -> int:
     """E2B-native sandbox timeout backstop set at provision."""
     return _get("sandbox", "timeout_s")

@@ -56,13 +56,35 @@ def _grep(pattern: str, *dirs: str, extra_flags: list[str] | None = None) -> lis
 
 
 def check_registry_closed() -> CheckResult:
-    """Check 1: assert_registry_closed() does not raise."""
+    """Check 1: the Doc-09 registry gate at the Doc-08 §4.8 strength (A19 / C-REGSCOPE).
+
+    The Doc-09 journey §2 check was set-equality only; per A_decisions A19 (cite 08 §4.8,
+    09 §16) it is strengthened to the FULL Doc-08 ``assert_registry_closed`` — which already
+    proves set-equality + every inbound type has EXACTLY ONE handler + every outbound type
+    has ≥1 projector + no signal-surface leak (§11.8) — AND the per-field produce/consume
+    diff (``assert_contract_fields_consumed``, 08 §4.8 / CANONICAL §11.11): a field produced
+    by one side and consumed by neither (or consumed under a name no model produces) fails
+    the journey gate here, NAMING the orphan. So the cross-doc integration gate is no weaker
+    than the Doc-08 build gate — the type graph AND the field graph must both close.
+    """
     label = "registry"
     try:
-        from contracts.registry import assert_registry_closed
+        from contracts.registry import (
+            assert_contract_fields_consumed,
+            assert_registry_closed,
+        )
 
+        # (a) the full type-graph closure: set-equality + handlers + projectors + no leak.
         assert_registry_closed()
-        return (label, "PASS", "closed — MessageType enum == CHANNEL_REGISTRY")
+        # (b) the §4.8 field-level produce/consume diff (the added Doc-08 strength).
+        field_orphans = assert_contract_fields_consumed()
+        if field_orphans:
+            return (label, "FAIL", f"field-diff orphans (§4.8): {field_orphans}")
+        return (
+            label,
+            "PASS",
+            "closed — enum==CHANNEL_REGISTRY, handlers+projectors covered, field-diff clean",
+        )
     except AssertionError as exc:
         return (label, "FAIL", f"closed-graph violation: {exc}")
     except Exception as exc:

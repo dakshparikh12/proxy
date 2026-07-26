@@ -98,6 +98,23 @@ class MeetingRuntime:
     # silently observe pre-consent audio, F-RECORD-BEFORE-CONSENT). Defaults to a fresh closed
     # gate so a bare runtime is fail-closed, not always-allow.
     consent_gate: Any = None
+    # C-CHATFORMAT — the outbound chat sink the LIVE notes engine drives the §2.4 deterministic
+    # chat formatters into: each committed decision/action/correction note-delta is rendered to
+    # its ``NoteLine`` and handed here for posting to meeting chat (``start_meeting_scribe`` →
+    # the committed-delta applier). ``None`` (the default) → no chat lines are posted this
+    # meeting — honest degradation mirroring the NullTTS media placeholder: the deterministic
+    # render is race-free + free, but the outbound chat surface (the ChatChannel bound to the
+    # transport) is wired by the provisioner/media pass, so a runtime with no chat surface
+    # simply posts nothing rather than crashing. A callable taking one rendered ProxyMessage.
+    chat_sink: "Callable[[Any], None] | None" = None
+    # C-TILE — the outbound tile render sink the wake path drives the §2.2 tile state machine
+    # into: when a wake turn's projector emits a work-tool ``ToolStart`` "working…" line, the
+    # live brain drives the machine to its ``working`` state and posts the registered
+    # ``TileState`` frame here (the render carrier). ``None`` (the default) → the tile isn't
+    # driven this meeting — honest degradation mirroring the NullTTS media placeholder (the
+    # tile ambience surface is wired by the provisioner/media pass). A callable taking one
+    # rendered ``TileState`` ProxyMessage.
+    tile_sink: "Callable[[Any], None] | None" = None
     _scribe: ScribeRuntimeHandle | None = field(default=None, init=False)
     _hearing: Any = field(default=None, init=False)
     _run_loop: RunLoop | None = field(default=None, init=False)
@@ -109,6 +126,14 @@ class MeetingRuntime:
     # §3.11 model-loop cancel. None until :func:`harness.live_brain.assemble_live_brain`
     # wires it (a bare runtime with no brain still tears down cleanly).
     live_brain: Any = field(default=None, init=False)
+    # The per-meeting transport ``WebhookProcessor`` bound to THIS meeting's carrier
+    # (C-SIGNALWIRE): the live webhook drain routes roster (present/join/leave), bot-status
+    # (connected/dropped/rejoined) and meeting-end webhooks through it so those signals reach
+    # the SAME carrier the Scribe + Orchestrator subscribe to — before this binding those
+    # producers existed but had NO live caller, so roster/bot-status never reached the live
+    # stream. Built once (its dedupe state — present-snapshot-once, meeting-end-once, the name
+    # cache — must persist across the meeting's webhooks) and cached here.
+    _webhook_processor: Any = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         # Fail-closed by default: a runtime with no explicit consent gate gets a fresh CLOSED
@@ -156,6 +181,7 @@ class MeetingRuntime:
                 self.db,
                 host_budget=self.host_budget,
                 referent_corpus=self.referent_corpus,
+                chat_sink=self.chat_sink,
             )
         if self._hearing is None:
             # Import lazily so the harness imports without transport resolved.
@@ -198,6 +224,23 @@ class MeetingRuntime:
         if self._hearing is None:
             self.start()
         await self._hearing.ingest_wire_transcript(msg)
+
+    def webhook_processor(self) -> Any:
+        """The per-meeting transport ``WebhookProcessor`` bound to THIS carrier (C-SIGNALWIRE).
+
+        Built once and cached so its once-only dedupe state (the initial present-set snapshot,
+        the exactly-once meeting-end guard, the participant name cache) persists across the
+        meeting's roster/bot-status/meeting-end webhooks. It emits onto :attr:`carrier` — the
+        SAME in-process stream the Scribe consumer and the Orchestrator pipe subscribe to — so
+        every one of the nine §3.10 signals reaches its live consumer through the ONE binding.
+        The drain already persisted the row durably, so callers drive the pure ``_emit_for``
+        emit step (never a second persist).
+        """
+        if self._webhook_processor is None:
+            from transport.events import WebhookProcessor
+
+            self._webhook_processor = WebhookProcessor(self.carrier)
+        return self._webhook_processor
 
     # ── the orchestrator run loop — THE per-meeting asyncio spine (§3.2, D-008) ──
     @property
@@ -336,7 +379,7 @@ class MeetingRuntime:
         words = getattr(signal, "words", None) or getattr(signal, "message", None)
         return str(words) if isinstance(words, str) and words else None
 
-    async def _drain(self) -> None:
+    async def _drain(self, *, reason: str = "call_ended") -> None:
         """Signal meeting end onto the carrier, then wait for the consumer to drain (bounded).
 
         Meeting end is EXPLICIT, never inferred from silence (§3.1): the runtime emits a
@@ -361,7 +404,9 @@ class MeetingRuntime:
         with contextlib.suppress(Exception):
             from transport.signals import MeetingEnd
 
-            await self.carrier.emit(MeetingEnd(reason="call_ended"))
+            # Reason is DERIVED from the webhook payload (threaded from ``end_meeting``),
+            # never a hard-coded synth string — the C-ENDOFTURN payload-derived meeting-end.
+            await self.carrier.emit(MeetingEnd(reason=reason))
         with contextlib.suppress(asyncio.TimeoutError, Exception):
             await asyncio.wait_for(self._scribe.wait(), timeout=_DRAIN_TIMEOUT_S)
 
@@ -370,6 +415,7 @@ class MeetingRuntime:
         close_config: CloseConfig,
         *,
         teardown: Callable[[], Awaitable[None]] | None = None,
+        reason: str = "call_ended",
     ) -> Any:
         """Drain the consumer (FREEZE), then run the close pass BEFORE teardown.
 
@@ -385,7 +431,7 @@ class MeetingRuntime:
         completed. Defaults to :meth:`aclose` (the bare pipe teardown) for callers
         that only need the render->GCS->chat->teardown order.
         """
-        await self._drain()
+        await self._drain(reason=reason)
         return await run_meeting_close(
             self.header,
             self.db,
@@ -490,8 +536,13 @@ class MeetingRuntimeRegistry:
     def get(self, meeting_id: str) -> MeetingRuntime | None:
         return self._runtimes.get(meeting_id)
 
-    async def end_meeting(self, meeting_id: str) -> None:
+    async def end_meeting(self, meeting_id: str, *, reason: str = "call_ended") -> None:
         """Run the close pass, THEN stop + drop a meeting's runtime (meeting end).
+
+        ``reason`` is the payload-derived meeting-end cause (C-ENDOFTURN): the live webhook
+        handler passes the actual Recall terminal reason so the emitted ``MeetingEnd`` carries
+        it rather than a hard-coded ``call_ended``. It defaults to ``call_ended`` for callers
+        that end a meeting without a webhook payload (test/teardown paths).
 
         This is the wired meeting-end path (gap DOC03-CLOSE-PASS-UNWIRED): when a
         close config is bound the runtime drains, folds the ledger, produces the
@@ -526,12 +577,12 @@ class MeetingRuntimeRegistry:
                 # store, and the close is idempotent on re-run (create-only notes).
                 from .close import run_ordered_close
 
-                await run_ordered_close(runtime, self._close_config)
+                await run_ordered_close(runtime, self._close_config, reason=reason)
             else:
                 # No close config bound: still signal meeting end + drain the serial
                 # consumer so the trailing window lands in the ledger BEFORE teardown,
                 # then release the engine. (run_close does this drain itself.)
-                await runtime._drain()
+                await runtime._drain(reason=reason)
                 await runtime.aclose()
         finally:
             # The ordered close's teardown-pipes is aclose; a no-notes/empty-ledger

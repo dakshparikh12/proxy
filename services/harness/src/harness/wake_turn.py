@@ -44,6 +44,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agentkit import BehaviorRunner, resume_with_fallback
+from libs.llm.prompts import fence_untrusted
 
 from libs.contracts import AgentChunk
 
@@ -282,11 +283,21 @@ class WakeTurn:
         # so the durable memory reaches the model without ever entering the session
         # history the compaction summarizes (it is re-read fresh each turn, never
         # persisted into the running session). The handle itself is always present.
+        # Both the wake event and the folded notes are UNTRUSTED meeting-derived data
+        # (a participant may plant 'ignore your rules' / 'open a PR' in either). Fence
+        # each in the shared ``<untrusted-transcript>`` spotlight delimiters — the same
+        # idiom the Scribe/Workroom use (§10.3 / 04 §3.4) — so the model sees a hard
+        # data/instruction boundary; the injection guardrail on the system prompt
+        # (build_query) names these delimiters as untrusted data whose embedded
+        # instructions are never followed. The meeting_id HANDLE stays outside the fence.
         notes_ref: str = self.meeting_id
         if notes:
-            notes_ref = f"{self.meeting_id}\nlive notes (read via GET /internal/notes):\n{notes}"
+            notes_ref = (
+                f"{self.meeting_id}\nlive notes (read via GET /internal/notes):\n"
+                f"{fence_untrusted(notes)}"
+            )
         inputs: dict[str, Any] = {
-            "event": event.render(),
+            "event": fence_untrusted(event.render()),
             "state_digest": digest.render(),
             "notes_ref": notes_ref,
         }

@@ -36,13 +36,20 @@ class DirectAnswer:
 
 def answer_direct(
     *,
-    question: str,
+    ask: str | None = None,
+    question: str | None = None,
     code_intel: Callable[..., Any] | Any | None = None,
     session: Any = None,
     e2b: Callable[..., Any] | None = None,
     workroom: Callable[..., Any] | None = None,
 ) -> DirectAnswer:
     """Answer a grounded question via the structural index — no E2B, no Workroom.
+
+    ONE canonical signature: the ask is passed as ``ask=`` (the name the canonical
+    :func:`harness.direct_answer.answer_direct` resolver uses). ``question=`` is a
+    back-compatible alias for the same argument so a legacy caller keeps working;
+    exactly one of the two must be supplied (they must not disagree). This façade
+    delegates to the ONE resolver — there is no second implementation.
 
     ``e2b`` / ``workroom`` are accepted only so a caller can PROVE the direct path
     never invokes them; this function calls neither. When a live ``session``
@@ -52,6 +59,16 @@ def answer_direct(
     legacy single-shot hook) is honoured as before. With no handle at all a
     deterministic clone-grounded citation stands in.
     """
+    if ask is not None and question is not None and ask != question:
+        raise ValueError(
+            "answer_direct: pass the ask once — `ask=` and `question=` are aliases "
+            "for the SAME argument and disagreed"
+        )
+    if ask is None:
+        ask = question
+    if ask is None:
+        raise TypeError("answer_direct requires the ask (`ask=`, or the `question=` alias)")
+    question = ask
     # A live server/session handle → the real resolver (real grounded citation).
     handle = session if session is not None else code_intel
     if handle is not None and not (

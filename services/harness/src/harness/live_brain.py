@@ -56,6 +56,7 @@ from libs.contracts import (
     CanvasPatch,
     ProxyMessage,
     ResponseChunk,
+    ToolStart,
     VoiceSpeak,
 )
 
@@ -261,7 +262,7 @@ def make_wake_adapter(
     flow): the projector renders such a chunk only as a "working…" tile that ``_emit_frame``
     drops — the real Workroom is never run. When ``driver`` is present the bridge instead
     claims the durable ``workroom:<id>`` row, ACKs "on it: …", and drives the Workroom task in
-    a tracked background task on ``runtime._workroom_tasks`` (never GC'd mid-flight; close can
+    a tracked background task on ``runtime._dispatch_tasks`` (never GC'd mid-flight; close can
     cancel it), delivering the terminal Envelope through the gated emitter (§3.2). The projector
     stays PURE — it NEVER sees the dispatch chunk.
 
@@ -278,6 +279,13 @@ def make_wake_adapter(
     from .workroom_bridge import handle_dispatch, is_dispatch_tool_use
 
     selector = select if select is not None else select_behavior
+    # C-TILE — the tile state machine, driven from the runtime. When the projector emits a
+    # work-tool ``ToolStart`` "working…" line, we drive the machine to its ``working`` state and
+    # post the resulting registered ``TileState`` frame to the runtime's tile sink (the render
+    # carrier). The tile sink is honest-degradation optional (``None`` → the tile isn't posted,
+    # mirroring the NullTTS media placeholder), so the wake path is unchanged when no tile
+    # surface is wired. The machine is per-wake-adapter (one meeting's tile), never process-global.
+    tile_driver = _build_tile_driver(runtime)
 
     async def _wake(event: MeetingEvent, digest: dict[str, Any]) -> None:
         text, speaker = _event_text(event.payload)
@@ -287,10 +295,10 @@ def make_wake_adapter(
         emitter = event.emitter
         # The tracked set of in-flight Workroom-driver tasks lives on the runtime so nothing
         # is GC'd mid-flight and meeting-end close can cancel them (§11.6). Built lazily once.
-        tasks = getattr(runtime, "_workroom_tasks", None)
+        tasks = getattr(runtime, "_dispatch_tasks", None)
         if tasks is None:
             tasks = set()
-            runtime._workroom_tasks = tasks
+            runtime._dispatch_tasks = tasks
         # Thread the LIVE controller (event.abort) DOWN to the provider — it polls
         # ``.aborted`` and breaks its SDK loop on quiet / meeting-end / timeout (§3.11).
         # Each chunk is projected ONCE (the delta stream is already ``stream_deltas``
@@ -318,21 +326,69 @@ def make_wake_adapter(
                 )
                 continue
             for frame in projector.project(chunk):
-                _emit_frame(emitter, frame)  # gated on is_owner (§3.7) — a zombie emits nothing
+                # gated on is_owner (§3.7) — a zombie emits nothing; a work-tool ToolStart
+                # drives the tile "working…" state via tile_driver (C-TILE).
+                _emit_frame(emitter, frame, tile_driver=tile_driver)
 
     return _wake
 
 
-def _emit_frame(emitter: Any, frame: ProxyMessage) -> None:
+def _build_tile_driver(runtime: Any) -> "_TileDriver | None":
+    """Build the per-meeting tile driver bound to the runtime's tile sink (C-TILE).
+
+    Returns a :class:`_TileDriver` wrapping ONE :class:`~transport.tile_state.TileStateMachine`
+    for this meeting and the runtime's ``tile_sink`` (the render-carrier post seam). ``None``
+    when the runtime exposes no ``tile_sink`` — the tile is then not driven (honest
+    degradation, mirroring the NullTTS media placeholder), and ``_emit_frame`` skips the tile
+    transition. Fail-closed (Rule 6): any construction fault degrades to no tile driver, never
+    a crash on the wake path.
+    """
+    tile_sink = getattr(runtime, "tile_sink", None)
+    if tile_sink is None:
+        return None
+    try:
+        from transport.tile_state import TileStateMachine
+
+        return _TileDriver(machine=TileStateMachine(), sink=tile_sink)
+    except Exception:  # noqa: BLE001 - a tile-build fault degrades to no tile, never crashes the wake
+        return None
+
+
+@dataclass
+class _TileDriver:
+    """Drives the §2.2 tile state machine from the runtime and posts frames to the tile sink.
+
+    Owns ONE :class:`~transport.tile_state.TileStateMachine` for the meeting. On a work-tool
+    ``ToolStart`` (the projector's "working…" line) it drives ``on_event("progress_envelope")``
+    → the ``working`` state and hands the registered ``TileState`` frame to the render-carrier
+    ``sink``. Fail-closed (Rule 6): a machine/sink fault is swallowed — the tile is best-effort
+    ambience, it never aborts the wake turn's delivery.
+    """
+
+    machine: Any
+    sink: Any
+
+    def on_tool_start(self) -> None:
+        """A work-tool started → drive the tile to ``working`` and post the frame (§2.2)."""
+        try:
+            frame = self.machine.on_event("progress_envelope")  # → the 'working' state
+            self.sink(frame)
+        except Exception:  # noqa: BLE001 - Rule 6: a tile fault never aborts the wake delivery
+            return
+
+
+def _emit_frame(emitter: Any, frame: ProxyMessage, *, tile_driver: "_TileDriver | None" = None) -> None:
     """Dispatch ONE projected render frame to its gated emit-frontier verb (§12.3 / §3.7).
 
     The projector chose the channel by mapping the model's delivery-tool call; this routes
     the frame to the matching gated verb (``speak`` / ``send_chat`` / ``show_screen``) —
-    the SOLE outward delivery authority, each fenced on ``is_owner``. A non-delivery render
-    frame (e.g. a ``ToolStart`` tile "working…" line) is a status render with no delivery
-    verb on this seam; it is skipped here (the tile surface is driven by the render carrier,
-    not the emit frontier). The frame's own payload is passed so the wire carries the exact
-    delivered text/artifact the projector rendered — never a re-derived string.
+    the SOLE outward delivery authority, each fenced on ``is_owner``. A ``ToolStart`` (the
+    work-tool "working…" line) has no delivery verb on the emit frontier — it is a tile
+    status render, so C-TILE drives the tile state machine (via ``tile_driver``) to its
+    ``working`` state and the registered ``TileState`` frame goes to the render carrier, not
+    a gated delivery verb. When no tile sink is wired (``tile_driver`` None) the ToolStart is
+    skipped (honest degradation). The frame's own payload is passed so the wire carries the
+    exact delivered text/artifact the projector rendered — never a re-derived string.
     """
     if isinstance(frame, VoiceSpeak):
         emitter.speak(frame.text)
@@ -340,6 +396,9 @@ def _emit_frame(emitter: Any, frame: ProxyMessage) -> None:
         emitter.send_chat(frame.chunk)
     elif isinstance(frame, CanvasPatch):
         emitter.show_screen(frame.patch)
+    elif isinstance(frame, ToolStart) and tile_driver is not None:
+        # C-TILE — the work-tool "working…" line drives the tile state machine to `working`.
+        tile_driver.on_tool_start()
 
 
 @dataclass

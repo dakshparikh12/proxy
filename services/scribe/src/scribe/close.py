@@ -54,7 +54,7 @@ tier-guard logic importable and unit-testable on a host without the vendor SDK.
 from __future__ import annotations
 
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional, Protocol
@@ -534,14 +534,32 @@ class CloseInput:
 
     folded_ledger: str
     gap_pending_spans: tuple[GapPendingSpan, ...]
+    # On the over-threshold reduce step the ``folded_ledger`` is NOT a raw comprehension
+    # ledger — it is ``render_markdown`` of the already-merged per-chunk partials, i.e.
+    # sections that are ALREADY resolved (deduped/carried, incl. header, blockers_risks,
+    # proxy_actions, decision provenance). This flag tells the reduce prompt to dedup and
+    # re-summarise those resolved sections rather than re-derive them from scratch (§3.7).
+    resolved_sections: bool = False
 
     def to_prompt(self) -> str:
         """Assemble the model prompt: folded ledger block + gap/pending spans.
 
         Contains the folded-ledger block and EXACTLY the gap+pending raw spans;
-        no comprehended-segment raw text ever appears (AC-CLOSE-04 oracle).
+        no comprehended-segment raw text ever appears (AC-CLOSE-04 oracle). On the
+        reduce step (``resolved_sections``) the block is announced as already-resolved
+        sections so the model consolidates rather than re-derives (§3.7 chunk-reduce).
         """
-        parts = ["<folded_ledger>", self.folded_ledger, "</folded_ledger>", ""]
+        ledger_tag = "resolved_sections" if self.resolved_sections else "folded_ledger"
+        parts: list[str] = []
+        if self.resolved_sections:
+            parts.append(
+                "The following are ALREADY-RESOLVED notes sections merged from the "
+                "meeting's chunks (header, blockers/risks, decisions with owner/when, "
+                "action items, open questions, and what Proxy did — each with its "
+                "receipt). Consolidate and de-duplicate them into ONE final record; "
+                "do not drop any section, and do not re-derive facts already present."
+            )
+        parts += [f"<{ledger_tag}>", self.folded_ledger, f"</{ledger_tag}>", ""]
         parts += ["<gap_pending_backfill>"]
         for s in self.gap_pending_spans:
             parts.append(f"[{s.status} {s.segment_id}] {s.text}")
@@ -872,18 +890,61 @@ class ReduceResult:
     total_cost_usd: float | None
 
 
+def _first_present(values: Iterable[Optional[str]]) -> Optional[str]:
+    """The first non-empty value across the partials (header fields don't concatenate)."""
+    for v in values:
+        if v is not None and str(v).strip():
+            return v
+    return None
+
+
+def _dedupe_preserve_order(values: Iterable[str]) -> list[str]:
+    """De-duplicate a flat string list while preserving first-seen order."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for v in values:
+        key = v.strip()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(v)
+    return out
+
+
 def _merge_final_notes(partials: list[FinalNotes]) -> FinalNotes:
     """Deterministically fold per-chunk partials into ONE object before the reduce.
 
-    Concatenates the section lists and joins the chunk summaries. This is the
-    map-side accumulation; the final reduce model call (below) re-summarises and
-    dedups the merged whole into the definitive record. No model call here.
+    Concatenates the section lists and joins the chunk summaries, and — critically —
+    carries **every** FinalNotes field through, not just summary/decisions/actions/
+    questions: the §2.6 header (title/date/attendees), the worst-news-first
+    ``blockers_risks``, ``proxy_actions``, and ``transcript_ref`` (§2.6 / AC-CLOSE-12).
+    Decision/action/question provenance rides intact because the ``FinalDecision`` /
+    ``FinalActionItem`` / ``FinalOpenQuestion`` objects are carried WHOLE (owner, when,
+    landed_moment, receipts) — never flattened to bare text. Dropping any of these on
+    the over-threshold reduce path would silently lose a live blocker or a Proxy-action
+    receipt from a large meeting's final notes; carrying them means the reduce prompt
+    (fed ``render_markdown(merged)``) sees the already-resolved sections and only
+    dedups/re-summarises, never re-derives them from scratch. This is the map-side
+    accumulation; the final reduce model call (below) folds the merged whole into the
+    definitive record. No model call here.
     """
     return FinalNotes(
+        # §2.6 header — first present wins (a header is a single meeting fact, not a
+        # per-chunk list); a chunk that never saw the header contributes None.
+        title=_first_present(p.title for p in partials),
+        meeting_date=_first_present(p.meeting_date for p in partials),
+        attendees=_dedupe_preserve_order(a for p in partials for a in p.attendees),
+        # §2.6 worst-news-first — carried, deduped, so a blocker in ANY chunk survives.
+        blockers_risks=_dedupe_preserve_order(
+            b for p in partials for b in p.blockers_risks
+        ),
         summary="\n\n".join(p.summary for p in partials if p.summary.strip()),
         decisions=[d for p in partials for d in p.decisions],
         action_items=[a for p in partials for a in p.action_items],
         open_questions=[q for p in partials for q in p.open_questions],
+        # §2.6 'what Proxy did' + raw-transcript pointer — carried WHOLE (each action
+        # keeps its Law-1 receipt); transcript_ref takes the first present pointer.
+        proxy_actions=[act for p in partials for act in p.proxy_actions],
+        transcript_ref=_first_present(p.transcript_ref for p in partials),
     )
 
 
@@ -942,6 +1003,7 @@ async def reduce_close(
     reduce_input = CloseInput(
         folded_ledger=render_markdown(merged),
         gap_pending_spans=close_input.gap_pending_spans,
+        resolved_sections=True,  # the merged block is already-resolved sections (§3.7)
     )
     final, reduce_cost = await generate_structured_close(
         reduce_input, model=model, caller=caller, call_external=call_external

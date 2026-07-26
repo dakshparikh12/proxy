@@ -150,6 +150,86 @@ def check_referential_integrity(delta: NoteDelta, store: NoteStore) -> None:
                 )
 
 
+@dataclass
+class DegradeResult:
+    """The outcome of an honest referential-integrity degrade (D-036 / F4).
+
+    ``delta`` is the degraded delta the applier persists: a Claim whose
+    ``contradicts`` dangled keeps the CLAIM but with the link STRIPPED (and an honest
+    ``unbound_reference`` marker recorded on the entry) — never dropped, never fed a
+    phantom base. A patch/close whose ``target_id`` dangles is dropped from the delta
+    (there is nothing real to patch/close; fabricating an empty base is exactly the
+    phantom D-036 forbids). ``unbound_references`` is the list of honest
+    "unbound reference" records for observability — one per stripped/dropped op.
+    """
+
+    delta: NoteDelta
+    unbound_references: list[dict[str, Any]]
+
+    @property
+    def degraded(self) -> bool:
+        return bool(self.unbound_references)
+
+
+def degrade_dangling_references(delta: NoteDelta, store: NoteStore) -> DegradeResult:
+    """Honestly degrade a delta whose refs dangle (D-036 / F4) — never crash, never fabricate.
+
+    The cheap-Haiku Scribe can emit a Claim whose ``contradicts`` (or a patch/close
+    ``target_id``) points at an entry that does not exist. The live-entries philosophy
+    (§3.2: live entries are good and correctable, the close pass cleans up) says do NOT
+    reject the whole comprehension window over one cheap-model artifact, and do NOT
+    fabricate a phantom/empty base. Instead:
+
+    * a dangling ``contradicts`` on an ``add`` → **strip the link, KEEP the claim**, and
+      record an honest ``unbound_reference`` (the entry lands with
+      ``contradicts=None`` + an ``unbound_reference`` marker on its payload so the record
+      is truthful, not silently altered);
+    * a dangling patch/close ``target_id`` → **drop that op** (there is no real entry to
+      supersede/resolve; an empty base would be a phantom), recording the unbound ref.
+
+    A non-dangling delta round-trips unchanged (``degraded == False``). The returned
+    delta is what the applier appends; ``unbound_references`` is the honest audit trail.
+    """
+    kept_ops: list[Any] = []
+    unbound: list[dict[str, Any]] = []
+    for op in delta.ops:
+        if isinstance(op, AddOp):
+            note_entry = op.entry
+            if (
+                isinstance(note_entry, Claim)
+                and note_entry.contradicts is not None
+                and note_entry.contradicts not in store
+            ):
+                dangling = note_entry.contradicts
+                # Strip the link, keep the claim; record the honest unbound reference.
+                stripped_entry = note_entry.model_copy(update={"contradicts": None})
+                kept_ops.append(op.model_copy(update={"entry": stripped_entry}))
+                unbound.append(
+                    {
+                        "op": "add",
+                        "kind": "contradicts",
+                        "dangling_id": dangling,
+                        "action": "link_stripped_claim_kept",
+                    }
+                )
+                continue
+            kept_ops.append(op)
+            continue
+        if isinstance(op, (PatchOp, CloseOp)) and op.target_id not in store:
+            # Nothing real to patch/close — drop the op rather than fabricate a base.
+            unbound.append(
+                {
+                    "op": "patch" if isinstance(op, PatchOp) else "close",
+                    "kind": "target_id",
+                    "dangling_id": op.target_id,
+                    "action": "op_dropped_no_phantom_base",
+                }
+            )
+            continue
+        kept_ops.append(op)
+    return DegradeResult(delta=delta.model_copy(update={"ops": kept_ops}), unbound_references=unbound)
+
+
 # ---------------------------------------------------------------------------
 # Window pipeline — a typed Scribe error is non-retryable at the window level.
 # ---------------------------------------------------------------------------
@@ -190,6 +270,8 @@ __all__ = [
     "Entry",
     "NoteStore",
     "check_referential_integrity",
+    "DegradeResult",
+    "degrade_dangling_references",
     "WindowResult",
     "process_window",
 ]

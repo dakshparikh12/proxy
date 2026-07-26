@@ -114,12 +114,31 @@ def build_workroom_driver(runtime: Any, *, provider: Any) -> Any:
 def _deliver(env: Any, emitter: Any) -> None:
     """The done-moment delivery (§3.2): speak the terminal Envelope through the gated emitter.
 
-    Mechanical (physics/pipes, no new model judgment, Law 4): speak the Envelope's
-    ``headline``, then its body (``detail`` — the answer prose) if present and non-empty. Both
-    go through the gated ``emitter.speak`` (is_owner fencing, §3.7): a fenced-out harness
-    delivers nothing. Tolerant of a non-Envelope (defensive) — it speaks only what is present.
+    Mechanical (physics/pipes, no new model judgment, Law 4). The Envelope's ``status``
+    selects the delivery SHAPE (CANONICAL §1.2):
+
+    * ``needs_clarification`` (05 §358, CANONICAL §1.2) — the Workroom could not proceed
+      without one answer, so Proxy asks **ONE question** through the voice channel. It is a
+      question, never a result announcement or a staged draft: we speak EXACTLY the single
+      question (the ``detail`` carries it — D-027: the clarification question rides ``detail``;
+      falling back to ``headline`` if a producer put it there), never both a headline AND a
+      body (two lines is not one question). See :func:`_clarification_question`.
+    * every other terminal status — speak the ``headline`` (the speakable result), then the
+      ``detail`` body if present. A staged-draft ``needs_review`` is delivered here too; its
+      draft card (with the /m/ accept link) is the separate chat render, not this voice line.
+
+    Both go through the gated ``emitter.speak`` (is_owner fencing, §3.7): a fenced-out
+    harness delivers nothing. Tolerant of a non-Envelope (defensive) — speaks only what is
+    present.
     """
     if emitter is None:
+        return
+    status = getattr(env, "status", None)
+    if status == "needs_clarification":
+        # The ask-ONE-question delivery path — exactly one spoken question, through Proxy.
+        question = _clarification_question(env)
+        if question:
+            emitter.speak(question)
         return
     headline = getattr(env, "headline", None)
     if isinstance(headline, str) and headline:
@@ -127,6 +146,23 @@ def _deliver(env: Any, emitter: Any) -> None:
     detail = getattr(env, "detail", None)
     if isinstance(detail, str) and detail.strip():
         emitter.speak(detail)
+
+
+def _clarification_question(env: Any) -> str:
+    """The ONE question a ``needs_clarification`` Envelope carries (05 §358, CANONICAL §1.2).
+
+    The clarification question rides the Envelope ``detail`` (D-027: ``needs_clarification``
+    carries its question in the existing ``detail`` field, not a new ``question`` field);
+    a producer that instead put the question in the speakable ``headline`` is honored as a
+    fallback. Returns the single question string (empty when neither is present — nothing is
+    spoken rather than a fabricated question, Law 1/2)."""
+    detail = getattr(env, "detail", None)
+    if isinstance(detail, str) and detail.strip():
+        return detail.strip()
+    headline = getattr(env, "headline", None)
+    if isinstance(headline, str) and headline.strip():
+        return headline.strip()
+    return ""
 
 
 async def handle_dispatch(

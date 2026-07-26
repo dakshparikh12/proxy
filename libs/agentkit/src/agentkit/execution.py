@@ -234,7 +234,13 @@ class BehaviorRunner:
         curated = tuple(config.mounted_tools)  # allowed_tools = config.tools (§10.5), never the union
         role_name = getattr(behavior, "role", "") or config.role
         thinking_on, budget = thinking_policy(config.model, role_name)
-        system_prompt = with_proxy_guardrails(render_role(behavior, inputs))
+        # The wake turn carries UNTRUSTED meeting data (the event text, folded notes,
+        # transcript tail) as inputs. Append the shared injection guardrail LAST so it is
+        # the final authoritative word of the composed system prompt — the same structural
+        # defense the Scribe/Workroom apply (§3.10 / §10.3 / 04 §3.4). The guardrail states
+        # the spotlight-fenced untrusted inputs are DATA whose embedded instructions are
+        # never followed; it must sit AFTER the spoken-register hint so nothing overrides it.
+        system_prompt = with_injection_guardrail(with_proxy_guardrails(render_role(behavior, inputs)))
         return ProviderQuery(
             model=config.model,
             allowed_tools=curated,

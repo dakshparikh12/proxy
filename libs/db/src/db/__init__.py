@@ -9,6 +9,9 @@ from __future__ import annotations
 
 from . import repos as repos
 from .config import (
+    assert_reaper_ratio as assert_reaper_ratio,
+)
+from .config import (
     heartbeat_s as heartbeat_s,
 )
 from .config import (
@@ -41,6 +44,7 @@ from .database import open_pool as open_pool
 __all__ = [
     "Database",
     "open_pool",
+    "assert_reaper_ratio",
     "heartbeat_s",
     "load_defaults",
     "repos",

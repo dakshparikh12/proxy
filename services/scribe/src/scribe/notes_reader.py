@@ -40,10 +40,56 @@ import hmac
 import json
 import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Optional, Protocol
 from uuid import UUID
 
 from .schema import Entry  # noqa: F401 — the folded entries ARE scribe.schema Entry payloads
+
+# ── Freshness-lag threshold (§3.8/§4). The notes object is reported as
+# ``freshness_lagging`` when the newest folded delta's ``as_of`` is older than this
+# many seconds relative to ``now()``. The value is a defaults.toml tunable
+# (``[scribe].notes_freshness_lag_threshold_s``, default 90s per §4's ``[>90s lag]``
+# lever), with a ``NOTES_FRESHNESS_LAG_THRESHOLD_S`` env override so a deployment can
+# retune the trip point (AC-PERF-FRESHNESS-THRESHOLD-CONFIGURABLE). The bool is
+# computed SERVER-SIDE at response time and rides OUTSIDE the byte-canonical body, so
+# the fold stays byte-stable (AC-CSREAD-10) while readers still see the object's real
+# currency (§3.9 — never a stale object pretending to be current).
+_FRESHNESS_LAG_ENV = "NOTES_FRESHNESS_LAG_THRESHOLD_S"
+_DEFAULT_FRESHNESS_LAG_S: float = 90.0
+
+
+def notes_freshness_lag_threshold_s() -> float:
+    """The >Ns lag threshold — env override, else defaults.toml, else the §4 default."""
+    raw = os.environ.get(_FRESHNESS_LAG_ENV)
+    if raw is not None:
+        try:
+            return float(raw)
+        except ValueError:
+            return _DEFAULT_FRESHNESS_LAG_S
+    try:
+        from db.config import load_defaults  # workspace seam; lazy (host may lack libs.db)
+
+        section = load_defaults().get("scribe", {})
+        value = section.get("notes_freshness_lag_threshold_s")
+        if value is not None:
+            return float(value)
+    except Exception:  # noqa: BLE001 — defaults file absent/unreadable → in-code default
+        pass
+    return _DEFAULT_FRESHNESS_LAG_S
+
+
+def _parse_as_of(as_of: Optional[str]) -> Optional[datetime]:
+    """Parse a fold ``as_of`` ISO-8601 string to an aware UTC datetime, or None."""
+    if not as_of:
+        return None
+    try:
+        dt = datetime.fromisoformat(as_of)
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 # ── Route-mount facts (AC-CSREAD-04). The endpoint lives in the /internal/*
 # route group, alongside /internal/reconcile, OUTSIDE the user-auth wall. These
@@ -120,11 +166,43 @@ class FreshnessFlag:
     is_empty: bool
 
     def to_dict(self) -> dict[str, Any]:
+        # NOTE: ``freshness_lagging`` is DELIBERATELY not in this dict. This dict
+        # feeds ``to_canonical_json`` (AC-CSREAD-10 byte-stability); a now()-derived
+        # bool would bust the byte-identity. The lagging bool is computed server-side
+        # at response time and attached OUTSIDE the canonical body (see
+        # :meth:`freshness_lagging` / :meth:`Notes.to_response_dict`).
         return {
             "as_of": self.as_of,
             "delta_count": self.delta_count,
             "is_empty": self.is_empty,
         }
+
+    def freshness_lagging(
+        self,
+        *,
+        now: Optional[datetime] = None,
+        threshold_s: Optional[float] = None,
+    ) -> bool:
+        """True IFF the notes object is lagging: ``now - as_of > threshold`` (§3.8/§4).
+
+        Computed server-side from the fold's ``as_of`` (the newest folded
+        ``note_deltas`` row's timestamp) vs ``now()`` — NOT a cached clock. An empty
+        ledger (no ``as_of``) is never lagging (there is nothing to be stale about).
+        ``threshold_s`` defaults to the configured ``NOTES_FRESHNESS_LAG_THRESHOLD_S``
+        / ``[scribe].notes_freshness_lag_threshold_s`` (default 90s per §4's
+        ``[>90s lag]`` lever). Strictly greater-than: at exactly the threshold the
+        object is still considered fresh (89s→false, 91s→true).
+        """
+        as_of_dt = _parse_as_of(self.as_of)
+        if as_of_dt is None:
+            return False
+        current = now if now is not None else datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        threshold = (
+            threshold_s if threshold_s is not None else notes_freshness_lag_threshold_s()
+        )
+        return (current - as_of_dt).total_seconds() > threshold
 
 
 class Notes:
@@ -227,7 +305,14 @@ class Notes:
         )
 
     def to_serializable(self) -> dict[str, Any]:
-        """The plain-dict form of the notes object (entries in fold order)."""
+        """The plain-dict form of the notes object (entries in fold order).
+
+        This is the BYTE-CANONICAL body (feeds ``to_canonical_json``): it carries
+        only fold-derived, clock-free values so the same ``note_deltas`` state renders
+        identical bytes across callers (AC-CSREAD-10). The server-computed
+        ``freshness_lagging`` bool is deliberately NOT here — it rides outside this
+        body via :meth:`to_response_dict`.
+        """
         return {
             "entries": [
                 {"entry_id": eid, **self.entries[eid]} for eid in self.order
@@ -235,6 +320,26 @@ class Notes:
             "current_goal": self.current_goal,
             "freshness_flag": self.freshness_flag.to_dict(),
         }
+
+    def to_response_dict(
+        self,
+        *,
+        now: Optional[datetime] = None,
+        threshold_s: Optional[float] = None,
+    ) -> dict[str, Any]:
+        """The notes object PLUS the server-computed ``freshness_lagging`` bool (§3.8).
+
+        For consumers that surface currency to a reader (the lagging trip point, §3.9)
+        without folding a now()-derived value into the byte-canonical body: this wraps
+        :meth:`to_serializable` and attaches ``freshness_lagging`` at the TOP LEVEL,
+        computed from the fold's ``as_of`` vs ``now()`` at the configured threshold.
+        The byte-canonical ``to_canonical_json`` is unaffected (still clock-free).
+        """
+        body = self.to_serializable()
+        body["freshness_lagging"] = self.freshness_flag.freshness_lagging(
+            now=now, threshold_s=threshold_s
+        )
+        return body
 
     def render_for_summary(self) -> str:
         """Stable-ordered plain-text rendering of the notes object for Segment B regen.
@@ -497,4 +602,5 @@ __all__ = [
     "MOUNTS_OUTSIDE_AUTH_WALL",
     "REQUIRES_USER_SESSION",
     "M_SURFACE_PATH",
+    "notes_freshness_lag_threshold_s",
 ]

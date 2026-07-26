@@ -76,21 +76,35 @@ class CodeIntelContext:
             lsp=lsp,
         )
 
-#: The MCP-namespaced tool names this server exposes once mounted. Every behavior /
-#: disposition that advertises a code-intel tool MUST name one of these (so ``allowed_tools``
-#: resolves to a real mounted tool). The harness ``answer-question`` needs get_dependents /
-#: who_writes / list_entry_points / grep / read / batch_read; ``surface-risk`` needs grep /
-#: read / get_dependents; the Workroom ``MAP_TOOLS`` needs get_dependents / who_writes /
-#: list_entry_points / grep / read. This set is the union — the single source of truth for the
-#: mount-vs-advertise contract (the two agree by construction).
-CODE_INTEL_TOOL_NAMES: tuple[str, ...] = (
-    "mcp__code_intel__get_dependents",
-    "mcp__code_intel__who_writes",
-    "mcp__code_intel__list_entry_points",
-    "mcp__code_intel__find_references",
-    "mcp__code_intel__grep",
-    "mcp__code_intel__read",
-    "mcp__code_intel__batch_read",
+#: The bare (un-namespaced) code_intel tool names — THE ONE canonical tool matrix (§2.3 /
+#: §3.5, CANONICAL §7 / §12.6). All 8 tools the real :class:`CodeIntelMCPServer` implements
+#: (``mcp_server.HOST_TOOL_NAMES``) are mounted here so the SDK server and the host server never
+#: diverge: get_dependents / who_writes / shares_table / list_entry_points / owner /
+#: find_references / grep / read / batch_read. The mount list below (``tools=[...]``) is derived
+#: from this ONE constant so a tool can never be advertised without a handler (or vice-versa) —
+#: the previous drift (the SDK server mounted 7, dropping shares_table / owner / lookup_referent)
+#: is closed by construction.
+_CODE_INTEL_TOOL_BASENAMES: tuple[str, ...] = (
+    "get_dependents",
+    "who_writes",
+    "shares_table",
+    "list_entry_points",
+    "owner",
+    "lookup_referent",
+    "find_references",
+    "grep",
+    "read",
+    "batch_read",
+)
+
+#: The MCP-namespaced tool names this server exposes once mounted (``mcp__code_intel__<tool>``).
+#: Derived from :data:`_CODE_INTEL_TOOL_BASENAMES` — the SINGLE source of truth every behavior /
+#: disposition that advertises a code-intel tool resolves against (so ``allowed_tools`` always
+#: names a real mounted tool). The harness ``answer-question`` / ``surface-risk`` behaviors and
+#: the Workroom ``MAP_TOOLS`` each name a curated SUBSET of these (D-015 curated tool subsets —
+#: never the union at a behavior), but every name they pick MUST appear here.
+CODE_INTEL_TOOL_NAMES: tuple[str, ...] = tuple(
+    f"mcp__code_intel__{name}" for name in _CODE_INTEL_TOOL_BASENAMES
 )
 
 #: The SDK server name; tools mount under ``mcp__code_intel__*``.
@@ -188,6 +202,86 @@ def build_code_intel_sdk_server(
             return _error_result(f"list_entry_points error: {exc}")
 
     @tool(
+        "shares_table",
+        "Return the modules that SHARE (read or write) the given database table — the "
+        "co-accessor set, grouped to owning module, with file:line lead citations. Confidence "
+        "is 'resolved' on an exact-supported ORM stack, 'lower-bound' otherwise (never a silent "
+        "wrong-exact).",
+        {"table": str},
+    )
+    async def shares_table(args: dict[str, Any]) -> dict[str, Any]:
+        _record("shares_table")
+        try:
+            table = str(args.get("table", ""))
+            res = server.shares_table(table)
+            modules = [{"module": m.id, "confidence": m.confidence} for m in res.modules]
+            touchers = [
+                {"symbol": _leaf(t.id), "file": t.file, "line": t.line, "confidence": t.confidence}
+                for t in res.touchers
+            ]
+            return _text_result(
+                {
+                    "table": table,
+                    "modules": modules,
+                    "touchers": touchers,
+                    "shared": res.shared,
+                    "status": res.status,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - never-throw boundary (Hard Rule 6)
+            return _error_result(f"shares_table error: {exc}")
+
+    @tool(
+        "owner",
+        "Return the owner of a file path (CODEOWNERS match, else git-blame fallback), with a "
+        "'resolved'/'lower-bound' confidence. An excluded/secret path never yields an owner "
+        "(returns not-found), never leaking its existence.",
+        {"path": str},
+    )
+    async def owner(args: dict[str, Any]) -> dict[str, Any]:
+        _record("owner")
+        try:
+            path = str(args.get("path", ""))
+            res = server.owner(path)
+            if res is None:
+                return _text_result({"path": path, "owner": None, "status": "not-found"})
+            return _text_result(
+                {
+                    "path": path,
+                    "owner": res.owner,
+                    "confidence": res.confidence,
+                    "file": res.file,
+                    "line": res.line,
+                    "status": "ok",
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - never-throw boundary (Hard Rule 6)
+            return _error_result(f"owner error: {exc}")
+
+    @tool(
+        "lookup_referent",
+        "Resolve a bare symbol name to its ONE canonical declaration id when the resolution is "
+        "unambiguous (exactly one match); returns null when the name is ambiguous or unknown "
+        "(the caller must then disambiguate rather than guess).",
+        {"symbol": str},
+    )
+    async def lookup_referent(args: dict[str, Any]) -> dict[str, Any]:
+        _record("lookup_referent")
+        try:
+            symbol = str(args.get("symbol", ""))
+            referent = server.lookup_referent(symbol)
+            return _text_result(
+                {
+                    "symbol": symbol,
+                    "referent": _leaf(referent) if referent else None,
+                    "referent_id": referent,
+                    "status": "ok" if referent else "not-found",
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - never-throw boundary (Hard Rule 6)
+            return _error_result(f"lookup_referent error: {exc}")
+
+    @tool(
         "find_references",
         "Find every reference (definition + call sites) of a symbol across the repo, with "
         "file:line citations. Use this to answer 'who calls X' / 'where is X used'.",
@@ -258,10 +352,29 @@ def build_code_intel_sdk_server(
         except Exception as exc:  # noqa: BLE001 - never-throw boundary (Hard Rule 6)
             return _error_result(f"read error: {exc}")
 
+    # Mount EXACTLY the canonical tool matrix, derived from the ONE shared constant so the
+    # mounted set and ``CODE_INTEL_TOOL_NAMES`` can never drift (§12.6). The lookup asserts every
+    # canonical basename has a handler defined above — a missing one is a build error, not a
+    # silent 7-of-8 mount.
+    _handlers = {
+        "get_dependents": get_dependents,
+        "who_writes": who_writes,
+        "shares_table": shares_table,
+        "list_entry_points": list_entry_points,
+        "owner": owner,
+        "lookup_referent": lookup_referent,
+        "find_references": find_references,
+        "grep": grep,
+        "read": read,
+        "batch_read": batch_read,
+    }
+    missing = [name for name in _CODE_INTEL_TOOL_BASENAMES if name not in _handlers]
+    if missing:  # pragma: no cover - guards against a future name added without a handler
+        raise RuntimeError(f"code_intel SDK server missing handlers for: {missing}")
     return create_sdk_mcp_server(
         name=CODE_INTEL_SERVER_NAME,
         version="1.0.0",
-        tools=[get_dependents, who_writes, list_entry_points, find_references, grep, read, batch_read],
+        tools=[_handlers[name] for name in _CODE_INTEL_TOOL_BASENAMES],
     )
 
 

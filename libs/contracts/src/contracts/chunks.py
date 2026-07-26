@@ -18,7 +18,23 @@ for _member in get_args(ChunkType):
 
 
 class AgentChunk(BaseModel):
-    """One streamed chunk from a behavior run. Discriminated by ``type``."""
+    """One streamed chunk from a behavior run. Discriminated by ``type``.
+
+    ``text`` is ``str | None`` (default ``None``), NOT ``str = ''`` (A16 / C-CHUNKNULL).
+    CANONICAL §1.1 sketches ``str = ''``, but ``str | None`` is the DELIBERATE, sealed
+    shape here: only the ``TEXT`` variant carries text; every other variant (``INIT``/
+    ``TOOL_USE``/``TOOL_RESULT``/``RESULT``/``ERROR``) legitimately has NO text, and
+    ``None`` says "absent" honestly rather than conflating it with an empty string. The
+    sealed contract tests construct the non-text variants as ``text=None``
+    (``tests/doc00/test_m00_cmp.py`` T-CMP-015, ``tests/doc00/test_w_workflows.py`` W11),
+    so ``None`` is locked in and cannot be narrowed to ``str = ''`` without editing a
+    sealed test. ``None`` is a safe SUPERSET of ``''``: every consumer that reads a chunk's
+    text guards it — the load-bearing one is ``agentkit.deltas.stream_deltas`` at
+    ``deltas.py:49`` (``accumulated = chunk.text or ""``), which is the single delta
+    seam every downstream consumer reads through. Non-TEXT chunks never reach that read
+    with a meaningful body. This is ONE consistent contract: producers emit ``None`` on
+    non-TEXT variants; the sole text consumer coalesces ``None``→``""``.
+    """
 
     type: ChunkType
     text: str | None = None

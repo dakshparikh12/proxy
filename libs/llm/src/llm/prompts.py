@@ -31,6 +31,19 @@ def _fence(transcript: str) -> str:
     return f"{_FENCE_OPEN}\n{transcript}\n{_FENCE_CLOSE}"
 
 
+def fence_untrusted(text: str) -> str:
+    """Bracket untrusted meeting content in the shared spotlight fence (§10.3).
+
+    THE one fence idiom for any untrusted meeting-derived string (a transcript
+    tail, a wake event, folded notes) that rides a role prompt as DATA. It uses
+    the identical ``<untrusted-transcript>`` delimiters the Scribe/orchestrator
+    role prompts use, so the model sees the same hard data/instruction boundary at
+    every call layer — the injection guardrail on the system prompt states these
+    delimiters mark untrusted data whose embedded instructions are never followed.
+    """
+    return _fence(text)
+
+
 def build_orchestrator_prompt(transcript: str) -> str:
     """Build the orchestrator prompt with the transcript fenced as untrusted data."""
     return (

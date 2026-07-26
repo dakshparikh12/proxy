@@ -34,6 +34,13 @@ _CALL_ENDED_EVENTS = frozenset(
 _TRANSCRIPT_EVENTS = frozenset(
     {"transcript.data", "transcript", "bot.transcript", "transcript.partial_data"}
 )
+# Recall roster + bot-status event names (§3.1/§3.7). On these the drain routes the
+# durably-persisted payload through the meeting's ONE ``WebhookProcessor`` bound to its
+# carrier so the roster (present/join/leave) and bot-status (connected/dropped/rejoined)
+# signals reach the live Scribe + Orchestrator subscribers — the C-SIGNALWIRE binding.
+# Before this, these producers existed but had NO live caller (the drain dropped the events).
+_ROSTER_EVENTS = frozenset({"participant.join", "participant.leave", "participant.update"})
+_BOT_STATUS_EVENTS = frozenset({"bot.status"})
 
 
 def ingest_webhook(event: dict[str, Any], *, store: Any) -> int:
@@ -46,6 +53,24 @@ def _event_name(payload: dict[str, Any]) -> str:
     """The Recall event name (``event``/``type``), lower-cased; '' when absent."""
     name = payload.get("event") or payload.get("type") or ""
     return str(name).strip().lower()
+
+
+def _meeting_end_reason(payload: dict[str, Any]) -> str:
+    """The meeting-end reason DERIVED from the webhook payload (§3.1, C-ENDOFTURN).
+
+    Recall's terminal callback carries the real cause: prefer an explicit ``data.reason``
+    (e.g. ``bot_removed``/``call_ended``); else fall back to the event name itself
+    (``bot.removed``/``call_ended``/``meeting_end``). Never a hard-coded synthesized string,
+    so the emitted ``MeetingEnd`` reflects what actually ended the meeting rather than a
+    fabricated ``call_ended`` for every path.
+    """
+    data = payload.get("data")
+    if isinstance(data, dict):
+        reason = data.get("reason")
+        if reason:
+            return str(reason)
+    event = _event_name(payload)
+    return event or "call_ended"
 
 
 def _bot_id(payload: dict[str, Any]) -> str | None:
@@ -125,11 +150,19 @@ async def _dispatch_meeting_event(
     ``start_meeting``. ``launch=None`` keeps the control_plane drain behaviour (notes
     engine only), so the two deployables share this one drain without either changing.
     """
+    from transport.events import is_meeting_end
+
     name = _event_name(payload)
     is_start = name in _IN_CALL_EVENTS
-    is_end = name in _CALL_ENDED_EVENTS
+    # A terminal bot-status (removed/call_ended/done) is a meeting-end, NOT a live bot-status
+    # signal — route it through the end path, never the roster/bot-status carrier binding.
+    is_end = name in _CALL_ENDED_EVENTS or is_meeting_end(payload)
     is_transcript = name in _TRANSCRIPT_EVENTS
-    if not (is_start or is_end or is_transcript):
+    # Roster + non-terminal bot-status feed the meeting's ONE carrier via the WebhookProcessor
+    # binding (C-SIGNALWIRE). A terminal bot-status already counted as ``is_end`` above is
+    # excluded so it closes the meeting rather than emitting a live bot-status signal.
+    is_signal = (name in _ROSTER_EVENTS or name in _BOT_STATUS_EVENTS) and not is_end
+    if not (is_start or is_end or is_transcript or is_signal):
         return
 
     # The meeting_runtime deployable: an in_call claims + launches the full harness
@@ -199,8 +232,23 @@ async def _dispatch_meeting_event(
                 logging.getLogger(__name__).error(
                     "transcript wire drift on meeting %s: %s", meeting_id, drift
                 )
+    elif is_signal:
+        # Route the durably-persisted roster / bot-status payload through the meeting's ONE
+        # WebhookProcessor bound to its carrier (C-SIGNALWIRE): the derived roster
+        # (present/join/leave) and bot-status (connected/dropped/rejoined) signals fan onto
+        # the SAME stream the Scribe + Orchestrator subscribe to. ``_emit_for`` is the pure
+        # emit step — the row is already durable, so this never re-persists. A signal before
+        # in_call started the runtime is a safe no-op (fail closed — no live consumer yet).
+        runtime = registry.get(meeting_id)
+        if runtime is not None:
+            await runtime.webhook_processor()._emit_for(payload)
     else:  # is_end
-        await registry.end_meeting(meeting_id)
+        # Derive the meeting-end reason from the ACTUAL webhook payload (§3.1, AC-TURN
+        # end-of-turn single-source): the emitted ``MeetingEnd`` must carry the real cause
+        # (``data.reason`` if Recall supplies one, else the event name — e.g. ``bot.removed``
+        # vs ``call_ended``), never a hard-coded synthesized string. This is the C-ENDOFTURN
+        # "live meeting-end reason synthesized not payload-derived" fix.
+        await registry.end_meeting(meeting_id, reason=_meeting_end_reason(payload))
 
 
 async def drain_pending_webhooks(

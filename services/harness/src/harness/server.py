@@ -498,6 +498,14 @@ def _start_webhook_drain(app: Any) -> None:
 
 
 async def _real_reaper(app: Any) -> None:
+    # Fail closed at boot on an unsafe STALE_AFTER_S/HEARTBEAT_S ratio (D-033):
+    # the boot sweep is heartbeat-gated so a booting instance never reaps a live
+    # sibling's fresh row, but that safety collapses if the staleness window is not
+    # comfortably larger than the heartbeat cadence. Assert the ≥3× ratio BEFORE the
+    # first sweep runs — a mis-config is rejected, never silently tolerated.
+    from libs.db import assert_reaper_ratio
+
+    assert_reaper_ratio()
     await app.state.db.sweep_stale_operation_runs()
 
 

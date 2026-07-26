@@ -47,15 +47,26 @@ def ingest(
     body: dict[str, Any],
     on_step: Callable[[str], None] | None = None,
 ) -> WebhookResponse:
-    """Durably land a webhook (dedup), then return 200 — no processing yet."""
+    """Durably land a webhook (dedup), then return 200 — no processing yet.
+
+    ``provider`` is named EXPLICITLY (never left to the schema DEFAULT): it is derived
+    'github'|'recall' from the delivery body via the ONE canonical classifier
+    (``db.repos.webhooks._derive_provider`` — a GitHub push carries ``ref``/``after``/
+    ``commits``; a Recall callback carries ``event``/``bot_id``). Sharing that classifier
+    keeps the sync intake and the async ``insert_event`` repo from drifting on how a
+    delivery is classified. The CHECK domain still rejects any out-of-domain value.
+    """
+    from db.repos.webhooks import _derive_provider
+
     step = on_step if on_step is not None else (lambda _s: None)
+    provider = _derive_provider(body)
     conn.execute(
         """
-        INSERT INTO webhook_events (delivery_guid, payload, status)
-        VALUES (%s, %s, 'pending')
+        INSERT INTO webhook_events (provider, delivery_guid, payload, status)
+        VALUES (%s, %s, %s, 'pending')
         ON CONFLICT (delivery_guid) DO NOTHING
         """,
-        (delivery_guid, Json(body)),
+        (provider, delivery_guid, Json(body)),
     )
     step("inserted")
     # The durable INSERT precedes the 200; processing is deferred to drain.

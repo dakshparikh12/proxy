@@ -108,6 +108,7 @@ async def run_ordered_close(
     close_config: Any,
     *,
     sandbox: Any = None,
+    reason: str = "call_ended",
 ) -> Any:
     """Run the §3.16 ordered close over Doc 03's close pass — the wired meeting-end.
 
@@ -147,7 +148,7 @@ async def run_ordered_close(
         await _complete_harness_row(runtime)
         await runtime.aclose()  # teardown-pipes LAST — nothing reads a torn-down store
 
-    result = await runtime.run_close(close_config, teardown=_ordered_tail)
+    result = await runtime.run_close(close_config, teardown=_ordered_tail, reason=reason)
     if not ran_tail:
         # Empty-ledger close: run_meeting_close returned without invoking teardown,
         # so the ordered tail is still this caller's responsibility (§3.16).

@@ -58,7 +58,14 @@ def parse_transcript(message: dict[str, Any]) -> Transcript:
             f"provenance {WIRE_SCHEMA_PROVENANCE}"
         )
 
-    is_final = bool(message.get("end_of_turn", True))
+    # ONE end_of_turn source of truth (§3.6, AC-TURN-02/06): a turn is FINAL only on a
+    # present-and-truthy ``end_of_turn`` — exactly the predicate ``turn.boundary_opened`` /
+    # ``boundary.py`` enforce. An ABSENT ``end_of_turn`` is an interim hypothesis (a
+    # mid-thought breath), NOT a completed turn, so it defaults to NOT-final — matching the
+    # boundary path rather than treating a missing field as a turn end (the C-ENDOFTURN
+    # divergence: the wire parser must not call a breath a turn end when the boundary path
+    # would not open voice on it). A final record cuts a notes window; a partial does not.
+    is_final = bool(message.get("end_of_turn", False))
     return Transcript(words=words, speaker=speaker, t=float(timestamp), is_final=is_final)
 
 

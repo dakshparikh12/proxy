@@ -156,6 +156,31 @@ def _sha256(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
+class _StdoutStore:
+    """A content-addressed store of the REAL captured stdout bytes (§3.5 / §3.7②).
+
+    ``stdout_ref`` in a receipt is a HANDLE into this store — never an inline sha of the
+    stream and never a truncated model summary. :meth:`put` stores the verbatim captured
+    bytes and returns a ``stream:<sha256>`` ref (content-addressed → tamper-evident, and an
+    identical stream de-dupes to the same ref); :meth:`get` returns the exact bytes back.
+    This mirrors :class:`workroom.sandbox_transport.HostReceiptStore` so the reference
+    toolset and the host-side capture path emit the SAME receipt shape (§3.7②'s evidence
+    gate reads ``stdout_ref`` as a handle, not a hash of the stream).
+    """
+
+    def __init__(self) -> None:
+        self._streams: dict[str, bytes] = {}
+
+    def put(self, data: bytes) -> str:
+        blob = bytes(data)
+        ref = "stream:" + hashlib.sha256(blob).hexdigest()
+        self._streams[ref] = blob  # verbatim — the full stream, never a summary
+        return ref
+
+    def get(self, ref: str) -> bytes | None:
+        return self._streams.get(ref)
+
+
 class SandboxToolset:
     """The 8 sandbox tool handlers bound to ONE allowed root (the clone root).
 
@@ -174,10 +199,20 @@ class SandboxToolset:
         # enforced by dropping the OLDEST entries first (a bounded window, never unbounded).
         self._journal: deque[dict[str, Any]] = deque()
         self._journal_bytes = 0
+        # The content-addressed store of the REAL captured stdout bytes (§3.7②): a receipt's
+        # ``stdout_ref`` is a HANDLE into this store, so the deterministic evidence gate can
+        # resolve the verbatim stream (never a sha of it, never a model summary). Mirrors the
+        # host-side HostReceiptStore so the two receipt sources share one shape.
+        self._stdout_store = _StdoutStore()
 
     @property
     def root(self) -> Path:
         return self._root
+
+    @property
+    def stdout_store(self) -> _StdoutStore:
+        """The content-addressed stdout store a receipt's ``stdout_ref`` handle resolves against."""
+        return self._stdout_store
 
     # ─────────────────────────── the trace journal ──────────────────────────
     def journal_entries(self) -> list[dict[str, Any]]:
@@ -494,12 +529,15 @@ class SandboxToolset:
             )
         stdout, truncated = _truncate(proc.stdout, head=_HEAD_LINES, tail=tail_lines)
         stderr, _stderr_trunc = _truncate(proc.stderr, head=_HEAD_LINES, tail=tail_lines)
+        # §3.7② receipt shape (matches HostReceiptCapture): ``stdout_ref`` is a HANDLE into the
+        # stdout store holding the verbatim captured bytes (never a sha of the stream), and
+        # ``artifact_hashes`` is a ``list[{path, sha256}]`` (run_command touches no file → []).
         receipt = {
             "command_id": str(uuid.uuid4()),
             "argv": [command],
             "exit_code": proc.returncode,
-            "stdout_ref": _sha256(proc.stdout.encode("utf-8")),
-            "artifact_hashes": {},
+            "stdout_ref": self._stdout_store.put(proc.stdout.encode("utf-8")),
+            "artifact_hashes": [],
             "duration_secs": None,
         }
         return ToolResult.ok(
@@ -616,7 +654,11 @@ class SandboxToolset:
 
     # ─────────────────────────── receipt helper ─────────────────────────────
     def _write_receipt(self, abs_path: str, rel_path: str) -> dict[str, Any]:
-        """A host-observed write receipt with the touched file's artifact hash (§3.5 / D-017)."""
+        """A host-observed write receipt with the touched file's artifact hash (§3.5 / D-017).
+
+        ``artifact_hashes`` is a ``list[{path, sha256}]`` (the shape §3.7②'s ``evidence_backed``
+        reads and HostReceiptCapture emits), NOT a ``{path: sha}`` dict — the host hashes the
+        LANDED bytes for each touched path; an unreadable file yields an empty hash (Rule 6)."""
         try:
             digest = _sha256(Path(abs_path).read_bytes())
         except OSError:
@@ -626,7 +668,7 @@ class SandboxToolset:
             "argv": [],
             "exit_code": 0,
             "stdout_ref": "",
-            "artifact_hashes": {rel_path: digest},
+            "artifact_hashes": [{"path": rel_path, "sha256": digest}],
             "duration_secs": None,
         }
 

@@ -32,7 +32,10 @@ from typing import Any
 
 from scribe.call import scribe_call as _real_scribe_call
 from scribe.coalescer import Coalescer, TranscriptSegment, Window
+from scribe.events import CollectingSink, Doc04Sink, emit_events_for_delta
 from scribe.notes_reader import read_notes
+from scribe.parse import Entry as _NoteEntry
+from scribe.parse import NoteStore, degrade_dangling_references
 from scribe.pipeline import DeltaApplier, GapRecorder, HostBudget, ScribeCaller, run_scribe
 from scribe.prefix import MeetingHeader
 from scribe.referent import ReferentCorpus, lookup_referent
@@ -54,6 +57,29 @@ def _estimate_tokens(words: str) -> int:
 # A trailing transcript with no successor carries no natural end; give it a nominal
 # span so the last window still has a positive duration. unit: seconds.
 _TRAILING_SPAN_S: float = 1.0
+
+
+def _post_note_deltas_to_chat(
+    chat_sink: "Callable[[Any], None]", committed_delta: Any, *, notes_enabled: bool = True
+) -> None:
+    """Render a COMMITTED note-delta to §2.4 chat lines and post each to the chat sink.
+
+    The live meeting-runtime caller for the deterministic ``transport.chat.format_note_deltas``
+    formatters (C-CHATFORMAT): a committed ``AddOp(Decision|ActionItem)`` → a decision/action
+    NoteLine, a committed ``PatchOp`` → a correction NoteLine (§2.4 #3/#4). Deterministic,
+    keyed on the committed delta, NEVER model-generated. Fault-swallowed (Rule 6): a broken
+    sink or a formatter fault never aborts the serial notes consumer — the notes ledger is the
+    source of truth, the chat line is best-effort exhaust.
+    """
+    try:
+        from transport.chat import format_note_deltas
+
+        for frame in format_note_deltas(
+            committed_delta, committed=True, notes_enabled=notes_enabled
+        ):
+            chat_sink(frame)
+    except Exception:  # noqa: BLE001 - Rule 6: a chat-render fault never crashes the notes consumer
+        return
 
 
 @dataclass
@@ -356,6 +382,8 @@ def build_real_seams(
     summary_client: Any | None = None,
     call_external: Any | None = None,
     referent_corpus: ReferentCorpus | None = None,
+    event_sink: Doc04Sink | None = None,
+    chat_sink: "Callable[[Any], None] | None" = None,
 ) -> RealSeams:
     """Bind the REAL vendor/Postgres seams for a live meeting (production wiring).
 
@@ -456,20 +484,63 @@ def build_real_seams(
     async def apply_delta(meeting_id: str, window: Window, delta: Any) -> None:
         from db.repos import notes as notes_repo
 
-        ops = getattr(delta, "ops", None) or []
         current_goal = getattr(delta, "current_goal", None)
+        # F4 / D-036 — honest referential-integrity DEGRADE before append: a Claim whose
+        # ``contradicts`` (or a patch/close ``target_id``) dangles against the meeting's
+        # committed entries is degraded (link stripped + claim kept / phantom-free op
+        # drop), never crashing the window and never fabricating an empty base. The store
+        # of known ids is reconstructed from the meeting's EXISTING note_deltas.
+        committed_events: list[Any] = []
         async with db.acquire() as conn:
             async with conn.transaction():
+                existing = await notes_repo.load_deltas(conn, meeting_id)
+                known_ids = {
+                    str(r["entry_id"]) for r in existing if str(r.get("op")) == "add"
+                }
+                store = NoteStore(
+                    {eid: _NoteEntry(id=eid, current={}) for eid in known_ids}
+                )
+                degrade = degrade_dangling_references(delta, store)
+                degraded_delta = degrade.delta
+                ops = list(getattr(degraded_delta, "ops", None) or [])
+
+                # O-SEGPERSIST (§12.10) — persist this comprehended window on the
+                # transcript plane as a segment that flips 'pending' -> 'comprehended' in
+                # the SAME tx as the note-delta append: a segment is never left
+                # half-comprehended, and the close-pass/replay ground truth (which reads
+                # status IN ('gap','pending')) never re-processes a window the live fold
+                # already comprehended. A window with NO ops (a goal-only or fully-degraded
+                # window) is still recorded comprehended — the raw text is preserved and
+                # the span is not left dangling as pending.
+                window_text = " ".join(
+                    s.text for s in getattr(window, "segments", ()) if getattr(s, "text", "")
+                )
+                seg = await notes_repo.insert_segment(
+                    conn,
+                    meeting_id=meeting_id,
+                    text=window_text,
+                    start_s=window.start_s,
+                    end_s=window.end_s,
+                    status="pending",
+                )
                 # Derive the per-kind minted-id counter from the meeting's EXISTING
                 # note_deltas in the SAME tx, so an id the LLM references across
                 # windows resolves and a fresh add never collides with a prior one.
-                existing = await notes_repo.load_deltas(conn, meeting_id)
                 counters = _kind_counters(existing)
                 first = True
                 for op in ops:
                     entry_id, op_name, payload = _canonical_row(
                         op, counters, referent_corpus
                     )
+                    # F4 — an honest 'unbound_reference' marker rides the payload of an
+                    # add whose contradicts link was stripped, so the record is truthful
+                    # (the claim landed; the link it named didn't resolve), never silently
+                    # altered.
+                    if op_name == "add" and degrade.unbound_references:
+                        for ub in degrade.unbound_references:
+                            if ub.get("op") == "add":
+                                payload = {**payload, "unbound_reference": ub}
+                                break
                     # The one-line goal/blocker signal rides the first written row's
                     # payload; the fold (Notes.fold_all) reads current_goal off ANY
                     # row, so one carrier is enough (§3.3.1).
@@ -495,6 +566,41 @@ def build_real_seams(
                         payload={"current_goal": current_goal},
                         window_start_s=window.start_s,
                     )
+                # O-SEGPERSIST — flip the just-inserted pending segment to 'comprehended'
+                # inside the SAME tx (a crash before commit rolls BOTH the append and the
+                # flip back, so a segment is never half-comprehended).
+                await notes_repo.set_segment_status(
+                    conn, segment_id=seg["id"], status="comprehended"
+                )
+
+                # C-EVENTS — emit material-change events transactionally with the append,
+                # keyed on the committed segment row (the free per-meeting revision handle
+                # the Proactive trigger dedupes on). We collect inside the tx (a pure walk
+                # over the degraded delta) and hand them to the sink AFTER commit, so a
+                # rolled-back window emits NOTHING. Only the pipe is wired here; the
+                # Proactive consumer stays deferred (the sink is a no-op collector).
+                collector = CollectingSink()
+                revision = int(seg["id"]) if str(seg["id"]).isdigit() else len(existing) + 1
+                emit_events_for_delta(
+                    degraded_delta, sink=collector, meeting_revision=revision
+                )
+                committed_events = collector.events
+
+        # Hand the committed events to the injected Doc-04 sink OUTSIDE the tx (so a
+        # rolled-back window never emits). Wiring only — the consumer is deferred.
+        if event_sink is not None:
+            for ev in committed_events:
+                event_sink.emit(ev)
+
+        # C-CHATFORMAT (§2.4 #3/#4) — the LIVE meeting-runtime caller for the deterministic
+        # chat formatters: drive ``transport.chat.format_note_deltas`` over the SAME COMMITTED
+        # delta (committed=True — the tx above landed) and hand each rendered NoteLine frame
+        # to the injected chat sink. This rides committed exhaust, is free/race-free, and
+        # cannot hallucinate (no model call). Fault-swallowed (Rule 6): a broken chat sink
+        # never aborts the serial notes consumer. No sink → no behavior change.
+        if chat_sink is not None:
+            _post_note_deltas_to_chat(chat_sink, degraded_delta)
+
         # Beside-the-loop rolling-summary cadence (§3.2): count the applied deltas and,
         # if a refresh is now due (N≈20 deltas OR ≈90s), regenerate Segment B OFF the
         # hot path — the tx is already committed, so the fold reads the fresh notes and
@@ -736,6 +842,8 @@ def start_meeting_scribe(
     *,
     host_budget: HostBudget | None = None,
     referent_corpus: ReferentCorpus | None = None,
+    event_sink: Doc04Sink | None = None,
+    chat_sink: "Callable[[Any], None] | None" = None,
 ) -> ScribeRuntimeHandle:
     """Production entrypoint — launch the live notes engine with the REAL seams.
 
@@ -748,8 +856,24 @@ def start_meeting_scribe(
     per-repo ``graph_nodes``); when supplied the applier binds each marked referent to
     a real code node so the notes the Workroom reads are code-oriented. Absent (a
     meeting with no built index) referents stay honestly named-but-unbound.
+
+    ``event_sink`` is the Doc-04 material-change consumer (the Proactive trigger, §3.5).
+    C-EVENTS wires the PIPE: the applier emits material-change events transactionally
+    with each committed note-delta and hands them to this sink. When omitted, a durable
+    per-meeting :class:`CollectingSink` is bound so the events are captured (the pipe is
+    live and inspectable) even though the Proactive CONSUMER stays deferred — the seam
+    exists and fires, it just isn't drained yet.
+
+    ``chat_sink`` is the LIVE meeting-runtime caller for the §2.4 deterministic chat
+    formatters (C-CHATFORMAT): each committed note-delta is rendered to its decision/action/
+    correction ``NoteLine`` and handed to this sink for posting to meeting chat. Omitted →
+    no chat lines are posted (no behavior change); the render is deterministic + free +
+    race-free (it rides committed exhaust, never a model call).
     """
-    seams = build_real_seams(header, db, referent_corpus=referent_corpus)
+    sink = event_sink if event_sink is not None else CollectingSink()
+    seams = build_real_seams(
+        header, db, referent_corpus=referent_corpus, event_sink=sink, chat_sink=chat_sink
+    )
     return launch_scribe_runtime(
         header,
         carrier,
