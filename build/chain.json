@@ -7212,7 +7212,7 @@
       "title": "Contract check: AgentChunk consumers use stream_deltas (no raw TEXT read)",
       "region": "09-VERIFICATION",
       "disposition": "build-new",
-      "status": "pending",
+      "status": "verified",
       "spec_refs": [
         "09-VERIFICATION.md#2",
         "CANONICAL-DECISIONS.md#1.1"
