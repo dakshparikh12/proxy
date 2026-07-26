@@ -31,15 +31,25 @@ situational judgment and drops nothing (AC-CHAT-10/11).
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+from uuid import UUID
 
 from contracts.channels import ChannelReport
+
+from libs.contracts import DraftCard, NoteLine
 
 from .carrier import SignalCarrier
 from .seams import TransportProvider
 from .signals import ChatMessage
+
+if TYPE_CHECKING:
+    from scribe.schema import NoteDelta
+
+    from libs.contracts import Envelope
+
+    from .failure import Gap
 
 #: The two ask sockets. An ask carries which socket birthed it; NOTHING else about the
 #: ask shape differs between them (AC-CHAT-03).
@@ -239,3 +249,144 @@ class ChatChannel:
 def _never(_message: str) -> bool:
     """The default addressing recognizer: token-only (no non-token form recognized)."""
     return False
+
+
+# ── the DETERMINISTIC chat formatters (§2.4 #3/#4/#8/#14, §2.3) ────────────────────
+# One template set of deterministic formatters, each riding existing exhaust — NOT a
+# wake, NEVER model-generated (so free, race-free, cannot hallucinate a decision,
+# CANONICAL §12.12). Each emits a **registered** ``ProxyMessage`` render frame
+# (``NoteLine`` / ``DraftCard`` from ``libs.contracts``); NOTHING here calls a provider
+# or ``stream_deltas``. Every string is in the §2.1 copy voice (no internal names, no
+# filler, no exclamation marks) — the naming lint + copy guide enforce that.
+
+#: The one home the draft-card link points at — the authenticated per-meeting home
+#: (§2.8), NEVER a raw GCS URI. A relative path so the surface app owns the origin.
+_MEETING_HOME = "/m/{meeting_id}"
+
+
+def _stances_clause(leans: dict[str, str]) -> str:
+    """Render a decision's ``leans`` as the deterministic '(Priya, Sam agreed)' clause.
+
+    Only the *for* stances are surfaced ("agreed") — a decision line marks who backed
+    it, not who abstained. Deterministic: names are emitted in ``leans`` insertion
+    order (the scribe schema preserves it), never a set/hash order. Empty ⇒ no clause.
+    """
+    agreed = [name for name, stance in leans.items() if stance == "for"]
+    if not agreed:
+        return ""
+    return f" ({', '.join(agreed)} agreed)"
+
+
+def _decision_line(entry: Any) -> str:
+    """The §2.4 #3 decision note-line — '— noted: decision — ship Friday (Priya, Sam agreed)'."""
+    return f"— noted: decision — {entry.text}{_stances_clause(dict(entry.leans))}"
+
+
+def _action_line(entry: Any) -> str:
+    """The §2.4 #3 action note-line — '— action: Sam → fix the retry test (by Fri)'.
+
+    The owner prefix and the due suffix are each present only when the scribe captured
+    them; a bare action still renders a clean, deterministic line.
+    """
+    owner = f"{entry.owner} → " if entry.owner else ""
+    due = f" ({entry.due})" if entry.due else ""
+    return f"— action: {owner}{entry.text}{due}"
+
+
+def format_note_deltas(
+    delta: NoteDelta,
+    *,
+    committed: bool,
+    notes_enabled: bool = True,
+) -> Iterator[NoteLine]:
+    """Emit the §2.4 #3/#4 chat lines for one COMMITTED note-delta — deterministic.
+
+    Keyed on a **committed** ``NoteDelta`` (CANONICAL §12.12): an uncommitted delta
+    (``committed=False``) emits NOTHING — a line never rides uncommitted state. When
+    the session disabled note-posting (§2.4 #9, ``notes_enabled=False``) the decision/
+    action lines are suppressed. Never spoken, never a wake, never model-generated.
+
+    * an ``AddOp`` carrying a ``Decision`` → the decision note-line,
+    * an ``AddOp`` carrying an ``ActionItem`` → the action note-line,
+    * a ``PatchOp`` → the correction ack ('— corrected: ship Friday', §2.4 #4).
+
+    Every other op (a Claim/Context add, a ``CloseOp``) is outside §2.4's scoped chat
+    set and emits nothing. The correction ack honors the SAME session disable.
+    """
+    if not committed or not notes_enabled:
+        return
+    for op in delta.ops:
+        text: str | None = None
+        if op.op == "add":
+            entry = op.entry
+            if entry.kind == "decision":
+                text = _decision_line(entry)
+            elif entry.kind == "action":
+                text = _action_line(entry)
+        elif op.op == "patch":
+            new_text = op.changes.get("text")
+            if isinstance(new_text, str) and new_text:
+                text = f"— corrected: {new_text}"
+        if text is not None:
+            yield NoteLine(text=text)
+
+
+def _meeting_link(meeting_id: UUID) -> str:
+    """The authenticated ``/m/{meeting_id}`` home link — NEVER a raw GCS URI (§2.4 #8/§2.8)."""
+    return _MEETING_HOME.format(meeting_id=meeting_id)
+
+
+def format_draft_card(envelope: Envelope, *, meeting_id: UUID) -> DraftCard:
+    """Render the §2.4 #8 draft card — what → change → the ``/m/`` link → 'your click'.
+
+    Deterministic, keyed on Doc 05's staged-draft ``Envelope``. Carries the persisted
+    ``Envelope.draft_id`` (CANONICAL §11.5) so the card render and the ``/m/`` accept
+    route read the SAME typed field. The link ALWAYS points at the authenticated
+    ``/m/{meeting_id}`` home (§2.8), **never** a raw GCS URI — even when the envelope's
+    artifact carries a ``gs://`` ref. A draft_id-less envelope is a wiring error (a card
+    that points a click at nothing), so it raises rather than render.
+    """
+    if envelope.draft_id is None:
+        raise ValueError("a draft card requires a persisted Envelope.draft_id (§2.4 #8, CANONICAL §11.5)")
+    what = envelope.headline
+    change = envelope.detail or envelope.headline
+    link = _meeting_link(meeting_id)
+    # what-it-is → one-line change → ─ divider → the /m/ link → 'approve = your click'.
+    summary = f"{what}\n{change}\n─\n{link}\napprove = your click"
+    return DraftCard(draft_id=envelope.draft_id, summary=summary)
+
+
+def format_reconciliation_card(
+    *,
+    left_value: str,
+    left_source: str,
+    left_as_of: str | None,
+    right_value: str,
+    right_source: str,
+    right_as_of: str | None,
+) -> NoteLine:
+    """Render the §2.4 #14 reconciliation card — two as-of-sourced values side by side.
+
+    A render VARIANT of the card format: two contested figures, each with its source
+    and as-of date — '— deck: $2.4M · Q3 filing: $2.19M, as of Q3 close.' It surfaces a
+    disagreement as a sourced comparison the room resolves for itself, NOT a verdict
+    Proxy delivers at someone (no 'you're wrong'). Deterministic: field order is fixed.
+    """
+    left = f"{left_source}: {left_value}"
+    if left_as_of:
+        left = f"{left} ({left_as_of})"
+    right = f"{right_source}: {right_value}"
+    if right_as_of:
+        right = f"{right}, {right_as_of}"
+    return NoteLine(text=f"— {left} · {right}.")
+
+
+def format_reconnect_summary(gap: Gap) -> NoteLine:
+    """Render the §2.3 reconnect summary — the honest disconnect gap, as a NoteLine.
+
+    Rides the existing ``failure.Gap`` wording (ONE source for the gap line, no
+    re-wording) and surfaces it as a registered render frame: the announced interval
+    equals the real disconnect window, the record is never presented as continuous
+    across the drop. Deterministic — it is the same string ``Gap.line()`` produces.
+    """
+    return NoteLine(text=gap.line())
