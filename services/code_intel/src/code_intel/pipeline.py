@@ -25,6 +25,10 @@ from .readiness import ReadinessRecord, now_indexed_at
 if TYPE_CHECKING:  # pragma: no cover
     from .meeting import MeetingSession
 
+# The graph smoke check (§3.7) samples this many known symbols and confirms each
+# resolves to a real file:line through the live path before ``ready`` is granted.
+_SMOKE_SAMPLE_SIZE = 25
+
 
 @dataclass
 class GraphVersion:
@@ -48,6 +52,13 @@ class Pipeline:
         self.graph_retention_index: dict[str, GraphVersion] = {}
         self.server: Any = None
         self.server_factory: Any = None
+        # The warm HOST-SIDE precision resolver (§2.1 / §3.5 / CANONICAL §12.2):
+        # a warm_resolver.MultiLangResolver pre-indexed over the pinned clone so
+        # find_references answers 'resolved' the first query at meeting start. The
+        # v0 seam is the AST/tree-sitter resolver; the full Serena/solid-lsp pool
+        # (type-aware cross-file exact resolution) layers on top as a future
+        # enhancement. NEVER runs in the E2B sandbox — host-side only.
+        self.lsp: Any = None
         # ONE persistent webhook handler per (long-lived) host. Its bounded dedup
         # cache is per-host state, so it must outlive individual pushes — it is
         # created once here and reused, never re-minted per delivery (which would
@@ -110,6 +121,10 @@ class Pipeline:
             self._cloner.pull_delta(self.clone_path)
         if self.clone_path and self.clone_path.exists():
             self.graph = self.rebuild_graph(built_at_sha=new_sha)
+            # Re-warm the precision resolver on the new HEAD so find_references
+            # answers 'resolved' for symbols the push added/moved — a stale warm
+            # index would silently down-grade them to a grep lower-bound.
+            self._rewarm_resolver()
         self.current_sha = new_sha
         self.graph_retention_index[new_sha] = GraphVersion(new_sha, self.graph)
         self._num_commits_last = num_commits
@@ -125,6 +140,20 @@ class Pipeline:
         loc = self._loc_provider.count() if hasattr(self._loc_provider, "count") else 0
         if loc >= get_int("lsp_warm_loc_threshold") and hasattr(self._lsp_lifecycle, "mark_pushed"):
             self._lsp_lifecycle.mark_pushed()
+
+    def _rewarm_resolver(self) -> None:
+        """Re-index the warm precision resolver over the current clone HEAD.
+
+        Rebuilding into a fresh instance means a query mid-rebuild still reads a
+        consistent (old-but-complete) index — never a half-populated one — and
+        both the pipeline-bound server and the per-query factory read
+        ``pipeline.lsp`` live, so they pick up the new instance on the next query.
+        A build failure leaves the previous warm index intact (degrade, never go
+        dark). The resolver never runs in the sandbox — host-side only (§12.2).
+        """
+        new_lsp = _build_warm_resolver(self.clone_path)
+        if new_lsp is not None:
+            self.lsp = new_lsp
 
     def uninstall_delete(self) -> None:
         import shutil
@@ -211,9 +240,25 @@ def run_full_pipeline(
 
     _warm_lsp(pipeline, loc_provider, lsp_lifecycle)
 
+    # Prepare-ahead: build the warm HOST-SIDE precision resolver (§2.1 / §3.5 /
+    # CANONICAL §12.2) over the pinned clone NOW, at build time — so the first
+    # find_references at meeting start is served 'resolved' from a warm index, not
+    # a cold spin-up that would down-grade to a grep lower-bound (AC-LAT-003). The
+    # v0 seam is warm_resolver.MultiLangResolver (AST + tree-sitter); the full
+    # Serena/solid-lsp pool (type-aware, cross-file exact) layers on top later.
+    pipeline.lsp = _build_warm_resolver(clone_path)
+
     indexed = coverage.count_by_status("indexed")
     flagged = coverage.count_by_status("flagged")
-    gate_ok = _coverage_gate_ok(clone_path, indexed, flagged) and not simulate_coverage_gap
+    # The §3.7 gate is a conjunction: 100% classification (coverage) AND the graph
+    # smoke check. A repo whose classification is complete but whose graph came back
+    # empty / unresolvable is NOT joinable — withhold ``ready`` (never a silent join
+    # over a broken graph). ``simulate_coverage_gap`` forces the coverage arm false.
+    gate_ok = (
+        _coverage_gate_ok(clone_path, indexed, flagged)
+        and not simulate_coverage_gap
+        and _graph_smoke_ok(pipeline.graph, indexed)
+    )
     if gate_ok:
         pipeline.readiness_record = ReadinessRecord(
             indexed_at=now_indexed_at(),
@@ -228,7 +273,9 @@ def run_full_pipeline(
     # a server bound to the pipeline so meeting/webhook lifecycles share state
     from .mcp_server import CodeIntelMCPServer, MCPServerFactory
 
-    pipeline.server = CodeIntelMCPServer(pipeline=pipeline, db_counter=db_counter, lsp_lifecycle=lsp_lifecycle)
+    pipeline.server = CodeIntelMCPServer(
+        pipeline=pipeline, db_counter=db_counter, lsp=pipeline.lsp, lsp_lifecycle=lsp_lifecycle
+    )
     # the per-query factory (§3.5): callers store this and mint one fresh,
     # queryable wrapper per query over the pipeline's immutable graph/clone/LSP.
     pipeline.server_factory = MCPServerFactory.for_pipeline(pipeline, db_counter=db_counter)
@@ -275,12 +322,71 @@ def _coverage_gate_ok(clone_path: Path, indexed: int, flagged: int) -> bool:
     return indexed + flagged == len(tracked)
 
 
+def _graph_smoke_ok(graph: Graph, indexed: int) -> bool:
+    """The §3.7 graph smoke check as a real gate (not a no-op, per the node risk).
+
+    A repo with indexed (parsed) files MUST yield a queryable graph: known symbols
+    resolve to a real ``file:line`` through the live resolution path. If ``indexed``
+    is zero the build parsed nothing (a fully-flagged repo — e.g. only grammarless
+    or generated files); that is a legitimately joinable classified repo with no
+    symbols to smoke, so the smoke arm is vacuously satisfied. Otherwise the graph
+    must be non-empty AND a deterministic sample of its nodes must each resolve to a
+    node carrying a truthy ``path`` and a positive ``line`` through ``resolve_symbol``
+    (the same live path the tools query). Deterministic and never-throw: a broken
+    graph fails closed to ``not_ready`` (Law 1), never crashes the pipeline.
+    """
+    if indexed <= 0:
+        return True
+    nodes = graph.nodes
+    if not nodes:
+        return False
+    # Deterministic sample: the first N nodes by id (stable ordering), each must
+    # resolve to a concrete location through the live resolution path.
+    sample = sorted(nodes, key=lambda n: n.id)[:_SMOKE_SAMPLE_SIZE]
+    for node in sample:
+        try:
+            resolved = graph.resolve_symbol(node.id)
+        except Exception:  # noqa: BLE001 - a raising resolver is itself a failed smoke
+            return False
+        if not resolved:
+            return False
+        if not all(getattr(r, "path", "") and getattr(r, "line", 0) for r in resolved):
+            return False
+    return True
+
+
 def _warm_lsp(pipeline: Pipeline, loc_provider: Any, lsp_lifecycle: Any) -> None:
     if loc_provider is None or lsp_lifecycle is None:
         return
     loc = loc_provider.count() if hasattr(loc_provider, "count") else 0
     if loc >= get_int("lsp_warm_loc_threshold") and hasattr(lsp_lifecycle, "mark_connected"):
         lsp_lifecycle.mark_connected()
+
+
+def _build_warm_resolver(clone_path: Path) -> Any:
+    """Pre-index the warm HOST-SIDE precision resolver over the pinned clone.
+
+    The v0 warm-resolver seam (§2.1) is ``warm_resolver.MultiLangResolver``: a
+    real static resolver that pre-indexes every definition site (Python via
+    ``ast``, every other grammar via tree-sitter tags) so ``find_references`` at
+    meeting start is a warm index lookup tagged ``resolved`` — never a cold spin.
+    The full Serena/solid-lsp language-server pool (type-aware, cross-file exact
+    resolution) is a documented FUTURE ENHANCEMENT that layers on this same
+    ``references`` / ``restart`` seam.
+
+    Never-throw + degrade-honestly: a missing clone or a resolver build failure
+    returns ``None`` (the caller keeps any prior warm index, or find_references
+    falls back to the grep lower-bound) — the pipeline never crashes and never
+    goes dark on a resolver hiccup (Law 1 / §3.8 honest-failure).
+    """
+    if clone_path is None or not clone_path.exists():
+        return None
+    from .warm_resolver import MultiLangResolver
+
+    try:
+        return MultiLangResolver(clone_path)
+    except Exception:  # a resolver build hiccup must never crash the build
+        return None
 
 
 def _touch_coverage_db(coverage_db_path: Path, db_tracer: Any) -> None:
