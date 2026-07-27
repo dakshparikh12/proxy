@@ -382,4 +382,21 @@ Ingest = `INSERT ... ON CONFLICT (delivery_guid) DO NOTHING` → return 200 imme
 
 ---
 
+## §13 · Scope decisions — Docs 06 & 07 (landed 2026-07-27, amendment pack P4)
+
+*Scope records. They are true whether or not the doc is built, and they exist so a later reader does not rediscover the boundary by guessing. Doc 06 is **SPEC'D, not built**; its four records are on the file because they are cheap to keep and expensive to re-derive.*
+
+### §13.1 · Doc 06 — Proactive (V1; spec'd, not a current build target)
+- **D06.1** — Proactive is **V1 and a pure consumer of Docs 01–05**: no transport, no ASR, no model seat, no sandbox, no delivery path, and no re-pathing of any sealed bundle.
+- **D06.2** — The proactive gate **clears** contributions; Doc 04's wake-turn tools (`speak` / `send_chat` / `show_screen`) remain the **sole delivery authority**. The gate delivers nothing itself.
+- **D06.3** — The **judge is the only situation→action mapping** in the proactive path and it is model judgment. The gate is physics and floors — a clock, a similarity lookup, a boundary signal, an enum comparison. This is the Law 4 basis for the split.
+- **D06.4** — **Voice enablement per verdict class is a config value** reviewed against the decision record, **not a code branch**. `voice_enabled_classes` ships empty.
+
+### §13.2 · Doc 07 — Post-Meeting Execution (V1; build target)
+- **D07.1** — Post-meeting execution runs Doc 05's Workroom in a `meeting_runtime` worker **with no media session**, and its run durability is the ordinary `operation_runs` row Doc 05 §3.1 already defines — **no new deployable, no new operation shape, no second run table**. `post_meeting_tasks` is product lifecycle state (tier, owner, plan, approval, outcome), never a run record; this is the §12.11 `workroom_tasks` prohibition applied here.
+- **D07.2** — **No post-meeting work executes before a named human approves the plan.** Invariant 6 covers the artifact at the end; this covers the *run* at the start. `APPROVED` is written only by a named human's action, and `RUNNING` is entered only from `APPROVED`.
+- **D07.3** — **V1 stages code-change drafts and never pushes.** PR creation requires `contents:write` plus tenant re-consent — a separate founder decision (F4), **declined for V1**. Doc 04 §3.16.1 and Doc 05 §3.8 already encode never-push; V1 changes nothing.
+
+---
+
 *Conformance rule for every doc: where your text conflicts with this file, this file wins — replace your definition with the canonical one (or a one-line reference to it). Do not re-describe a shared type's shape in prose; point to `libs/contracts`. This is the discipline that keeps the spec from re-drifting.*
