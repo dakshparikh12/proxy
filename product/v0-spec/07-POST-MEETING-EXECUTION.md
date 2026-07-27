@@ -64,7 +64,7 @@ For every surviving item, Proxy writes a plan: the task in one line · why it ex
 
 The owner may **approve · edit · split · downgrade to a ticket · reject.** Approval is recorded with a name and a timestamp.
 
-**Until that approval exists, no sandbox starts, no model does work beyond triage and the plan itself, and no durable write occurs outside the task's own record** — the plan text lives on that record. This is Law 3 and Invariant 6 (every world-change is a staged draft behind a named human) applied to the *run*: Invariant 6 already covers the artifact at the end; this covers the start. A plan nobody answers expires quietly after `plan_expiry`. Proxy does not nag and never proceeds by default.
+**Until that approval exists, no sandbox starts, no model does work beyond triage and the plan itself, and no durable write occurs outside the task's own record — with exactly one carve-out: `clarify_items`, which §3.3 writes while the task is in CLARIFYING** (founder ruling on contradiction C-D, 2026-07-27; the carve-out is closed — `clarify_items` is the only table exempt, and asking a question is not a world-change) — the plan text lives on that record. This is Law 3 and Invariant 6 (every world-change is a staged draft behind a named human) applied to the *run*: Invariant 6 already covers the artifact at the end; this covers the start. A plan nobody answers expires quietly after `plan_expiry`. Proxy does not nag and never proceeds by default.
 
 ### 3.5 Execution
 
