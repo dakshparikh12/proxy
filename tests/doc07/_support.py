@@ -234,3 +234,43 @@ class FakeFinalNotes:
 
 def _val(v: Any) -> Any:
     return v.value if hasattr(v, "value") else v
+
+
+def assert_no_code_reference(path: str, tokens: tuple[str, ...]) -> None:
+    """Assert a module contains no CODE reference to any of ``tokens``.
+
+    Deliberately AST-based rather than a substring grep over the source. Prose mentions a
+    forbidden thing all the time — triage.py's seat comment says "WORKROOM is the
+    sandboxed builder" — and a grep that fails on a comment is a test that punishes
+    documentation. What matters is whether the module can *reach* the thing, so this
+    inspects imports, identifiers, attribute names, and string literals used as code
+    (call arguments), and ignores comments and docstrings.
+    """
+    import ast
+    import pathlib
+
+    tree = ast.parse(pathlib.Path(path).read_text(encoding="utf-8"))
+    seen: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            seen.update(a.name.lower() for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            seen.add((node.module or "").lower())
+            seen.update(a.name.lower() for a in node.names)
+        elif isinstance(node, ast.Name):
+            seen.add(node.id.lower())
+        elif isinstance(node, ast.Attribute):
+            seen.add(node.attr.lower())
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            # A bare string constant is only "code" if it is not a docstring; docstrings
+            # are Expr statements, which we skip by only taking strings inside calls.
+            pass
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            for arg in list(node.args) + [k.value for k in node.keywords]:
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    seen.add(arg.value.lower())
+
+    for token in tokens:
+        hits = sorted(s for s in seen if token in s)
+        assert not hits, f"{path} reaches for {token!r} in code: {hits}"

@@ -4,7 +4,6 @@ from __future__ import annotations
 import uuid
 
 import pytest
-
 from harness.post_meeting.report import (
     CONFIDENCE_BY_STATUS,
     KIND_BY_STATUS,

@@ -5,7 +5,6 @@ import copy
 import uuid
 
 import pytest
-
 from harness.post_meeting.config import PostMeetingConfig
 from harness.post_meeting.models import Tier
 from harness.post_meeting.triage import (
@@ -16,9 +15,10 @@ from harness.post_meeting.triage import (
     coerce_tier,
     run_triage,
 )
+
 from libs.llm.src.llm.structured import StructuredOutputError, StructuredResult
 
-from ._support import FakeActionItem, FakeFinalNotes, ForbiddenSandbox
+from ._support import FakeActionItem, FakeFinalNotes
 
 pytestmark = pytest.mark.asyncio
 
@@ -255,12 +255,24 @@ async def test_ac_pme_06_neg_unreadable_condition_report_drops_the_tier():
 
 @pytest.mark.negative
 async def test_ac_pme_06_neg_no_sandbox_is_started_during_triage():
-    sandbox = ForbiddenSandbox()
+    """Static, not behavioural.
+
+    Handing run_triage a ForbiddenSandbox it never receives would assert nothing — the
+    counter would read 0 whether or not the product misbehaved. The real property is that
+    triage has no sandbox to reach: the module neither imports nor names one.
+    """
+    from ._support import assert_no_code_reference
+
+    assert_no_code_reference(
+        "services/harness/src/harness/post_meeting/triage.py",
+        ("sandbox", "e2b", "propose_change", "staged_drafts"),
+    )
+
     caller = caller_returning([_v("m#0", "ticket+plan+draft", met=True)])
-    await run_triage(
+    res = await run_triage(
         [ITEMS[0]], caller=caller, call_external=passthrough_call_external, config=CFG
     )
-    assert sandbox.call_count == 0
+    assert res.ok
 
 
 @pytest.mark.negative

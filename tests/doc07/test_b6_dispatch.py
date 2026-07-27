@@ -7,7 +7,6 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-
 from harness.post_meeting.approval import approve
 from harness.post_meeting.config import PostMeetingConfig
 from harness.post_meeting.dispatch import (

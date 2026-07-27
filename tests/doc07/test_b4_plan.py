@@ -5,7 +5,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-
 from harness.post_meeting.config import PostMeetingConfig
 from harness.post_meeting.models import Source, TaskRecord, TaskState
 from harness.post_meeting.plan import (
@@ -15,9 +14,10 @@ from harness.post_meeting.plan import (
     render_plan,
     run_plan,
 )
+
 from libs.llm.src.llm.structured import StructuredOutputError, StructuredResult
 
-from ._support import ForbiddenSandbox, FakeTaskStore
+from ._support import FakeTaskStore
 
 pytestmark = pytest.mark.asyncio
 
@@ -110,14 +110,25 @@ async def test_failed_plan_call_does_not_move_the_task_to_planned():
 
 
 async def test_planning_starts_no_sandbox():
-    sandbox = ForbiddenSandbox()
+    """Static: the planning module has no sandbox to reach (§3.4).
+
+    A ForbiddenSandbox the module never receives would read 0 regardless of behaviour, so
+    the assertion is on the source: no sandbox, no E2B, no propose_change in B4.
+    """
+    from ._support import assert_no_code_reference
+
+    assert_no_code_reference(
+        "services/harness/src/harness/post_meeting/plan.py",
+        ("sandbox", "e2b", "propose_change", "staged_drafts"),
+    )
+
     store = FakeTaskStore()
     tid = await _seed(store)
-    await run_plan(
+    res = await run_plan(
         task_id=tid, text="x", owner="Sam", item_ref="m#0",
         store=store, caller=caller_ok(), call_external=passthrough,
     )
-    assert sandbox.call_count == 0
+    assert res.ok
 
 
 # ── AC-PME-08 · an unanswered plan expires quietly ────────────────────────
@@ -165,14 +176,20 @@ async def test_ac_pme_08_expiry_boundary_is_inclusive_at_the_configured_hours():
 
 
 async def test_ac_pme_08_no_sandbox_is_provisioned_by_expiry():
-    sandbox = ForbiddenSandbox()
+    """Expiry closes a task; it never provisions anything.
+
+    Behavioural half: the only table touched is post_meeting_tasks, and the task lands
+    terminal. Structural half is covered by test_planning_starts_no_sandbox, which asserts
+    the module has no sandbox reference to reach at all.
+    """
     store = FakeTaskStore()
     tid = await _seed(store, TaskState.PLANNED)
     await expire_stale_plans(
         [{"task_id": tid, "state": TaskState.PLANNED, "planned_at": T0}],
         store=store, now=T0 + timedelta(hours=72), config=CFG,
     )
-    assert sandbox.call_count == 0
+    assert store.tables_written == {"post_meeting_tasks"}
+    assert store.rows[tid]["state"] == TaskState.DISCARDED.value
 
 
 # ── AC-PME-08-NEG · clock/sweep faults never approve ──────────────────────

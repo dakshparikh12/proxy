@@ -6,7 +6,6 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-
 from harness.post_meeting.approval import approve
 from harness.post_meeting.final_gate import (
     FORBIDDEN_REPO_WRITES,

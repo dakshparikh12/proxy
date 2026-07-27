@@ -11,7 +11,6 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-
 from harness.post_meeting.approval import (
     PRE_APPROVAL_MODEL_CALLS,
     PRE_APPROVAL_WRITABLE_TABLES,
