@@ -1,0 +1,93 @@
+# manifest.yaml — Doc 07 seal record (GENERATOR.md §19 minimum manifest)
+#
+# NOTE ON CONVENTION: acceptance/doc00-doc03 carry no manifest.yaml — for those bundles the
+# seal marker is directory placement (acceptance/ = sealed, staging/ = in progress). This is
+# the first bundle to carry an explicit seal record. It is purely additive: the placement
+# convention still holds, and nothing reads this file to make a runtime decision.
+
+bundle:
+  id: ACCEPTANCE-DOC07
+  version: 1.0.0
+  status: SEALED
+  sealed_at: "2026-07-27"
+  authority_document: product/v0-spec/07-POST-MEETING-EXECUTION.md
+  implementation_commit: 38c75c6bfd5a20ef5327b2b43254d51885979a73
+  bundle_hash: "1ff8020b471de5822fde9b184f08a627cc3f727cd4b445a85c06f3b721876745"
+
+release_profile:
+  name: autonomous-build-complete
+  blocking_criticalities: [P0, P1, P2]
+
+integrity:
+  authority_hash:           "58d53c26493c60c96c26972a2f99ec4ada1e51927f201051685afb8fc541e4a8"
+  requirements_hash:        "dc81bed0027608c28181c23bfceed8c6e6f6ffe9ae78e73e1d8ebd03edba679d"
+  criteria_hash:            "565557f2b10656f2482afa74f1a8dd011f5c9a4b2d5df36b44149332381fbb29"
+  dependency_manifest_hash: "3c14c130bce298029cf981645f77821da999a04f6fbfbd66a4b65326474d5c00"
+  # bundle_hash = sha256 of the four hashes above, concatenated in sorted key order.
+
+counts:
+  authority_clauses: 16        # Doc 07 Appendix C seeds
+  requirements: 16
+  derived_obligations: 0       # none derived; every criterion traces to an Appendix C seed
+  criteria_total: 30
+  positive_criteria: 16
+  negative_criteria: 14
+  blocking_criteria: 30
+  golden_path_criteria: 4
+  mandatory_faults: 58
+  tests_and_evaluations: 30    # test_ids declared; not yet authored
+
+gates:
+  ladder_schema_gate:
+    result: PASS
+    detail: >-
+      30 criteria, all carrying a well-formed verification_ladder; 28 non-null
+      dependency_class; 14 -NEG pairs present; manifest bidirectionally consistent;
+      e2e confined to the 4 golden-path criteria.
+  rtm_coverage_gate:
+    result: PASS
+    detail: "16/16 requirements covered — P0 4/4, P1 8/8, P2 4/4; every criterion traces to a real requirement."
+  note: >-
+    Both gates live at orchestrator/*.py on `main` and were DELETED from this branch by
+    commit d9e60db ("delete v1 process machinery"). They were run from the `main` copy
+    against this bundle rather than being re-added here, so the deletion decision stands.
+    Both require PYTHONUTF8=1 on Windows: they call read_text() with no encoding and fail
+    on cp1252 against UTF-8 content.
+
+qualification:
+  status: SPEC_QUALIFIED
+  material_ambiguities: 0
+  unresolved_contradictions: 0
+  untestable_blocking_requirements: 0
+  contradictions_resolved:
+    - id: C-A
+      ruling: "scope_id = meeting_id, operation_type = 'workroom:{task_id}'. Code right, spec wrong. Landed as amendment P10."
+    - id: C-C
+      ruling: "Doc 07 creates and owns clarify_items until Doc 06 lands; co-ownership noted in migration 0010."
+    - id: C-D
+      ruling: "clarify_items is carved out of the pre-approval durability invariant. Carve-out is closed — it is the only exempt table."
+
+# ── Honest limits of this seal (GENERATOR.md §2.2) ───────────────────────────
+assurance_limits:
+  blocked_criteria:
+    count: 4
+    ids: [AC-PME-09, AC-PME-09-NEG, AC-PME-10, AC-PME-10-NEG]
+    dependency: "meeting_runtime worker runnable with no media session"
+    detail: >-
+      Doc 07 §3.5 requires the Workroom to run in a meeting_runtime worker with no media
+      session while also asserting "No new deployable". MeetingRuntime
+      (services/harness/src/harness/meeting_runtime.py:54) is media-coupled by construction
+      and has no no-media entrypoint. These four criteria are sealed and blocking, but
+      CANNOT be executed until that worker exists or §3.5 is amended. A green run of this
+      bundle that omits them is NOT a green bundle.
+  tests_not_authored: >-
+    Every criterion declares test_ids, but no test bodies exist yet. Sealing fixes the
+    contract, not the evidence — per §1.1 acceptance is authored before implementation.
+  no_evidence_yet: >-
+    No execution evidence is attached to this seal. Per §1.6 evidence from a different
+    bundle, build, verifier, or environment does not satisfy this gate.
+  generator_limits: >-
+    A green bundle would not prove Doc 07's spec contains every real-world requirement,
+    that unmodeled state cannot fail, or that the fault models below are exhaustive.
+
+builder_writes: DENIED
