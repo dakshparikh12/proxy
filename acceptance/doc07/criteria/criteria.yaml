@@ -1,0 +1,841 @@
+# criteria.yaml — Doc 07 (Post-Meeting Execution)
+# One criterion per Doc 07 Appendix C seed. 16 seeds -> 16 criteria.
+# None merged, none invented, none split. Ladders derived per GENERATOR.md §8.4.
+# Generated 2026-07-27 against 07-POST-MEETING-EXECUTION.md as landed in commit 720d5aa.
+#
+# ── BLOCKED CRITERIA (6 of 16) ────────────────────────────────────────────────
+# A criterion is marked `blocked:` when it rests on a dependency the 2026-07-27 repo
+# audit found ABSENT *outside Doc 07's own build scope* — i.e. it cannot be satisfied
+# even after Doc 07 is fully implemented.
+#   clarify_items table ABSENT (owned by Doc 06 §4; Doc 06 is SPEC'D, NOT BUILT)
+#     -> AC-PME-03, AC-PME-04
+#   meeting_runtime worker with no media session ABSENT (Doc 07 §3.5)
+#     -> AC-PME-09, AC-PME-10
+#   libs/llm structured-output entrypoint on the sonnet seat ABSENT (seat named, no
+#   structured-output call surface)  -> AC-PME-01, AC-PME-06
+#
+# ── EXPECTED-PENDING, NOT BLOCKED ─────────────────────────────────────────────
+# `post_meeting_tasks` and the [post_meeting] config section do not exist yet. They are
+# Doc 07's OWN artifacts, created by this build (Phase C step 2). Per GENERATOR.md §1.1
+# criteria are authored BEFORE implementation, so their absence is the normal pre-build
+# state and is NOT recorded as a blocker. Every criterion below assumes they will exist.
+#
+# ── KNOWN GENERATION GAP (declared, not silent) ───────────────────────────────
+# GENERATOR.md §8.4.1 requires a paired AC-<id>-NEG criterion for every criterion whose
+# dependency_class is non-null. That would add 14 NEG criteria here. They are NOT emitted:
+# the generation instruction for this bundle was "one criterion per seed, merge none,
+# invent none". The §8.4.1 obligation is therefore OUTSTANDING and this bundle will fail
+# orchestrator/ladder_schema_gate.py until the NEG pairs are generated. Recorded here
+# rather than passed over in silence.
+
+# ── INTAKE & TRIAGE ───────────────────────────────────────────────────────────
+- criterion_id: AC-PME-01
+  name: Every action item receives exactly one tier and the close record is unmodified
+  evidence_class: '[integration]'
+  authority_refs:
+  - R-doc07-PME-01
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: vendor:anthropic
+  mock_boundary: >-
+    may mock the Anthropic HTTP response body via a vcrpy cassette at the
+    call_external/transport layer; MUST NOT replace the call_external seam, the request
+    construction, or the client object with Mock() — the real structured triage request
+    must be built and driven through the real seam at least once
+  verification_ladder:
+  - tier: lint
+  - tier: unit
+  - tier: reality
+  blocked:
+    status: BLOCKED
+    blocking_dependency: libs/llm structured-output entrypoint on the sonnet seat
+    dependency_owner: libs/llm
+    evidence: >-
+      libs/llm/src/llm/routing.py:17-19 names the claude-sonnet-4-6 seats, but libs/llm
+      exposes only call_model() (client.py:114) — grep for output_schema|structured_output|
+      json_schema across libs/llm returns zero hits (audit 2026-07-27). Doc 07 §3.1
+      requires "one structured call on the sonnet seat". The only structured-output path
+      in the repo is the Agent SDK provider seam used by services/scribe/close.py:38.
+    consequence: >-
+      The tiering call cannot be made as specified until a structured-output surface
+      exists on the sonnet seat, or Doc 07 is amended to route triage through the
+      scribe/close.py provider seam instead.
+  behavior:
+    given: >-
+      A completed Doc 03 close pass whose final object contains N action items of mixed
+      shape, and a pinned copy of the rendered close record.
+    when: Post-meeting intake reads the close output once.
+    then:
+    - Every one of the N action items carries exactly one tier from {informational, question, ticket, ticket+plan, ticket+plan+draft}
+    - No action item carries zero tiers and none carries two
+    - The close record is byte-identical to the pinned copy after intake completes
+  applicability:
+    fixtures: [fixture-close-output-mixed-items]
+    estates: [small-clean]
+    excluded_estates: []
+    rationale: "Tiering is content-shaped, not repository-shaped; one clean estate suffices."
+  primary_oracle:
+    type: deterministic_comparison
+    artifact: "assert len(tiers_assigned) == N and all tiers in enum; assert sha256(close_record_after) == sha256(close_record_before)"
+  thresholds:
+    items_without_exactly_one_tier: 0
+    close_record_bytes_changed: 0
+  fault_model_refs:
+  - F-ITEM-UNTIERED
+  - F-CLOSE-RECORD-MUTATED
+  test_ids:
+  - T-PME-01
+
+- criterion_id: AC-PME-02
+  name: Total failure of post-meeting execution leaves the close and the record untouched
+  evidence_class: '[fault-injection]'
+  authority_refs:
+  - R-doc07-PME-02
+  criticality: P0
+  blocking: true
+  golden_path: true
+  dependency_class: db:postgres
+  mock_boundary: >-
+    real Postgres only; no in-memory substitute for the integration tier. The fault is
+    injected into post-meeting execution, never into the close path under observation.
+  verification_ladder:
+  - tier: lint
+  - tier: unit
+  - tier: integration
+  - tier: e2e
+  behavior:
+    given: >-
+      A meeting driven through Doc 04's ordered close to completion, with post-meeting
+      execution configured to raise on entry (and, in a second arm, to be absent entirely).
+    when: The meeting ends and the ordered close runs.
+    then:
+    - The ordered close completes in its specified order and the notes link posts in chat
+    - The finalized notes object in GCS is byte-identical to the control run without post-meeting execution
+    - The failure is surfaced in logs and does not propagate into the close path
+    - No operation_runs row belonging to the close is left non-terminal
+  applicability:
+    fixtures: [fixture-meeting-close-e2e]
+    estates: [small-clean]
+    excluded_estates: []
+    rationale: "This is the doc's isolation promise; it must hold on the real close path."
+  primary_oracle:
+    type: differential_comparison
+    artifact: "diff(close_artifacts_with_failing_doc07, close_artifacts_control) == empty"
+  thresholds:
+    close_artifact_bytes_changed: 0
+    close_steps_skipped: 0
+  fault_model_refs:
+  - F-DOC07-RAISES-INTO-CLOSE
+  - F-DOC07-DELAYS-TEARDOWN
+  test_ids:
+  - T-PME-02
+
+# ── AMBIGUITY & OWNERSHIP ─────────────────────────────────────────────────────
+- criterion_id: AC-PME-03
+  name: An item lacking owner, scope, or done-condition is never planned and becomes a question
+  evidence_class: '[integration]'
+  authority_refs:
+  - R-doc07-PME-03
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres only; no in-memory substitute for the integration tier"
+  verification_ladder:
+  - tier: lint
+  - tier: unit
+  - tier: integration
+  blocked:
+    status: BLOCKED
+    blocking_dependency: clarify_items table
+    dependency_owner: "Doc 06 §4 (co-owned with Doc 07; Doc 06 is SPEC'D, NOT BUILT)"
+    evidence: >-
+      grep -rn 'clarify_items' migrations/ libs/ services/ returns zero hits
+      (audit 2026-07-27). The 8 applied migrations create tenants, users, repos, meetings,
+      sessions, operation_runs, meeting_cost, staged_drafts, webhook_events,
+      transcript_segments, note_deltas, connect_readiness, meeting_cost_telemetry — and no
+      clarify_items.
+    consequence: >-
+      The question has nowhere to be written. Doc 07 §3.3 names clarify_items as "the same
+      record Doc 06 uses", but Doc 06 is not being built, so the table has no builder.
+      See contradiction C-C: Doc 06 §3.6 says clarify_items is "written here, completed by
+      Doc 07", while Doc 07 §3.3 has Doc 07 creating rows. Ownership must be ruled on
+      before this criterion can be satisfied.
+  behavior:
+    given: >-
+      A triaged action item missing at least one of: an owner, a scope, a stated
+      done-condition.
+    when: Triage and planning run over the item.
+    then:
+    - No plan is written for the item
+    - A clarify_items row is created carrying the question, its kind, and a blocking_ref back to the item
+    - The task remains in CLARIFYING and does not advance toward APPROVED
+  applicability:
+    fixtures: [fixture-underspecified-action-items]
+    estates: [small-clean]
+    excluded_estates: []
+    rationale: "Pure content/state behavior against the durable substrate."
+  primary_oracle:
+    type: state_transition_check
+    artifact: "assert task.state == 'CLARIFYING' and task.plan is None and clarify_items row exists with blocking_ref == item_ref"
+  thresholds:
+    plans_written_for_underspecified_items: 0
+    missing_clarify_rows: 0
+  fault_model_refs:
+  - F-PLAN-WITHOUT-OWNER
+  - F-SILENT-DROP-OF-AMBIGUOUS-ITEM
+  test_ids:
+  - T-PME-03
+
+- criterion_id: AC-PME-04
+  name: A question with no attributed person or no channel stays pending on the task record
+  evidence_class: '[integration]'
+  authority_refs:
+  - R-doc07-PME-04
+  criticality: P2
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres only; no in-memory substitute for the integration tier"
+  verification_ladder:
+  - tier: lint
+  - tier: unit
+  - tier: integration
+  blocked:
+    status: BLOCKED
+    blocking_dependency: clarify_items table
+    dependency_owner: "Doc 06 §4 (co-owned with Doc 07; Doc 06 is SPEC'D, NOT BUILT)"
+    evidence: >-
+      grep -rn 'clarify_items' migrations/ libs/ services/ returns zero hits
+      (audit 2026-07-27).
+    consequence: >-
+      The pending state has no home. Note this criterion is NOT blocked on the absence of
+      an out-of-meeting channel: Doc 08 draft cards are BUILT
+      (libs/contracts/src/contracts/channel.py:163 class DraftCard;
+      services/transport/src/transport/chat.py:339 format_draft_card), so the
+      "surfaces on the draft cards" arm of Doc 07 §3.3 is satisfiable today.
+  behavior:
+    given: >-
+      A clarifying question whose item has no person the notes attribute it to, or a
+      tenant with no out-of-meeting channel in channel-report.
+    when: Routing of the clarifying question is attempted.
+    then:
+    - The question is not sent to any channel
+    - The question remains pending on the task record and is exposed on the draft card surface
+    - The item is held and does not advance toward APPROVED
+  applicability:
+    fixtures: [fixture-unattributed-question, fixture-tenant-no-dm-channel]
+    estates: [small-clean]
+    excluded_estates: []
+    rationale: "Routing fallback is substrate-level, not repository-shaped."
+  primary_oracle:
+    type: state_transition_check
+    artifact: "assert clarify_item.answered_by is None and task.state == 'CLARIFYING' and sent_message_count == 0"
+  thresholds:
+    messages_sent_without_channel: 0
+    items_advanced_while_pending: 0
+  fault_model_refs:
+  - F-QUESTION-SENT-TO-NOBODY
+  - F-ITEM-PROCEEDS-WHILE-PENDING
+  test_ids:
+  - T-PME-04
+
+- criterion_id: AC-PME-05
+  name: Ambiguous ownership records UNRESOLVED and is never inferred
+  evidence_class: '[unit-property]'
+  authority_refs:
+  - R-doc07-PME-05
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres only; no in-memory substitute for the integration tier"
+  verification_ladder:
+  - tier: lint
+  - tier: unit
+  - tier: integration
+  behavior:
+    given: >-
+      A corpus of action items in which ownership is absent, and whose surrounding notes
+      contain strong but non-normative ownership signals: a most-senior speaker, a
+      highest-word-count speaker, and a last-toucher of the referenced file.
+    when: Ownership is resolved for each item.
+    then:
+    - owner is the literal string UNRESOLVED for every item with no owner stated in the room
+    - owner is never equal to the senior speaker, the dominant speaker, or the file's last author unless the room named them
+    - UNRESOLVED is distinct from empty string and from NULL
+    - Every UNRESOLVED item is held at the question tier
+  applicability:
+    fixtures: [fixture-ownership-decoys]
+    estates: [small-clean]
+    excluded_estates: []
+    rationale: "The decoys are the point; a synthetic corpus exercises them precisely."
+  primary_oracle:
+    type: invariant
+    artifact: "for each item without a stated owner: assert owner == 'UNRESOLVED' and owner not in {senior_speaker, dominant_speaker, last_file_author}"
+  thresholds:
+    inferred_owners: 0
+    unresolved_conflated_with_empty: 0
+  fault_model_refs:
+  - F-OWNER-INFERRED-FROM-SENIORITY
+  - F-UNRESOLVED-STORED-AS-EMPTY
+  test_ids:
+  - T-PME-05
+
+- criterion_id: AC-PME-06
+  name: Failing any draft-tier condition drops the item at least one tier
+  evidence_class: '[eval]'
+  authority_refs:
+  - R-doc07-PME-06
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: vendor:anthropic
+  mock_boundary: >-
+    may mock the Anthropic HTTP response body via a vcrpy cassette at the
+    call_external/transport layer; MUST NOT replace the call_external seam or the
+    structured triage request construction with Mock()
+  verification_ladder:
+  - tier: lint
+  - tier: unit
+  - tier: reality
+  blocked:
+    status: BLOCKED
+    blocking_dependency: libs/llm structured-output entrypoint on the sonnet seat
+    dependency_owner: libs/llm
+    evidence: >-
+      Same as AC-PME-01: libs/llm exposes call_model() only; no structured-output surface
+      (audit 2026-07-27).
+    consequence: >-
+      Tier assignment is model judgment per Doc 07 §3.1 and Law 4 ("no rule table mapping
+      item text to a tier"), so this criterion cannot be satisfied by deterministic code
+      standing in for the judge. It needs the structured seat.
+  behavior:
+    given: >-
+      A labelled corpus of action items, each violating exactly one draft-tier condition:
+      no concrete scope; no clear area of the codebase; too large to review in one sitting;
+      material ambiguity present; no stated way to tell it worked.
+    when: Triage assigns a tier to each item.
+    then:
+    - No item in the corpus receives the ticket+plan+draft tier
+    - Each item's tier is at least one level below ticket+plan+draft
+    - The tier assignment is produced by the model judge, not by a rule table keyed on item text
+  applicability:
+    fixtures: [fixture-draft-tier-violations]
+    estates: [small-clean]
+    excluded_estates: []
+    rationale: "One labelled corpus per violated condition is the only way to test the policy."
+  primary_oracle:
+    type: labelled_corpus_comparison
+    artifact: "goldens/doc07-draft-tier-violations.json — assert tier < 'ticket+plan+draft' for every labelled violation"
+  thresholds:
+    draft_tier_granted_to_violating_item: 0
+    rule_table_lookups_detected: 0
+  fault_model_refs:
+  - F-DRAFT-TIER-ON-AMBIGUOUS-ITEM
+  - F-TIER-FROM-HARDCODED-RULE-TABLE
+  test_ids:
+  - T-PME-06
+
+# ── THE APPROVAL GATE ─────────────────────────────────────────────────────────
+- criterion_id: AC-PME-07
+  name: Nothing runs and nothing durable is written before a named human approves
+  evidence_class: '[security-adversarial]'
+  authority_refs:
+  - R-doc07-PME-07
+  criticality: P0
+  blocking: true
+  golden_path: true
+  dependency_class: db:postgres
+  mock_boundary: >-
+    real Postgres only; the sandbox provider and the model seat are observed, never
+    replaced with permissive stubs — a stub that silently allows the call would invert
+    this criterion
+  verification_ladder:
+  - tier: lint
+  - tier: unit
+  - tier: integration
+  - tier: e2e
+  behavior:
+    given: A task that has been triaged and planned but whose plan has not been approved.
+    when: >-
+      The system is driven through every pre-approval path, including an adversarial
+      attempt to dispatch the task directly.
+    then:
+    - No sandbox is provisioned (the sandbox provider records zero calls)
+    - No model call is made beyond the triage call and the plan call
+    - No durable write occurs to any table other than the task's own record
+    - The task cannot enter RUNNING from any state other than APPROVED
+    - approved_by and approved_at are both non-null on any transition into APPROVED
+  applicability:
+    fixtures: [fixture-unapproved-plan, fixture-adversarial-direct-dispatch]
+    estates: [small-clean]
+    excluded_estates: []
+    rationale: "This is Law 3 and Invariant 6 applied to the run; it is the doc's safety boundary."
+  primary_oracle:
+    type: invariant
+    artifact: >-
+      assert sandbox_provider.call_count == 0 and model_calls <= {triage, plan} and
+      set(tables_written) <= {'post_meeting_tasks'} and no RUNNING transition whose
+      predecessor state != 'APPROVED'
+  thresholds:
+    sandboxes_started_before_approval: 0
+    durable_writes_outside_task_record: 0
+    running_transitions_not_from_approved: 0
+    approved_rows_missing_approver_identity: 0
+  fault_model_refs:
+  - F-SANDBOX-BEFORE-APPROVAL
+  - F-RUNNING-FROM-PLANNED
+  - F-APPROVED-WITHOUT-NAMED-HUMAN
+  notes:
+    contradiction_ref: C-D
+    contradiction_note: >-
+      UNRESOLVED CONTRADICTION, flagged not resolved. This criterion's third assertion
+      ("no durable write outside the task's own record") is contradicted by AC-PME-03,
+      which requires a clarify_items write while the task is in CLARIFYING — a state
+      strictly before APPROVED. Doc 07 §3.8 permits clarify_items writes with no state
+      qualifier. The invariant as stated in §3.4 cannot hold simultaneously with §3.3 as
+      specified. A founder ruling is required on whether clarify_items is carved out of
+      the pre-approval durability invariant. Until then this criterion's
+      durable_writes_outside_task_record threshold is provisional.
+  test_ids:
+  - T-PME-07
+
+- criterion_id: AC-PME-08
+  name: An unanswered plan expires quietly without proceeding
+  evidence_class: '[integration]'
+  authority_refs:
+  - R-doc07-PME-08
+  criticality: P2
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: >-
+    real Postgres only; time is advanced via an injected clock, never by sleeping —
+    the expiry comparison itself must execute
+  verification_ladder:
+  - tier: lint
+  - tier: unit
+  - tier: integration
+  behavior:
+    given: A planned task whose owner never responds, and a clock advanced past plan_expiry.
+    when: The expiry sweep runs.
+    then:
+    - The task closes without entering APPROVED or RUNNING
+    - No further notification is sent to the owner after the plan was first delivered
+    - No sandbox is provisioned at any point
+    - The task's terminal outcome records expiry as the reason
+  applicability:
+    fixtures: [fixture-expired-plan]
+    estates: [small-clean]
+    excluded_estates: []
+    rationale: "Time-driven lifecycle behavior against the durable substrate."
+  primary_oracle:
+    type: state_transition_check
+    artifact: "assert task.state is terminal and task.outcome names expiry and notifications_after_first == 0"
+  thresholds:
+    notifications_after_expiry: 0
+    tasks_proceeding_after_expiry: 0
+  fault_model_refs:
+  - F-NAG-AFTER-EXPIRY
+  - F-PROCEED-BY-DEFAULT-ON-SILENCE
+  test_ids:
+  - T-PME-08
+
+# ── EXECUTION ─────────────────────────────────────────────────────────────────
+- criterion_id: AC-PME-09
+  name: Dispatch uses Doc 04's bundle and Doc 05's Workroom, and no second execution path exists
+  evidence_class: '[static]'
+  authority_refs:
+  - R-doc07-PME-09
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: >-
+    real Postgres only; the static arm is pure AST/grep over the source tree and mocks
+    nothing
+  verification_ladder:
+  - tier: lint
+  - tier: unit
+  - tier: integration
+  blocked:
+    status: BLOCKED
+    blocking_dependency: "meeting_runtime worker runnable with no media session"
+    dependency_owner: services/harness
+    evidence: >-
+      services/harness/src/harness/meeting_runtime.py:54 MeetingRuntime is media-coupled by
+      construction: it owns `carrier`, a live HearingStage (`_hearing`), the Scribe consumer,
+      a consent_gate, and an STT credential-refresh loop. No no-media entrypoint and no
+      worker `main()` exist — grep for '__main__|def main(' across services/harness/src/harness
+      returns zero hits (audit 2026-07-27).
+    consequence: >-
+      Doc 07 §3.5 requires the Workroom package to run "in a meeting_runtime worker with no
+      media session — no transport, no Scribe, no tile" and asserts "No new deployable".
+      Today there is no way to start that worker without media. Either a no-media mode is
+      added to MeetingRuntime, or Doc 07 §3.5 is amended.
+  behavior:
+    given: An approved task ready for dispatch.
+    when: The task is dispatched and the source tree is scanned.
+    then:
+    - Dispatch constructs the bundle via Doc 04's existing assemble_bundle and no other constructor
+    - The bundle reaches Doc 05's Workroom unchanged
+    - Static scan finds no second sandbox provider, agent framework, task queue, scheduler, or broker introduced by Doc 07
+    - The Workroom returns the standard envelope
+  applicability:
+    fixtures: [fixture-approved-task]
+    estates: [small-clean]
+    excluded_estates: []
+    rationale: "One arm is behavioral, one is a whole-tree static assertion."
+  primary_oracle:
+    type: static_plus_contract
+    artifact: >-
+      AST assert the only Bundle construction on the doc07 path resolves to
+      harness.dispatch.assemble_bundle; grep-assert no new provider/queue/scheduler symbol
+      introduced under the doc07 module
+  thresholds:
+    second_execution_paths: 0
+    non_canonical_bundle_constructors: 0
+  fault_model_refs:
+  - F-PARALLEL-TASK-QUEUE
+  - F-BUNDLE-REBUILT-LOCALLY
+  test_ids:
+  - T-PME-09
+
+- criterion_id: AC-PME-10
+  name: A run is exactly one operation_runs row and survives worker recycle
+  evidence_class: '[process]'
+  authority_refs:
+  - R-doc07-PME-10
+  criticality: P0
+  blocking: true
+  golden_path: true
+  dependency_class: db:postgres
+  mock_boundary: >-
+    real Postgres only; the worker is killed as a real process (SIGKILL), never simulated
+    by setting a flag — the reclaim path must actually execute
+  verification_ladder:
+  - tier: lint
+  - tier: unit
+  - tier: integration
+  - tier: e2e
+  blocked:
+    status: BLOCKED
+    blocking_dependency: "meeting_runtime worker runnable with no media session"
+    dependency_owner: services/harness
+    evidence: >-
+      Same as AC-PME-09. There is no media-less worker to recycle, so the recycle arm of
+      this criterion cannot be executed as specified.
+    consequence: >-
+      The one-row arm is testable today against libs/ops/claim.py and
+      libs/ops/reconcile.py; the survive-recycle arm is not.
+  behavior:
+    given: A dispatched task running in a worker.
+    when: The worker process is killed mid-run and reconcile sweeps.
+    then:
+    - Exactly one operation_runs row exists for the task at all times
+    - No second run table is written; post_meeting_tasks holds lifecycle state only and never duplicates the run record
+    - The killed run is reclaimed by the same atomic claim, heartbeat and reconcile Doc 05 §3.1 defines
+    - The reclaimed run resumes from its persisted progress rather than restarting from zero
+  applicability:
+    fixtures: [fixture-worker-kill]
+    estates: [small-clean]
+    excluded_estates: []
+    rationale: "Crash-recovery is only meaningful against a real process and a real database."
+  primary_oracle:
+    type: invariant
+    artifact: >-
+      assert count(operation_runs WHERE task) == 1 at every observation point; assert
+      post_meeting_tasks has no status/heartbeat/progress column duplicating the run
+  thresholds:
+    operation_runs_rows_per_task: 1
+    second_run_tables: 0
+    unreclaimed_runs_after_reconcile: 0
+  fault_model_refs:
+  - F-SECOND-RUN-TABLE
+  - F-ORPHANED-RUN-AFTER-KILL
+  notes:
+    contradiction_ref: C-A
+    contradiction_note: >-
+      UNRESOLVED CONTRADICTION, flagged not resolved. Doc 07 §3.5 specifies
+      scope_id = the task id AND operation_type = 'workroom:<taskId>', which places the task
+      id in both columns. The built convention is the opposite split:
+      services/harness/src/harness/dispatch.py:129-145 claims with scope_id = meeting_id
+      (cast to text at that one call site) and operation_type = workroom_op_type(task_id);
+      libs/ops/src/ops/cost.py:323 does the same. Separately, CANONICAL §11.2 line 224 says
+      scope_id "also holds workroom task_ids", agreeing with Doc 07 and not with the code.
+      Three sources, two shapes. A parameterised operation_type is NOT novel — it already
+      ships — so the pack's cardinality concern is pre-existing, not introduced by Doc 07.
+      The unique index operation_runs_one_running_per_scope is on (scope_id, operation_type),
+      so the chosen split determines what "one running per scope" actually guarantees.
+      A ruling is required before this criterion's one-row assertion has a fixed meaning.
+  test_ids:
+  - T-PME-10
+
+- criterion_id: AC-PME-11
+  name: Reaching a concurrency or per-meeting cap makes further dispatch wait
+  evidence_class: '[integration]'
+  authority_refs:
+  - R-doc07-PME-11
+  criticality: P2
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: "real Postgres only; the cap comparison must execute against real claimed rows"
+  verification_ladder:
+  - tier: lint
+  - tier: unit
+  - tier: integration
+  behavior:
+    given: >-
+      A tenant at max_concurrent_tasks and, in a second arm, a meeting at
+      max_tasks_per_meeting.
+    when: An additional approved task is dispatched.
+    then:
+    - The additional task waits rather than starting
+    - The number of concurrently running tasks never exceeds the cap
+    - The waiting task is not dropped, failed, or silently discarded
+    - The task starts once a slot frees
+  applicability:
+    fixtures: [fixture-tenant-at-concurrency-cap, fixture-meeting-at-task-cap]
+    estates: [small-clean, multi-tenant]
+    excluded_estates: []
+    rationale: "Caps are per-tenant, so a multi-tenant estate proves they do not leak across tenants."
+  primary_oracle:
+    type: invariant
+    artifact: "assert max(observed_concurrent_running) <= max_concurrent_tasks and dropped_tasks == 0"
+  thresholds:
+    cap_exceeded_observations: 0
+    tasks_dropped_at_cap: 0
+  fault_model_refs:
+  - F-CAP-EXCEEDED-UNDER-RACE
+  - F-TASK-DROPPED-AT-CAP
+  test_ids:
+  - T-PME-11
+
+- criterion_id: AC-PME-12
+  name: A cost estimate over the ceiling asks the owner before the sandbox spins
+  evidence_class: '[integration]'
+  authority_refs:
+  - R-doc07-PME-12
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: >-
+    real Postgres only; the sandbox provider is observed and must record zero calls —
+    it is never replaced with a permissive stub
+  verification_ladder:
+  - tier: lint
+  - tier: unit
+  - tier: integration
+  behavior:
+    given: An approved task whose pre-dispatch cost estimate exceeds task_cost_ceiling.
+    when: Dispatch is attempted.
+    then:
+    - The owner is asked before any sandbox is provisioned
+    - The sandbox provider records zero calls until the owner answers
+    - No spend is incurred against meeting_cost for the task before the answer
+    - A declined or unanswered ask leaves the task unstarted
+  applicability:
+    fixtures: [fixture-over-ceiling-estimate]
+    estates: [small-clean]
+    excluded_estates: []
+    rationale: "Reuses Doc 04's existing pre-dispatch estimate gate; no repository shape involved."
+  primary_oracle:
+    type: invariant
+    artifact: "assert sandbox_provider.call_count == 0 and cost_delta == 0 until owner_response is recorded"
+  thresholds:
+    sandboxes_started_before_cost_ask: 0
+    spend_before_answer: 0
+  fault_model_refs:
+  - F-SPEND-BEFORE-ASK
+  - F-CEILING-BYPASSED-ON-RETRY
+  test_ids:
+  - T-PME-12
+
+# ── REPORTING ─────────────────────────────────────────────────────────────────
+- criterion_id: AC-PME-13
+  name: needs_clarification is reported as a question, never as a failure
+  evidence_class: '[unit-example]'
+  authority_refs:
+  - R-doc07-PME-13
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  verification_ladder:
+  - tier: lint
+  - tier: unit
+  behavior:
+    given: A Workroom envelope returned with status needs_clarification and its one question.
+    when: The report for that task is rendered.
+    then:
+    - The report is classified as a question, presented as blocked-on-you
+    - The report is not classified as a failure and carries no failure language
+    - The envelope's question is carried into the report verbatim
+  applicability:
+    fixtures: [fixture-envelope-needs-clarification]
+    estates: [small-clean]
+    excluded_estates: []
+    rationale: "Pure in-process mapping from envelope status to report class; no external dependency."
+  primary_oracle:
+    type: deterministic_comparison
+    artifact: "assert report.kind == 'question' and report.kind != 'failure' and report.question == envelope.question"
+  thresholds:
+    needs_clarification_reported_as_failure: 0
+  fault_model_refs:
+  - F-CLARIFICATION-REPORTED-AS-FAILURE
+  test_ids:
+  - T-PME-13
+
+- criterion_id: AC-PME-14
+  name: partial and failed are reported plainly and the confidence signal never rounds up
+  evidence_class: '[unit-property]'
+  authority_refs:
+  - R-doc07-PME-14
+  criticality: P1
+  blocking: true
+  golden_path: false
+  dependency_class: null
+  verification_ladder:
+  - tier: lint
+  - tier: unit
+  behavior:
+    given: Workroom envelopes across the full status enum {done, partial, failed, needs_clarification, needs_review}.
+    when: The report and its confidence signal are rendered for each.
+    then:
+    - partial renders as needs-attention and failed renders as plainly failed with its reason
+    - The confidence signal is never more favourable than the envelope status permits
+    - done is the only status that renders as confident
+    - The failure reason from the envelope is present in the report, not summarised away
+  applicability:
+    fixtures: [fixture-envelope-status-matrix]
+    estates: [small-clean]
+    excluded_estates: []
+    rationale: "Law 2 is a total function over the status enum; property coverage is exhaustive and cheap."
+  primary_oracle:
+    type: invariant
+    artifact: "for every status s: assert confidence_rank(report(s)) <= confidence_rank(s)"
+  thresholds:
+    confidence_rounded_up: 0
+    failure_reasons_dropped: 0
+  fault_model_refs:
+  - F-PARTIAL-REPORTED-AS-DONE
+  - F-FAILURE-REASON-SWALLOWED
+  test_ids:
+  - T-PME-14
+
+# ── WHAT LANDS IN THE WORLD ───────────────────────────────────────────────────
+- criterion_id: AC-PME-15
+  name: The artifact is a proposed staged draft with receipts, and is never pushed
+  evidence_class: '[security-adversarial]'
+  authority_refs:
+  - R-doc07-PME-15
+  criticality: P0
+  blocking: true
+  golden_path: true
+  dependency_class: db:postgres
+  mock_boundary: >-
+    real Postgres and a real GCS bucket (or its versioned local double) for the bundle;
+    the git remote is observed for zero write operations and is never replaced by a
+    permissive stub
+  verification_ladder:
+  - tier: lint
+  - tier: unit
+  - tier: integration
+  - tier: e2e
+  behavior:
+    given: A completed task that produced a multi-file code change.
+    when: The artifact is staged via propose_change.
+    then:
+    - A staged_drafts row exists with status exactly 'proposed'
+    - The row carries a draft_id and the bundle is retrievable from GCS
+    - The draft carries receipts grounding its claims
+    - No push, no branch creation on the remote, and no pull request occurs
+    - The GitHub App token in use carries no contents:write scope
+  applicability:
+    fixtures: [fixture-code-change-task]
+    estates: [small-clean]
+    excluded_estates: []
+    rationale: "This is the doc's irreversible-action boundary and must run against the real substrate."
+  primary_oracle:
+    type: invariant
+    artifact: >-
+      assert staged_drafts.status == 'proposed' and draft_id is not None and
+      git_remote.write_operations == 0 and 'contents:write' not in token_scopes
+  thresholds:
+    pushes: 0
+    pull_requests_opened: 0
+    drafts_at_wrong_status: 0
+  fault_model_refs:
+  - F-PUSH-ON-ACCEPT
+  - F-DRAFT-WRITTEN-AT-NEEDS-REVIEW
+  notes:
+    schema_gap: >-
+      The staged_drafts.status column is plain text with DEFAULT 'proposed' and NO CHECK
+      constraint enumerating proposed|accepted|rejected|applied
+      (migrations/versions/0001_substrate.py:134-144, audit 2026-07-27). CANONICAL §4
+      line 125 documents the enum in a comment only. This criterion therefore asserts the
+      value explicitly rather than relying on the database to reject a wrong one, and a
+      CHECK constraint is recommended as a follow-up so the enum is enforced where it is
+      declared.
+  test_ids:
+  - T-PME-15
+
+- criterion_id: AC-PME-16
+  name: Reports use only a channel-report channel, reach owner and named recipients, on four events only
+  evidence_class: '[contract]'
+  authority_refs:
+  - R-doc07-PME-16
+  criticality: P2
+  blocking: true
+  golden_path: false
+  dependency_class: db:postgres
+  mock_boundary: >-
+    real Postgres only; the channel senders are observed for call sites and are never
+    replaced by a stub that would accept an unlisted channel
+  verification_ladder:
+  - tier: lint
+  - tier: unit
+  - tier: integration
+  behavior:
+    given: >-
+      A task reaching each of the four reportable events (completion, question, failure,
+      cost ask) plus several non-reportable intermediate steps, for a tenant whose
+      channel-report lists a known channel set.
+    when: Reporting runs.
+    then:
+    - Every report is delivered on a channel present in that meeting's channel-report
+    - No report is delivered on a channel absent from channel-report
+    - Each report reaches the task owner and every recipient the room explicitly named
+    - Reports are emitted on exactly the four reportable events and on no intermediate step
+  applicability:
+    fixtures: [fixture-report-event-matrix]
+    estates: [small-clean, multi-tenant]
+    excluded_estates: []
+    rationale: "Channel sets are per-tenant; multi-tenant proves a channel never leaks across tenants."
+  primary_oracle:
+    type: contract_check
+    artifact: >-
+      assert set(channels_used) <= set(channel_report_for_meeting) and
+      report_events == {completion, question, failure, cost_ask}
+  thresholds:
+    reports_on_unlisted_channel: 0
+    reports_on_intermediate_steps: 0
+    named_recipients_missed: 0
+  fault_model_refs:
+  - F-REPORT-ON-UNLISTED-CHANNEL
+  - F-PER-STEP-CHATTER
+  notes:
+    p6_deferred: >-
+      P6 (Slack via channel-report) was DEFERRED by founder call because Doc 08 draft cards
+      are BUILT (libs/contracts/src/contracts/channel.py:163 class DraftCard;
+      libs/contracts/src/contracts/registry.py:72 DRAFT_CARD; and
+      services/transport/src/transport/chat.py:339 format_draft_card). Draft cards are
+      therefore Doc 07's report surface in V1, and this criterion is NOT blocked on an
+      out-of-meeting channel. If P6 later lands, slack_dm_available joins the channel set
+      this criterion reads and no assertion here changes.
+  test_ids:
+  - T-PME-16

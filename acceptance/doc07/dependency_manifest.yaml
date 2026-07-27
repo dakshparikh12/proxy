@@ -1,0 +1,127 @@
+# dependency_manifest.yaml — Doc 07 (Post-Meeting Execution)
+# Emitted per GENERATOR.md §8.4.3. One entry per real external dependency the spec requires.
+# Bidirectionally consistent with criteria/criteria.yaml: every class here is carried by the
+# criteria listed, and every non-null dependency_class in the criteria appears here.
+# Generated 2026-07-27.
+doc: doc07
+
+dependencies:
+  - dependency_class: db:postgres
+    kind: local
+    seam: libs/db
+    real_object: >-
+      libs/ops/claim.py (atomic claim), libs/ops/reconcile.py (reconcile sweep),
+      libs/db/repos/* (row access). Doc 07 adds post_meeting_tasks; the run itself stays
+      the operation_runs row created by services/harness/dispatch.py.
+    mock_boundary: >-
+      real Postgres only; no in-memory substitute for the integration tier. Where a
+      criterion observes the sandbox provider or a git remote for zero calls, that
+      observer MUST NOT be a permissive stub — a stub that silently allows the call
+      would invert the criterion it is meant to prove.
+    cassette_glob: null
+    criteria:
+      - AC-PME-02
+      - AC-PME-03
+      - AC-PME-04
+      - AC-PME-05
+      - AC-PME-07
+      - AC-PME-08
+      - AC-PME-09
+      - AC-PME-10
+      - AC-PME-11
+      - AC-PME-12
+      - AC-PME-15
+      - AC-PME-16
+    golden_path_criteria:
+      - AC-PME-02
+      - AC-PME-07
+      - AC-PME-10
+      - AC-PME-15
+
+  - dependency_class: vendor:anthropic
+    kind: vendor
+    seam: libs/http call_external
+    real_object: >-
+      The structured triage/plan call on the claude-sonnet-4-6 seat named in
+      libs/llm/src/llm/routing.py:17-19. NOTE: the structured-output entrypoint this
+      requires does not yet exist on libs/llm (see blocked_dependencies below).
+    mock_boundary: >-
+      may mock the Anthropic HTTP response body via a vcrpy cassette at the
+      call_external/transport layer; MUST NOT replace the call_external seam, the request
+      construction, or the client object with Mock() — the real structured request must be
+      built and driven through the real seam at least once.
+    cassette_glob: tests/cassettes/doc07_triage_*.yaml
+    criteria:
+      - AC-PME-01
+      - AC-PME-06
+    golden_path_criteria: []
+
+# Criteria that rest on nothing outside the process (dependency_class: null) and so appear
+# in no entry above: AC-PME-13, AC-PME-14. Both are pure envelope->report mappings.
+
+golden_path:
+  rationale: >-
+    Four criteria, one per irreversible or trust-defining promise Doc 07 makes. These are
+    the ones a founder would point at to say "this is the product working safely".
+  criteria:
+    - criterion_id: AC-PME-02
+      promise: "Post-meeting execution can never damage the meeting record or the close."
+    - criterion_id: AC-PME-07
+      promise: "Nothing runs before a named human approves — Law 3 applied to the run."
+    - criterion_id: AC-PME-10
+      promise: "One operation_runs row is the whole truth of a run, and it survives a crash."
+    - criterion_id: AC-PME-15
+      promise: "What lands in the world is a proposed draft behind a human click, never a push."
+
+# ── Dependencies the 2026-07-27 audit found ABSENT ────────────────────────────
+# These are NOT verification dependencies of a working system; they are build blockers
+# recorded here so the manifest is honest about what cannot yet be exercised at all.
+blocked_dependencies:
+  - dependency: clarify_items table
+    status: ABSENT
+    owner: "Doc 06 §4 — co-owned with Doc 07; Doc 06 is SPEC'D, NOT BUILT"
+    evidence: "grep -rn 'clarify_items' migrations/ libs/ services/ -> 0 hits"
+    blocks: [AC-PME-03, AC-PME-04]
+    note: >-
+      Contradiction C-C is unresolved: Doc 06 §3.6 says clarify_items is "written here,
+      completed by Doc 07"; Doc 07 §3.3 has Doc 07 creating rows. Both cannot be the full
+      picture, and the table has no builder while Doc 06 is unbuilt.
+
+  - dependency: meeting_runtime worker runnable with no media session
+    status: ABSENT
+    owner: services/harness
+    evidence: >-
+      services/harness/src/harness/meeting_runtime.py:54 — MeetingRuntime is media-coupled
+      by construction (carrier, HearingStage, Scribe consumer, consent_gate, STT refresh
+      loop). No no-media entrypoint; no worker main() in services/harness/src/harness.
+    blocks: [AC-PME-09, AC-PME-10]
+    note: >-
+      Doc 07 §3.5 requires this worker and simultaneously asserts "No new deployable".
+      Either MeetingRuntime gains a no-media mode or §3.5 is amended.
+
+  - dependency: libs/llm structured-output entrypoint on the sonnet seat
+    status: ABSENT
+    owner: libs/llm
+    evidence: >-
+      libs/llm/src/llm/routing.py:17-19 names the claude-sonnet-4-6 seats; libs/llm exposes
+      only call_model() (client.py:114). grep for
+      output_schema|structured_output|json_schema across libs/llm -> 0 hits. The repo's only
+      structured-output path is the Agent SDK provider seam at services/scribe/close.py:38.
+    blocks: [AC-PME-01, AC-PME-06]
+    note: >-
+      Doc 07 §3.1 requires "one structured call on the sonnet seat" for tiering, and Law 4
+      forbids substituting a rule table, so this cannot be worked around in code.
+
+# ── Outstanding generation obligation (declared, not silent) ──────────────────
+generation_gaps:
+  - gap: "GENERATOR.md §8.4.1 paired negative criteria not emitted"
+    detail: >-
+      14 of 16 criteria carry a non-null dependency_class and therefore each require a
+      paired AC-PME-NN-NEG criterion terminating in the `negative` tier. None were emitted:
+      the instruction for this bundle was one criterion per seed, merge none, invent none.
+    consequence: >-
+      orchestrator/ladder_schema_gate.py will fail this bundle at seal time until the 14
+      NEG pairs are generated. This bundle is therefore CANDIDATE, not SEALED.
+    affected: >-
+      AC-PME-01..12, AC-PME-15, AC-PME-16 (all except AC-PME-13 and AC-PME-14, whose
+      dependency_class is null)
