@@ -101,3 +101,40 @@ outbound_sends_per_second = 4
 bot_usd_per_hr = 0.50    # Recall bot. range: 0.40..0.60
 stt_usd_per_hr = 0.15    # AssemblyAI via Recall BYOK passthrough. range: 0.10..0.20
 tts_usd_per_hr = 0.15    # Cartesia Sonic 3, within the $0.10-0.20 band. range: 0.10..0.20
+
+[post_meeting]
+# Doc 07 (Post-Meeting Execution) §3.5 limits + §3.1 tier availability + §3.4 expiry.
+# Every value here is a LIMIT or a SWITCH — none of them is a situation→action mapping.
+# Tiering itself is model judgment (Law 4), and there is deliberately no config key that
+# maps item text to a tier.
+#
+# Max post-meeting tasks running concurrently for one tenant (§3.5). Post-meeting work is
+# background: it competes with live meetings for the same sandbox and model budget, so
+# this sits below the per-meeting Workroom semaphore rather than at it. Reaching the cap
+# makes further dispatch WAIT, never drop (AC-PME-11). unit: tasks. range: 1..10.
+max_concurrent_tasks = 3
+# Max tasks one meeting may spawn (§3.5). A bound on blast radius from a single long
+# meeting with a large action-item list; items beyond it stay as ticket rows and are not
+# dispatched. unit: tasks. range: 1..25.
+max_tasks_per_meeting = 10
+# Per-task spend ceiling checked BEFORE the sandbox spins (§3.5) — the same pre-dispatch
+# estimate gate Doc 04 already applies to live asks. Exceeding it asks the owner rather
+# than spending (AC-PME-12). Set below the ~$0.95-1.15 all-in cost of a meeting-hour, so
+# one unattended task can never cost more than the meeting that produced it.
+# unit: USD/task. range: 0.25..5.00.
+task_cost_ceiling = 1.00
+# How long an unanswered plan waits before the task closes quietly (§3.4). Sized for the
+# real approval path: a plan sent at the end of a meeting should survive a night and a
+# normal working day so an owner who was travelling still gets to answer. Proxy does not
+# nag and never proceeds by default — on expiry the task just closes (AC-PME-08).
+# unit: hours. range: 4..168.
+plan_expiry = 48
+# Whether the ticket+plan+draft tier is available at all (§3.1). Shipping TRUE: unlike
+# Doc 06's voice_enabled_classes (which ships empty because a spoken interruption reaches
+# the room with no human in between), nothing here can surprise anyone — no sandbox
+# starts and no draft is written until a named human approves the plan (§3.4, D07.2), and
+# the artifact is a staged draft behind a second human click (§3.7). The approval gate,
+# not this switch, is the safety control. Flip to false if triage precision disappoints
+# in practice: it is the one lever that stops drafting without touching any code path.
+# unit: boolean. range: true|false.
+draft_tier_enabled = true
