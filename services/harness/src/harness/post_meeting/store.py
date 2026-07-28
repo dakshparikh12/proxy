@@ -149,6 +149,18 @@ class PostMeetingTaskStore:
             )
             return dict(row) if row is not None else None
 
+    async def task_id_for_draft(self, draft_id: Any) -> Optional[Any]:
+        """The post-meeting task that staged ``draft_id``, or ``None`` (SEAM 3).
+
+        ``None`` is an ordinary answer, not an error: the live in-meeting path stages
+        drafts too, and those have no ``post_meeting_tasks`` row.
+        """
+        async with self._db.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT task_id FROM post_meeting_tasks WHERE draft_id = $1", draft_id
+            )
+            return row["task_id"] if row is not None else None
+
     async def count_running_for_tenant(self, tenant_id: Any) -> int:
         """Backs ``max_concurrent_tasks`` (Doc 07 §3.5 / AC-PME-11).
 

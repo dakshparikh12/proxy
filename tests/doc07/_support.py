@@ -102,6 +102,12 @@ class FakeTaskStore:
         row = self.rows.get(task_id)
         return dict(row) if row else None
 
+    async def task_id_for_draft(self, draft_id: Any) -> Optional[Any]:
+        for tid, r in self.rows.items():
+            if r["draft_id"] == draft_id:
+                return tid
+        return None
+
     async def count_running_for_tenant(self, tenant_id: Any) -> int:
         return sum(
             1

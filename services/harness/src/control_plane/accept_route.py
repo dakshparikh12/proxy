@@ -99,6 +99,7 @@ def handle_accept(
     draft_id: str,
     idempotency_key: str,
     audit_sink: Callable[[Any], None] | None = None,
+    post_meeting_outcome: Callable[..., None] | None = None,
 ) -> AcceptResponse:
     """Authorize + apply a draft accept on DURABLE storage (idempotent, audited).
 
@@ -172,6 +173,13 @@ def handle_accept(
             f"user={getattr(request, 'user', None)} "
             f"kind={applied.kind} accept_id={accept_id}"
         )
+
+    # (7) SEAM 3 (Doc 07 §3.9): close the post-meeting task this draft came from.
+    #     AFTER the draft is applied and the audit line is written, so a fault in Doc 07's
+    #     bookkeeping can never turn a landed human accept into an error response.
+    _post_meeting_outcome(
+        post_meeting_outcome, "accept", draft_id, getattr(request, "user", None)
+    )
     return response
 
 
@@ -183,6 +191,7 @@ def handle_reject(
     draft_id: str,
     idempotency_key: str,
     audit_sink: Callable[[Any], None] | None = None,
+    post_meeting_outcome: Callable[..., None] | None = None,
 ) -> AcceptResponse:
     """Authorize + decline a draft on DURABLE storage (idempotent, audited).
 
@@ -255,7 +264,34 @@ def handle_reject(
             f"user={getattr(request, 'user', None)} "
             f"kind={declined.kind} reject_id={reject_id}"
         )
+
+    # (7) SEAM 3 (Doc 07 §3.9): the task reaches CHANGES_REQUESTED, not DISCARDED —
+    #     a reviewer asking for another pass is not the task being abandoned.
+    _post_meeting_outcome(
+        post_meeting_outcome, "reject", draft_id, getattr(request, "user", None)
+    )
     return response
+
+
+def _post_meeting_outcome(
+    sink: Any, action: str, draft_id: str, who: Any
+) -> None:
+    """Hand the draft decision to Doc 07's task record. Never raises, never blocks.
+
+    ``sink`` is optional — a deployment without post-meeting execution wired passes
+    ``None`` and this is a no-op, so the accept route behaves exactly as it did before
+    Doc 07 existed. The sink itself is total (``harness.post_meeting.outcome``); this
+    wrapper is the route's own guard so that stays true no matter what is injected.
+    """
+    if sink is None:
+        return
+    try:
+        sink(action=action, draft_id=draft_id, who=who)
+    except BaseException:  # noqa: BLE001 - the human's decision has already landed
+        _AUDIT_LOG.exception(
+            "post-meeting %s write-back failed for draft %s; the draft action stands",
+            action, draft_id,
+        )
 
 
 # ── The authenticated control_plane route mount ──────────────────────────────
