@@ -169,6 +169,15 @@ def create_app() -> FastAPI:
     # nothing, never pushes). A separate protected() instance per route keeps each
     # route's dependant tree independently stamped for the enumeration test.
     install_reject_route(app, dependencies=[protected(_resolve_session_from_request)])
+    # Doc 07 §3.4 PLAN approval (SEAM 2) — POST /m/{id}/tasks/{id}/approve, behind the
+    # SAME auth wall. Distinct from draft acceptance above: plan approval is the gate that
+    # lets work START, draft acceptance is the click that lands the artifact. It lives here
+    # for the same reason the accept route does — it must work long after the meeting
+    # harness is gone. Dispatch is left unwired: it returns 202 dispatch_blocked naming
+    # Doc 04 §112's missing tool wrapper (docs/gaps/DOC04-WORKROOM-DISPATCH-UNWIRED.md).
+    from .plan_approval_route import install_approve_route
+
+    install_approve_route(app, dependencies=[protected(_resolve_session_from_request)])
     # The WS upgrade gateway (§4.3/§12.9): /ws authenticates at the connection UPGRADE —
     # an unauthenticated upgrade is rejected (401) BEFORE the 101, never per-message.
     install_gateway_route(app)
