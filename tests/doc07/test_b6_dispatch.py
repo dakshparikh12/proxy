@@ -37,19 +37,38 @@ def fake_assemble(**kw):
     return FakeBundle(**kw)
 
 
+class FakeHandle:
+    """Shaped like ``harness.dispatch.WorkroomHandle``: task_id, run_id, bundle.
+
+    ``run_id`` is the ``operation_runs.id`` the claim returned — a DIFFERENT uuid from
+    ``task_id``. Keeping them distinct here is what makes the FK semantics testable: a
+    double that returned the task id would let the wrong-column bug pass.
+    """
+
+    def __init__(self, task_id, run_id, bundle):
+        self.task_id = task_id
+        self.run_id = run_id
+        self.bundle = bundle
+
+
 class RecordingWorkroom:
     """Counts dispatches. The ONLY execution path B6 may reach."""
 
-    def __init__(self, envelope=None, error=None):
+    def __init__(self, error=None, run_id=None, returns=None):
         self.calls: list[object] = []
-        self._envelope = envelope or {"status": "done"}
         self._error = error
+        #: the operation_runs.id this fake claim "persists"
+        self.run_id = run_id or uuid.uuid4()
+        #: override the return value entirely (e.g. a DispatchDecision with no run_id)
+        self._returns = returns
 
     async def __call__(self, bundle):
         self.calls.append(bundle)
         if self._error:
             raise self._error
-        return self._envelope
+        if self._returns is not None:
+            return self._returns
+        return FakeHandle(task_id=bundle.task_id, run_id=self.run_id, bundle=bundle)
 
 
 async def _approved(store, owner="Sam"):
@@ -146,12 +165,53 @@ async def test_ac_pme_10_task_record_carries_no_run_state_columns():
     assert "operation_ref" in row, "the run is referenced, not duplicated"
 
 
-async def test_ac_pme_10_operation_ref_points_at_one_run():
+async def test_ac_pme_10_operation_ref_is_the_run_id_not_the_task_id():
+    """``operation_ref`` is a uuid FK to ``operation_runs(id)`` (migration 0009).
+
+    It must be the run row's id, which the Workroom claim returns as
+    ``WorkroomHandle.run_id`` — NOT the task id. They are different uuids, and writing
+    the task id here is an FK violation the real database rejects. The earlier version of
+    this test asserted the task id and so encoded the bug.
+    """
     store, wr = FakeTaskStore(), RecordingWorkroom()
     tid = await _approved(store)
     out = await _dispatch(store, wr, task_id=tid)
-    assert out.operation_ref == tid
-    assert store.rows[tid]["operation_ref"] == tid
+
+    assert out.operation_ref == wr.run_id
+    assert store.rows[tid]["operation_ref"] == wr.run_id
+    assert out.operation_ref != tid, "operation_ref must not be the task id"
+
+
+@pytest.mark.negative
+async def test_ac_pme_10_neg_a_workroom_return_without_a_run_id_is_an_error():
+    """No run_id means no operation_runs row was claimed — there is nothing to point at."""
+    store = FakeTaskStore()
+    wr = RecordingWorkroom(returns={"status": "ask_approval"})  # a DispatchDecision-ish
+    tid = await _approved(store)
+    out = await _dispatch(store, wr, task_id=tid)
+
+    assert out.decision is DispatchDecision.ERROR
+    assert out.operation_ref is None
+    assert "no run_id" in out.detail
+    assert store.rows[tid]["operation_ref"] is None
+
+
+@pytest.mark.negative
+async def test_ac_pme_10_neg_a_failed_pointer_write_is_a_real_failure():
+    """Previously swallowed. A run that nothing points at is unreportable and unreconcilable."""
+    store, wr = FakeTaskStore(), RecordingWorkroom()
+    tid = await _approved(store)
+
+    async def boom(_task_id, _ref):
+        raise ConnectionResetError("operation_ref write rejected")
+
+    store.set_operation_ref = boom  # type: ignore[method-assign]
+    out = await _dispatch(store, wr, task_id=tid)
+
+    assert out.decision is DispatchDecision.ERROR, "a failed pointer write was swallowed"
+    assert isinstance(out.error, ConnectionResetError)
+    assert out.operation_ref == wr.run_id, "the orphaned run id must be reported"
+    assert str(wr.run_id) in out.detail
 
 
 async def test_ac_pme_10_migration_keys_the_run_by_meeting_and_task():

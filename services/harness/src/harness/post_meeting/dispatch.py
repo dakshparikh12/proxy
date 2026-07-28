@@ -189,20 +189,48 @@ async def run_dispatch(
             task_id=task_id,
         )
         await store.set_state(task_id, TaskState.RUNNING)
-        envelope = await workroom_dispatch(bundle)
+        handle = await workroom_dispatch(bundle)
     except Exception as exc:  # noqa: BLE001 - report plainly; NEVER fall back to another path
         log.exception("dispatch: workroom dispatch failed for %s", task_id)
         return DispatchOutcome(task_id, DispatchDecision.ERROR, error=exc,
                                estimated_cost_usd=estimate,
                                detail="workroom dispatch failed; no fallback path exists")
 
-    operation_ref = getattr(bundle, "task_id", None)
+    # ``post_meeting_tasks.operation_ref`` is ``uuid REFERENCES operation_runs(id)``
+    # (migration 0009), so the pointer is the run row's id — the ``run_id`` the Workroom
+    # claim returned on its :class:`WorkroomHandle`. It is NOT the task id: those are two
+    # different uuids, and writing the task id here is an FK violation that the real
+    # database rejects. Under P10 the run is keyed (scope_id=meeting_id,
+    # operation_type='workroom:{task_id}'); its primary key is what we store.
+    operation_ref = getattr(handle, "run_id", None)
+    if operation_ref is None:
+        # dispatch_workroom returns a DispatchDecision instead of a handle when its own
+        # cost gate ran. B6 gates cost itself and calls it ungated, so no run_id here means
+        # the Workroom did not claim a row — there is no run to point at.
+        log.error("dispatch: workroom returned no run_id for %s", task_id)
+        return DispatchOutcome(
+            task_id, DispatchDecision.ERROR, envelope=handle, estimated_cost_usd=estimate,
+            detail="workroom returned no run_id; no operation_runs row was claimed",
+        )
+
     try:
         await store.set_operation_ref(task_id, operation_ref)
-    except Exception:  # noqa: BLE001 - the run is real even if the pointer write failed
+    except Exception as exc:  # noqa: BLE001 - a failed pointer write IS a failure
+        # Previously swallowed. It cannot be: the run is claimed and executing, but the
+        # task record does not point at it, so nothing can find the run to report on or
+        # reconcile it against. Reported as ERROR with the run id in the detail so the
+        # orphan is recoverable by hand.
         log.exception("dispatch: could not record operation_ref for %s", task_id)
+        return DispatchOutcome(
+            task_id, DispatchDecision.ERROR, error=exc, operation_ref=operation_ref,
+            envelope=handle, estimated_cost_usd=estimate,
+            detail=(
+                f"workroom run {operation_ref} was claimed but operation_ref could not be "
+                "recorded; the task record does not point at its run"
+            ),
+        )
 
     return DispatchOutcome(
         task_id, DispatchDecision.DISPATCHED, operation_ref=operation_ref,
-        envelope=envelope, estimated_cost_usd=estimate,
+        envelope=handle, estimated_cost_usd=estimate,
     )
