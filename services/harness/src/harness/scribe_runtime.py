@@ -26,9 +26,12 @@ the production wiring in :func:`start_meeting_scribe`.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 from scribe.call import scribe_call as _real_scribe_call
 from scribe.coalescer import Coalescer, TranscriptSegment, Window
@@ -570,6 +573,13 @@ class CloseConfig:
     post_chat_link: Any
     close_caller: Any | None = None
     call_external: Any | None = None
+    #: SEAM 1 (Doc 07 §2) — invoked with the finalized ``FinalNotes`` AFTER the ordered
+    #: close has completed. Optional: ``None`` means post-meeting execution is not wired,
+    #: and the close behaves exactly as it did before Doc 07 existed. Whatever this is, it
+    #: is called through :func:`_run_post_meeting_intake`, which cannot let it raise into
+    #: the close — Doc 07 §2 requires that if the component fails entirely the close
+    #: sequence and the meeting record are unaffected.
+    post_meeting_intake: Any | None = None
 
 
 class _MeetingCloseOpSink:
@@ -717,7 +727,7 @@ async def run_meeting_close(
     # 4) The ordered close (render -> GCS -> chat link -> teardown) on ONE op row.
     _ = OPERATION_TYPE  # documents the operation_runs.operation_type this sink writes
     sink = _MeetingCloseOpSink(db)
-    return await run_close_pass(
+    close_result = await run_close_pass(
         meeting_id,
         reduced.final_notes,
         reduced.total_cost_usd,
@@ -727,6 +737,37 @@ async def run_meeting_close(
         teardown=teardown,
         op_sink=sink,
     )
+
+    # 5) SEAM 1 (Doc 07 §2) — the record is written; post-meeting execution may now read
+    #    it. Strictly AFTER run_close_pass returns, so nothing here can hold the bot,
+    #    insert a step into the ordered close, or touch the notes object. The close's
+    #    return value is computed above and is returned unchanged below whatever happens.
+    await _run_post_meeting_intake(close_config, meeting_id, reduced.final_notes)
+    return close_result
+
+
+async def _run_post_meeting_intake(
+    close_config: CloseConfig, meeting_id: Any, final_notes: Any
+) -> None:
+    """Call Doc 07's intake, and NEVER let it affect the close (Doc 07 §2).
+
+    The hook is optional and the call is total: a missing hook, a hook that raises, a hook
+    that hangs on a bad import — none of it changes the close's outcome or its return
+    value. The failure is logged and dropped here rather than propagating, because the
+    close pass has already written the permanent record by this point and there is nothing
+    left for the caller to do differently.
+    """
+    hook = getattr(close_config, "post_meeting_intake", None)
+    if hook is None:
+        return
+    try:
+        await hook(final_notes, meeting_id=meeting_id)
+    except BaseException:  # noqa: BLE001 - Doc 07 §2: the close is unaffected, whatever
+        # class of failure post-meeting execution produces.
+        log.exception(
+            "post-meeting intake failed for meeting %s; close and record unaffected",
+            meeting_id,
+        )
 
 
 def start_meeting_scribe(
