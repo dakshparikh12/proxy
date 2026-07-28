@@ -13,6 +13,7 @@ from harness.post_meeting.intake import run_intake, run_intake_guarded
 from harness.post_meeting.models import TaskState, Tier
 from harness.post_meeting.triage import TRIAGE_SCHEMA
 from harness.scribe_runtime import CloseConfig, _run_post_meeting_intake
+
 from libs.llm.src.llm.structured import StructuredOutputError, StructuredResult
 
 from ._support import FakeActionItem, FakeClarifyStore, FakeFinalNotes, FakeTaskStore

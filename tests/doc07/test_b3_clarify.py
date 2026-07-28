@@ -253,3 +253,44 @@ async def test_ac_pme_04_neg_pending_item_never_advances_toward_approved():
     assert ts.rows[tid]["approved_at"] is None
     with pytest.raises(ValueError, match="RUNNING may only be entered from APPROVED"):
         await ts.set_state(tid, TaskState.RUNNING)
+
+
+# ── routed_to: resolved, recorded, delivery deferred ──────────────────────
+async def test_routed_to_is_recorded_and_delivery_is_explicitly_deferred():
+    """routed_to says WHO the question is for; it is not a delivery receipt.
+
+    Doc 07 §3.6: this doc "defines no channel of its own". The question reaches its human
+    via the draft card, which renders from the pending clarify_items rows — so nothing is
+    lost by not sending, and sending would be the new messaging path §3.8 forbids.
+    """
+    ts, cs = FakeTaskStore(), FakeClarifyStore()
+    tid = await _seed(ts, owner="Sam")
+    res = await run_clarify(
+        [_item(tid, owner="Sam", attributed_person="Sam", has_scope=True)],
+        tenant_id=TENANT, meeting_id=MEETING,
+        clarify_store=cs, task_store=ts, channels=CHANNELS,
+    )
+    o = res.outcomes[0]
+    assert o.routed_to == "Sam"
+    assert o.delivery_deferred is True, "delivery must be explicitly deferred, not silent"
+    assert o.written is True
+
+    # The question is still reachable: it is a pending clarify row, which is what the
+    # draft card renders from.
+    pending = await cs.pending_for_meeting(MEETING)
+    assert [p["question"] for p in pending] == [o.question]
+
+
+async def test_an_unroutable_question_is_pending_not_deferred():
+    """The two states are distinct: nobody to ask vs. resolved-but-not-sent."""
+    ts, cs = FakeTaskStore(), FakeClarifyStore()
+    tid = await _seed(ts)
+    res = await run_clarify(
+        [_item(tid, owner=UNRESOLVED, attributed_person=None)],
+        tenant_id=TENANT, meeting_id=MEETING,
+        clarify_store=cs, task_store=ts, channels=CHANNELS,
+    )
+    o = res.outcomes[0]
+    assert o.routed_to is None
+    assert o.pending is True
+    assert o.delivery_deferred is False

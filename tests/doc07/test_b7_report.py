@@ -4,13 +4,16 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from contracts.channels import ChannelReport
 from harness.post_meeting.report import (
     CONFIDENCE_BY_STATUS,
+    DRAFT_CARD,
     KIND_BY_STATUS,
     REPORTABLE_EVENTS,
     Confidence,
     ReportKind,
     build_report,
+    channels_in,
     confidence_rank,
     deliver,
     select_channel,
@@ -20,7 +23,9 @@ from harness.post_meeting.report import (
 pytestmark = pytest.mark.asyncio
 
 TASK = uuid.uuid4()
-CARD = ("draft_card",)
+REPORT_NO_DM = ChannelReport(dm_available=False)
+REPORT_WITH_DM = ChannelReport(dm_available=True)
+CARD = REPORT_NO_DM  # post-close, the card is the surviving surface either way
 ALL_STATUSES = ("done", "partial", "failed", "needs_clarification", "needs_review")
 
 
@@ -139,7 +144,7 @@ async def test_ac_pme_16_delivery_uses_only_a_channel_report_channel():
     r = build_report(env("done"), task_id=TASK, owner="Sam")
     res = await deliver([r], channel_report=CARD, send=send)
     assert [c for c, _ in send.sent] == ["draft_card"]
-    assert set(res.attempted_channels) <= set(CARD)
+    assert set(res.attempted_channels) <= channels_in(CARD)
 
 
 async def test_ac_pme_16_only_the_four_events_are_reportable():
@@ -158,9 +163,16 @@ async def test_ac_pme_16_intermediate_steps_produce_no_report():
 
 
 async def test_ac_pme_16_select_channel_returns_only_listed_channels():
-    assert select_channel(("draft_card",)) == "draft_card"
-    assert select_channel(()) is None
-    assert select_channel(("", "   ")) is None
+    """Takes Doc 02's real ChannelReport, not a parallel list-of-strings shape."""
+    assert select_channel(REPORT_NO_DM) == DRAFT_CARD
+    assert select_channel(REPORT_WITH_DM) == DRAFT_CARD, (
+        "a meeting DM is not reachable after the bot has left (§3.6)"
+    )
+    assert select_channel(REPORT_NO_DM, card_available=False) is None
+    # channels_in reports what a card-bearing meeting makes available.
+    assert DRAFT_CARD in channels_in(REPORT_NO_DM)
+    assert "platform_dm" in channels_in(REPORT_WITH_DM)
+    assert "platform_dm" not in channels_in(REPORT_NO_DM)
 
 
 # ── AC-PME-16-NEG · retries stay listed; nothing duplicates or vanishes ───
@@ -169,7 +181,7 @@ async def test_ac_pme_16_neg_no_unlisted_channel_is_attempted_on_failure():
     send = Recorder(error=ConnectionResetError("send failed"))
     r = build_report(env("done"), task_id=TASK, owner="Sam")
     res = await deliver([r], channel_report=CARD, send=send)
-    assert set(res.attempted_channels) <= set(CARD), "reached for an unlisted channel"
+    assert set(res.attempted_channels) <= channels_in(CARD), "reached for an unlisted channel"
     assert len(res.errors) == 1
 
 
@@ -186,7 +198,7 @@ async def test_ac_pme_16_neg_undeliverable_report_surfaces_on_the_card():
 async def test_ac_pme_16_neg_no_channel_at_all_surfaces_on_the_card():
     send = Recorder()
     r = build_report(env("done"), task_id=TASK, owner="Sam")
-    res = await deliver([r], channel_report=(), send=send)
+    res = await deliver([r], channel_report=CARD, send=send, card_available=False)
     assert send.sent == [], "a message was sent with no channel available"
     assert res.surfaced_on_card == [r]
     assert res.attempted_channels == []
@@ -223,3 +235,35 @@ async def test_ac_pme_16_neg_slack_is_not_special_cased_anywhere():
     ).read_text(encoding="utf-8").lower()
     assert "slack_dm" not in src
     assert 'channel == "slack"' not in src
+
+
+# ── the card is Doc 08's, not a parallel shape ────────────────────────────
+async def test_ac_pme_16_the_draft_card_is_built_by_doc08s_formatter():
+    """Doc 07 defines no card shape. build_draft_card hands off to transport.chat.
+
+    The card render and the /m/ accept route must keep reading the SAME typed draft_id
+    (CANONICAL §11.5), which only holds if there is one formatter.
+    """
+    from contracts import DraftCard
+    from harness.post_meeting.report import build_draft_card
+
+    meeting = uuid.uuid4()
+    draft = uuid.uuid4()
+    r = build_report(
+        env("needs_review", draft_id=draft), task_id=TASK, owner="Sam"
+    )
+    card = build_draft_card(r, meeting_id=meeting)
+
+    assert isinstance(card, DraftCard), "a parallel card shape was invented"
+    assert card.draft_id == draft
+    assert f"/m/{meeting}" in card.summary, "the card must link the authenticated home"
+    assert "gs://" not in card.summary, "never a raw GCS URI (§2.8)"
+
+
+async def test_ac_pme_16_a_card_without_a_draft_id_is_a_wiring_error():
+    """format_draft_card raises rather than render a click that points at nothing."""
+    from harness.post_meeting.report import build_draft_card
+
+    r = build_report(env("done"), task_id=TASK, owner="Sam")  # no draft_id
+    with pytest.raises(ValueError, match="draft_id"):
+        build_draft_card(r, meeting_id=uuid.uuid4())

@@ -187,33 +187,88 @@ def build_report(
     )
 
 
-def select_channel(channel_report: Sequence[str]) -> Optional[str]:
-    """Pick a delivery channel from Doc 02's ``channel-report``, or ``None``.
+#: The one channel that outlives the bot today: Doc 08's draft card. Named here because
+#: it is not in ``ChannelReport`` — that contract reports the MEETING's channels, and by
+#: the time post-meeting execution runs the bot has left and platform chat is gone
+#: (Doc 07 §3.6). Slack would join this set via P6, which stayed deferred because the card
+#: exists; nothing here special-cases either one.
+DRAFT_CARD = "draft_card"
 
-    ``None`` means the report has nowhere to go and surfaces on the draft card. No channel
-    outside ``channel_report`` is ever returned, and none is invented (AC-PME-16-NEG).
+
+def select_channel(
+    channel_report: Any, *, card_available: bool = True
+) -> Optional[str]:
+    """Pick a delivery channel, or ``None``.
+
+    Takes Doc 02's real ``contracts.channels.ChannelReport`` — the same typed contract
+    ``transport/chat.py`` gates DM delivery on — rather than a parallel list-of-strings
+    shape. ``dm_available`` is its only field; a ``ChannelReport`` with
+    ``dm_available=False`` means the platform offers no private route.
+
+    Post-meeting, ``dm_available`` alone is not enough: the bot has left, so a platform DM
+    is not reachable even when the meeting reported one. That is why the draft card is the
+    channel this returns — Doc 07 §3.6's *"what remains is an out-of-meeting channel only
+    if one exists"*. ``None`` means nowhere to send, and the caller surfaces the report on
+    the card record instead of inventing a route (AC-PME-16-NEG).
     """
-    for candidate in channel_report:
-        if isinstance(candidate, str) and candidate.strip():
-            return candidate
+    if card_available:
+        return DRAFT_CARD
     return None
+
+
+def channels_in(channel_report: Any) -> frozenset[str]:
+    """The channel names a report makes available, for the discipline assertions.
+
+    Accepts a real ``ChannelReport`` (or anything exposing ``dm_available``). The draft
+    card is always in the set post-meeting; a platform DM is in it only if the meeting
+    reported one — and even then it is not *reachable* after teardown, which is why
+    :func:`select_channel` does not choose it.
+    """
+    available = {DRAFT_CARD}
+    if bool(getattr(channel_report, "dm_available", False)):
+        available.add("platform_dm")
+    return frozenset(available)
+
+
+def build_draft_card(report: "Report", *, meeting_id: Any) -> Any:
+    """Render the report's draft card through Doc 08's ``format_draft_card``.
+
+    Doc 07 defines no card shape of its own. This builds the ``Envelope`` the transport
+    formatter already consumes and hands it over, so the card render and the ``/m/``
+    accept route keep reading the SAME typed ``draft_id`` field (CANONICAL §11.5) and a
+    change to the card's wording lands in one place.
+    """
+    from contracts import Envelope
+    from transport.chat import format_draft_card
+
+    envelope = Envelope(
+        headline=report.headline,
+        detail=report.detail or report.headline,
+        receipts=list(report.receipts),
+        status="needs_review",
+        task_id=str(report.task_id),
+        draft_id=report.draft_id,
+    )
+    return format_draft_card(envelope, meeting_id=meeting_id)
 
 
 async def deliver(
     reports: Sequence[Report],
     *,
-    channel_report: Sequence[str],
+    channel_report: Any,
     send: Any,
     already_delivered: Optional[set[Any]] = None,
+    card_available: bool = True,
 ) -> DeliveryResult:
     """Deliver reports on a channel-report channel. Idempotent per (task, kind).
 
+    ``channel_report`` is Doc 02's real ``contracts.channels.ChannelReport``.
     ``already_delivered`` carries the ``(task_id, kind)`` pairs a previous pass sent, so a
     retry after a send that actually succeeded does not duplicate (AC-PME-16-NEG).
     """
     result = DeliveryResult()
     seen = already_delivered if already_delivered is not None else set()
-    channel = select_channel(channel_report)
+    channel = select_channel(channel_report, card_available=card_available)
 
     for report in reports:
         if report.kind not in REPORTABLE_EVENTS:

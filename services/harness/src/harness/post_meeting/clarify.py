@@ -77,8 +77,13 @@ class ClarifyOutcome:
     #: True when a clarify_items row was durably written.
     written: bool = False
     clarify_id: Any = None
-    #: Where the question went. None = nowhere; it stays pending on the task record.
+    #: Who the question is FOR. ``None`` = nobody could be resolved, so it stays pending.
+    #: A non-None value is not a delivery receipt — see :attr:`delivery_deferred`.
     routed_to: Optional[str] = None
+    #: True when a recipient was resolved but no message was sent. Doc 07 §3.6: this doc
+    #: "defines no channel of its own"; the question reaches its human via the draft card,
+    #: which renders from the pending ``clarify_items`` rows. See ``run_clarify``.
+    delivery_deferred: bool = False
     #: True when the question could not be delivered and surfaces on the draft card.
     pending: bool = False
     error: Optional[BaseException] = None
@@ -210,5 +215,22 @@ async def run_clarify(
             outcome.pending = True
         else:
             outcome.routed_to = recipient
+            # DELIVERY IS DEFERRED, AND THAT IS DELIBERATE — not a dropped step.
+            #
+            # ``routed_to`` records WHO the question is for. It is not persisted and no
+            # message is sent, because Doc 07 §3.6 is explicit that this doc "defines no
+            # channel of its own": delivery is Doc 04's `send_chat` over a channel present
+            # in Doc 02's `channel-report`. After the close the bot has left, so the only
+            # surviving surface is Doc 08's draft card — and the card renders from the
+            # PENDING clarify_items rows (`ClarifyItemStore.pending_for_meeting`), which
+            # are already written above. So the question does reach a human; it reaches
+            # them by being on the card, not by being addressed.
+            #
+            # Persisting a recipient column would be inventing a routing table this doc
+            # does not own, and sending would be the new messaging path §3.8 forbids.
+            # When P6 lands (Slack in `channel-report`), delivery becomes a `send_chat`
+            # call at the B7 report seam and `routed_to` becomes its addressee — no schema
+            # change here.
+            outcome.delivery_deferred = True
         result.outcomes.append(outcome)
     return result

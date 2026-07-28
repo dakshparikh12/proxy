@@ -5,12 +5,20 @@ path), **AC-PME-10/-NEG** (exactly one ``operation_runs`` row, surviving worker 
 **AC-PME-11/-NEG** (caps make dispatch wait) and **AC-PME-12/-NEG** (a cost estimate over
 the ceiling asks the owner before the sandbox spins).
 
-**There is no execution engine in this module.** It assembles nothing and runs nothing:
-it calls ``harness.dispatch.assemble_bundle`` and ``harness.dispatch.dispatch_workroom``,
-which already exist for the live path. Doc 07 §3.5 is emphatic that everything about how
-the work happens is Doc 05's, and AC-PME-09 asserts statically that no second sandbox
-provider, queue, scheduler or broker appears. The only thing added here is the decision of
-*whether* to dispatch — caps, cost, and the approval gate.
+**There is no execution engine in this module.** It assembles nothing and runs nothing.
+``assemble_bundle`` and ``workroom_dispatch`` are **injected by the caller** — this module
+imports neither, which is what keeps AC-PME-09's static assertion (no second sandbox
+provider, queue, scheduler or broker) true by construction rather than by discipline. The
+only thing added here is the decision of *whether* to dispatch — caps, cost, and the
+approval gate.
+
+The intended injections are ``harness.dispatch.assemble_bundle`` and
+``harness.dispatch.dispatch_workroom``. **Neither is wired in production today**:
+``dispatch_workroom`` has no production caller and Doc 05's ``SessionDriver`` is
+constructed only in tests, so a dispatched task would claim an ``operation_runs`` row
+that nothing executes. SEAM 2 therefore refuses rather than calling into that —
+see ``control_plane.plan_approval_route.WorkroomDispatchUnavailable`` and
+``docs/gaps/DOC04-WORKROOM-DISPATCH-UNWIRED.md``.
 
 **The run row is Doc 04's, not ours.** Per amendment P10 (ruling C-A) the row is keyed
 ``scope_id`` = meeting id and ``operation_type`` = ``workroom:{task_id}``, which is what
