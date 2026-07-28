@@ -18,10 +18,10 @@ provider, queue, scheduler or broker appears. The only thing added here is the d
 and never mirrors its state — no status, no heartbeat, no progress column
 (D07.1 / CANONICAL §12.11's ``workroom_tasks`` prohibition).
 
-**Where it runs:** a ``meeting_runtime`` with ``media_session=False``
-(:func:`post_meeting_worker`). Not a new deployable — a mode on the runtime that already
-exists. This is the resolution of the contradiction the sealed bundle recorded in
-``assurance_limits``.
+**Where it runs.** A dispatched task is ``(db, meeting_id)`` handed to Doc 05's
+``SessionDriver``, which resolves the notes reader, the ``code_intel`` server, the
+``operation_runs`` claim and the warm sandbox itself. No ``MeetingRuntime`` object is
+involved — see amendment P11 and ``docs/gaps/DOC04-WORKROOM-DISPATCH-UNWIRED.md``.
 """
 from __future__ import annotations
 
@@ -70,28 +70,6 @@ class DispatchOutcome:
             DispatchDecision.WAITING_MEETING_CAP,
             DispatchDecision.COST_ASK,
         }
-
-
-def post_meeting_worker(
-    *, header: Any, carrier: Any, db: Any, host_budget: Any, **kwargs: Any
-) -> Any:
-    """Build the ``meeting_runtime`` worker Doc 07 §3.5 specifies — with no media session.
-
-    No transport, no Scribe, no tile, no consent gate and no STT loop are constructed. The
-    runtime refuses :meth:`start` and :meth:`ingest_transcript` in this mode, so it cannot
-    be turned into an observing one. **No new deployable** — this is the existing
-    ``MeetingRuntime`` in its no-media mode.
-    """
-    from ..meeting_runtime import MeetingRuntime
-
-    return MeetingRuntime(
-        header=header,
-        carrier=carrier,
-        db=db,
-        host_budget=host_budget,
-        media_session=False,
-        **kwargs,
-    )
 
 
 async def check_caps(

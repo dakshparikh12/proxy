@@ -110,25 +110,7 @@ class MeetingRuntime:
     # wires it (a bare runtime with no brain still tears down cleanly).
     live_brain: Any = field(default=None, init=False)
 
-    # ── no-media mode (Doc 07 §3.5) ───────────────────────────────────────────
-    # Post-meeting work outlives the meeting, and the meeting harness tears down at close.
-    # Doc 07 §3.5 requires the Workroom package to run "in a ``meeting_runtime`` worker
-    # with no media session — no transport, no Scribe, no tile; just the Workroom and the
-    # notes reader" while simultaneously asserting "No new deployable".
-    #
-    # Those two are only compatible if the EXISTING runtime can run without media, so this
-    # is a MODE on this class rather than a second runtime type. With ``media_session=False``
-    # nothing media-bearing is constructed: no carrier subscription, no HearingStage, no
-    # Scribe consumer, no STT-credential loop, and no ConsentGate — and :meth:`start` and
-    # :meth:`ingest_transcript` REFUSE, so a no-media runtime cannot be turned into an
-    # observing one by a later call. That refusal is what keeps the consent invariant
-    # ("never can_observe=None on the live path") true: there is no live path here.
-    media_session: bool = True
-
     def __post_init__(self) -> None:
-        if not self.media_session:
-            # No media, nothing to consent to, and deliberately no transport import.
-            return
         # Fail-closed by default: a runtime with no explicit consent gate gets a fresh CLOSED
         # one so the live HearingStage drops every record until :meth:`grant_consent` opens it.
         # (Never left None — a None gate would give the live stage can_observe=None = always-allow.)
@@ -144,16 +126,7 @@ class MeetingRuntime:
         notice posted (the bot reaches ``in_call`` only after :meth:`JoinSession.join` posted
         the notice as its first observable action). After this the live ``HearingStage`` stops
         dropping records and observation begins; before it, every record is dropped (Law 3).
-
-        REFUSES on a no-media runtime. There is no gate to open because there is nothing to
-        observe, and the previous behaviour — an ``AttributeError`` on ``None`` — read as a
-        crash rather than a refusal, which is the wrong signal for a Law 3 control.
         """
-        if not self.media_session:
-            raise RuntimeError(
-                "grant_consent() called on a no-media meeting_runtime (Doc 07 §3.5): "
-                "there is no media session to consent to"
-            )
         self.consent_gate.grant()
 
     def start(self) -> ScribeRuntimeHandle:
@@ -175,15 +148,7 @@ class MeetingRuntime:
         second subscription (subscription count stays 1). The Scribe subscribe end is
         registered FIRST (``start_meeting_scribe`` subscribes synchronously), so no early
         transcript is dropped on the floor.
-
-        Refuses on a ``media_session=False`` runtime: there are no media pipes to wire, and
-        wiring them would mean observing audio with no consent gate.
         """
-        if not self.media_session:
-            raise RuntimeError(
-                "start() called on a no-media meeting_runtime (Doc 07 §3.5): this worker "
-                "has no transport, Scribe or consent gate and must not observe a meeting"
-            )
         if self._scribe is None:
             self._scribe = start_meeting_scribe(
                 self.header,
@@ -224,21 +189,12 @@ class MeetingRuntime:
     async def ingest_transcript(self, msg: dict[str, Any]) -> None:
         """Fan ONE real Recall real-time transcript passthrough message onto the carrier.
 
-        Refuses on a ``media_session=False`` runtime — see :attr:`media_session`. A
-        no-media worker that accepted transcript would be observing a meeting without a
-        consent gate, which is the one thing the mode exists to make impossible.
-
         The production emit end of the bridge: the harness webhook drain hands each live
         ``transcript`` passthrough body here; the runtime's ``HearingStage`` parses it
         with the fail-loud confirmed-wire parser and emits the resulting ``Transcript``
         signal onto :attr:`carrier` — the SAME stream the Scribe subscribes to. Ensures
         the stage is bound (a transcript that races the runtime start still finds one).
         """
-        if not self.media_session:
-            raise RuntimeError(
-                "ingest_transcript() called on a no-media meeting_runtime (Doc 07 §3.5): "
-                "this worker has no consent gate and must not observe a meeting"
-            )
         if self._hearing is None:
             self.start()
         await self._hearing.ingest_wire_transcript(msg)
@@ -265,15 +221,7 @@ class MeetingRuntime:
         is the ONE generic judgment entry (the model); ``addressed`` is the
         mechanical front-gate verdict (the name-gate). Both are injectable so the
         spine assembles before the SDK session/name-gate are wired in later steps.
-
-        REFUSES on a no-media runtime: the run loop is the wake-turn spine, and a
-        post-meeting worker has no room to wake into.
         """
-        if not self.media_session:
-            raise RuntimeError(
-                "build_run_loop() called on a no-media meeting_runtime (Doc 07 §3.5): "
-                "this worker has no wake-turn spine; it runs the Workroom, not a meeting"
-            )
         if self._run_loop is None:
             emitter = None
             if self.operation_handle is not None:
@@ -330,14 +278,6 @@ class MeetingRuntime:
             if type(signal).__name__ == "MeetingEnd" and self._meeting_ended is not None:
                 self._meeting_ended.set()
 
-        if not self.media_session:
-            # Guarded here, not only at start(): this is the OTHER path that touches the
-            # carrier. A no-media worker has no transport behind it, so subscribing would
-            # either attach to a dead carrier or, worse, to a live one it must not read.
-            raise RuntimeError(
-                "wire_orchestrator_pipe() called on a no-media meeting_runtime "
-                "(Doc 07 §3.5): this worker has no carrier to subscribe to"
-            )
         # subscribe() registers this consumer's queue synchronously (no await),
         # so the pipe is live before run_orchestrator_loop is even scheduled.
         self._orchestrator_pipe = StandingPipe(
@@ -353,15 +293,7 @@ class MeetingRuntime:
         and drains the subscriber. A silent meeting is just this pipe forwarding
         ambient signals while the loop makes zero wake turns. Reuses the pipe wired at
         join (subscribe-once) rather than opening a second subscription.
-
-        REFUSES on a no-media runtime. ``wire_orchestrator_pipe`` would refuse anyway;
-        guarding here too makes the error name the entry point the caller actually used.
         """
-        if not self.media_session:
-            raise RuntimeError(
-                "run_orchestrator_loop() called on a no-media meeting_runtime "
-                "(Doc 07 §3.5): there is no carrier to forward signals from"
-            )
         pipe = self.wire_orchestrator_pipe()
         await pipe.run()
 
@@ -374,14 +306,7 @@ class MeetingRuntime:
         EXPLICIT (§3.1), never inferred from silence. On return the carrier is closed and
         the pump cancelled so both carrier subscribers (Scribe + orchestrator) drain; the
         caller then runs the ordered close/teardown.
-
-        REFUSES on a no-media runtime: there is no meeting to wait for the end of.
         """
-        if not self.media_session:
-            raise RuntimeError(
-                "run_until_meeting_end() called on a no-media meeting_runtime "
-                "(Doc 07 §3.5): this worker is not attached to a meeting"
-            )
         pipe = self.wire_orchestrator_pipe()
         ended = self._meeting_ended
         pump = asyncio.ensure_future(pipe.run())

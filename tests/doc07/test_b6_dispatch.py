@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import ast
-import inspect
 import pathlib
 import uuid
 from datetime import datetime, timezone
@@ -10,12 +9,7 @@ from datetime import datetime, timezone
 import pytest
 from harness.post_meeting.approval import approve
 from harness.post_meeting.config import PostMeetingConfig
-from harness.post_meeting.dispatch import (
-    DispatchDecision,
-    check_caps,
-    post_meeting_worker,
-    run_dispatch,
-)
+from harness.post_meeting.dispatch import DispatchDecision, check_caps, run_dispatch
 from harness.post_meeting.models import Source, TaskRecord, TaskState, Tier
 
 from ._support import FakeTaskStore, ForbiddenSandbox
@@ -470,65 +464,3 @@ async def test_ac_pme_12_neg_unapproved_task_never_reaches_cost_or_workroom():
     assert out.decision is DispatchDecision.NOT_APPROVED
     assert asked["n"] == 0, "cost was estimated for an unapproved task"
     assert wr.calls == []
-
-
-# ── the no-media worker (Doc 07 §3.5) ─────────────────────────────────────
-async def test_no_media_worker_constructs_nothing_media_bearing():
-    rt = post_meeting_worker(header=object(), carrier=object(), db=object(), host_budget=object())
-    assert rt.media_session is False
-    assert rt.consent_gate is None, "a no-media worker must not build a consent gate"
-    assert rt._scribe is None and rt._hearing is None
-    assert rt.stt_refresh_running is False
-
-
-class TripwireCarrier:
-    """A carrier that fails loudly if a no-media runtime ever touches it."""
-
-    def subscribe(self):
-        raise AssertionError("a no-media runtime subscribed to the carrier")
-
-    def close(self):
-        pass
-
-
-@pytest.mark.parametrize(
-    "call",
-    [
-        pytest.param(lambda rt: rt.start(), id="start"),
-        pytest.param(lambda rt: rt.grant_consent(), id="grant_consent"),
-        pytest.param(lambda rt: rt.wire_orchestrator_pipe(), id="wire_orchestrator_pipe"),
-        pytest.param(lambda rt: rt.build_run_loop(), id="build_run_loop"),
-        pytest.param(lambda rt: rt.ingest_transcript({"words": "hi"}), id="ingest_transcript"),
-        pytest.param(lambda rt: rt.run_orchestrator_loop(), id="run_orchestrator_loop"),
-        pytest.param(lambda rt: rt.run_until_meeting_end(), id="run_until_meeting_end"),
-    ],
-)
-async def test_no_media_worker_refuses_every_media_entry_point(call):
-    """Every path into the media machinery refuses, and none touches the carrier.
-
-    grant_consent previously raised AttributeError on a None gate — a crash, not a
-    refusal, which is the wrong signal for a Law 3 control. wire_orchestrator_pipe was
-    entirely unguarded and would have subscribed to the carrier.
-    """
-    rt = post_meeting_worker(
-        header=object(), carrier=TripwireCarrier(), db=object(), host_budget=object()
-    )
-    with pytest.raises(RuntimeError, match="no-media meeting_runtime"):
-        result = call(rt)
-        if inspect.isawaitable(result):
-            await result
-
-
-async def test_no_media_worker_teardown_is_clean():
-    """aclose must still work — a worker that cannot be torn down leaks."""
-    rt = post_meeting_worker(
-        header=object(), carrier=TripwireCarrier(), db=object(), host_budget=object()
-    )
-    await rt.aclose()
-
-
-async def test_no_media_worker_is_the_same_class_not_a_new_deployable():
-    from harness.meeting_runtime import MeetingRuntime
-
-    rt = post_meeting_worker(header=object(), carrier=object(), db=object(), host_budget=object())
-    assert isinstance(rt, MeetingRuntime)
