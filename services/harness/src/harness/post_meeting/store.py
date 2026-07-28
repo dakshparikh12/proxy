@@ -13,7 +13,14 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from .models import Source, TaskRecord, TaskState, Tier
+from .models import (
+    DISPATCHABLE_TIERS,
+    TERMINAL_STATES,
+    Source,
+    TaskRecord,
+    TaskState,
+    Tier,
+)
 
 # Column list is spelled out at each call site rather than interpolated from a constant:
 # an f-string carrying a SQL fragment is indistinguishable from an injection site to a
@@ -156,12 +163,37 @@ class PostMeetingTaskStore:
             )
             return int(row["n"])
 
-    async def count_for_meeting(self, meeting_id: Any) -> int:
-        """Backs ``max_tasks_per_meeting`` (Doc 07 §3.5 / AC-PME-11)."""
+    async def count_dispatchable_for_meeting(
+        self, meeting_id: Any, *, exclude_task_id: Any = None
+    ) -> int:
+        """Backs ``max_tasks_per_meeting`` (Doc 07 §3.5 / AC-PME-11).
+
+        Counts only tasks that can actually occupy a dispatch slot:
+
+        * **dispatchable tier** — ``ticket+plan+draft`` is the only tier that reaches the
+          Workroom (§3.1). Counting every row meant a meeting with eleven *informational*
+          items — items that by definition produce nothing — permanently blocked all
+          dispatch for that meeting. An untiered row (tier IS NULL) has not been triaged
+          yet and cannot be dispatched, so it does not count either.
+        * **non-terminal state** — a task that has been accepted, had changes requested,
+          or been discarded is finished and is not holding a slot.
+
+        ``exclude_task_id`` leaves the candidate out of its own count, so the caller's
+        comparison reads "are there already N others?" and can use ``>=`` exactly like the
+        concurrency check. Mixing an inclusive count with ``>`` and an exclusive count with
+        ``>=`` is what produced the off-by-one.
+        """
         async with self._db.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT count(*) AS n FROM post_meeting_tasks WHERE meeting_id = $1",
+                "SELECT count(*) AS n FROM post_meeting_tasks "
+                " WHERE meeting_id = $1 "
+                "   AND tier = ANY($2::text[]) "
+                "   AND state <> ALL($3::text[]) "
+                "   AND ($4::uuid IS NULL OR task_id <> $4::uuid)",
                 meeting_id,
+                [t.value for t in DISPATCHABLE_TIERS],
+                [s.value for s in TERMINAL_STATES],
+                exclude_task_id,
             )
             return int(row["n"])
 

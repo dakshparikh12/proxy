@@ -109,8 +109,22 @@ class FakeTaskStore:
             if r["tenant_id"] == tenant_id and r["state"] == "RUNNING"
         )
 
-    async def count_for_meeting(self, meeting_id: Any) -> int:
-        return sum(1 for r in self.rows.values() if r["meeting_id"] == meeting_id)
+    async def count_dispatchable_for_meeting(
+        self, meeting_id: Any, *, exclude_task_id: Any = None
+    ) -> int:
+        """Mirrors the real SQL: dispatchable tier, non-terminal state, candidate excluded."""
+        from harness.post_meeting.models import DISPATCHABLE_TIERS, TERMINAL_STATES
+
+        tiers = {t.value for t in DISPATCHABLE_TIERS}
+        terminal = {s.value for s in TERMINAL_STATES}
+        return sum(
+            1
+            for tid, r in self.rows.items()
+            if r["meeting_id"] == meeting_id
+            and r["tier"] in tiers
+            and r["state"] not in terminal
+            and tid != exclude_task_id
+        )
 
     # ── the two database guards from migration 0009 ───────────────────────
     def _update(self, task_id: Any, **patch: Any) -> None:

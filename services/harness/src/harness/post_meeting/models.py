@@ -70,6 +70,19 @@ def drop_one_tier(tier: Tier) -> Tier:
     return TIER_ORDER[max(0, idx - 1)]
 
 
+#: States a task can no longer leave (Doc 07 §3.9's three outcomes after DRAFTED).
+#: ``DRAFTED`` is deliberately NOT terminal — it is waiting on a human's accept click.
+TERMINAL_STATES: frozenset[TaskState] = frozenset(
+    {TaskState.ACCEPTED, TaskState.CHANGES_REQUESTED, TaskState.DISCARDED}
+)
+
+#: The only tier that ever reaches the Workroom (§3.1: "a plan, then a Workroom draft").
+#: informational produces nothing, question produces a clarifying question, ticket a
+#: staged record, ticket+plan a plan for a human — none of them occupies a dispatch slot,
+#: so none of them may count against ``max_tasks_per_meeting``.
+DISPATCHABLE_TIERS: frozenset[Tier] = frozenset({Tier.TICKET_PLAN_DRAFT})
+
+
 class Source(str, Enum):
     """Where the item came from (Doc 07 §3.1 intake). Matches migration 0009's CHECK."""
 

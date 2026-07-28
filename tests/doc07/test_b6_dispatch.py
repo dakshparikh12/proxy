@@ -15,7 +15,7 @@ from harness.post_meeting.dispatch import (
     post_meeting_worker,
     run_dispatch,
 )
-from harness.post_meeting.models import Source, TaskRecord, TaskState
+from harness.post_meeting.models import Source, TaskRecord, TaskState, Tier
 
 from ._support import FakeTaskStore, ForbiddenSandbox
 
@@ -71,13 +71,25 @@ class RecordingWorkroom:
         return FakeHandle(task_id=bundle.task_id, run_id=self.run_id, bundle=bundle)
 
 
-async def _approved(store, owner="Sam"):
+async def _approved(store, owner="Sam", tier=Tier.TICKET_PLAN_DRAFT):
+    """An approved task at the only tier that can actually be dispatched."""
     tid = await store.insert_task(
         TaskRecord(task_id=None, tenant_id=TENANT, meeting_id=MEETING,
                    source=Source.CLOSE_ITEM, item_ref="m#0", owner=owner)
     )
+    await store.set_tier(tid, tier, state=TaskState.TRIAGED)
     await store.set_state(tid, TaskState.PLANNED)
     await approve(task_id=tid, approver=owner, store=store, now=NOW)
+    return tid
+
+
+async def _item(store, tier, state=TaskState.EXTRACTED):
+    """A non-dispatchable task record — an informational/question/ticket item."""
+    tid = await store.insert_task(
+        TaskRecord(task_id=None, tenant_id=TENANT, meeting_id=MEETING,
+                   source=Source.CLOSE_ITEM, item_ref="m#x", owner="Sam")
+    )
+    await store.set_tier(tid, tier, state=state)
     return tid
 
 
@@ -311,6 +323,77 @@ async def test_ac_pme_11_neg_cap_check_reads_live_counts_not_a_local_counter():
     assert await check_caps(
         tenant_id=TENANT, meeting_id=MEETING, store=store, config=CFG
     ) is DispatchDecision.WAITING_CONCURRENCY
+
+
+# ── AC-PME-11 · the meeting cap counts only what can actually be dispatched ─
+async def test_ac_pme_11_non_dispatchable_items_never_block_dispatch():
+    """The reported defect: 11 informational items permanently blocked every dispatch.
+
+    Only ticket+plan+draft reaches the Workroom (§3.1). informational, question, ticket and
+    ticket+plan produce no run, so they cannot consume a dispatch slot.
+    """
+    store, wr = FakeTaskStore(), RecordingWorkroom()
+    for tier in (Tier.INFORMATIONAL, Tier.QUESTION, Tier.TICKET, Tier.TICKET_PLAN):
+        for _ in range(11):
+            await _item(store, tier)
+
+    tid = await _approved(store)
+    out = await _dispatch(store, wr, task_id=tid)
+    assert out.dispatched, "non-dispatchable items blocked a real task"
+
+
+async def test_ac_pme_11_untriaged_items_do_not_count():
+    store, wr = FakeTaskStore(), RecordingWorkroom()
+    for _ in range(20):
+        await store.insert_task(
+            TaskRecord(task_id=None, tenant_id=TENANT, meeting_id=MEETING,
+                       source=Source.CLOSE_ITEM, item_ref="m#u", owner="Sam")
+        )  # tier stays None — not yet triaged, so not dispatchable
+    tid = await _approved(store)
+    assert (await _dispatch(store, wr, task_id=tid)).dispatched
+
+
+async def test_ac_pme_11_meeting_cap_admits_exactly_n_not_n_plus_one():
+    """A cap of 3 admits 3 dispatchable tasks and holds the 4th — no off-by-one.
+
+    Concurrency is set high so the MEETING cap is the binding constraint; otherwise
+    max_concurrent_tasks bites first and the test measures the wrong limit.
+    """
+    cfg = PostMeetingConfig(max_concurrent_tasks=99, max_tasks_per_meeting=3)
+    store, wr = FakeTaskStore(), RecordingWorkroom()
+    outcomes = []
+    for _ in range(cfg.max_tasks_per_meeting + 2):
+        tid = await _approved(store)
+        outcomes.append(await _dispatch(store, wr, task_id=tid, config=cfg))
+
+    dispatched = [o for o in outcomes if o.dispatched]
+    held = [o for o in outcomes if o.decision is DispatchDecision.WAITING_MEETING_CAP]
+    assert len(dispatched) == cfg.max_tasks_per_meeting, (
+        f"meeting cap admitted {len(dispatched)} at a cap of {cfg.max_tasks_per_meeting}"
+    )
+    assert len(held) == 2, "the over-cap tasks must be HELD, not dropped or errored"
+
+
+async def test_ac_pme_11_terminal_tasks_release_their_meeting_slot():
+    cfg = PostMeetingConfig(max_concurrent_tasks=99, max_tasks_per_meeting=3)
+    store, wr = FakeTaskStore(), RecordingWorkroom()
+    for _ in range(cfg.max_tasks_per_meeting):
+        t = await _approved(store)
+        await _dispatch(store, wr, task_id=t, config=cfg)
+        await store.set_outcome(t, state=TaskState.ACCEPTED, outcome="accepted")
+
+    tid = await _approved(store)
+    assert (await _dispatch(store, wr, task_id=tid, config=cfg)).dispatched, (
+        "terminal tasks still held their meeting slot"
+    )
+
+
+async def test_ac_pme_11_candidate_is_excluded_from_its_own_count():
+    store = FakeTaskStore()
+    tid = await _approved(store)
+    n_with = await store.count_dispatchable_for_meeting(MEETING)
+    n_without = await store.count_dispatchable_for_meeting(MEETING, exclude_task_id=tid)
+    assert n_with == 1 and n_without == 0
 
 
 # ── AC-PME-12 · cost ask happens before the sandbox spins ─────────────────

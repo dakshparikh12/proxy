@@ -100,18 +100,26 @@ async def check_caps(
     meeting_id: Any,
     store: Any,
     config: PostMeetingConfig,
+    task_id: Any = None,
 ) -> Optional[DispatchDecision]:
     """Return the cap that is blocking dispatch, or ``None`` if there is room.
 
     Reads the LIVE counts rather than an in-process counter, so two workers cannot each
     believe they hold the last slot. A count that cannot be read blocks dispatch
     (AC-PME-11-NEG: an unreadable count is never treated as zero).
+
+    Both comparisons are ``>=`` against a count that EXCLUDES the candidate task, so each
+    reads "are there already N others?". The previous version mixed an exclusive count
+    with ``>=`` for concurrency and an inclusive count with ``>`` for the meeting cap,
+    which admitted an 11th task at a cap of 10.
     """
     running = await store.count_running_for_tenant(tenant_id)
     if running >= config.max_concurrent_tasks:
         return DispatchDecision.WAITING_CONCURRENCY
-    per_meeting = await store.count_for_meeting(meeting_id)
-    if per_meeting > config.max_tasks_per_meeting:
+    per_meeting = await store.count_dispatchable_for_meeting(
+        meeting_id, exclude_task_id=task_id
+    )
+    if per_meeting >= config.max_tasks_per_meeting:
         return DispatchDecision.WAITING_MEETING_CAP
     return None
 
@@ -154,7 +162,8 @@ async def run_dispatch(
     # 2. Caps. A blocked task WAITS; it is never dropped (AC-PME-11).
     try:
         blocked = await check_caps(
-            tenant_id=tenant_id, meeting_id=meeting_id, store=store, config=cfg
+            tenant_id=tenant_id, meeting_id=meeting_id, store=store, config=cfg,
+            task_id=task_id,
         )
     except Exception as exc:  # noqa: BLE001 - an unreadable count is NOT zero
         log.exception("dispatch: cap read failed for %s; holding", task_id)
