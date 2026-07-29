@@ -35,10 +35,22 @@ COMPLETED turn; :meth:`Engine.drain` awaits everything in flight (tests +
 orderly meeting end). A turn's context is snapshotted when its task first runs
 — the first yield to the event loop after the feed call — so lines that arrive
 while a turn is already working never mutate that turn's ask.
+
+One mouth: Proxy has ONE voice, so concurrent turns SERIALIZE their speech —
+their deltas never interleave in the shared ``speak`` sink. A turn acquires the
+speak lock lazily at its FIRST spoken delta and holds it until the turn
+completes, so the honest consequence is asymmetric by design: a turn's
+PRE-SPEECH work (tool calls before it first speaks) runs fully concurrent with
+everything else, but once turn A is speaking, turn B pauses at its own first
+delta until A's turn finishes — one mouth, natural meeting behavior. The lock
+serializes SPEECH only, never turn starts or the feed path;
+:attr:`TurnResult.spoken` semantics are unchanged (each turn's own deltas, in
+order).
 """
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
@@ -69,6 +81,8 @@ CODE_TOOLS: tuple[str, ...] = (
     "mcp__code_intel__batch_read",
     "mcp__code_intel__glob",
 )
+
+logger = logging.getLogger(__name__)
 
 #: The speak sink as a plain async callable — receives each spoken text delta.
 SpeakFn = Callable[[str], Awaitable[None]]
@@ -168,6 +182,10 @@ class Engine:
         self._last_turn: TurnResult | None = None
         self._turns: list[TurnResult] = []
         self._inflight: set[asyncio.Task[TurnResult]] = set()
+        # One mouth: concurrent turns serialize their SPEECH through this lock
+        # (acquired lazily at a turn's first spoken delta — see the module
+        # docstring for the honest consequence). Never touched by the feed path.
+        self._speak_lock = asyncio.Lock()
 
     @property
     def notes(self) -> NotesStore:
@@ -250,20 +268,33 @@ class Engine:
     def _on_turn_task_done(self, task: asyncio.Task[TurnResult]) -> None:
         """Untrack a finished turn task and retrieve its outcome.
 
-        ``_wake_and_run`` never raises, so ``exception()`` is ``None`` by
-        construction — retrieving it keeps that guarantee observable (no
-        "exception was never retrieved" warning could ever fire).
+        ``_wake_and_run`` never raises (§9), so ``exception()`` is ``None`` by
+        construction — retrieving it keeps that guarantee observable. If it is
+        ever NON-None (only possible if a ``BaseException``-derived escape ever
+        broke the never-raise invariant), that broken invariant must be LOUD,
+        never silently dropped: log it at CRITICAL.
         """
         self._inflight.discard(task)
-        if not task.cancelled():
-            task.exception()
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.critical(
+                "wake turn task escaped the never-raise boundary (§9 invariant "
+                "broken): %r",
+                exc,
+                exc_info=exc,
+            )
 
     async def drain(self) -> None:
         """Await every in-flight wake turn — tests + orderly meeting end.
 
         Loops until ``_inflight`` is empty so turns spawned while draining
-        (e.g. a worker finishing mid-drain) are awaited too. Never raises:
-        ``_wake_and_run`` absorbs all turn faults into honest results (§9).
+        (e.g. a worker finishing mid-drain) are awaited too. Never raises
+        TODAY: ``_wake_and_run`` absorbs all turn faults into honest results
+        (§9) and no cancellation path exists in the product — but if a
+        teardown node ever CANCELS in-flight turn tasks, the ``gather`` here
+        would propagate that ``CancelledError``.
         """
         while self._inflight:
             await asyncio.gather(*tuple(self._inflight))
@@ -285,10 +316,16 @@ class Engine:
         when the task first runs); lines landing in the notes after that never
         enter this turn. On completion the result appends to ``_turns`` and
         becomes ``_last_turn`` — the only shared writes, both at the end.
+
+        One mouth: the speak lock is acquired lazily at this turn's FIRST
+        spoken delta and released in the ``finally`` when the turn completes —
+        pre-speech work runs unserialized; once speaking starts, the whole
+        turn's speech is contiguous in the shared sink (module docstring).
         """
         spoken_parts: list[str] = []
         result_text = ""
         error: str | None = None
+        lock_held = False
         try:
             turn_input = build_turn_input(
                 prime=self._prime,
@@ -310,6 +347,12 @@ class Engine:
                     delta = accumulated[len(seen.get(msg_id, "")):]
                     seen[msg_id] = accumulated
                     if delta:
+                        if not lock_held:
+                            # One mouth (lazy): first spoken delta claims the
+                            # voice; another turn mid-speech parks THIS turn
+                            # right here until that one finishes.
+                            await self._speak_lock.acquire()
+                            lock_held = True
                         spoken_parts.append(delta)
                         await self._speak(delta)
                 elif chunk.type == "RESULT":
@@ -320,6 +363,9 @@ class Engine:
                     error = str(chunk.metadata.get("message", "")) or "provider error"
         except Exception as exc:  # noqa: BLE001 — a failed turn NEVER crashes the loop (§9)
             error = str(exc) or exc.__class__.__name__
+        finally:
+            if lock_held:
+                self._speak_lock.release()
         turn = TurnResult(
             source=engagement.source,
             spoken="".join(spoken_parts),

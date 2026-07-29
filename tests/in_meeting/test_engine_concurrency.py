@@ -15,19 +15,28 @@ the wake task, so the turn's context is snapshotted when the task FIRST RUNS —
 the first yield to the event loop after the feed call — not inside the feed call
 itself. Once the turn is in flight (blocked at the provider), lines fed while it
 works land in the notes immediately but NEVER enter that turn's context. The
-five AC groups:
+snapshot is pinned from BOTH sides: lines fed after the first run are excluded
+(AC1), and lines fed BEFORE the first run — both feeds in AC2 precede any yield
+— DO appear in each turn's recent-notes block. The seven AC groups:
 
 1. never deaf — lines fed while a turn is blocked in flight land in the notes
    instantly; the turn still completes and its context excludes those lines;
 2. concurrent asks, per-ask isolation (S7) — two addressed lines back-to-back
    run two simultaneous turns; ``turns`` carries BOTH results, each with its
-   OWN ask's answer (no cross-contamination);
+   OWN ask's answer (no cross-contamination); each turn's transcript block
+   carries the OTHER ask's line (fed before either task first ran);
 3. loop-not-blocked — the feed call returns while the turn is still in flight
    (structural: ``_inflight`` non-empty, release event not yet set);
 4. drain with nothing in flight completes immediately; ``turns`` empty before
    any wake;
 5. worker path concurrent — ``on_worker_done`` while a voice turn is in flight:
-   both run simultaneously and both results land after drain.
+   both run simultaneously and both results land after drain;
+6. one mouth — two concurrent multi-delta turns NEVER interleave their spoken
+   deltas in the shared sink: the sink holds one whole turn's deltas
+   contiguously, then the other's (speech serializes; Proxy has ONE voice);
+7. pre-speech concurrency preserved — the speak lock serializes SPEECH only,
+   never turn STARTS: a turn's tool-ish work before its first TEXT runs while
+   another turn is already in flight (2 provider calls before anyone speaks).
 """
 from __future__ import annotations
 
@@ -173,6 +182,14 @@ async def test_two_concurrent_asks_each_get_their_own_isolated_turn() -> None:
     asks = [prompt.split("You were addressed:")[-1] for prompt, _ in provider.calls]
     assert any(_ASK_A in a and _ASK_B not in a for a in asks)
     assert any(_ASK_B in a and _ASK_A not in a for a in asks)
+    # Positive snapshot pin: BOTH feeds preceded any yield to the event loop, so
+    # each line was in the notes when either turn's task FIRST RAN — ask B's line
+    # IS in turn A's recent-notes transcript block (and vice versa). This pins
+    # the documented snapshot timing from the inclusion side; AC1 pins exclusion.
+    prompt_a = next(p for p, _ in provider.calls if _ASK_A in p.split("You were addressed:")[-1])
+    prompt_b = next(p for p, _ in provider.calls if _ASK_B in p.split("You were addressed:")[-1])
+    assert _ASK_B in prompt_a.split("You were addressed:")[0]
+    assert _ASK_A in prompt_b.split("You were addressed:")[0]
     # last_turn is the most recently COMPLETED turn — one of the two, never lost.
     assert engine.last_turn is not None and engine.last_turn in engine.turns
 
@@ -252,4 +269,143 @@ async def test_worker_delivery_runs_concurrently_with_an_in_flight_turn() -> Non
     by_source = {t.source: t for t in engine.turns}
     assert by_source["voice"].spoken == _ANSWER_A
     assert by_source["worker"].spoken == _WORKER_ANSWER
+    assert all(t.error is None for t in engine.turns)
+
+
+# ── AC6 + AC7: one mouth — speech serializes, pre-speech work does not ────────
+
+_DELTAS_A = ["A1 retry ", "A2 logic ", "A3 client.py:42"]
+_DELTAS_B = ["B1 auth ", "B2 lives ", "B3 login.py:17"]
+
+
+class MultiDeltaProvider:
+    """A scripted provider that streams SEVERAL accumulated TEXT chunks per turn
+    with an explicit event-loop yield (``asyncio.sleep(0)``) between each — so
+    two concurrent turns WOULD provably interleave their spoken deltas in the
+    shared sink if speech were not serialized. The reply script is keyed on the
+    ``You were addressed:`` ask, exactly like :class:`SlowProvider`. Turns with
+    ``pre_speech`` scripts first emit TOOL_USE/TOOL_RESULT chunks (recorded in
+    ``tool_steps``) and then block on ``gate`` BEFORE their first TEXT — the
+    fake tool-ish progression AC7 uses to prove pre-speech work never waits on
+    another turn's speech."""
+
+    def __init__(
+        self,
+        scripts: dict[str, list[str]],
+        *,
+        pre_speech: dict[str, int] | None = None,
+        gate: asyncio.Event | None = None,
+    ) -> None:
+        self.calls: list[str] = []
+        self.tool_steps: list[str] = []
+        self._scripts = scripts
+        self._pre_speech = pre_speech or {}
+        self._gate = gate
+
+    async def stream(self, prompt: str, query: ProviderQuery) -> AsyncIterator[AgentChunk]:
+        self.calls.append(prompt)
+        msg_id = f"m-{len(self.calls)}"
+        ask = prompt.split("You were addressed:")[-1]
+        deltas = next(
+            (script for key, script in self._scripts.items() if key in ask), []
+        )
+        tool_steps = next(
+            (n for key, n in self._pre_speech.items() if key in ask), 0
+        )
+        for step in range(tool_steps):
+            await asyncio.sleep(0)  # tool-ish pre-speech work yields to the loop
+            self.tool_steps.append(f"{msg_id}-tool-{step}")
+            yield AgentChunk(
+                type="TOOL_USE", text=None,
+                metadata={"id": f"t-{step}", "name": "mcp__code_intel__grep", "input": {}},
+            )
+            yield AgentChunk(
+                type="TOOL_RESULT", text=None,
+                metadata={"tool_use_id": f"t-{step}", "is_error": False, "structured": None},
+            )
+        if self._gate is not None:
+            await self._gate.wait()
+        accumulated = ""
+        for delta in deltas:
+            await asyncio.sleep(0)  # the interleave point: yield BETWEEN spoken deltas
+            accumulated += delta
+            yield AgentChunk(type="TEXT", text=accumulated, metadata={"msg_id": msg_id})
+        yield AgentChunk(type="RESULT", text=accumulated, metadata={})
+
+
+def _multi_engine(provider: MultiDeltaProvider) -> tuple[Engine, list[str]]:
+    spoken: list[str] = []
+
+    async def speak(text: str) -> None:
+        spoken.append(text)
+
+    engine = Engine(
+        provider=provider,
+        model=_MODEL,
+        allowed_tools=(),
+        speak=speak,
+        disambiguate=lambda text: True,
+        map_text=_MAP,
+    )
+    return engine, spoken
+
+
+@pytest.mark.asyncio
+async def test_concurrent_turns_never_interleave_spoken_deltas() -> None:
+    """AC6 — one mouth: two simultaneous multi-delta turns, each yielding to the
+    event loop between deltas (so an unserialized engine provably interleaves
+    them). The shared sink must hold one turn's deltas CONTIGUOUSLY, then the
+    other's — whichever turn spoke first, never a mix. ``TurnResult.spoken``
+    stays each turn's own full text, unchanged."""
+    provider = MultiDeltaProvider({_ASK_A: _DELTAS_A, _ASK_B: _DELTAS_B})
+    engine, spoken = _multi_engine(provider)
+
+    assert await engine.feed_transcript(_line(_ASK_A, "Devon", 20.0)) is not None
+    assert await engine.feed_transcript(_line(_ASK_B, "Priya", 21.0)) is not None
+    await asyncio.sleep(0)
+    assert len(provider.calls) == 2  # both turns in flight at the same time
+
+    await engine.drain()
+
+    # The whole-sink sequence is one turn then the other — NO interleave.
+    assert spoken in (_DELTAS_A + _DELTAS_B, _DELTAS_B + _DELTAS_A), (
+        f"spoken deltas interleaved across turns: {spoken!r}"
+    )
+    # Per-turn results are intact and their own (semantics unchanged).
+    assert {t.spoken for t in engine.turns} == {"".join(_DELTAS_A), "".join(_DELTAS_B)}
+    assert all(t.error is None for t in engine.turns)
+
+
+@pytest.mark.asyncio
+async def test_pre_speech_work_runs_concurrently_speech_lock_never_serializes_starts() -> None:
+    """AC7 — the speak lock serializes SPEECH, never turn STARTS or pre-speech
+    work: with both turns gated before their first TEXT, BOTH providers are
+    called and turn B's tool-ish progression completes while NOTHING has been
+    spoken yet — 2 in flight before either speaks. After the gate opens, speech
+    still lands contiguously per turn."""
+    gate = asyncio.Event()
+    provider = MultiDeltaProvider(
+        {_ASK_A: _DELTAS_A, _ASK_B: _DELTAS_B},
+        pre_speech={_ASK_B: 2},
+        gate=gate,
+    )
+    engine, spoken = _multi_engine(provider)
+
+    assert await engine.feed_transcript(_line(_ASK_A, "Devon", 20.0)) is not None
+    assert await engine.feed_transcript(_line(_ASK_B, "Priya", 21.0)) is not None
+    for _ in range(6):  # let both streams start and B's tool progression run
+        await asyncio.sleep(0)
+
+    # Both providers CALLED concurrently, B's pre-speech tool work done — and
+    # not one delta spoken: the lock gated nothing before the first TEXT.
+    assert len(provider.calls) == 2
+    assert len(provider.tool_steps) == 2
+    assert spoken == []
+    assert engine.turns == ()
+
+    gate.set()
+    await engine.drain()
+
+    assert spoken in (_DELTAS_A + _DELTAS_B, _DELTAS_B + _DELTAS_A)
+    assert {t.spoken for t in engine.turns} == {"".join(_DELTAS_A), "".join(_DELTAS_B)}
     assert all(t.error is None for t in engine.turns)
