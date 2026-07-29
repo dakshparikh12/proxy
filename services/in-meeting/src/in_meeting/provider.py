@@ -11,12 +11,12 @@ as the prompt. This module builds the ``ClaudeAgentOptions`` for such a turn:
     are required; neither suppresses connectors alone), a computed built-in
     ``tools`` list (``()`` in sandbox mode: no host-side ``Read``/``Grep``/``Bash``),
     and the ``SDK_LOCAL_TOOLS`` block-list pinned into ``disallowed_tools``.
-  * **The 1-hour prompt-cache directive** — ``extra_args["system-prompt-cache-ttl"]
-    = "1h"`` (the SDK's CLI passthrough; proven at
-    ``services/workroom/src/workroom/agent_config.py:265-284``), so the CLI marks
-    the system-prompt breakpoint with a 1-hour TTL and the stable prime+map prefix
-    is cached across wake turns ("map = cached prefix ~90% cheaper", SPEC §8).
-    It is UNCONDITIONAL: every engine turn caches the stable prefix.
+  * **Automatic prompt caching of the stable prefix** — the ``system_prompt``
+    (prime + map) is static across wake turns, so the CLI/API caches it by default
+    ("map = cached prefix ~90% cheaper", SPEC §8); ``cacheReadInputTokens`` confirms
+    hits. NO ``extra_args`` cache flag is set: the installed Claude Code CLI (2.1.191)
+    has no ``--system-prompt-cache-ttl`` flag and aborts on it (the functional sim
+    caught this). A longer-than-default TTL is a named optimization residual.
 
 The options-building logic is ported (not imported) from the old brain's seam —
 ``services/harness/src/harness/provider.py:349-411`` (``build_sdk_options``), its
@@ -86,9 +86,14 @@ disallowed_tools: tuple[str, ...] = SDK_LOCAL_TOOLS
 # firing in sandbox mode means the triad leaked. Matched case-insensitively.
 _HOST_BUILTINS: frozenset[str] = frozenset(t.lower() for t in SDK_LOCAL_TOOLS)
 
-#: The 1-hour prompt-cache TTL on the stable-prefix breakpoint (SPEC §8): the
-#: Messages-API "1h" wire token, carried as the CLI passthrough the SDK enforces.
-SYSTEM_PROMPT_CACHE_TTL: str = "1h"
+# Prompt caching of the stable prefix (prime + map, SPEC §8) is AUTOMATIC: the
+# system_prompt is static across wake turns, so the CLI/API caches it by default
+# (cacheReadInputTokens confirms hits). The installed Claude Code CLI (2.1.191) has
+# NO --system-prompt-cache-ttl flag — passing one via extra_args makes the CLI abort
+# ("unknown option"), which the functional sim caught. An explicit longer-than-default
+# TTL (>~5min, for long meetings) is a NAMED OPTIMIZATION RESIDUAL: it needs a CLI/API
+# path that exposes the ttl for a CUSTOM system prompt (--exclude-dynamic-system-prompt-
+# sections only applies to the DEFAULT preset, not our custom --system-prompt).
 
 
 def _thinking_config(query: ProviderQuery) -> dict[str, Any] | None:
@@ -109,20 +114,15 @@ def _thinking_config(query: ProviderQuery) -> dict[str, Any] | None:
 
 def build_engine_options(query: ProviderQuery) -> ClaudeAgentOptions:
     """Build the ``ClaudeAgentOptions`` for one engine turn: the isolation triad by
-    construction + the 1-hour prompt-cache directive on the stable prefix.
+    construction. Prompt caching of the stable prefix is AUTOMATIC (see the module
+    note above) — no ``extra_args`` cache flag is set (the installed CLI rejects it).
 
-    ``query.system_prompt`` is the STABLE, cached prefix (prime + map) — the
-    volatile per-turn ask never rides it (it is passed to ``query()`` as the
-    prompt by the context-assembly layer). ``extra_args`` carries the
-    ``system-prompt-cache-ttl`` CLI passthrough unconditionally; a
-    ``query.extra``-provided ``extra_args`` sub-dict is merged, but the cache-ttl
-    always wins.
+    ``query.system_prompt`` is the STABLE, auto-cached prefix (prime + map) — the
+    volatile per-turn ask never rides it (it is passed to ``query()`` as the prompt
+    by the context-assembly layer). No caller-provided ``extra_args`` is threaded:
+    the engine passes no CLI passthrough flags, which also closes the passthrough
+    smuggling vector — nothing untrusted can weaken the triad via extra_args.
     """
-    # The 1-hour stable-prefix cache directive — unconditional on every engine turn.
-    extra_raw = query.extra.get("extra_args") if query.extra else None
-    extra_args: dict[str, str | None] = dict(extra_raw) if isinstance(extra_raw, dict) else {}
-    extra_args["system-prompt-cache-ttl"] = SYSTEM_PROMPT_CACHE_TTL
-
     options = ClaudeAgentOptions(
         model=query.model,
         allowed_tools=list(query.allowed_tools),
@@ -135,7 +135,6 @@ def build_engine_options(query: ProviderQuery) -> ClaudeAgentOptions:
         setting_sources=[],                       # isolation triad (load no fs settings)
         max_turns=query.max_turns,
         thinking=_thinking_config(query),         # type: ignore[arg-type]
-        extra_args=extra_args,
     )
     if query.system_prompt:
         options.system_prompt = query.system_prompt

@@ -153,11 +153,12 @@ async def test_maps_sdk_messages_to_agent_chunks_in_order() -> None:
 
 
 # ---------------------------------------------------------------------------
-# AC 2 — options wired: the REAL invocation path carries the cache-ttl directive
+# AC 2 — options wired: the REAL invocation path carries the engine's own options
+# (no unsupported cache flag — caching is automatic; the sim caught the CLI reject)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_query_fn_receives_engine_options_with_cache_ttl() -> None:
+async def test_query_fn_receives_engine_options() -> None:
     fake = _FakeQueryFn(_messages())
     await _drain(EngineProvider(query_fn=fake), _ASK, _query())
 
@@ -167,7 +168,9 @@ async def test_query_fn_receives_engine_options_with_cache_ttl() -> None:
     assert call["prompt"] == _ASK
     options = call["options"]
     assert isinstance(options, ClaudeAgentOptions)
-    assert options.extra_args["system-prompt-cache-ttl"] == "1h"
+    # No CLI passthrough flags: prompt caching is automatic and the installed CLI has
+    # no --system-prompt-cache-ttl flag (passing one aborts the real turn).
+    assert options.extra_args == {}
     # The stable prefix rides system_prompt; the isolation triad is on the call.
     assert options.system_prompt == _PRIME_AND_MAP
     assert options.strict_mcp_config is True

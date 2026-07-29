@@ -52,23 +52,27 @@ def _query(**overrides: Any) -> ProviderQuery:
 
 
 # ---------------------------------------------------------------------------
-# AC 1 — the 1-hour prompt-cache directive is present (and unconditional)
+# AC 1 — caching is automatic; NO unsupported extra_args flag (the sim-caught CLI bug)
 # ---------------------------------------------------------------------------
 
-def test_cache_ttl_directive_present() -> None:
+def test_no_unsupported_extra_args_flags() -> None:
+    """No CLI passthrough flags are set. Prompt caching of the static system-prompt
+    prefix is automatic; the installed Claude Code CLI (2.1.191) has no
+    ``--system-prompt-cache-ttl`` flag — passing one aborts the real turn ("unknown
+    option"), which the functional sim caught. ``extra_args`` stays empty."""
     options = build_engine_options(_query())
-    assert options.extra_args["system-prompt-cache-ttl"] == "1h"
+    assert options.extra_args == {}
 
 
-def test_cache_ttl_wins_over_query_extra_and_merge_preserved() -> None:
-    """A ``query.extra``-provided ``extra_args`` sub-dict is merged, but the
-    cache-ttl always wins/persists (it is unconditional on every engine turn)."""
+def test_caller_extra_args_are_not_threaded_through() -> None:
+    """A caller-provided ``extra_args`` sub-dict is NOT passed through to the CLI: the
+    engine sets no passthrough flags, so nothing untrusted can ride ``extra_args`` to
+    weaken the isolation triad (closes the deferred smuggling-vector finding)."""
     q = _query(
-        extra={"extra_args": {"system-prompt-cache-ttl": "5m", "some-flag": "on"}}
+        extra={"extra_args": {"system-prompt-cache-ttl": "5m", "setting-sources": "user"}}
     )
     options = build_engine_options(q)
-    assert options.extra_args["system-prompt-cache-ttl"] == "1h"
-    assert options.extra_args["some-flag"] == "on"
+    assert options.extra_args == {}
 
 
 # ---------------------------------------------------------------------------
