@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
@@ -22,9 +23,27 @@ from .media import AudioChunk, CanvasFrame
 from .seams import OutputMediaSink
 from .signals import ChatMessage, RosterEvent
 
-# Recall rate card (managed V0, §4). Home for the accrual constant is config; this
-# per-call unit is the telemetry hint passed to the seam.
+# Recall's global default host — the us-east-1 alias (per the live regions doc); used
+# only when no RECALL_REGION is configured, so unset envs see zero behavior change.
 _RECALL_BASE = "https://api.recall.ai/api/v1"
+
+
+def _recall_base() -> str:
+    """Resolve the Recall API base for this deployment's region (Law 4 — never baked in).
+
+    Recall workspaces are region-ISOLATED (https://docs.recall.ai/docs/regions): the
+    API lives on per-region hosts (``us-east-1`` / ``us-west-2`` / ``eu-central-1`` /
+    ``ap-northeast-1`` ``.recall.ai``) and ``api.recall.ai`` is merely the us-east-1
+    alias — a key minted in one region's workspace is 401-rejected on every other
+    host (proven live: 401 on api.recall.ai/us-east-1, 200 on us-west-2 for a
+    us-west-2 key). ``RECALL_REGION`` names the deployment's region; read at
+    transport-construction time (never import time) so tests and deploys can set it.
+    Unset or blank keeps the global default.
+    """
+    region = os.environ.get("RECALL_REGION", "").strip()
+    if region:
+        return f"https://{region}.recall.ai/api/v1"
+    return _RECALL_BASE
 # Per-round-trip client timeout (seconds) — matches the workspace seam convention
 # (premeeting's token mint); the retry policy above this lives in ``call_external``.
 _HTTP_TIMEOUT_S = 15.0
@@ -137,6 +156,10 @@ class RecallTransport:
         self._dm_available = dm_available
         self._webhook_url = webhook_url
         self._output_media_url = output_media_url
+        # The region-resolved API base (``RECALL_REGION``): captured at construction —
+        # every ``_api`` round-trip (and every output-media sink bound to it) rides
+        # the workspace's own region host; unset env keeps the global default.
+        self._base = _recall_base()
         self._roster: dict[str, asyncio.Queue[RosterEvent]] = {}
         self._chat: dict[str, asyncio.Queue[ChatMessage]] = {}
         # Bots whose output audio is muted (C5): sink-side suppression, per bot —
@@ -294,7 +317,7 @@ class RecallTransport:
 
         headers = {"Authorization": f"Token {self._api_key}"}
         async with http_client(timeout=_HTTP_TIMEOUT_S) as client:
-            resp = await client.request(method, f"{_RECALL_BASE}{path}", headers=headers, json=body)
+            resp = await client.request(method, f"{self._base}{path}", headers=headers, json=body)
             resp.raise_for_status()
             if resp.status_code == 204:
                 # Recall's DELETE output endpoints answer 204 with NO body (per the

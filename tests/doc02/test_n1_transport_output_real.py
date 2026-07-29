@@ -58,6 +58,10 @@ def _install_fake_http(
     """
     import libs.http.src.http.external as ext
 
+    # Region hygiene: the URL assertions below pin the default https://api.recall.ai
+    # host — the ambient env (e.g. a sourced .env with RECALL_REGION) must never leak in.
+    monkeypatch.delenv("RECALL_REGION", raising=False)
+
     calls: list[dict[str, Any]] = []
 
     class _FakeResponse:

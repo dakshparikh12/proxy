@@ -7,8 +7,10 @@ request. This suite proves the mechanism is now a genuine round-trip:
 
   the REAL ``libs.http.call_external`` funnel invokes ``_api`` → ``_api`` builds the
   request against a client constructed ONLY by ``libs.http.http_client`` (the sole
-  raw-client home, AC-XCUT-03) → exact method + ``https://api.recall.ai/api/v1``
-  URL + ``Authorization: Token <key>`` (Recall's real auth scheme) + JSON body go
+  raw-client home, AC-XCUT-03) → exact method + the region-resolved base URL
+  (``https://api.recall.ai/api/v1`` by default; ``https://<RECALL_REGION>.recall.ai``
+  when the env names a region — Recall workspaces are region-isolated)
+  + ``Authorization: Token <key>`` (Recall's real auth scheme) + JSON body go
   out on the wire → the PARSED RESPONSE BODY comes back, never a fabricated dict.
 
 Deterministic: the ONLY fake is the httpx client at the ``http_client`` seam (the
@@ -37,6 +39,11 @@ def _install_fake_http(
     the round-trip at exactly the raw-client construction seam — nothing else is faked.
     """
     import libs.http.src.http.external as ext
+
+    # Region hygiene: the default-host assertions below pin https://api.recall.ai —
+    # the ambient env (e.g. a sourced .env with RECALL_REGION=us-west-2) must never
+    # leak in. Region-aware tests setenv AFTER this call, before construction.
+    monkeypatch.delenv("RECALL_REGION", raising=False)
 
     calls: list[dict[str, Any]] = []
 
@@ -174,6 +181,60 @@ def test_c1_every_api_caller_flows_through_the_real_transport(monkeypatch: Any) 
     assert calls[2]["json"] == {"message": "hello", "to": "participant-9"}
     # Every round-trip carries the real auth header; the key never mutates per call.
     assert all(c["headers"]["Authorization"] == "Token rk_c1_acceptance_key" for c in calls)
+
+
+# ── region-aware base host (RECALL_REGION) ────────────────────────────────────────────
+#
+# Recall workspaces are region-ISOLATED (https://docs.recall.ai/docs/regions): the API
+# lives on per-region hosts (us-east-1 / us-west-2 / eu-central-1 / ap-northeast-1
+# .recall.ai) and ``api.recall.ai`` is merely the us-east-1 alias. A key minted in a
+# region workspace is 401-rejected on every other host — proven live: the founder's key
+# gets 401 on api.recall.ai and us-east-1, 200 on https://us-west-2.recall.ai. The
+# transport must resolve the host from RECALL_REGION at construction time (Law 4 —
+# a deployment fact, never baked in).
+
+
+def test_c1_recall_region_env_routes_every_call_to_the_region_host(monkeypatch: Any) -> None:
+    """RECALL_REGION=us-west-2 → the whole _api path rides https://us-west-2.recall.ai."""
+    from libs.http.src.http.external import call_external
+    from transport.recall import RecallTransport
+
+    calls = _install_fake_http(monkeypatch, payload=_RECALL_BOT_RESPONSE)
+    monkeypatch.setenv("RECALL_REGION", "us-west-2")
+    transport = RecallTransport(call_external, api_key="rk_west_workspace_key")
+
+    bot_id = asyncio.run(transport.join("https://meet.google.com/abc-defg-hij"))
+
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["url"] == "https://us-west-2.recall.ai/api/v1/bot", (
+        "a us-west-2 workspace key is 401-rejected on api.recall.ai — the create-bot "
+        "call must ride the documented region host"
+    )
+    assert calls[0]["headers"]["Authorization"] == "Token rk_west_workspace_key"
+    assert bot_id == "bd8f4d54-9a2c-4b3e-8f1d-2e7c6a5b4d3c"
+
+    # Delivery verbs flow through the same _api path — same region host, no stragglers.
+    asyncio.run(transport.leave(bot_id))
+    assert calls[-1]["url"] == f"https://us-west-2.recall.ai/api/v1/bot/{bot_id}/leave"
+
+
+def test_c1_no_region_env_defaults_to_the_global_host(monkeypatch: Any) -> None:
+    """Unset (or blank) RECALL_REGION → https://api.recall.ai — zero behavior change."""
+    from libs.http.src.http.external import call_external
+    from transport.recall import RecallTransport
+
+    calls = _install_fake_http(monkeypatch, payload=_RECALL_BOT_RESPONSE)
+    # The helper already delenv'd RECALL_REGION — this transport sees no region at all.
+    transport = RecallTransport(call_external, api_key="rk_default_key")
+
+    asyncio.run(transport.join("https://meet.google.com/abc-defg-hij"))
+    assert calls[0]["url"] == "https://api.recall.ai/api/v1/bot"
+
+    # A blank region (e.g. ``RECALL_REGION=`` in a dotenv) is the same as unset.
+    monkeypatch.setenv("RECALL_REGION", "   ")
+    blank = RecallTransport(call_external, api_key="rk_default_key")
+    asyncio.run(blank.leave("bot-1"))
+    assert calls[-1]["url"] == "https://api.recall.ai/api/v1/bot/bot-1/leave"
 
 
 def test_c1_non_2xx_is_an_error_never_a_silent_success(monkeypatch: Any) -> None:
