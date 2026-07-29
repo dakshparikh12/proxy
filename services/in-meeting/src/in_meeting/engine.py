@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from agentkit import Provider
 
@@ -45,6 +45,19 @@ from in_meeting.trigger import (
     Engagement,
     EngagementTrigger,
     Source,
+)
+
+#: The grounded code-lookup toolbelt — the four canonical ``mcp__code_intel__*``
+#: names premeeting's ``RepoContext.build_server()`` exposes over the clone
+#: (``SERVER_NAME="code_intel"``, ``TOOL_BASENAMES=("grep","read","batch_read",
+#: "glob")``). Callers pass this as ``allowed_tools`` alongside
+#: ``mcp_servers={"code_intel": <the built server>}`` — the Engine itself stays
+#: decoupled from premeeting and just threads what it's given.
+CODE_TOOLS: tuple[str, ...] = (
+    "mcp__code_intel__grep",
+    "mcp__code_intel__read",
+    "mcp__code_intel__batch_read",
+    "mcp__code_intel__glob",
 )
 
 #: The speak sink as a plain async callable — receives each spoken text delta.
@@ -111,7 +124,10 @@ class Engine:
     streams to (production wires the TTS→meeting channel, C9); ``disambiguate``
     is the trigger's one judgment hook ("addressed to me, or 'proxy server'?").
     ``map_text=None`` (unindexed repo) degrades to a prime-only prefix and must
-    still run — nothing here requires a map.
+    still run — nothing here requires a map. ``mcp_servers`` is the injected
+    server-name → SDK MCP server config mapping the caller mounts for the turn
+    (e.g. ``{"code_intel": ...}`` with ``allowed_tools=CODE_TOOLS``) — pure
+    threading, no capability decision here; ``None`` mounts nothing.
     """
 
     def __init__(
@@ -125,9 +141,11 @@ class Engine:
         map_text: str | None = None,
         prime: str = PROXY_SYSTEM_PROMPT,
         recent_lines: int = 40,
+        mcp_servers: dict[str, Any] | None = None,
     ) -> None:
         self._model = model
         self._allowed_tools = allowed_tools
+        self._mcp_servers = mcp_servers
         self._speak: SpeakFn = _as_speak_fn(speak)
         self._provider: Provider = provider if provider is not None else EngineProvider()
         self._map_text = map_text
@@ -207,6 +225,7 @@ class Engine:
                 model=self._model,
                 allowed_tools=self._allowed_tools,
                 recent_lines=self._recent_lines,
+                mcp_servers=self._mcp_servers,
             )
             # Accumulated-text-so-far per msg_id — spoken deltas are the new suffix.
             seen: dict[str, str] = {}

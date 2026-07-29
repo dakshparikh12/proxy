@@ -104,3 +104,29 @@ def test_empty_notes_yield_an_empty_recent_block_not_a_crash() -> None:
     ti = _build(notes=NotesStore())
     assert _ASK in ti.prompt
     assert "untrusted data" in ti.prompt
+
+
+# ── CODE-LOOKUP: the grounding toolbelt threads through to the query ──────────
+
+
+def test_mcp_servers_thread_through_to_the_query() -> None:
+    """CODE-LOOKUP AC1 — an injected server config lands on ProviderQuery.mcp_servers
+    verbatim (the wiring that makes mcp__code_intel__* tools reachable)."""
+    sentinel = object()
+    ti = build_turn_input(
+        prime=_PRIME,
+        map_text=_MAP,
+        notes=_store(),
+        ask=_ASK,
+        model=_MODEL,
+        allowed_tools=_TOOLS,
+        mcp_servers={"code_intel": sentinel},
+    )
+    assert ti.query.mcp_servers == {"code_intel": sentinel}
+
+
+def test_mcp_servers_default_is_none_backward_compat() -> None:
+    """CODE-LOOKUP AC1 — omitting mcp_servers keeps the current behavior: no
+    servers mounted (None on the query)."""
+    ti = _build()
+    assert ti.query.mcp_servers is None

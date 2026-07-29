@@ -18,6 +18,7 @@ does. ``map_text=None`` (unindexed repo, D-032) degrades to a prime-only prefix.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from agentkit import ProviderQuery, with_injection_guardrail, with_proxy_guardrails
 
@@ -46,6 +47,7 @@ def build_turn_input(
     model: str,
     allowed_tools: tuple[str, ...],
     recent_lines: int = 40,
+    mcp_servers: dict[str, Any] | None = None,
 ) -> TurnInput:
     """Assemble one wake turn's input: stable cached prefix + volatile prompt.
 
@@ -54,6 +56,12 @@ def build_turn_input(
     LAST — a strict suffix nothing in the transcript can override. The volatile
     prompt is the last ``recent_lines`` of ``notes`` (empty when the store is
     empty) plus the ``ask``, rendered as one labelled untrusted-data block.
+
+    ``mcp_servers`` is the turn's CURATED server-name → SDK MCP server config
+    mapping (e.g. ``{"code_intel": <RepoContext-built server>}``), threaded
+    verbatim onto the query so the ``mcp__<server>__*`` names in
+    ``allowed_tools`` are actually reachable. ``None`` (the default) mounts
+    nothing — the pre-toolbelt behavior, unchanged.
     """
     stable = prime
     if map_text is not None:
@@ -68,5 +76,10 @@ def build_turn_input(
 
     return TurnInput(
         prompt=prompt,
-        query=ProviderQuery(model=model, allowed_tools=allowed_tools, system_prompt=stable),
+        query=ProviderQuery(
+            model=model,
+            allowed_tools=allowed_tools,
+            system_prompt=stable,
+            mcp_servers=mcp_servers,
+        ),
     )

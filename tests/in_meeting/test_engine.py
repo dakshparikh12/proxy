@@ -29,7 +29,7 @@ from agentkit import ProviderQuery, injection_guardrail_suffix
 from agentkit.execution import INJECTION_GUARDRAIL_MARK
 from contracts import AgentChunk
 
-from in_meeting.engine import Engine, TurnResult
+from in_meeting.engine import CODE_TOOLS, Engine, TurnResult
 from in_meeting.notes import TranscriptLine
 from in_meeting.prompt import PROXY_SYSTEM_PROMPT
 from in_meeting.trigger import ChatLine
@@ -328,6 +328,65 @@ async def test_chat_at_proxy_wakes_a_turn_and_plain_chat_is_free() -> None:
     prompt, _ = provider.calls[0]
     assert "@proxy summarize the decision" in prompt
     assert captured == [_ANSWER]
+
+
+# ── CODE-LOOKUP: the grounding toolbelt reaches the real invocation path ──────
+
+
+def test_code_tools_names_the_four_canonical_code_intel_tools() -> None:
+    """CODE-LOOKUP AC3 — CODE_TOOLS is the engine-local constant callers pass as
+    allowed_tools; it names EXACTLY the premeeting toolbelt's four tools."""
+    assert CODE_TOOLS == (
+        "mcp__code_intel__grep",
+        "mcp__code_intel__read",
+        "mcp__code_intel__batch_read",
+        "mcp__code_intel__glob",
+    )
+
+
+@pytest.mark.asyncio
+async def test_mcp_servers_and_code_tools_reach_the_provider_query() -> None:
+    """CODE-LOOKUP AC2 — an Engine built with the grounding toolbelt threads BOTH
+    the server config and the tool names onto the captured provider query: the
+    turn that speaks is the turn that can actually read the clone (Law 1)."""
+    sentinel = object()
+    provider = FakeProvider()
+    spoken: list[str] = []
+
+    async def speak(text: str) -> None:
+        spoken.append(text)
+
+    engine = Engine(
+        provider=provider,
+        model=_MODEL,
+        allowed_tools=CODE_TOOLS,
+        speak=speak,
+        disambiguate=lambda text: True,
+        map_text=_MAP,
+        mcp_servers={"code_intel": sentinel},
+    )
+
+    engagement = await engine.feed_transcript(_line(_ASK))
+
+    assert engagement is not None
+    assert len(provider.calls) == 1
+    _, query = provider.calls[0]
+    assert query.mcp_servers == {"code_intel": sentinel}
+    assert query.allowed_tools == CODE_TOOLS
+
+
+@pytest.mark.asyncio
+async def test_engine_default_mcp_servers_is_none_backward_compat() -> None:
+    """CODE-LOOKUP AC2 — an Engine built WITHOUT mcp_servers (the current callers)
+    keeps the current behavior: the query carries no server config."""
+    provider = FakeProvider()
+    engine, _ = _engine(provider)
+
+    await engine.feed_transcript(_line(_ASK))
+
+    assert len(provider.calls) == 1
+    _, query = provider.calls[0]
+    assert query.mcp_servers is None
 
 
 # ── The pending-ask passthrough (mechanical, no NLP) ──────────────────────────
