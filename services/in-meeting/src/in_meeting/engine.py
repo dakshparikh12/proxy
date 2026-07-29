@@ -24,11 +24,21 @@ string physics — the Engine only exposes :meth:`Engine.arm_pending_ask` as a
 mechanical passthrough for the caller to arm the follow-up window (no "?"
 parsing, no NLP, lives here).
 
-Sequential by design for L8: one turn is awaited to completion before the next
-input is fed (monitor-while-working concurrency is L7/W2, out of scope).
+Never blocked, never deaf (L7/W2, SPEC §4/§9): wake turns run as BACKGROUND
+TASKS. The feed path — notes append + trigger consult — is instant and never
+awaits a turn, so the loop keeps ingesting while Proxy works, and two asks a
+second apart run as two simultaneous turns, each isolated per ask (every turn
+carries its own local context/stream state; nothing of one leaks into another).
+Every completed turn lands in :attr:`Engine.turns` (completion order — which
+may differ from ask order); :attr:`Engine.last_turn` is the most recently
+COMPLETED turn; :meth:`Engine.drain` awaits everything in flight (tests +
+orderly meeting end). A turn's context is snapshotted when its task first runs
+— the first yield to the event loop after the feed call — so lines that arrive
+while a turn is already working never mutate that turn's ask.
 """
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
@@ -156,6 +166,8 @@ class Engine:
         self._notes = NotesStore()
         self._trigger = EngagementTrigger(disambiguate=disambiguate)
         self._last_turn: TurnResult | None = None
+        self._turns: list[TurnResult] = []
+        self._inflight: set[asyncio.Task[TurnResult]] = set()
 
     @property
     def notes(self) -> NotesStore:
@@ -164,8 +176,19 @@ class Engine:
 
     @property
     def last_turn(self) -> TurnResult | None:
-        """The most recent wake turn's outcome; ``None`` before any wake."""
+        """The most recently COMPLETED wake turn's outcome; ``None`` before any
+        completes. With concurrent turns, completion order may differ from ask
+        order — :attr:`turns` keeps every result."""
         return self._last_turn
+
+    @property
+    def turns(self) -> tuple[TurnResult, ...]:
+        """Every completed wake turn, in COMPLETION order (a snapshot).
+
+        With overlapping turns no result is ever lost to the ``last_turn``
+        overwrite — each turn appends here the moment it finishes.
+        """
+        return tuple(self._turns)
 
     def arm_pending_ask(self) -> None:
         """Passthrough to the trigger's follow-up window (M2).
@@ -179,30 +202,71 @@ class Engine:
     async def feed_transcript(self, line: TranscriptLine) -> Engagement | None:
         """One spoken line: append to the notes, consult the trigger, wake if engaged.
 
-        Returns the :class:`Engagement` when Proxy woke (the turn has fully run
-        by then — read :attr:`last_turn` for its outcome), else ``None``: idle
-        is free, zero provider work.
+        Returns the :class:`Engagement` when Proxy woke — the turn runs as a
+        BACKGROUND task (never awaited here; the loop stays listening, L7/W2);
+        ``await drain()`` then read :attr:`turns` / :attr:`last_turn` for its
+        outcome. ``None`` when idle: free, zero provider work.
         """
         self._notes.append(line)
         engagement = self._trigger.on_transcript(line)
         if engagement is None:
             return None
-        await self._wake_and_run(engagement)
+        self._spawn_turn(engagement)
         return engagement
 
     async def feed_chat(self, msg: ChatLine) -> Engagement | None:
-        """One chat message: consult the trigger, wake on the ``@proxy`` token."""
+        """One chat message: consult the trigger, wake on the ``@proxy`` token.
+
+        The wake turn runs as a background task, exactly like the voice path.
+        """
         engagement = self._trigger.on_chat(msg)
         if engagement is None:
             return None
-        await self._wake_and_run(engagement)
+        self._spawn_turn(engagement)
         return engagement
 
     async def on_worker_done(self, worker_id: str, result: str) -> Engagement:
-        """A finished background worker: always a wake carrying its result."""
+        """A finished background worker: always a wake carrying its result.
+
+        The delivery turn runs as a background task too — a worker landing
+        while another turn is mid-flight never waits and never blocks the loop.
+        """
         engagement = self._trigger.on_worker_done(worker_id, result)
-        await self._wake_and_run(engagement)
+        self._spawn_turn(engagement)
         return engagement
+
+    def _spawn_turn(self, engagement: Engagement) -> None:
+        """Start one wake turn as a tracked background task (the L7/W2 seam).
+
+        The task is held in ``_inflight`` until it finishes (the done-callback
+        discards it and retrieves the outcome — ``_wake_and_run`` never raises
+        (§9), so no exception can leak or go unretrieved). The feed path returns
+        the instant the task is created.
+        """
+        task = asyncio.create_task(self._wake_and_run(engagement))
+        self._inflight.add(task)
+        task.add_done_callback(self._on_turn_task_done)
+
+    def _on_turn_task_done(self, task: asyncio.Task[TurnResult]) -> None:
+        """Untrack a finished turn task and retrieve its outcome.
+
+        ``_wake_and_run`` never raises, so ``exception()`` is ``None`` by
+        construction — retrieving it keeps that guarantee observable (no
+        "exception was never retrieved" warning could ever fire).
+        """
+        self._inflight.discard(task)
+        if not task.cancelled():
+            task.exception()
+
+    async def drain(self) -> None:
+        """Await every in-flight wake turn — tests + orderly meeting end.
+
+        Loops until ``_inflight`` is empty so turns spawned while draining
+        (e.g. a worker finishing mid-drain) are awaited too. Never raises:
+        ``_wake_and_run`` absorbs all turn faults into honest results (§9).
+        """
+        while self._inflight:
+            await asyncio.gather(*tuple(self._inflight))
 
     async def _wake_and_run(self, engagement: Engagement) -> TurnResult:
         """ONE fully-contexted streamed turn; never raises — the loop must survive.
@@ -212,8 +276,15 @@ class Engine:
         carries ACCUMULATED text per ``msg_id`` — provider.py §1.1 — so the
         Engine speaks each fragment exactly once, never twice), keep the
         terminal RESULT text, and turn any ERROR chunk or raised exception into
-        an honest :class:`TurnResult` error. When the turn returns, the Engine
-        is immediately listening again.
+        an honest :class:`TurnResult` error.
+
+        Per-ask isolated (L7): everything a turn accumulates — ``turn_input``,
+        the ``seen`` per-msg text, ``spoken_parts``, ``result_text``, ``error``
+        — is LOCAL to this call, so overlapping turns never share stream state.
+        The turn's context is snapshotted HERE (the ``build_turn_input`` call
+        when the task first runs); lines landing in the notes after that never
+        enter this turn. On completion the result appends to ``_turns`` and
+        becomes ``_last_turn`` — the only shared writes, both at the end.
         """
         spoken_parts: list[str] = []
         result_text = ""
@@ -255,5 +326,6 @@ class Engine:
             result_text=result_text,
             error=error,
         )
+        self._turns.append(turn)
         self._last_turn = turn
         return turn

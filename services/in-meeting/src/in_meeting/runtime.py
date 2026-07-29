@@ -129,22 +129,24 @@ async def run_meeting(
     """Drive the assembled Engine from the meeting's injected sources until they end.
 
     Every transcript line is fed to :meth:`Engine.feed_transcript` — the trigger
-    decides whether Proxy wakes (idle lines are free); when a turn runs it is awaited
-    to completion before the next line is pulled. A turn fault never crashes this
-    driver: the Engine's ``_wake_and_run`` absorbs provider errors into an honest
-    ``last_turn.error`` and NEVER raises (engine.py §9), so the loop simply continues
-    to the next line. When ``chat_source`` is given it is consumed the same way
-    through :meth:`Engine.feed_chat` after the transcript source is exhausted.
-
-    SEQUENTIAL by design for THIS node (one turn awaited before the next input, the
-    L8 discipline): concurrent monitor-while-working — pumping transcript and chat
-    interleaved while a turn is in flight — is a later node (L7/W2), not built here.
+    decides whether Proxy wakes (idle lines are free). NEVER BLOCKED (L7/W2 done):
+    a wake turn runs as a background task inside the Engine, so the next line is
+    pulled immediately — Proxy keeps listening while it works, and overlapping asks
+    run as simultaneous turns, each isolated per ask. Turn COMPLETION order may
+    differ from ask order (``engine.turns`` holds every result, completion-ordered).
+    A turn fault never crashes this driver: the Engine's ``_wake_and_run`` absorbs
+    provider errors into an honest ``TurnResult.error`` and NEVER raises (engine.py
+    §9). When ``chat_source`` is given it is consumed the same way through
+    :meth:`Engine.feed_chat` after the transcript source is exhausted. Once both
+    sources end, :meth:`Engine.drain` awaits every in-flight turn — the driver
+    returns only when all turns have finished.
     """
     async for line in transcript_source:
         await engine.feed_transcript(line)
     if chat_source is not None:
         async for msg in chat_source:
             await engine.feed_chat(msg)
+    await engine.drain()
 
 
 __all__ = ["assemble_engine", "run_meeting"]

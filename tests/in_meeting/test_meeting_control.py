@@ -246,6 +246,7 @@ async def test_engine_delivers_meeting_server_and_tools_onto_the_provider_query(
     engagement = await engine.feed_transcript(
         TranscriptLine(text="Proxy, mute yourself for a minute.", speaker="Priya", timestamp=12.0, end_of_turn=True)
     )
+    await engine.drain()
 
     assert engagement is not None
     assert len(provider.calls) == 1

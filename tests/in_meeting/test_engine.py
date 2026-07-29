@@ -8,7 +8,10 @@ volatile prompt), runs ONE streamed provider turn, routes spoken TEXT to the
 ``speak`` sink, and returns to listening. "Claude Code, pointed at a meeting."
 
 Deterministic and offline: the provider is a scripted fake ``agentkit.Provider``
-(no live CLI, no network). The six AC groups (SPEC §3/§4/§9):
+(no live CLI, no network). Wake turns run as BACKGROUND tasks since
+ENGINE-CONCURRENCY (L7/W2 — see ``test_engine_concurrency.py``), so each test
+``await``s ``engine.drain()`` after feeding before reading a turn's outcome; every
+assertion below is unchanged in strength. The six AC groups (SPEC §3/§4/§9):
 
 1. wake with full context — captured provider args carry prime + map + injection
    guardrail in ``system_prompt`` and the ask + recent notes in ``prompt``;
@@ -132,6 +135,7 @@ async def test_addressed_line_wakes_with_full_context() -> None:
     await _feed_idle_context(engine, provider)
 
     engagement = await engine.feed_transcript(_line(_ASK))
+    await engine.drain()
 
     assert engagement is not None and engagement.source == "voice"
     assert len(provider.calls) == 1
@@ -160,6 +164,7 @@ async def test_spoken_text_reaches_the_sink_and_the_turn_result() -> None:
     engine, spoken = _engine(provider)
 
     await engine.feed_transcript(_line(_ASK))
+    await engine.drain()
 
     assert spoken == [_ANSWER]
     turn = engine.last_turn
@@ -186,6 +191,7 @@ async def test_accumulated_text_chunks_speak_only_the_new_suffix() -> None:
     engine, spoken = _engine(provider)
 
     await engine.feed_transcript(_line(_ASK))
+    await engine.drain()
 
     assert spoken == ["on it", ", the retry logic is in client.py:42"]
     assert engine.last_turn is not None
@@ -207,6 +213,7 @@ async def test_loop_resumes_and_idle_stays_free_after_a_turn() -> None:
 
     assert await engine.feed_transcript(_line(_ASK)) is not None
     assert await engine.feed_transcript(_line("Moving on to the roadmap.")) is None
+    await engine.drain()
     assert len(provider.calls) == 1  # exactly ONE turn ran across both lines
 
 
@@ -225,11 +232,13 @@ async def test_error_chunk_is_surfaced_honestly_and_the_loop_survives() -> None:
     engine, spoken = _engine(provider)
 
     first = await engine.feed_transcript(_line(_ASK))
+    await engine.drain()
     assert first is not None
     assert engine.last_turn is not None
     assert engine.last_turn.error is not None and "auth expired" in engine.last_turn.error
 
     second = await engine.feed_transcript(_line("Proxy, try that lookup again?"))
+    await engine.drain()
     assert second is not None
     assert len(provider.calls) == 2  # the loop survived and ran the next turn
     assert engine.last_turn.error is None
@@ -244,12 +253,14 @@ async def test_raising_provider_is_surfaced_honestly_and_the_loop_survives() -> 
     engine, spoken = _engine(provider)
 
     first = await engine.feed_transcript(_line(_ASK))
+    await engine.drain()
     assert first is not None  # feed_transcript did not raise
     assert engine.last_turn is not None
     assert engine.last_turn.error is not None and "died mid-turn" in engine.last_turn.error
     assert spoken == ["checking now"]  # the partial pre-fault speech was delivered
 
     second = await engine.feed_transcript(_line("Proxy, are you still with us?"))
+    await engine.drain()
     assert second is not None
     assert len(provider.calls) == 2
     assert engine.last_turn.error is None
@@ -267,6 +278,7 @@ async def test_no_map_runs_a_valid_turn_with_prime_and_guardrail_only() -> None:
     engine, spoken = _engine(provider, map_text=None)
 
     engagement = await engine.feed_transcript(_line(_ASK))
+    await engine.drain()
 
     assert engagement is not None
     assert engine.last_turn is not None and engine.last_turn.error is None
@@ -289,6 +301,7 @@ async def test_worker_done_wakes_a_turn_carrying_the_result() -> None:
     await _feed_idle_context(engine, provider)
 
     engagement = await engine.on_worker_done("w-7", "build green: 128 tests passed")
+    await engine.drain()
 
     assert engagement.source == "worker"
     assert len(provider.calls) == 1
@@ -323,6 +336,7 @@ async def test_chat_at_proxy_wakes_a_turn_and_plain_chat_is_free() -> None:
     assert provider.calls == []
 
     engagement = await engine.feed_chat(ChatLine(sender="Priya", message="@proxy summarize the decision"))
+    await engine.drain()
     assert engagement is not None and engagement.source == "chat"
     assert len(provider.calls) == 1
     prompt, _ = provider.calls[0]
@@ -367,6 +381,7 @@ async def test_mcp_servers_and_code_tools_reach_the_provider_query() -> None:
     )
 
     engagement = await engine.feed_transcript(_line(_ASK))
+    await engine.drain()
 
     assert engagement is not None
     assert len(provider.calls) == 1
@@ -393,6 +408,7 @@ async def test_wake_turn_carries_a_multi_turn_budget() -> None:
         disambiguate=lambda text: True, map_text=_MAP,
     )
     await default_engine.feed_transcript(_line(_ASK))
+    await default_engine.drain()
     _, query = provider.calls[0]
     assert query.max_turns > 1  # never 1 — that caps the agent after the ack
 
@@ -402,6 +418,7 @@ async def test_wake_turn_carries_a_multi_turn_budget() -> None:
         disambiguate=lambda text: True, map_text=_MAP, max_turns=25,
     )
     await override_engine.feed_transcript(_line(_ASK))
+    await override_engine.drain()
     _, query2 = provider2.calls[0]
     assert query2.max_turns == 25
 
@@ -414,6 +431,7 @@ async def test_engine_default_mcp_servers_is_none_backward_compat() -> None:
     engine, _ = _engine(provider)
 
     await engine.feed_transcript(_line(_ASK))
+    await engine.drain()
 
     assert len(provider.calls) == 1
     _, query = provider.calls[0]
@@ -432,6 +450,7 @@ async def test_arm_pending_ask_passthrough_wakes_on_the_reply() -> None:
 
     engine.arm_pending_ask()
     engagement = await engine.feed_transcript(_line("Yes, the checkout retries.", "Priya", 31.0))
+    await engine.drain()
 
     assert engagement is not None and engagement.source == "reply"
     assert len(provider.calls) == 1
