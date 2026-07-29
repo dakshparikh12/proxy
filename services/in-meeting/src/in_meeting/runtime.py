@@ -1,0 +1,135 @@
+"""The in-meeting runtime entrypoint — assemble the Engine, drive it from the meeting (RUNTIME).
+
+The Engine (``in_meeting.engine``) is the proven always-on loop, but on its own it is
+never a runnable product: something has to hand it its REAL access and feed it the
+meeting. This module is that integration spine — the future cutover target the old
+harness boot path will call — and it does exactly two things:
+
+* :func:`assemble_engine` wires the already-built pieces together: the pre-meeting
+  ``index.md`` map loaded by pinned sha (MAP-LOAD), the grounded code toolbelt served
+  off the tenant's clone (``premeeting.repo_context`` — the KEEP integration seam),
+  and the meeting-control toolbelt bound to THIS meeting's bot
+  (``in_meeting.meeting_control``). Degradation is honest by construction: an
+  unindexed repo / missing clone mounts no ``code_intel`` server and advertises no
+  code tools (the sim's caller-guard, mirrored), and Proxy still joins the meeting
+  with its meeting-control access intact.
+* :func:`run_meeting` drives the assembled Engine from the meeting's injected
+  sources: each transcript line is fed to ``Engine.feed_transcript`` (idle is free —
+  the trigger decides when Proxy wakes), and an optional chat source feeds
+  ``Engine.feed_chat``.
+
+Physics only (Law 4): this module ASSEMBLES access and PUMPS inputs — it makes no
+situation→action decision and owns no capability choice; everything "Proxy does"
+stays in the agent (the prime + its mounted access). The transcript SOURCE and the
+SPEAK sink are INJECTED seams: the real webhook→``TranscriptLine`` adapter and the
+real TTS speak sink are separate nodes that plug into them — none of that wiring
+lives here. No ``services/harness`` import.
+"""
+from __future__ import annotations
+
+from collections.abc import AsyncIterable
+from pathlib import Path
+from typing import Any
+
+from agentkit import Provider
+from claude_agent_sdk import McpSdkServerConfig
+from premeeting.repo_context import RepoContext
+
+from in_meeting.engine import CODE_TOOLS, Engine, SpeakFn, SpeakSink
+from in_meeting.map_loader import load_meeting_map
+from in_meeting.meeting_control import (
+    MEETING_TOOLS,
+    MeetingControlTransport,
+    build_meeting_control_server,
+)
+from in_meeting.notes import TranscriptLine
+from in_meeting.prompt import PROXY_SYSTEM_PROMPT
+from in_meeting.provider import EngineProvider
+from in_meeting.trigger import ChatLine, Disambiguate
+
+
+async def assemble_engine(
+    *,
+    model: str,
+    tenant_id: str,
+    repo: str,
+    pinned_sha: str,
+    bot_id: str,
+    transport: MeetingControlTransport,
+    conn: Any,
+    clone_path: Path,
+    speak: SpeakFn | SpeakSink,
+    disambiguate: Disambiguate,
+    provider: Provider | None = None,
+    prime: str = PROXY_SYSTEM_PROMPT,
+) -> Engine:
+    """Assemble ONE meeting's Engine with its full real access, honestly degraded.
+
+    The map is loaded for the meeting's exact pinned ``(tenant_id, repo, pinned_sha)``
+    key (never "latest"; ``None`` when unindexed — the Engine already runs prime-only,
+    D-032). The code toolbelt is built off the tenant's clone via
+    ``RepoContext.build_server()`` — ``None`` (no clone) mounts nothing, and the
+    caller-guard mirrors the sim's: the ``mcp__code_intel__*`` names are only
+    advertised when the server actually mounted, so the agent is never handed a tool
+    name that can't resolve. The meeting-control server is bound to THIS meeting's
+    ``bot_id`` at build time (one meeting's tools can never steer another's bot).
+
+    ``conn`` is a borrowed asyncpg connection (the ``premeeting.map_store`` shape);
+    ``speak``/``disambiguate``/``provider`` are the Engine's injected seams, threaded
+    through unchanged (``provider=None`` = the real :class:`EngineProvider`).
+    """
+    map_text = await load_meeting_map(
+        conn=conn, tenant_id=tenant_id, repo=repo, pinned_sha=pinned_sha
+    )
+    code_server: McpSdkServerConfig | None = RepoContext(
+        clone_path=Path(clone_path), map_text=map_text, tenant_id=tenant_id
+    ).build_server()
+    meeting_server = build_meeting_control_server(transport, bot_id=bot_id)
+
+    allowed_tools: tuple[str, ...] = (
+        CODE_TOOLS if code_server is not None else ()
+    ) + MEETING_TOOLS
+    mcp_servers: dict[str, Any] = {"meeting": meeting_server}
+    if code_server is not None:
+        mcp_servers["code_intel"] = code_server
+
+    return Engine(
+        model=model,
+        allowed_tools=allowed_tools,
+        speak=speak,
+        disambiguate=disambiguate,
+        map_text=map_text,
+        mcp_servers=mcp_servers,
+        prime=prime,
+        provider=provider if provider is not None else EngineProvider(),
+    )
+
+
+async def run_meeting(
+    engine: Engine,
+    *,
+    transcript_source: AsyncIterable[TranscriptLine],
+    chat_source: AsyncIterable[ChatLine] | None = None,
+) -> None:
+    """Drive the assembled Engine from the meeting's injected sources until they end.
+
+    Every transcript line is fed to :meth:`Engine.feed_transcript` — the trigger
+    decides whether Proxy wakes (idle lines are free); when a turn runs it is awaited
+    to completion before the next line is pulled. A turn fault never crashes this
+    driver: the Engine's ``_wake_and_run`` absorbs provider errors into an honest
+    ``last_turn.error`` and NEVER raises (engine.py §9), so the loop simply continues
+    to the next line. When ``chat_source`` is given it is consumed the same way
+    through :meth:`Engine.feed_chat` after the transcript source is exhausted.
+
+    SEQUENTIAL by design for THIS node (one turn awaited before the next input, the
+    L8 discipline): concurrent monitor-while-working — pumping transcript and chat
+    interleaved while a turn is in flight — is a later node (L7/W2), not built here.
+    """
+    async for line in transcript_source:
+        await engine.feed_transcript(line)
+    if chat_source is not None:
+        async for msg in chat_source:
+            await engine.feed_chat(msg)
+
+
+__all__ = ["assemble_engine", "run_meeting"]
