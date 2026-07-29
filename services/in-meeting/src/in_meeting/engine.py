@@ -142,10 +142,12 @@ class Engine:
         prime: str = PROXY_SYSTEM_PROMPT,
         recent_lines: int = 40,
         mcp_servers: dict[str, Any] | None = None,
+        max_turns: int = 16,
     ) -> None:
         self._model = model
         self._allowed_tools = allowed_tools
         self._mcp_servers = mcp_servers
+        self._max_turns = max_turns
         self._speak: SpeakFn = _as_speak_fn(speak)
         self._provider: Provider = provider if provider is not None else EngineProvider()
         self._map_text = map_text
@@ -226,6 +228,7 @@ class Engine:
                 allowed_tools=self._allowed_tools,
                 recent_lines=self._recent_lines,
                 mcp_servers=self._mcp_servers,
+                max_turns=self._max_turns,
             )
             # Accumulated-text-so-far per msg_id — spoken deltas are the new suffix.
             seen: dict[str, str] = {}

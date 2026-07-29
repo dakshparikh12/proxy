@@ -376,6 +376,37 @@ async def test_mcp_servers_and_code_tools_reach_the_provider_query() -> None:
 
 
 @pytest.mark.asyncio
+async def test_wake_turn_carries_a_multi_turn_budget() -> None:
+    """The wake turn must NOT be capped at a single SDK turn: SPEC §4.3's "reason →
+    plan → act, ONE PASS" is one WAKE, not one SDK step. A grounded turn needs several
+    iterations (load a deferred tool → call it → observe → answer); max_turns=1 caps
+    the agent right after the ack, before any tool result lands (the functional sim
+    caught exactly this). Assert the ProviderQuery on the real wake path carries a
+    multi-turn budget by default, and that a caller override threads through."""
+    provider = FakeProvider()
+
+    async def speak(_text: str) -> None:
+        return None
+
+    default_engine = Engine(
+        provider=provider, model=_MODEL, allowed_tools=(), speak=speak,
+        disambiguate=lambda text: True, map_text=_MAP,
+    )
+    await default_engine.feed_transcript(_line(_ASK))
+    _, query = provider.calls[0]
+    assert query.max_turns > 1  # never 1 — that caps the agent after the ack
+
+    provider2 = FakeProvider()
+    override_engine = Engine(
+        provider=provider2, model=_MODEL, allowed_tools=(), speak=speak,
+        disambiguate=lambda text: True, map_text=_MAP, max_turns=25,
+    )
+    await override_engine.feed_transcript(_line(_ASK))
+    _, query2 = provider2.calls[0]
+    assert query2.max_turns == 25
+
+
+@pytest.mark.asyncio
 async def test_engine_default_mcp_servers_is_none_backward_compat() -> None:
     """CODE-LOOKUP AC2 — an Engine built WITHOUT mcp_servers (the current callers)
     keeps the current behavior: the query carries no server config."""

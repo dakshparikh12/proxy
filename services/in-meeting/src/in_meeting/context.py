@@ -48,6 +48,7 @@ def build_turn_input(
     allowed_tools: tuple[str, ...],
     recent_lines: int = 40,
     mcp_servers: dict[str, Any] | None = None,
+    max_turns: int = 16,
 ) -> TurnInput:
     """Assemble one wake turn's input: stable cached prefix + volatile prompt.
 
@@ -62,6 +63,13 @@ def build_turn_input(
     verbatim onto the query so the ``mcp__<server>__*`` names in
     ``allowed_tools`` are actually reachable. ``None`` (the default) mounts
     nothing — the pre-toolbelt behavior, unchanged.
+
+    ``max_turns`` is the agent's per-wake loop budget. SPEC §4.3's "reason →
+    plan → act, ONE PASS" is one WAKE, not one SDK turn: a grounded turn needs
+    several iterations (load a deferred tool, call it, observe, reason, answer),
+    so the default is a multi-turn budget (never 1 — that caps the agent after
+    the ack, before any tool result lands). Bounded so a wake can't run away; the
+    heavy/long work is spawned to a worker, not run inline past this budget.
     """
     stable = prime
     if map_text is not None:
@@ -81,5 +89,6 @@ def build_turn_input(
             allowed_tools=allowed_tools,
             system_prompt=stable,
             mcp_servers=mcp_servers,
+            max_turns=max_turns,
         ),
     )
