@@ -157,7 +157,7 @@ def build_wake_turn(
         provider = ClaudeAgentProvider()
     reg = registry if registry is not None else behaviors.REGISTRY
     reader = notes_reader if notes_reader is not None else _durable_notes_reader(runtime)
-    servers = mcp_servers if mcp_servers is not None else _build_code_intel_servers(runtime)
+    servers = mcp_servers if mcp_servers is not None else _build_servers(runtime)
     return WakeTurn(
         meeting_id=runtime.header.meeting_id,
         provider=provider,
@@ -189,6 +189,72 @@ def _build_code_intel_servers(runtime: Any) -> dict[str, Any] | None:
     if server is None:
         return None
     return {"code_intel": server}
+
+
+def _build_dispatch_server(runtime: Any) -> dict[str, Any] | None:
+    """Mount Doc 04 §112's ``dispatch_workroom`` tool for this meeting.
+
+    This is the tool the wake turn calls to hand real work to the Workroom — the wrapper
+    §112 assigns the harness and that had no implementation until now (see
+    ``docs/gaps/DOC04-WORKROOM-DISPATCH-UNWIRED.md``). Mounted the same way as
+    ``code_intel``: a factory-per-query SDK MCP server bound to THIS meeting.
+
+    ``meeting_id`` is bound here, from the runtime's own header, so the model cannot supply
+    one. The completion goes to the LIVE sink: the terminal envelope becomes a
+    ``MeetingEvent`` and Proxy re-wakes to deliver it (§3.2). Post-meeting execution uses
+    the other sink and does NOT mount this tool — it has no wake turn to call it.
+
+    Fail-closed like ``_build_code_intel_servers``: without a ``db`` handle or a run loop
+    there is nothing to dispatch into, so the tool is not mounted and the turn degrades to
+    having no dispatch verb rather than mounting one that cannot work.
+    """
+    db = getattr(runtime, "db", None)
+    run_loop = getattr(runtime, "run_loop", None)
+    if db is None or run_loop is None:
+        return None
+    try:
+        from datetime import datetime, timezone
+
+        from .dispatch import make_dispatch_workroom_server
+        from .dispatch_sinks import live_sink
+
+        meeting_id = runtime.header.meeting_id
+
+        def _run_task(bundle: Any, *, run_id: Any) -> Any:
+            """Hand the claimed bundle to Doc 05's SessionDriver."""
+            from workroom.session import SessionDriver
+
+            return SessionDriver(db=db, disposition="worker").run_task(
+                bundle, run_id=run_id
+            )
+
+        def _on_complete(envelope: Any) -> None:
+            live_sink(run_loop, task_id=envelope.task_id)(envelope)
+
+        server = make_dispatch_workroom_server(
+            db=db,
+            meeting_id=meeting_id,
+            now=lambda: datetime.now(timezone.utc),
+            run_task=_run_task,
+            on_complete=_on_complete,
+        )
+    except Exception:  # noqa: BLE001 - a build fault degrades to no-mount, never a crash
+        return None
+    return {"dispatch_workroom": server}
+
+
+def _build_servers(runtime: Any) -> dict[str, Any] | None:
+    """Every host-side MCP server this meeting's wake turn mounts.
+
+    ``code_intel`` (the codebase graph) and ``dispatch_workroom`` (§112). Either may be
+    absent — an unindexed repo yields no ``code_intel``, and a runtime with no run loop
+    yields no dispatch verb — and the turn still assembles with whatever is available.
+    """
+    servers: dict[str, Any] = {}
+    for built in (_build_code_intel_servers(runtime), _build_dispatch_server(runtime)):
+        if built:
+            servers.update(built)
+    return servers or None
 
 
 def _durable_notes_reader(runtime: Any) -> Callable[[str], Awaitable[str]]:
