@@ -306,7 +306,17 @@ async def _dispatch_meeting_event(
             if engine is not None and name in _ENGINE_TRANSCRIPT_EVENTS:
                 line = _engine_transcript_line(body)
                 if line is not None:
-                    await engine.feed_transcript(line)
+                    try:
+                        await engine.feed_transcript(line)
+                    except Exception:  # noqa: BLE001 - the feed path is designed never-raise;
+                        # an escape is logged for a human and the drain continues, so one
+                        # bad line never leaves the row unprocessed (never a poison row) —
+                        # and the notes-plane ingest below still runs.
+                        logging.getLogger(__name__).exception(
+                            "engine transcript feed failed on meeting %s (never-raise "
+                            "boundary escaped) — the row still drains",
+                            meeting_id,
+                        )
             from transport.wire import WireDriftError
 
             try:
@@ -328,7 +338,15 @@ async def _dispatch_meeting_event(
         if engine is not None:
             msg = _engine_chat_line(payload)
             if msg is not None:
-                await engine.feed_chat(msg)
+                try:
+                    await engine.feed_chat(msg)
+                except Exception:  # noqa: BLE001 - same never-raise boundary defense as the
+                    # transcript feed: log the escape, keep draining (never a poison row).
+                    logging.getLogger(__name__).exception(
+                        "engine chat feed failed on meeting %s (never-raise boundary "
+                        "escaped) — the row still drains",
+                        meeting_id,
+                    )
     elif is_signal:
         # Route the durably-persisted roster / bot-status payload through the meeting's ONE
         # WebhookProcessor bound to its carrier (C-SIGNALWIRE): the derived roster

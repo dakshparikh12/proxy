@@ -64,10 +64,10 @@ _log = logging.getLogger(__name__)
 # never block a test / a shutdown forever. unit: seconds.
 DEFAULT_MEETING_TIMEOUT_S: float = 3600.0
 
-# Bound on each meeting-end engine teardown step (drain the in-flight turns, flush +
-# close the speak pipe). Teardown must never deadlock meeting end (§3.8): a hung turn
-# or a stuck synth is abandoned after this bound and the close still completes the
-# operation row. unit: seconds.
+# Bound on EACH meeting-end engine teardown step (drain the in-flight turns, flush +
+# close the speak pipe, kill the warm sandbox). Teardown must never deadlock meeting
+# end (§3.8): a hung turn, a stuck synth, or a hanging E2B kill is abandoned after
+# this bound and the close still completes the operation row. unit: seconds.
 ENGINE_TEARDOWN_TIMEOUT_S: float = 30.0
 
 # Recall bot-status event names that mean "the bot is now IN the room" — the moment the
@@ -547,31 +547,42 @@ async def run_meeting_until_end(
     return outcome
 
 
-async def _teardown_engine(runtime: Any, meeting_id: str) -> None:
+async def _teardown_engine(
+    runtime: Any, meeting_id: str, *, timeout_s: float | None = None
+) -> None:
     """Meeting-end lifecycle for the NEW engine — ordered, bounded, never-deadlock.
 
     Order: ``engine.drain()`` (every in-flight wake turn finishes or the bound trips) →
     ``speak_pipe.aclose()`` (the trailing partial is flushed into the room, then quiet) →
     ``sandbox.kill()`` (the provisioner owns the warm handle's lifetime; the kill rides
     the ONE ``call_external`` seam like every E2B round-trip) → drop the meeting's
-    Output-Media channel. Every step is best-effort + bounded (§3.8): a hung turn or a
-    dead vendor edge must never block the operation-row completion behind it.
+    Output-Media channel. Every step is best-effort + WALL-CLOCK bounded (§3.8): each
+    await — the kill included — rides ``asyncio.wait_for`` on the same teardown bound
+    (``call_external`` retries raised transport errors but has no clock of its own, so
+    a HANGING vendor edge is abandoned by the bound, not waited on). A hung turn, a
+    stuck synth, or a wedged E2B kill must never block the operation-row completion
+    behind it. ``timeout_s`` overrides the module bound (``ENGINE_TEARDOWN_TIMEOUT_S``)
+    for callers/tests that need a tighter clock; resolved at call time.
     """
+    bound = timeout_s if timeout_s is not None else ENGINE_TEARDOWN_TIMEOUT_S
     engine = getattr(runtime, "engine", None)
     if engine is not None:
         with contextlib.suppress(Exception):
-            await asyncio.wait_for(engine.drain(), timeout=ENGINE_TEARDOWN_TIMEOUT_S)
+            await asyncio.wait_for(engine.drain(), timeout=bound)
     pipe = getattr(runtime, "speak_pipe", None)
     aclose = getattr(pipe, "aclose", None)
     if aclose is not None:
         with contextlib.suppress(Exception):
-            await asyncio.wait_for(aclose(), timeout=ENGINE_TEARDOWN_TIMEOUT_S)
+            await asyncio.wait_for(aclose(), timeout=bound)
     sandbox = getattr(runtime, "engine_sandbox", None)
     if sandbox is not None:
         with contextlib.suppress(Exception):
             from libs.http.src.http import external as _http
 
-            await _http.call_external(lambda: sandbox.kill(), service="e2b", max_retries=1)
+            await asyncio.wait_for(
+                _http.call_external(lambda: sandbox.kill(), service="e2b", max_retries=1),
+                timeout=bound,
+            )
     if engine is not None or pipe is not None:
         with contextlib.suppress(Exception):
             from in_meeting import output_media

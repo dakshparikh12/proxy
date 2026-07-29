@@ -156,9 +156,16 @@ class _LoaderRecorder:
 class FakeConn:
     """A minimal asyncpg-conn stand-in: routes fetchrow by table, records execs."""
 
-    def __init__(self, *, meeting_row: dict[str, Any] | None = None, repo_row: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        meeting_row: dict[str, Any] | None = None,
+        repo_row: dict[str, Any] | None = None,
+        pending_webhooks: list[dict[str, Any]] | None = None,
+    ) -> None:
         self.meeting_row = meeting_row
         self.repo_row = repo_row
+        self.pending_webhooks = list(pending_webhooks or [])
         self.executed: list[tuple[str, tuple[Any, ...]]] = []
 
     async def fetchrow(self, sql: str, *args: Any) -> dict[str, Any] | None:
@@ -167,6 +174,11 @@ class FakeConn:
         if "FROM repos" in sql:
             return self.repo_row
         return None
+
+    async def fetch(self, sql: str, *args: Any) -> list[dict[str, Any]]:
+        if "FROM webhook_events" in sql:
+            return list(self.pending_webhooks)
+        return []
 
     async def execute(self, sql: str, *args: Any) -> str:
         self.executed.append((sql, args))
@@ -421,6 +433,10 @@ async def test_partial_transcript_is_not_fed_to_the_engine() -> None:
     await _dispatch_meeting_event(payload, db=db, registry=FakeRegistry(runtime))
 
     assert engine.transcripts == [], "a partial must not reach the engine (double-wake)"
+    assert runtime.ingested and runtime.ingested[0]["words"] == "Proxy, pi", (
+        "the partial must STILL reach the notes-plane carrier ingest — its coalescer "
+        "owns partial/final semantics; only the ENGINE feed is finals-gated"
+    )
 
 
 @pytest.mark.asyncio
@@ -465,6 +481,68 @@ async def test_chat_event_before_boot_is_a_safe_noop() -> None:
         "data": {"data": {"participant": {"name": "P"}, "data": {"text": "@proxy hi"}}, "bot": {"id": "bot-7"}},
     }
     await _dispatch_meeting_event(payload, db=db, registry=FakeRegistry(runtime))  # must not raise
+
+
+class RaisingEngine(FakeEngine):
+    """An engine whose designed-never-raise feed path ESCAPES (scripted raise)."""
+
+    async def feed_transcript(self, line: TranscriptLine) -> None:
+        raise RuntimeError("transcript feed escaped (scripted)")
+
+    async def feed_chat(self, msg: ChatLine) -> None:
+        raise RuntimeError("chat feed escaped (scripted)")
+
+
+@pytest.mark.asyncio
+async def test_engine_feed_escape_never_poisons_the_drain(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """AC2/AC3 (poison-row defense) — the Engine's feed path is designed
+    never-raise, but an ESCAPE must not leave the webhook row unprocessed: the
+    drain logs the fault, still marks BOTH rows processed (never a poison row),
+    and the notes-plane carrier ingest still received the transcript body."""
+    from harness.webhooks import drain_pending_webhooks
+
+    engine = RaisingEngine()
+    runtime = FakeRuntime(engine)
+    transcript_event = {
+        "event": "transcript.data",
+        "data": {
+            "bot_id": "bot-7",
+            "words": "Proxy, ping?",
+            "speaker": "Sam",
+            "timestamp": 12.5,
+            "end_of_turn": True,
+        },
+    }
+    chat_event = {
+        "event": "participant_events.chat_message",
+        "data": {
+            "data": {"participant": {"name": "Priya"}, "data": {"text": "@proxy hi"}},
+            "bot": {"id": "bot-7"},
+        },
+    }
+    conn = FakeConn(
+        meeting_row=_resolved_row(),
+        pending_webhooks=[
+            {"id": "wh-1", "payload": transcript_event},
+            {"id": "wh-2", "payload": chat_event},
+        ],
+    )
+    db = FakeDb(conn)
+
+    with caplog.at_level("ERROR"):
+        drained = await drain_pending_webhooks(db, registry=FakeRegistry(runtime))
+
+    assert drained == 2, "the drain must complete past a raising engine feed"
+    processed = [sql for sql, _ in conn.executed if "processed" in sql]
+    assert len(processed) == 2, "BOTH rows must still be marked processed (never a poison row)"
+    assert runtime.ingested and runtime.ingested[0]["words"] == "Proxy, ping?", (
+        "the notes-plane ingest must still receive the body past an engine-feed escape"
+    )
+    assert sum("feed" in rec.getMessage() for rec in caplog.records) >= 2, (
+        "each engine-feed escape must be logged for a human (never silent)"
+    )
 
 
 # ── AC5: meeting end — engine drained, pipe closed, sandbox killed, row done ──
@@ -542,6 +620,95 @@ async def test_meeting_end_drains_engine_kills_sandbox_completes_row(
     assert registry.get("m-1") is None, "the runtime was not dropped at meeting end"
     assert any("completed" in sql for sql, _ in conn.executed), (
         "the operation_runs row was not completed at meeting end"
+    )
+
+
+class HangingKillSandboxHandle(FakeSandboxHandle):
+    """A sandbox handle whose kill HANGS — never returns, never raises.
+
+    ``call_external`` retries on RAISED transport errors but has no wall-clock
+    bound of its own, so a hang (a wedged E2B edge) is the exact failure the
+    teardown bound must cover."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.kill_started = asyncio.Event()
+
+    async def kill(self) -> None:
+        self.kill_started.set()
+        await asyncio.Event().wait()  # hangs forever (until cancelled by the bound)
+
+
+@pytest.mark.asyncio
+async def test_hanging_sandbox_kill_is_bounded_and_row_still_completes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """AC5 (bounded teardown) — a sandbox kill that HANGS (never returns, never
+    raises) must not wedge meeting end: every teardown step rides the same
+    wall-clock bound, so the launched entry still returns promptly and the
+    operation_runs row still completes."""
+    from harness import meeting_runtime as mr
+    from harness import provisioner as prov
+    from in_meeting import runtime as im_runtime
+
+    monkeypatch.setenv("PROXY_TENANT_VOLUME_ROOT", str(tmp_path))
+    monkeypatch.setattr(mr, "start_meeting_scribe", lambda *a, **k: _NullScribe())
+    monkeypatch.setattr(im_runtime, "load_meeting_map", _LoaderRecorder(None))
+    # The tiny injectable teardown bound: with the kill genuinely bounded the whole
+    # teardown finishes in well under a second; an UNbounded kill wedges forever.
+    monkeypatch.setattr(prov, "ENGINE_TEARDOWN_TIMEOUT_S", 0.1)
+
+    async def _fake_claim(db: Any, meeting_id: str, op: str, *, created_by: Any = None) -> str:
+        return "run-1"
+
+    monkeypatch.setattr(prov, "claim_meeting", _fake_claim)
+
+    conn = FakeConn(meeting_row=_resolved_row(), repo_row=_repo_row())
+    db = FakeDb(conn)
+    registry = mr.MeetingRuntimeRegistry(db)
+    backend = FakeSandboxBackend()
+    backend.handle = HangingKillSandboxHandle()
+    pipe = FakeSpeakPipe()
+
+    payload = {"event": "bot.in_call", "data": {"bot_id": "bot-7"}}
+    task = asyncio.ensure_future(
+        prov.run_meeting_until_end(
+            payload,
+            db=db,
+            registry=registry,
+            timeout_s=5.0,
+            provider=FakeProvider(),
+            transport=FakeTransport(),
+            speak=pipe,
+            disambiguate=_confirm_every_hit,
+            sandbox_backend=backend,
+            model="claude-orch-test",
+        )
+    )
+
+    runtime = None
+    for _ in range(300):
+        runtime = registry.get("m-1")
+        if runtime is not None and getattr(runtime, "engine", None) is not None:
+            break
+        await asyncio.sleep(0.01)
+    assert runtime is not None and runtime.engine is not None, "the boot did not assemble the engine"
+
+    from transport.signals import MeetingEnd
+
+    await runtime.carrier.emit(MeetingEnd(reason="call_ended"))
+    # RED on an unbounded kill: the teardown wedges on sandbox.kill() and this trips.
+    outcome = await asyncio.wait_for(task, timeout=3.0)
+
+    assert outcome.ran_to_end is True
+    handle = backend.handle
+    assert isinstance(handle, HangingKillSandboxHandle) and handle.kill_started.is_set(), (
+        "the kill must still be ATTEMPTED (bounded, not skipped)"
+    )
+    assert pipe.closed is True, "the speak pipe still closes ahead of the hung kill"
+    assert registry.get("m-1") is None, "the runtime must still be dropped behind a hung kill"
+    assert any("completed" in sql for sql, _ in conn.executed), (
+        "the operation_runs row must still complete behind a hung sandbox kill"
     )
 
 
