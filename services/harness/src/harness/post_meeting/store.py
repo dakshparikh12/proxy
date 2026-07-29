@@ -78,14 +78,42 @@ class PostMeetingTaskStore:
             )
 
     async def set_plan(self, task_id: Any, plan: str, *, state: TaskState) -> None:
+        """Write the plan and STAMP ``planned_at`` — the §3.4 expiry clock.
+
+        ``planned_at`` is set here and nowhere else on the create path, because this is the
+        moment the plan is put in front of a human. Measuring expiry from ``created_at``
+        would charge the human for the time Proxy spent triaging (migration 0012).
+        """
         async with self._db.acquire() as conn:
             await conn.execute(
-                "UPDATE post_meeting_tasks SET plan = $2, state = $3, updated_at = now() "
-                "WHERE task_id = $1",
+                "UPDATE post_meeting_tasks "
+                "   SET plan = $2, state = $3, planned_at = now(), updated_at = now() "
+                " WHERE task_id = $1",
                 task_id,
                 plan,
                 state.value,
             )
+
+    async def planned_tasks_for_sweep(self, *, tenant_id: Any = None) -> list[dict[str, Any]]:
+        """The rows ``plan.expire_stale_plans`` needs: task_id, state, planned_at.
+
+        Reads only ``state='PLANNED'`` — the sweep never acts on anything else, so the
+        partial index (migration 0012) serves this exactly. Without this reader the sweep
+        had no way to obtain ``planned_at`` and silently expired nothing.
+        """
+        async with self._db.acquire() as conn:
+            if tenant_id is None:
+                rows = await conn.fetch(
+                    "SELECT task_id, state, planned_at FROM post_meeting_tasks "
+                    " WHERE state = 'PLANNED'"
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT task_id, state, planned_at FROM post_meeting_tasks "
+                    " WHERE state = 'PLANNED' AND tenant_id = $1",
+                    tenant_id,
+                )
+            return [dict(r) for r in rows]
 
     async def approve(self, task_id: Any, *, approved_by: str, approved_at: Any) -> None:
         """Write APPROVED with its approver in ONE statement.

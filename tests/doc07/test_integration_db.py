@@ -335,3 +335,76 @@ async def test_clarify_items_round_trips_against_the_real_table(db, seed):
     pending = await store.pending_for_meeting(meeting_id)
     assert [r["clarify_id"] for r in pending] == [cid]
     assert pending[0]["blocking_ref"] == "m#0"
+
+
+# ── AC-PME-08 · the expiry clock, against the real column ─────────────────
+async def test_ac_pme_08_set_plan_stamps_planned_at(db, seed):
+    """Before migration 0012 there was no planned_at, so nothing could ever expire."""
+    tenant_id, meeting_id = seed
+    store = PostMeetingTaskStore(db)
+    tid = await _task(store, tenant_id, meeting_id)
+
+    async with db.acquire() as conn:
+        before = await conn.fetchval(
+            "SELECT planned_at FROM post_meeting_tasks WHERE task_id=$1", tid
+        )
+    assert before is None, "planned_at must be NULL until a plan is presented"
+
+    await store.set_plan(tid, "PLAN: bump the ceiling", state=TaskState.PLANNED)
+    async with db.acquire() as conn:
+        after = await conn.fetchval(
+            "SELECT planned_at FROM post_meeting_tasks WHERE task_id=$1", tid
+        )
+    assert after is not None, "set_plan did not stamp the expiry clock"
+
+
+async def test_ac_pme_08_sweep_reader_returns_what_expire_needs(db, seed):
+    """The store can now supply (task_id, state, planned_at) — it previously could not."""
+    tenant_id, meeting_id = seed
+    store = PostMeetingTaskStore(db)
+    tid = await _task(store, tenant_id, meeting_id)
+    await store.set_plan(tid, "PLAN", state=TaskState.PLANNED)
+
+    rows = await store.planned_tasks_for_sweep(tenant_id=tenant_id)
+    assert len(rows) == 1
+    row = rows[0]
+    assert set(row) >= {"task_id", "state", "planned_at"}
+    assert row["state"] == TaskState.PLANNED.value
+    assert isinstance(row["planned_at"], datetime)
+
+
+async def test_ac_pme_08_expiry_runs_end_to_end_on_real_rows(db, seed):
+    """expire_stale_plans over rows read from Postgres — the path that never worked."""
+    from datetime import timedelta
+
+    from harness.post_meeting.config import PostMeetingConfig
+    from harness.post_meeting.plan import expire_stale_plans
+
+    tenant_id, meeting_id = seed
+    store = PostMeetingTaskStore(db)
+    tid = await _task(store, tenant_id, meeting_id)
+    await store.set_plan(tid, "PLAN", state=TaskState.PLANNED)
+
+    rows = await store.planned_tasks_for_sweep(tenant_id=tenant_id)
+    planned_at = rows[0]["planned_at"]
+    cfg = PostMeetingConfig(plan_expiry_hours=48)
+
+    # Not yet expired.
+    res = await expire_stale_plans(
+        rows, store=store, now=planned_at + timedelta(hours=47), config=cfg
+    )
+    assert res.expired == []
+    assert (await store.get(tid))["state"] == TaskState.PLANNED.value
+
+    # Past the window: closes quietly.
+    res = await expire_stale_plans(
+        rows, store=store, now=planned_at + timedelta(hours=49), config=cfg
+    )
+    assert res.expired == [tid]
+    assert res.notifications_sent == 0
+    row = await store.get(tid)
+    assert row["state"] == TaskState.DISCARDED.value
+    assert "expired" in row["outcome"]
+
+    # And the sweep reader no longer returns it.
+    assert await store.planned_tasks_for_sweep(tenant_id=tenant_id) == []

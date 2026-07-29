@@ -60,6 +60,7 @@ class FakeTaskStore:
             "draft_id": None,
             "cost_usd": 0.0,
             "outcome": None,
+            "planned_at": None,
         }
         self.tables_written.add("post_meeting_tasks")
         return tid
@@ -71,7 +72,15 @@ class FakeTaskStore:
         self._update(task_id, state=_val(state))
 
     async def set_plan(self, task_id: Any, plan: str, *, state: TaskState) -> None:
-        self._update(task_id, plan=plan, state=_val(state))
+        # Mirrors the real store: writing a plan stamps the §3.4 expiry clock.
+        self._update(task_id, plan=plan, state=_val(state), planned_at=_now())
+
+    async def planned_tasks_for_sweep(self, *, tenant_id: Any = None) -> list[dict[str, Any]]:
+        return [
+            {"task_id": tid, "state": r["state"], "planned_at": r.get("planned_at")}
+            for tid, r in self.rows.items()
+            if r["state"] == "PLANNED" and (tenant_id is None or r["tenant_id"] == tenant_id)
+        ]
 
     async def approve(self, task_id: Any, *, approved_by: str, approved_at: Any) -> None:
         self._update(
@@ -250,6 +259,12 @@ class FakeFinalNotes:
     action_items: list[Any] = field(default_factory=list)
     decisions: list[Any] = field(default_factory=list)
     open_questions: list[Any] = field(default_factory=list)
+
+
+def _now() -> Any:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc)
 
 
 def _val(v: Any) -> Any:
