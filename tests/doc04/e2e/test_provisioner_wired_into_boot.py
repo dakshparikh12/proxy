@@ -135,13 +135,19 @@ async def test_boot_step_wires_provisioner_and_drain_routes_in_call() -> None:
         # The runtime was assembled + launched by the provisioner (not a Scribe-only start).
         for _ in range(300):
             rt = registry.get(meeting_id)
-            if rt is not None and rt.run_loop is not None:
+            if rt is not None and rt.run_loop is not None and rt.engine is not None:
                 break
             await asyncio.sleep(0.01)
         runtime = registry.get(meeting_id)
         assert runtime is not None and runtime.run_loop is not None, (
             "the provisioner did not assemble + launch the runtime on the booted drain path"
         )
+        # THE CUTOVER: the booted drain path assembles the NEW in-meeting engine (the
+        # brain seat) — reachable by meeting id off the registry entry, old brain absent.
+        assert runtime.engine is not None, (
+            "the booted drain path did not assemble the in-meeting engine (cutover seam dead)"
+        )
+        assert runtime.live_brain is None, "the OLD live brain must no longer own the boot path"
         # is_owner fencing is bound off the claimed row's handle.
         assert runtime.operation_handle is not None
         assert runtime.operation_handle.is_owner is True

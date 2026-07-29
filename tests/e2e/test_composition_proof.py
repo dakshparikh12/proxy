@@ -1,33 +1,38 @@
 """COMPOSITION PROOF — boot the product and drive ONE scripted end-to-end meeting.
 
-Phase-1 Structural-Convergence gate (§Stage D). This is the whole-product assembly proof:
-it BOOTS the real harness (real Postgres, real ``SignalCarrier``, real ``RunLoop`` +
-``MeetingRuntime`` + name-gate + projector + gated emitter + close + reconcile) and drives a
-single meeting through the entire reactive arc
+Phase-1 Structural-Convergence gate (§Stage D), re-anchored by THE CUTOVER: the brain on
+the production boot path is the NEW in-meeting engine (``in_meeting.engine.Engine``,
+assembled by ``harness.provisioner._assemble_engine``). This is the whole-product assembly
+proof: it BOOTS the real harness (real Postgres, real ``SignalCarrier`` + ``MeetingRuntime``
++ webhook drain + close + reconcile) and drives a single meeting through the entire arc
 
-    CONNECT/JOIN  →  UNDERSTAND  →  REACTIVE LOOP (ask → name-gate → wake turn →
-    DIRECT ANSWER)  →  DELIVER  →  CLOSE  →  RECONCILE
+    CONNECT/JOIN  →  UNDERSTAND  →  ENGINE LOOP (ask → trigger → wake turn →
+    DIRECT ANSWER into the speak pipe)  →  CLOSE  →  RECONCILE
 
 with vendors faked ONLY at their seams: the Anthropic MODEL at the ``agentkit.Provider``
-seam (a recording ``FakeProvider`` — the exact seam the provisioner threads), the Scribe
-note-fold micro-call stubbed at ``_real_scribe_call``, and the close-leg (Sonnet + GCS +
+seam, the SPEAK sink at the engine's injected speak seam (production = Cartesia→Output-Media;
+here a recorder), the DISAMBIGUATOR at the trigger's async confirm seam, the E2B sandbox at
+the ``provision_sandbox`` backend seam, the Recall transport at the meeting-control Protocol,
+the Scribe note-fold micro-call at ``_real_scribe_call``, and the close-leg (Sonnet + GCS +
 chat) at the injected ``CloseConfig``. EVERY internal seam is real — the real webhook drain,
-the real transport→carrier bridge, the real run loop, the real projector→emit frontier.
+the real provisioner claim + engine assembly, the real trigger/notes/context spine.
 
 The proof asserts the arc COMPLETES:
-  * ``in_call`` (drained through the real provisioner ``launch``) BOOTS a live runtime;
-  * an ADDRESSED transcript ("Proxy, …") drained through the real transport→carrier bridge
-    reaches the wake turn and the model's grounded answer is DELIVERED on the gated wire
-    (is_owner fencing, §3.7) — the DIRECT-ANSWER arm end-to-end;
+  * ``in_call`` (drained through the real provisioner ``launch``) BOOTS a live runtime whose
+    ``engine`` is the NEW brain (the OLD live brain is absent — the cutover invariant);
+  * an ADDRESSED transcript ("Proxy, …") drained through the real webhook dispatch reaches
+    ``engine.feed_transcript``, wakes ONE real provider turn, and the grounded answer lands
+    in the speak pipe — the DIRECT-ANSWER arm end-to-end;
   * ``call_ended`` ENDS the meeting → the ordered close runs → the meeting row is stamped
     ``ended_at`` (durable close, §3);
+  * the heavy-work arm is MOUNTED through the boot path (SANDBOX_TOOLS advertised off the
+    warm handle) and the meeting-end lifecycle closes it (engine drained → speak pipe closed
+    → sandbox killed → operation row completed);
   * the reconcile sweep runs clean over the durable substrate;
   * and — the whole-assembly invariant — ZERO unhandled asyncio task exceptions fire across
     the entire arc (a hollow seam surfaces here as a crashed background task, never silently).
 
-Env-gated on ``TEST_DATABASE_URL`` (run via ``build/setup-test-env.sh``). The WORKROOM
-DISPATCH arm is proven separately once its bridge is wired (Stage C1); this proof covers the
-DIRECT-ANSWER arc, which is the fully-composed spine.
+Env-gated on ``TEST_DATABASE_URL`` (run via ``build/setup-test-env.sh``).
 """
 from __future__ import annotations
 
@@ -41,7 +46,7 @@ from libs.db import Database, open_pool, repos
 from libs.contracts import AgentChunk
 
 from harness.meeting_runtime import MeetingRuntimeRegistry
-from harness.provisioner import provision_meeting
+from harness.provisioner import provision_meeting, run_meeting_until_end
 from harness.webhooks import drain_pending_webhooks
 
 _DSN = os.environ.get("TEST_DATABASE_URL", "").strip()
@@ -55,20 +60,18 @@ _ANSWER = "handle_login is called from services/auth/session.py:42 (resolved)"
 class FakeProvider:
     """A recording ``agentkit.Provider`` stub — NO live Anthropic call (the model seam).
 
-    Yields a canned ``AgentChunk`` stream for a DIRECT ANSWER: an INIT, a ``speak`` TOOL_USE
-    carrying the grounded answer (the projector maps this to a ``VoiceSpeak`` → the gated
-    ``emitter.speak``), then a RESULT. This is the exact recording-stub shape the live-brain
-    assembly seam test uses; the provisioner threads it onto ``query.abort`` just as the real
-    ``ClaudeAgentProvider`` is threaded.
+    Yields the ENGINE's canned turn: INIT → an accumulated-TEXT chunk carrying the
+    grounded answer (the engine routes the new suffix to its injected ``speak`` sink)
+    → RESULT. This is the exact seam ``_assemble_engine`` threads (``provider=``).
     """
 
     name = "claude"
 
-    def __init__(self, *, said: str = _ANSWER, dispatch_task: str | None = None) -> None:
+    def __init__(self, *, said: str = _ANSWER) -> None:
         self._said = said
-        self._dispatch_task = dispatch_task
         self.calls = 0
         self.seen_prompts: list[str] = []
+        self.seen_queries: list = []
 
     def matches(self, model: str) -> bool:  # pragma: no cover - seam parity
         return True
@@ -76,33 +79,71 @@ class FakeProvider:
     def stream(self, prompt, query):
         self.calls += 1
         self.seen_prompts.append(prompt)
+        self.seen_queries.append(query)
         said = self._said
-        dispatch_task = self._dispatch_task
 
         async def gen():
             yield AgentChunk(type="INIT", metadata={"session_id": "comp-sess"})
-            if dispatch_task is not None:
-                # A WORKROOM DISPATCH tool-use — the model decides real code work belongs in
-                # the sandbox and hands it off (§11.6). The bridge intercepts this chunk.
-                yield AgentChunk(
-                    type="TOOL_USE",
-                    metadata={
-                        "name": "dispatch_workroom",
-                        "input": {"task": dispatch_task},
-                        "id": "comp-d1",
-                    },
-                )
-            else:
-                yield AgentChunk(
-                    type="TOOL_USE",
-                    metadata={"name": "speak", "input": {"text": said}, "id": "comp-m1"},
-                )
+            yield AgentChunk(type="TEXT", text=said, metadata={"msg_id": "comp-m1"})
             yield AgentChunk(
                 type="RESULT",
+                text=said,
                 metadata={"total_cost_usd": 0.004, "num_turns": 1, "session_id": "comp-sess"},
             )
 
         return gen()
+
+
+class FakeSpeakPipe:
+    """The engine's speak seam as a recorder (SpeakSink shape + meeting-end aclose)."""
+
+    def __init__(self) -> None:
+        self.said: list[str] = []
+        self.closed = False
+
+    async def say(self, text: str) -> None:
+        self.said.append(text)
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class FakeTransport:
+    """The meeting-control verbs (mute/unmute/post_chat/send_dm) as inert recorders."""
+
+    async def mute(self, bot_id: str) -> None:
+        return None
+
+    async def unmute(self, bot_id: str) -> None:
+        return None
+
+    async def post_chat(self, bot_id: str, message: str, *, pinned: bool = False) -> None:
+        return None
+
+    async def send_dm(self, bot_id: str, message: str, participant_id: str) -> None:
+        return None
+
+
+class FakeSandboxHandle:
+    """The warm E2B handle shape; records the meeting-end kill."""
+
+    def __init__(self) -> None:
+        self.killed = False
+
+    @property
+    def commands(self):
+        return None
+
+    @property
+    def files(self):
+        return None
+
+    async def kill(self) -> None:
+        self.killed = True
+
+
+async def _confirm_every_hit(line: str) -> bool:
+    return True
 
 
 class _CreateOnlyBlob:
@@ -156,35 +197,8 @@ def _make_close_config():
     return cfg, posted
 
 
-@requires_pg
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_composition_proof_direct_answer_arc(monkeypatch) -> None:
-    # ── zero-unhandled-exception guard: record any background task crash across the arc ──
-    loop = asyncio.get_running_loop()
-    unhandled: list[dict] = []
-    prev_handler = loop.get_exception_handler()
-
-    def _record(_loop, context):
-        unhandled.append(context)
-
-    loop.set_exception_handler(_record)
-
-    # ── fake the Scribe note-fold micro-call (the one internal LLM not on the provider/close
-    #    seam) so UNDERSTAND runs without the depleted key; the wake path is untouched. ──
-    async def _fake_scribe_call(*a, **kw):
-        return []  # no note deltas — this proof asserts the reactive/deliver arc, not the fold
-
-    monkeypatch.setattr(
-        "harness.scribe_runtime._real_scribe_call", _fake_scribe_call, raising=False
-    )
-
-    pool = await open_pool(_DSN)
-    db = Database(pool, f"comp-{os.getpid()}")
-    close_config, posted_links = _make_close_config()
-    registry = MeetingRuntimeRegistry(db, close_config=close_config)
-
-    # ── seed a live meeting (tenant/repo/meeting) ──
+async def _seed_live_meeting(db):
+    """Seed a live (tenant, repo, meeting) and return (meeting_row, bot_id)."""
     async with db.acquire() as conn:
         tenant = await conn.fetchrow(
             "INSERT INTO tenants (name) VALUES ($1) RETURNING id", f"t-{uuid.uuid4().hex[:8]}"
@@ -204,36 +218,81 @@ async def test_composition_proof_direct_answer_arc(monkeypatch) -> None:
             recall_bot_id=bot_id,
             status="live",
         )
+    return meeting, bot_id
+
+
+async def _ingest(db, payload: dict) -> None:
+    guid = f"wh-{uuid.uuid4().hex}"
+    async with db.acquire() as conn:
+        await repos.webhooks.insert_event(conn, guid, payload)
+
+
+@requires_pg
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_composition_proof_direct_answer_arc(monkeypatch) -> None:
+    # ── zero-unhandled-exception guard: record any background task crash across the arc ──
+    loop = asyncio.get_running_loop()
+    unhandled: list[dict] = []
+    prev_handler = loop.get_exception_handler()
+
+    def _record(_loop, context):
+        unhandled.append(context)
+
+    loop.set_exception_handler(_record)
+
+    # ── fake the Scribe note-fold micro-call (the one internal LLM not on the provider/close
+    #    seam) so UNDERSTAND runs without a live key; the engine path is untouched. ──
+    async def _fake_scribe_call(*a, **kw):
+        return []  # no note deltas — this proof asserts the reactive/deliver arc, not the fold
+
+    monkeypatch.setattr(
+        "harness.scribe_runtime._real_scribe_call", _fake_scribe_call, raising=False
+    )
+
+    pool = await open_pool(_DSN)
+    db = Database(pool, f"comp-{os.getpid()}")
+    close_config, posted_links = _make_close_config()
+    registry = MeetingRuntimeRegistry(db, close_config=close_config)
+    meeting, bot_id = await _seed_live_meeting(db)
     meeting_id = str(meeting["id"])
 
     fake_provider = FakeProvider()
+    speak_pipe = FakeSpeakPipe()
+    sandbox_handle = FakeSandboxHandle()
+
+    async def _sandbox_backend(**kw):
+        return sandbox_handle
 
     async def _launch(payload: dict) -> None:
-        # The real provisioner seam — atomic claim + one-scope assembly + live-brain wire,
-        # with the FAKE model injected (the exact kwarg the provisioner threads, §3.3).
-        await provision_meeting(payload, db=db, registry=registry, provider=fake_provider)
+        # The real provisioner seam — atomic claim + one-scope assembly + THE CUTOVER's
+        # engine assembly, with every vendor faked at the exact kwargs the provisioner
+        # threads (provider / speak / disambiguate / transport / sandbox_backend).
+        await provision_meeting(
+            payload,
+            db=db,
+            registry=registry,
+            provider=fake_provider,
+            speak=speak_pipe,
+            disambiguate=_confirm_every_hit,
+            transport=FakeTransport(),
+            sandbox_backend=_sandbox_backend,
+        )
 
-    async def _ingest(payload: dict) -> None:
-        guid = f"wh-{uuid.uuid4().hex}"
-        async with db.acquire() as conn:
-            await repos.webhooks.insert_event(conn, guid, payload)
-
-    pump: asyncio.Task | None = None
     try:
         # ── 1. CONNECT/JOIN — in_call boots the runtime through the real provisioner ──
-        await _ingest({"event": "bot.in_call", "data": {"bot_id": bot_id}})
+        await _ingest(db, {"event": "bot.in_call", "data": {"bot_id": bot_id}})
         await drain_pending_webhooks(db, registry=registry, launch=_launch)
         runtime = registry.get(meeting_id)
         assert runtime is not None, "in_call did not BOOT a MeetingRuntime through the provisioner"
-        assert runtime.live_brain is not None, "the live brain was not assembled on the boot path"
+        # THE CUTOVER invariant: the NEW engine is the brain; the old live brain is absent.
+        assert runtime.engine is not None, "the in-meeting engine was not assembled on the boot path"
+        assert runtime.live_brain is None, "the OLD live brain must no longer own the boot path"
+        assert runtime.engine_sandbox is sandbox_handle, "the warm sandbox handle was not stashed"
 
-        # Start the transport→orchestrator pump so carrier signals reach the run loop (the RUN
-        # block §3.2). The wake fires as an async task inside the loop when an addressed line lands.
-        pump = asyncio.ensure_future(runtime.run_orchestrator_loop())
-        await asyncio.sleep(0)
-
-        # ── 2+3. UNDERSTAND + REACTIVE — an ADDRESSED transcript drives a real wake turn ──
+        # ── 2+3. UNDERSTAND + ENGINE LOOP — an ADDRESSED transcript wakes ONE real turn ──
         await _ingest(
+            db,
             {
                 "event": "transcript.data",
                 "data": {
@@ -243,39 +302,32 @@ async def test_composition_proof_direct_answer_arc(monkeypatch) -> None:
                     "timestamp": 0.0,
                     "end_of_turn": True,
                 },
-            }
+            },
         )
         await drain_pending_webhooks(db, registry=registry, launch=_launch)
 
-        # ── DELIVER — poll the gated wire for the grounded answer (accumulate across drains) ──
-        emitter = runtime.run_loop._emitter
-        assert emitter is not None, "the run loop has no gated emitter (delivery seam unbound)"
-        delivered: list = []
+        # ── DELIVER — the grounded answer lands in the speak pipe (the engine's one voice) ──
         for _ in range(200):
-            delivered.extend(emitter.drain_wire())
-            if any(kind == "speak" and _ANSWER in str(text) for kind, text in delivered):
+            if any(_ANSWER in s for s in speak_pipe.said):
                 break
             await asyncio.sleep(0.02)
 
         assert fake_provider.calls == 1, (
-            f"the wake turn did not run a REAL model turn (provider calls={fake_provider.calls}) — "
-            "the addressed ask never reached the wake through the live carrier→pipe→loop arc"
+            f"the engine did not run a REAL model turn (provider calls={fake_provider.calls}) — "
+            "the addressed ask never reached the wake through the drain→engine arc"
         )
-        assert any(kind == "speak" and _ANSWER in str(text) for kind, text in delivered), (
-            f"the grounded answer never reached the gated wire; delivered={delivered!r}"
+        assert "Proxy, who calls handle_login?" in fake_provider.seen_prompts[0], (
+            "the ask was not carried verbatim into the turn prompt"
+        )
+        assert any(_ANSWER in s for s in speak_pipe.said), (
+            f"the grounded answer never reached the speak pipe; said={speak_pipe.said!r}"
         )
 
         # ── 4. CLOSE — call_ended ENDS the meeting → ordered close → durable ended_at ──
-        await _ingest({"event": "bot.call_ended", "data": {"bot_id": bot_id}})
+        await _ingest(db, {"event": "bot.call_ended", "data": {"bot_id": bot_id}})
         await drain_pending_webhooks(db, registry=registry, launch=_launch)
 
     finally:
-        if pump is not None:
-            pump.cancel()
-            try:
-                await pump
-            except asyncio.CancelledError:
-                pass
         # Belt-and-suspenders: ensure the meeting is ended even if call_ended didn't route.
         try:
             await registry.end_meeting(meeting_id)
@@ -302,45 +354,24 @@ async def test_composition_proof_direct_answer_arc(monkeypatch) -> None:
     )
 
 
-async def _seed_live_meeting(db):
-    """Seed a live (tenant, repo, meeting) and return (meeting_row, bot_id)."""
-    async with db.acquire() as conn:
-        tenant = await conn.fetchrow(
-            "INSERT INTO tenants (name) VALUES ($1) RETURNING id", f"t-{uuid.uuid4().hex[:8]}"
-        )
-        repo = await conn.fetchrow(
-            "INSERT INTO repos (tenant_id, full_name, default_branch) VALUES ($1,$2,$3) RETURNING id",
-            tenant["id"], "example/app", "main",
-        )
-    bot_id = f"recall-bot-{uuid.uuid4().hex}"
-    async with db.acquire() as conn:
-        meeting = await repos.meetings.insert_meeting(
-            conn,
-            tenant_id=tenant["id"],
-            repo_id=repo["id"],
-            meeting_url="https://meet.example/comp",
-            pinned_sha="deadbeef",
-            recall_bot_id=bot_id,
-            status="live",
-        )
-    return meeting, bot_id
-
-
-_DISPATCH_TASK = "add retry logic to the checkout flow"
-_DRAFT_HEADLINE = "Staged a draft: added retry to checkout.py:42 (needs your review)"
-
-
 @requires_pg
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_composition_proof_workroom_dispatch_arc(monkeypatch) -> None:
-    """WORKROOM DISPATCH composes through the wake: ask → dispatch → run → deliver (§11.6/§3.2).
+async def test_composition_proof_sandbox_arm_and_meeting_end_lifecycle(monkeypatch) -> None:
+    """The heavy-work arm + the meeting-end lifecycle compose through the boot path.
 
-    A wake-turn ``dispatch_workroom`` tool-use is INTERCEPTED by the bridge, drives the real
-    ``harness.dispatch.dispatch_workroom`` (a durable ``workroom:<id>`` row is claimed), ACKs
-    on the gated wire, runs the Workroom task (its E2B/model internals faked at ``run_task`` —
-    those are proven in isolation), and on completion DELIVERS the terminal draft back to the
-    meeting. The Workroom driver's run_task is the ONE fake; every bridge seam is real.
+    SINCE THE CUTOVER the heavy/code work arm is the ENGINE's sandbox toolbelt (the agent
+    composes ``mcp__sandbox__*`` in a warm per-meeting E2B sandbox) — the old wake→Workroom
+    dispatch bridge no longer rides the boot path (its module tests keep covering it until
+    the delete wave). This proof drives ``run_meeting_until_end`` (the real per-meeting
+    entry) on live Postgres and asserts:
+
+      * a heavy ask wakes ONE real provider turn whose captured query ADVERTISES the
+        sandbox toolbelt (``mcp__sandbox__*``) and MOUNTS the ``sandbox`` server off the
+        warm handle provisioned at join — the arm is live, not a dead module;
+      * ``call_ended`` (the existing end-signal machinery) ends the launched meeting: the
+        engine drains, the speak pipe closes, the SANDBOX IS KILLED, the runtime drops,
+        and the ``operation_runs`` row completes — the full cutover lifecycle.
     """
     loop = asyncio.get_running_loop()
     unhandled: list[dict] = []
@@ -354,105 +385,100 @@ async def test_composition_proof_workroom_dispatch_arc(monkeypatch) -> None:
         "harness.scribe_runtime._real_scribe_call", _fake_scribe_call, raising=False
     )
 
-    # The Workroom driver's ONE task entry — faked to return a terminal staged-draft Envelope
-    # (its real E2B+model internals are proven by tests/doc05, not re-run here). Records the
-    # bundle it received so we prove the bridge assembled + handed off the real ask.
-    from contracts import Envelope
-
-    run_task_bundles: list = []
-
-    async def _fake_run_task(self, bundle, *, run_id, **kw):
-        run_task_bundles.append(bundle)
-        return Envelope(
-            headline=_DRAFT_HEADLINE,
-            status="needs_review",
-            task_id=bundle.task_id,
-            draft_id=uuid.uuid4(),
-        )
-
-    monkeypatch.setattr("workroom.session.SessionDriver.run_task", _fake_run_task, raising=True)
-
     pool = await open_pool(_DSN)
-    db = Database(pool, f"comp-wr-{os.getpid()}")
+    db = Database(pool, f"comp-sb-{os.getpid()}")
     close_config, _ = _make_close_config()
     registry = MeetingRuntimeRegistry(db, close_config=close_config)
     meeting, bot_id = await _seed_live_meeting(db)
     meeting_id = str(meeting["id"])
 
-    wake_provider = FakeProvider(dispatch_task=_DISPATCH_TASK)
+    fake_provider = FakeProvider(said="on it — running the suite in the sandbox now.")
+    speak_pipe = FakeSpeakPipe()
+    sandbox_handle = FakeSandboxHandle()
 
-    async def _launch(payload: dict) -> None:
-        await provision_meeting(payload, db=db, registry=registry, provider=wake_provider)
+    async def _sandbox_backend(**kw):
+        return sandbox_handle
 
-    async def _ingest(payload: dict) -> None:
-        guid = f"wh-{uuid.uuid4().hex}"
-        async with db.acquire() as conn:
-            await repos.webhooks.insert_event(conn, guid, payload)
+    # The real per-meeting entry, launched exactly as the production launcher launches it.
+    task = asyncio.ensure_future(
+        run_meeting_until_end(
+            {"event": "bot.in_call", "data": {"bot_id": bot_id}},
+            db=db,
+            registry=registry,
+            timeout_s=30.0,
+            provider=fake_provider,
+            speak=speak_pipe,
+            disambiguate=_confirm_every_hit,
+            transport=FakeTransport(),
+            sandbox_backend=_sandbox_backend,
+        )
+    )
 
-    pump: asyncio.Task | None = None
     try:
-        await _ingest({"event": "bot.in_call", "data": {"bot_id": bot_id}})
-        await drain_pending_webhooks(db, registry=registry, launch=_launch)
-        runtime = registry.get(meeting_id)
-        assert runtime is not None and runtime.live_brain is not None
+        # Wait for the boot (claim + assembly, on the launched task).
+        runtime = None
+        for _ in range(300):
+            runtime = registry.get(meeting_id)
+            if runtime is not None and runtime.engine is not None:
+                break
+            await asyncio.sleep(0.01)
+        assert runtime is not None and runtime.engine is not None, (
+            "the launched meeting did not assemble the engine"
+        )
+        assert runtime.engine_sandbox is sandbox_handle
 
-        pump = asyncio.ensure_future(runtime.run_orchestrator_loop())
-        await asyncio.sleep(0)
-
-        # An addressed ask the model routes to the Workroom.
+        # A heavy ask, drained through the REAL webhook dispatch → engine → one turn.
         await _ingest(
+            db,
             {
                 "event": "transcript.data",
                 "data": {
                     "bot_id": bot_id,
-                    "words": "Proxy, add retry logic to the checkout flow",
+                    "words": "Proxy, run the test suite and tell us what breaks",
                     "speaker": "Sam",
-                    "timestamp": 0.0,
+                    "timestamp": 1.0,
                     "end_of_turn": True,
                 },
-            }
+            },
         )
-        await drain_pending_webhooks(db, registry=registry, launch=_launch)
-
-        # Poll the gated wire for BOTH the ack and the terminal draft delivery.
-        emitter = runtime.run_loop._emitter
-        delivered: list = []
+        await drain_pending_webhooks(db, registry=registry)
         for _ in range(200):
-            delivered.extend(emitter.drain_wire())
-            if any(_DRAFT_HEADLINE in str(text) for _, text in delivered) and run_task_bundles:
+            if fake_provider.calls >= 1:
                 break
             await asyncio.sleep(0.02)
-
-        spoken = [str(text) for kind, text in delivered if kind == "speak"]
-
-        assert wake_provider.calls == 1, "the wake turn never ran (the ask didn't reach the wake)"
-        assert run_task_bundles, "the Workroom driver's run_task was NEVER invoked — dispatch didn't drive the Workroom"
-        assert _DISPATCH_TASK in run_task_bundles[0].ask, (
-            f"the dispatched bundle carried the wrong ask: {run_task_bundles[0].ask!r}"
+        assert fake_provider.calls == 1, "the heavy ask never woke the engine"
+        query = fake_provider.seen_queries[0]
+        assert "mcp__sandbox__run_command" in query.allowed_tools, (
+            "the sandbox toolbelt is not ADVERTISED on the boot path — the heavy-work arm is dead"
         )
-        assert any("on it" in s.lower() for s in spoken), f"no ACK was delivered on dispatch; wire={spoken!r}"
-        assert any(_DRAFT_HEADLINE in s for s in spoken), (
-            f"the Workroom's terminal draft never reached the meeting; wire={spoken!r}"
+        assert query.mcp_servers is not None and "sandbox" in query.mcp_servers, (
+            "the sandbox server was not MOUNTED off the warm handle"
         )
 
-        # The durable dispatch record: a workroom:<id> operation_runs row was claimed for this meeting.
+        # ── meeting end: the existing end-signal machinery closes the whole lifecycle ──
+        await _ingest(db, {"event": "bot.call_ended", "data": {"bot_id": bot_id}})
+        await drain_pending_webhooks(db, registry=registry)
+        outcome = await asyncio.wait_for(task, timeout=10.0)
+
+        assert outcome.claimed is True and outcome.ran_to_end is True
+        assert speak_pipe.closed is True, "the speak pipe was not closed at meeting end"
+        assert sandbox_handle.killed is True, "the warm sandbox was not killed at meeting end"
+        assert registry.get(meeting_id) is None, "the runtime was not dropped at meeting end"
         async with db.acquire() as conn:
-            wr = await conn.fetchrow(
-                "SELECT id, operation_type FROM operation_runs "
-                "WHERE scope_id = $1 AND operation_type LIKE 'workroom:%' ORDER BY started_at DESC LIMIT 1",
+            row = await conn.fetchrow(
+                "SELECT status FROM operation_runs WHERE scope_id = $1 AND operation_type = $2 "
+                "ORDER BY started_at DESC LIMIT 1",
                 meeting_id,
+                "meeting-harness",
             )
-        assert wr is not None, "dispatch_workroom did not claim a durable workroom:<id> operation_runs row"
-
-        await _ingest({"event": "bot.call_ended", "data": {"bot_id": bot_id}})
-        await drain_pending_webhooks(db, registry=registry, launch=_launch)
+        assert row is not None and row["status"] == "completed", (
+            f"the operation_runs row did not complete at meeting end (row={dict(row) if row else None})"
+        )
     finally:
-        if pump is not None:
-            pump.cancel()
-            try:
-                await pump
-            except asyncio.CancelledError:
-                pass
+        if not task.done():
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
         try:
             await registry.end_meeting(meeting_id)
         except Exception:
@@ -460,6 +486,6 @@ async def test_composition_proof_workroom_dispatch_arc(monkeypatch) -> None:
 
     loop.set_exception_handler(prev_handler)
     assert not unhandled, (
-        "unhandled asyncio task exception(s) during the dispatch arc: "
+        "unhandled asyncio task exception(s) during the sandbox-arm arc: "
         + "; ".join(str(c.get("exception") or c.get("message")) for c in unhandled)
     )

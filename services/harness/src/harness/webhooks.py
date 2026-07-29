@@ -41,6 +41,18 @@ _TRANSCRIPT_EVENTS = frozenset(
 # Before this, these producers existed but had NO live caller (the drain dropped the events).
 _ROSTER_EVENTS = frozenset({"participant.join", "participant.leave", "participant.update"})
 _BOT_STATUS_EVENTS = frozenset({"bot.status"})
+# Recall's REAL meeting-chat event name — ``participant_events.chat_message``, confirmed
+# against the live docs (docs.recall.ai "Real-Time Event Payloads": the participant-events
+# family; payload nests data.data.participant{ id,name,... } + data.data.data{ text,to }).
+# Chat previously had NO route here (the drain dropped it); since the cutover it feeds the
+# in-meeting engine's ``feed_chat`` (the ``@proxy`` token wakes, no model call on the scan).
+_CHAT_EVENTS = frozenset({"participant_events.chat_message"})
+# Which transcript events feed the ENGINE: finals only. A partial (interim hypothesis)
+# carries the same words its final will carry — feeding both would append duplicate notes
+# lines AND wake Proxy twice on one spoken ask (the trigger has no dedupe by design). The
+# carrier/notes-plane ingest below still receives every passthrough (its coalescer owns
+# partial/final semantics); only the engine feed is finals-gated.
+_ENGINE_TRANSCRIPT_EVENTS = frozenset({"transcript.data", "transcript", "bot.transcript"})
 
 
 def ingest_webhook(event: dict[str, Any], *, store: Any) -> int:
@@ -74,10 +86,19 @@ def _meeting_end_reason(payload: dict[str, Any]) -> str:
 
 
 def _bot_id(payload: dict[str, Any]) -> str | None:
-    """The Recall ``bot_id`` from the callback body (top-level or nested ``data``)."""
+    """The Recall ``bot_id`` from the callback body (top-level or nested ``data``).
+
+    Recall's real-time participant-events envelope (e.g. the chat event) carries the
+    bot as an OBJECT — ``data.bot.id`` (docs.recall.ai real-time event payloads) — so
+    that shape resolves too (additive; the flat ``bot_id`` forms stay first).
+    """
     data = payload.get("data")
     if isinstance(data, dict) and data.get("bot_id"):
         return str(data["bot_id"])
+    if isinstance(data, dict):
+        bot = data.get("bot")
+        if isinstance(bot, dict) and bot.get("id"):
+            return str(bot["id"])
     if payload.get("bot_id"):
         return str(payload["bot_id"])
     return None
@@ -129,6 +150,59 @@ def _transcript_body(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _engine_transcript_line(body: dict[str, Any]) -> Any | None:
+    """Adapt one drained transcript body onto the engine's ``TranscriptLine`` shape.
+
+    Mechanical field mapping (the cutover adapter): ``{words, speaker, timestamp,
+    end_of_turn}`` → ``TranscriptLine(text, speaker, timestamp, end_of_turn)``.
+    Empty/absent words → ``None`` (nothing to note, nothing to scan — a safe no-op
+    rather than junk in the engine's notes). Never raises on a drifted body: the
+    fail-loud wire validation stays the carrier path's job.
+    """
+    words = body.get("words")
+    if not isinstance(words, str) or not words.strip():
+        return None
+    from in_meeting.notes import TranscriptLine
+
+    ts = body.get("timestamp")
+    try:
+        timestamp = float(ts or 0.0)
+    except (TypeError, ValueError):
+        timestamp = 0.0
+    return TranscriptLine(
+        text=words,
+        speaker=str(body.get("speaker") or ""),
+        timestamp=timestamp,
+        end_of_turn=bool(body.get("end_of_turn", False)),
+    )
+
+
+def _engine_chat_line(payload: dict[str, Any]) -> Any | None:
+    """Adapt one Recall chat event onto the engine's ``ChatLine`` shape.
+
+    The documented ``participant_events.chat_message`` envelope nests
+    ``data.data.participant`` (the sender) and ``data.data.data.text`` (the message)
+    — docs.recall.ai real-time event payloads. A flatter body (``sender``/``message``
+    or ``text`` directly under ``data``) adapts too. No text → ``None`` (safe no-op).
+    """
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    raw_inner = data.get("data")
+    inner: dict[str, Any] = raw_inner if isinstance(raw_inner, dict) else data
+    raw_leaf = inner.get("data")
+    leaf: dict[str, Any] = raw_leaf if isinstance(raw_leaf, dict) else inner
+    text = leaf.get("text") if isinstance(leaf.get("text"), str) else leaf.get("message")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    raw_participant = inner.get("participant")
+    participant: dict[str, Any] = raw_participant if isinstance(raw_participant, dict) else {}
+    sender = participant.get("name") or participant.get("id") or inner.get("sender") or ""
+    from in_meeting.trigger import ChatLine
+
+    return ChatLine(sender=str(sender), message=text)
+
+
 async def _dispatch_meeting_event(
     payload: dict[str, Any],
     *,
@@ -158,11 +232,14 @@ async def _dispatch_meeting_event(
     # signal — route it through the end path, never the roster/bot-status carrier binding.
     is_end = name in _CALL_ENDED_EVENTS or is_meeting_end(payload)
     is_transcript = name in _TRANSCRIPT_EVENTS
+    # Meeting chat (the confirmed ``participant_events.chat_message``) feeds the in-meeting
+    # engine's chat trigger — the ``@proxy`` token wakes; plain chat prose stays free.
+    is_chat = name in _CHAT_EVENTS
     # Roster + non-terminal bot-status feed the meeting's ONE carrier via the WebhookProcessor
     # binding (C-SIGNALWIRE). A terminal bot-status already counted as ``is_end`` above is
     # excluded so it closes the meeting rather than emitting a live bot-status signal.
     is_signal = (name in _ROSTER_EVENTS or name in _BOT_STATUS_EVENTS) and not is_end
-    if not (is_start or is_end or is_transcript or is_signal):
+    if not (is_start or is_end or is_transcript or is_chat or is_signal):
         return
 
     # The meeting_runtime deployable: an in_call claims + launches the full harness
@@ -214,16 +291,26 @@ async def _dispatch_meeting_event(
         # a recording meeting, and it never defaults to always-allow.
         runtime.grant_consent()
     elif is_transcript:
-        # The live transcript reaches the notes engine: feed the passthrough body onto
-        # the meeting's carrier (transport's emit end) so it flows carrier->coalescer->
-        # Scribe->note_deltas. A transcript before in_call started the runtime is a safe
-        # no-op (fail closed) — the notes engine only exists once the bot is in the room.
+        # The live transcript reaches BOTH consumers (the cutover):
+        #   1. the in-meeting ENGINE — the brain: each FINAL line is adapted to a
+        #      ``TranscriptLine`` and pushed to ``engine.feed_transcript`` (notes accumulate,
+        #      the trigger decides when Proxy wakes; partials are excluded — one spoken ask
+        #      must not wake Proxy twice);
+        #   2. the meeting's carrier (transport's emit end) — the durable notes plane:
+        #      carrier->coalescer->Scribe->note_deltas, unchanged.
+        # A transcript before in_call started the runtime is a safe no-op (fail closed).
         runtime = registry.get(meeting_id)
         if runtime is not None:
+            body = _transcript_body(payload)
+            engine = getattr(runtime, "engine", None)
+            if engine is not None and name in _ENGINE_TRANSCRIPT_EVENTS:
+                line = _engine_transcript_line(body)
+                if line is not None:
+                    await engine.feed_transcript(line)
             from transport.wire import WireDriftError
 
             try:
-                await runtime.ingest_transcript(_transcript_body(payload))
+                await runtime.ingest_transcript(body)
             except WireDriftError as drift:
                 # Fail LOUD but never poison the drain: a single drifted passthrough
                 # message is logged for a human (CANONICAL §11.10 — no silent wire
@@ -232,6 +319,16 @@ async def _dispatch_meeting_event(
                 logging.getLogger(__name__).error(
                     "transcript wire drift on meeting %s: %s", meeting_id, drift
                 )
+    elif is_chat:
+        # Meeting chat → the engine's chat trigger (the cutover's NEW route; chat events
+        # were previously dropped here). The documented Recall envelope is adapted to a
+        # ``ChatLine``; a chat before the engine booted is a safe no-op (fail closed).
+        runtime = registry.get(meeting_id)
+        engine = getattr(runtime, "engine", None) if runtime is not None else None
+        if engine is not None:
+            msg = _engine_chat_line(payload)
+            if msg is not None:
+                await engine.feed_chat(msg)
     elif is_signal:
         # Route the durably-persisted roster / bot-status payload through the meeting's ONE
         # WebhookProcessor bound to its carrier (C-SIGNALWIRE): the derived roster

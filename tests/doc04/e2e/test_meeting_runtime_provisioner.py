@@ -124,6 +124,14 @@ async def test_in_call_webhook_atomically_claims_and_assembles_once() -> None:
     runtime = registry.get(meeting_id)
     assert runtime is not None, "the provisioner did not assemble a MeetingRuntime"
     assert runtime.run_loop is not None, "the run loop was not assembled at provision"
+    # THE CUTOVER: the NEW in-meeting engine is the brain on the boot path — assembled
+    # at provision, reachable by meeting id off the registry entry, with its speak pipe
+    # + warm sandbox handle stashed for the meeting-end lifecycle. The OLD live brain is
+    # no longer wired here.
+    assert runtime.engine is not None, "the in-meeting engine was not assembled at provision"
+    assert runtime.speak_pipe is not None, "the speak pipe was not stashed at provision"
+    assert runtime.engine_sandbox is not None, "the warm sandbox handle was not stashed"
+    assert runtime.live_brain is None, "the OLD live brain must no longer own the boot path"
     # The operation handle is bound so is_owner fencing gates every emit.
     assert runtime.operation_handle is not None, "the claimed row's handle was not bound"
     assert runtime.operation_handle.is_owner is True

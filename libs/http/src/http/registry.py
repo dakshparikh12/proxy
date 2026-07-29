@@ -93,6 +93,11 @@ PUBLIC_ROUTES: frozenset[str] = frozenset(
         # member takes the SAME route protected(). No token + no session ⇒ Not found.
         # Accept/reject are NOT here (protected()).
         "GET /health",  # liveness probe — no tenant data, no session (§0)
+        # The Output-Media orb page the Recall bot streams as its camera (the cutover):
+        # Recall's headless browser has no session, so the exemption is structural. The
+        # page itself is the orb shell (no tenant data); its WS feed carries only Proxy's
+        # own synthesized speech for that meeting, keyed on the unguessable meeting uuid.
+        "GET /output-media/{meeting_id}",
         # The OIDC sign-in flow itself is necessarily pre-session (it is how a
         # session is *obtained*); it carries no tenant data and returns redirects.
         "GET /auth/login",

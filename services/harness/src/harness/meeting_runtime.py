@@ -129,8 +129,27 @@ class MeetingRuntime:
     # The assembled live brain (wake turn + name-gate + barge-in seam), stashed by the
     # provisioner so the live VAD "Proxy, quiet" / whisper-stop trigger reaches the
     # §3.11 model-loop cancel. None until :func:`harness.live_brain.assemble_live_brain`
-    # wires it (a bare runtime with no brain still tears down cleanly).
+    # wires it (a bare runtime with no brain still tears down cleanly). SINCE THE
+    # CUTOVER the production boot path no longer assembles it (the NEW engine below
+    # owns the brain seat); the field stays until the old-brain delete wave retires it.
     live_brain: Any = field(default=None, init=False)
+    # THE CUTOVER (in-meeting engine on the boot path): the NEW always-on engine
+    # (``in_meeting.engine.Engine``) the provisioner assembles at join. Stashed HERE so
+    # the webhook drain reaches it by meeting id (``registry.get(meeting_id).engine``)
+    # to feed transcript/chat lines — the registry shell stays the one lookup surface,
+    # exactly as the old runtime was reachable. ``None`` until the provisioner wires it
+    # (the control-plane Scribe-only drain builds runtimes with no engine — those keep
+    # the notes plane only).
+    engine: Any = field(default=None, init=False)
+    # The engine's speak pipe (``in_meeting.speak.SpeakPipe`` — text→Cartesia→Output-Media
+    # channel), held so meeting end can flush + close it (``aclose``) after the engine
+    # drains. ``None`` when no engine was assembled.
+    speak_pipe: Any = field(default=None, init=False)
+    # The meeting's warm E2B sandbox handle (provisioned at join, ``in_meeting.sandbox``).
+    # The PROVISIONER owns its lifecycle: killed at meeting end in the same teardown that
+    # completes the operation row. ``None`` = the meeting runs without sandbox tools (an
+    # honest degrade — a provision fault never kills the meeting).
+    engine_sandbox: Any = field(default=None, init=False)
     # The per-meeting transport ``WebhookProcessor`` bound to THIS meeting's carrier
     # (C-SIGNALWIRE): the live webhook drain routes roster (present/join/leave), bot-status
     # (connected/dropped/rejoined) and meeting-end webhooks through it so those signals reach

@@ -84,8 +84,12 @@ async def update_bot_id(
 
 
 async def get_by_bot_id(conn: Any, recall_bot_id: str) -> dict[str, Any] | None:
+    # ``pinned_sha``/``recall_bot_id``/``meeting_url`` ride along (additively) so the
+    # meeting-boot path can assemble the in-meeting engine off THIS one resolve —
+    # the engine's map load is keyed on the meeting's exact pinned sha, never "latest".
     row = await conn.fetchrow(
-        "SELECT id, tenant_id, repo_id FROM meetings WHERE recall_bot_id = $1",
+        "SELECT id, tenant_id, repo_id, pinned_sha, recall_bot_id, meeting_url "
+        "FROM meetings WHERE recall_bot_id = $1",
         recall_bot_id,
     )
     return dict(row) if row is not None else None

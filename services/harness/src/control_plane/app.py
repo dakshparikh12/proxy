@@ -197,6 +197,22 @@ def create_app() -> FastAPI:
     from .connect import install_connect_routes
 
     install_connect_routes(app)
+    # THE CUTOVER: the Output-Media surface — the orb page + per-meeting audio feed the
+    # Recall bot streams as its camera (``GET /output-media/{meeting_id}`` + its WS).
+    # ``RECALL_OUTPUT_MEDIA_URL`` points HERE at deploy (the join config already sends it
+    # on bot create). Recall's headless browser has no session, so the page route is
+    # PUBLIC_ROUTES-allowlisted (the page is the orb shell — no tenant data; the WS feed
+    # carries only Proxy's own synthesized speech for that meeting id, keyed on the
+    # unguessable meeting uuid) and the WS route classifies ``ws`` for the enumeration gate.
+    # Mounted as MATERIALIZED routes (not ``app.include_router``): this FastAPI version's
+    # lazy include leaves an ``_IncludedRouter`` marker in ``app.routes`` that the §4.6
+    # structural route-enumeration cannot classify — appending the router's real
+    # APIRoute/APIWebSocketRoute objects (empty prefix) is the classic include semantics
+    # and keeps every mounted route a first-class, enumerable object.
+    from in_meeting import output_media
+
+    for _media_route in output_media.router.routes:
+        app.router.routes.append(_media_route)
 
     @app.get("/health")
     async def health() -> Any:
