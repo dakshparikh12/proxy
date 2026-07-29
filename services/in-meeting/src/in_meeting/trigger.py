@@ -11,8 +11,9 @@ Four sources, all mechanical physics plus exactly one injected judgment seam:
 
 * **voice** — a word-boundary scan of each spoken line for the name ``"proxy"``
   (case-insensitive; ``proxying`` / ``proxyserver`` are not hits). A name-hit
-  triggers ONE call to the *injected* ``disambiguate`` hook ("addressed to me,
-  or 'proxy server'?"). Confirmed → wake. The hook is a plain callable, so this
+  triggers ONE awaited call to the *injected async* ``disambiguate`` hook
+  ("addressed to me, or 'proxy server'?") — a bounded model call fits behind the
+  seam now. Confirmed → wake. The hook is a plain async callable, so this
   module constructs no SDK client and imports nothing beyond the stdlib and the
   engine's own transcript type.
 * **chat** — the ``@proxy`` token wakes directly, no model call. A bare word
@@ -34,7 +35,7 @@ window.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -68,11 +69,12 @@ _CHAT_TOKEN_RE = re.compile(r"(?<!\w)@proxy\b", re.IGNORECASE)
 #: Which source woke Proxy — provenance for the loop, never a judgment.
 Source = Literal["voice", "chat", "reply", "worker"]
 
-#: The injected disambiguation hook: takes the spoken line, returns True iff the
-#: name-hit addresses Proxy (vs. the common-noun "proxy server"). The one model
-#: touch on this path — injected, so the module stays vendor-free; invoked ONLY
-#: on a mechanical voice name-hit.
-Disambiguate = Callable[[str], bool]
+#: The injected disambiguation hook: takes the spoken line, resolves True iff
+#: the name-hit addresses Proxy (vs. the common-noun "proxy server"). ASYNC —
+#: the one model touch on this path is a real awaited bounded call now (ONE
+#: shape, no sync/async branching); injected, so the module stays vendor-free;
+#: awaited ONLY on a mechanical voice name-hit.
+Disambiguate = Callable[[str], Awaitable[bool]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,10 +104,12 @@ class Engagement:
 class EngagementTrigger:
     """The always-on detector for ONE meeting: wake or stay asleep, per input.
 
-    ``disambiguate`` is the injected hook, invoked ONLY on a spoken mechanical
-    name-hit — never on chat, never on a non-hit line, never on Proxy's own
-    speech. The only state is the pending-ask window (a small countdown); there
-    is no scheduler, no clock, no persistence.
+    ``disambiguate`` is the injected async hook, awaited ONLY on a spoken
+    mechanical name-hit — never on chat (``on_chat`` stays sync: the ``@proxy``
+    token wakes directly, no disambiguation), never on a non-hit line, never on
+    Proxy's own speech, never on a worker tap (``on_worker_done`` stays sync).
+    The only state is the pending-ask window (a small countdown); there is no
+    scheduler, no clock, no persistence.
     """
 
     def __init__(self, *, disambiguate: Disambiguate) -> None:
@@ -121,7 +125,7 @@ class EngagementTrigger:
         """
         self._pending_lines_left = PENDING_ASK_LINE_BUDGET
 
-    def on_transcript(self, line: TranscriptLine) -> Engagement | None:
+    async def on_transcript(self, line: TranscriptLine) -> Engagement | None:
         """One spoken line → wake (voice or reply) or ``None`` (free).
 
         Order of physics: the speaker-scoped self-guard first (Proxy's own line
@@ -129,6 +133,14 @@ class EngagementTrigger:
         hit belongs to the voice path and spends one intervening line from the
         window); then the pending-ask window (an armed, un-prefixed human line
         is the reply and consumes the arm).
+
+        ASYNC, but the hook is awaited ONLY on a mechanical voice name-hit —
+        non-hit lines and Proxy's own (``PROXY_SPEAKER``) lines never await
+        anything. An async function with no internal await runs synchronously
+        under asyncio (no yield to the event loop), so the feed path's
+        atomicity is PRESERVED for all non-hits: append + consult still happen
+        with nothing interleaving. Only a confirmed-or-rejected name-hit pays
+        the awaited bounded confirm call.
         """
         if line.speaker == PROXY_SPEAKER:
             return None
@@ -137,7 +149,7 @@ class EngagementTrigger:
             # intervening line from the window, then the hook resolves intent.
             if self._pending_lines_left > 0:
                 self._pending_lines_left -= 1
-            if self._disambiguate(line.text):
+            if await self._disambiguate(line.text):
                 return Engagement(source="voice", text=line.text, speaker=line.speaker)
             return None
         if self._pending_lines_left > 0:

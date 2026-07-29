@@ -53,6 +53,11 @@ def _line(text: str, speaker: str = "Devon", timestamp: float = 20.0) -> Transcr
     return TranscriptLine(text=text, speaker=speaker, timestamp=timestamp, end_of_turn=True)
 
 
+async def _confirm_every_hit(text: str) -> bool:
+    """The injected ASYNC disambiguation seam, scripted to confirm every name-hit."""
+    return True
+
+
 def _happy_turn() -> list[AgentChunk]:
     """The brief's scripted turn: INIT → TEXT (the spoken answer) → RESULT."""
     return [
@@ -110,7 +115,7 @@ def _engine(
         model=_MODEL,
         allowed_tools=_TOOLS,
         speak=speak,
-        disambiguate=lambda text: True,
+        disambiguate=_confirm_every_hit,
         map_text=map_text,
     )
     return engine, spoken
@@ -329,7 +334,7 @@ async def test_chat_at_proxy_wakes_a_turn_and_plain_chat_is_free() -> None:
         model=_MODEL,
         allowed_tools=_TOOLS,
         speak=Sink(),
-        disambiguate=lambda text: True,
+        disambiguate=_confirm_every_hit,
     )
 
     assert await engine.feed_chat(ChatLine(sender="Priya", message="the proxy server is fine")) is None
@@ -375,7 +380,7 @@ async def test_mcp_servers_and_code_tools_reach_the_provider_query() -> None:
         model=_MODEL,
         allowed_tools=CODE_TOOLS,
         speak=speak,
-        disambiguate=lambda text: True,
+        disambiguate=_confirm_every_hit,
         map_text=_MAP,
         mcp_servers={"code_intel": sentinel},
     )
@@ -405,7 +410,7 @@ async def test_wake_turn_carries_a_multi_turn_budget() -> None:
 
     default_engine = Engine(
         provider=provider, model=_MODEL, allowed_tools=(), speak=speak,
-        disambiguate=lambda text: True, map_text=_MAP,
+        disambiguate=_confirm_every_hit, map_text=_MAP,
     )
     await default_engine.feed_transcript(_line(_ASK))
     await default_engine.drain()
@@ -415,7 +420,7 @@ async def test_wake_turn_carries_a_multi_turn_budget() -> None:
     provider2 = FakeProvider()
     override_engine = Engine(
         provider=provider2, model=_MODEL, allowed_tools=(), speak=speak,
-        disambiguate=lambda text: True, map_text=_MAP, max_turns=25,
+        disambiguate=_confirm_every_hit, map_text=_MAP, max_turns=25,
     )
     await override_engine.feed_transcript(_line(_ASK))
     await override_engine.drain()

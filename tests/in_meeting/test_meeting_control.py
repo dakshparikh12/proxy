@@ -42,6 +42,11 @@ from in_meeting.notes import TranscriptLine
 _BOT_ID = "b1"
 
 
+async def _confirm_every_hit(text: str) -> bool:
+    """The injected ASYNC disambiguation seam, scripted to confirm every name-hit."""
+    return True
+
+
 # ── fakes: a call-recording transport + a vendor-faulting transport ───────────
 
 
@@ -239,7 +244,7 @@ async def test_engine_delivers_meeting_server_and_tools_onto_the_provider_query(
         model="claude-opus-4-6",
         allowed_tools=MEETING_TOOLS,
         speak=speak,
-        disambiguate=lambda text: True,
+        disambiguate=_confirm_every_hit,
         mcp_servers={"meeting": server},
     )
 

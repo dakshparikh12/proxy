@@ -47,6 +47,11 @@ def _line(text: str, speaker: str = "Devon", timestamp: float = 20.0) -> Transcr
     return TranscriptLine(text=text, speaker=speaker, timestamp=timestamp, end_of_turn=True)
 
 
+async def _confirm_every_hit(text: str) -> bool:
+    """The injected ASYNC disambiguation seam, scripted to confirm every name-hit."""
+    return True
+
+
 async def _source(lines: Iterable[TranscriptLine]) -> AsyncIterator[TranscriptLine]:
     for line in lines:
         yield line
@@ -173,7 +178,7 @@ async def _assemble(
         conn=conn,
         clone_path=clone_path,
         speak=speak,
-        disambiguate=lambda text: True,
+        disambiguate=_confirm_every_hit,
         provider=provider,
         sandbox=sandbox,
     )

@@ -224,9 +224,20 @@ class Engine:
         BACKGROUND task (never awaited here; the loop stays listening, L7/W2);
         ``await drain()`` then read :attr:`turns` / :attr:`last_turn` for its
         outcome. ``None`` when idle: free, zero provider work.
+
+        The trigger consult is awaited: on a mechanical voice name-hit it makes
+        ONE bounded confirm call ("addressed to me, or 'proxy server'?") — that
+        await is the SPEC's DESIGNED confirm latency (§3.1, pennies, only on
+        hits), not an accident. Non-hit and Proxy-own lines never await inside
+        the consult, so the append+consult step stays effectively atomic for
+        them. Honest consequence of the hit-path await: a reply line racing an
+        in-flight confirmation is a bounded sub-second physics window — the
+        pending-ask state is read/updated when each line's consult actually
+        runs, and a tiny Haiku turn bounds how long a hit line can hold the
+        feed.
         """
         self._notes.append(line)
-        engagement = self._trigger.on_transcript(line)
+        engagement = await self._trigger.on_transcript(line)
         if engagement is None:
             return None
         self._spawn_turn(engagement)

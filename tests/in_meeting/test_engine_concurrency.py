@@ -71,6 +71,11 @@ def _line(text: str, speaker: str = "Devon", timestamp: float = 20.0) -> Transcr
     return TranscriptLine(text=text, speaker=speaker, timestamp=timestamp, end_of_turn=True)
 
 
+async def _confirm_every_hit(text: str) -> bool:
+    """The injected ASYNC disambiguation seam, scripted to confirm every name-hit."""
+    return True
+
+
 class SlowProvider:
     """A scripted ``agentkit.Provider`` whose stream BLOCKS on ``release`` before
     yielding — a deterministic "slow turn". Records every ``(prompt, query)``
@@ -108,7 +113,7 @@ def _engine(provider: SlowProvider) -> tuple[Engine, list[str]]:
         model=_MODEL,
         allowed_tools=(),
         speak=speak,
-        disambiguate=lambda text: True,
+        disambiguate=_confirm_every_hit,
         map_text=_MAP,
     )
     return engine, spoken
@@ -344,7 +349,7 @@ def _multi_engine(provider: MultiDeltaProvider) -> tuple[Engine, list[str]]:
         model=_MODEL,
         allowed_tools=(),
         speak=speak,
-        disambiguate=lambda text: True,
+        disambiguate=_confirm_every_hit,
         map_text=_MAP,
     )
     return engine, spoken
