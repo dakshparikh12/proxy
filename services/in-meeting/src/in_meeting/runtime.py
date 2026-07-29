@@ -8,11 +8,14 @@ harness boot path will call — and it does exactly two things:
 * :func:`assemble_engine` wires the already-built pieces together: the pre-meeting
   ``index.md`` map loaded by pinned sha (MAP-LOAD), the grounded code toolbelt served
   off the tenant's clone (``premeeting.repo_context`` — the KEEP integration seam),
-  and the meeting-control toolbelt bound to THIS meeting's bot
-  (``in_meeting.meeting_control``). Degradation is honest by construction: an
-  unindexed repo / missing clone mounts no ``code_intel`` server and advertises no
-  code tools (the sim's caller-guard, mirrored), and Proxy still joins the meeting
-  with its meeting-control access intact.
+  the meeting-control toolbelt bound to THIS meeting's bot
+  (``in_meeting.meeting_control``), and — when the caller passes a provisioned
+  sandbox handle — the sandbox execution toolbelt (``in_meeting.sandbox``).
+  Degradation is honest by construction: an unindexed repo / missing clone mounts no
+  ``code_intel`` server and advertises no code tools, and no sandbox handle mounts
+  no ``sandbox`` server and advertises no sandbox tools (the sim's caller-guard,
+  mirrored on both) — Proxy still joins the meeting with its meeting-control access
+  intact.
 * :func:`run_meeting` drives the assembled Engine from the meeting's injected
   sources: each transcript line is fed to ``Engine.feed_transcript`` (idle is free —
   the trigger decides when Proxy wakes), and an optional chat source feeds
@@ -45,6 +48,7 @@ from in_meeting.meeting_control import (
 from in_meeting.notes import TranscriptLine
 from in_meeting.prompt import PROXY_SYSTEM_PROMPT
 from in_meeting.provider import EngineProvider
+from in_meeting.sandbox import SANDBOX_TOOLS, build_sandbox_server
 from in_meeting.trigger import ChatLine, Disambiguate
 
 
@@ -62,6 +66,7 @@ async def assemble_engine(
     disambiguate: Disambiguate,
     provider: Provider | None = None,
     prime: str = PROXY_SYSTEM_PROMPT,
+    sandbox: Any | None = None,
 ) -> Engine:
     """Assemble ONE meeting's Engine with its full real access, honestly degraded.
 
@@ -73,6 +78,12 @@ async def assemble_engine(
     advertised when the server actually mounted, so the agent is never handed a tool
     name that can't resolve. The meeting-control server is bound to THIS meeting's
     ``bot_id`` at build time (one meeting's tools can never steer another's bot).
+
+    ``sandbox`` is the ALREADY-PROVISIONED per-meeting E2B handle (warm-at-join) or
+    ``None``: the caller provisions it and owns its lifetime (``kill()``); this
+    function only MOUNTS it — ``build_sandbox_server`` binds the handle into the
+    ``sandbox`` server and ``SANDBOX_TOOLS`` are advertised ONLY when it mounted
+    (the same caller-guard as ``code_intel``, so names and servers never diverge).
 
     ``conn`` is a borrowed asyncpg connection (the ``premeeting.map_store`` shape);
     ``speak``/``disambiguate``/``provider`` are the Engine's injected seams, threaded
@@ -87,11 +98,15 @@ async def assemble_engine(
     meeting_server = build_meeting_control_server(transport, bot_id=bot_id)
 
     allowed_tools: tuple[str, ...] = (
-        CODE_TOOLS if code_server is not None else ()
-    ) + MEETING_TOOLS
+        (CODE_TOOLS if code_server is not None else ())
+        + MEETING_TOOLS
+        + (SANDBOX_TOOLS if sandbox is not None else ())
+    )
     mcp_servers: dict[str, Any] = {"meeting": meeting_server}
     if code_server is not None:
         mcp_servers["code_intel"] = code_server
+    if sandbox is not None:
+        mcp_servers["sandbox"] = build_sandbox_server(sandbox)
 
     return Engine(
         model=model,

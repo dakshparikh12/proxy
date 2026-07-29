@@ -34,6 +34,7 @@ from in_meeting.meeting_control import MEETING_TOOLS
 from in_meeting.notes import TranscriptLine
 from in_meeting.prompt import PROXY_SYSTEM_PROMPT
 from in_meeting.runtime import assemble_engine, run_meeting
+from in_meeting.sandbox import SANDBOX_TOOLS
 from in_meeting.trigger import ChatLine
 
 _MODEL = "claude-opus-4-6"
@@ -114,6 +115,20 @@ class FakeTransport:
         self.calls.append(f"send_dm:{bot_id}")
 
 
+class FakeSandbox:
+    """An inert provisioned-sandbox handle (the ``SandboxHandle`` shape): assembly
+    BINDS it into the ``sandbox`` server at mount time; no verb ever runs here —
+    the caller provisions and kills, ``assemble_engine`` only mounts."""
+
+    @property
+    def commands(self) -> Any:
+        return None
+
+    @property
+    def files(self) -> Any:
+        return None
+
+
 class _LoaderRecorder:
     """Stands in for ``load_meeting_map``: records the exact pinned key it was
     called with and returns the scripted map text (or None)."""
@@ -136,6 +151,7 @@ async def _assemble(
     clone_path: Path,
     map_text: str | None,
     speak_into: list[str],
+    sandbox: Any | None = None,
 ) -> tuple[Any, _LoaderRecorder, FakeTransport, object]:
     """Assemble an Engine through the REAL ``assemble_engine`` path with the
     injected fakes; returns (engine, loader, transport, conn sentinel)."""
@@ -159,6 +175,7 @@ async def _assemble(
         speak=speak,
         disambiguate=lambda text: True,
         provider=provider,
+        sandbox=sandbox,
     )
     return engine, loader, transport, conn
 
@@ -195,6 +212,40 @@ async def test_full_assembly_mounts_code_and_meeting_access(
     assert "code_intel" in query.mcp_servers and "meeting" in query.mcp_servers
     assert _MAP in query.system_prompt
     assert PROXY_SYSTEM_PROMPT in query.system_prompt
+    assert spoken == [_ANSWER]
+
+
+@pytest.mark.asyncio
+async def test_full_surface_mounts_sandbox_access_too(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """AC1 (sandbox) — a provisioned sandbox handle passed to ``assemble_engine``
+    mounts the COMPLETE access surface: the captured query advertises
+    ``CODE_TOOLS + MEETING_TOOLS + SANDBOX_TOOLS`` and carries all three servers
+    (``code_intel``, ``meeting``, ``sandbox``). The caller-guard mirrors code's:
+    with ``sandbox=None`` (the default, every other test here) NO sandbox name is
+    advertised and no ``sandbox`` server mounts — advertised names and mounted
+    servers never diverge."""
+    (tmp_path / "client.py").write_text("def retry():\n    return 42\n", encoding="utf-8")
+    provider = FakeProvider()
+    spoken: list[str] = []
+
+    engine, _, _, _ = await _assemble(
+        monkeypatch,
+        provider=provider,
+        clone_path=tmp_path,
+        map_text=_MAP,
+        speak_into=spoken,
+        sandbox=FakeSandbox(),
+    )
+
+    await run_meeting(engine, transcript_source=_source([_line(_ASK)]))
+
+    assert len(provider.calls) == 1
+    _, query = provider.calls[0]
+    assert query.allowed_tools == CODE_TOOLS + MEETING_TOOLS + SANDBOX_TOOLS
+    assert query.mcp_servers is not None
+    assert set(query.mcp_servers) == {"code_intel", "meeting", "sandbox"}
     assert spoken == [_ANSWER]
 
 
