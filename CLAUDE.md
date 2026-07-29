@@ -31,6 +31,7 @@ Drop and rebuild the derived cache freely; never treat it as the record of truth
 ## The build loop (doc-agnostic — every doc runs the SAME pipeline)
 - Work **ONE** task from `slices/<id>/tasks.json` at a time; `/clear` between tasks.
 - TDD: write the failing acceptance test → code to green → **never edit tests, cassettes, acceptance bundles, goldens, fixtures, or `_baseline.json`** (a lean PreToolUse guard enforces this).
+- **Store-backed behaviour: write the REAL-Postgres integration test BEFORE the unit test.** A fake supplies whatever fields you hand it, so a unit test over one proves the application's intent, never the substrate's shape. Two defects shipped unit-green this way — `post_meeting_tasks.operation_ref` held the wrong uuid (an FK violation the fake had no FK to catch) and `planned_at` was read but never existed (so nothing ever expired). Both were invisible until the real store was asked what it returns.
 - A task is done ONLY after its real path RAN on real/held-out data and the output was shown as evidence; flip `passes:true` in `tasks.json` only then.
 - `_baseline.json` changes and the `EXTRACTION_COUNT_HALT` are **human-gated** (founder review; never auto-approve).
 - A task that fails N identical times flags `BLOCKED:<reason>` and continues — it never deadlocks and never silently claims done.
