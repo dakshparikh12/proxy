@@ -186,6 +186,46 @@ def _push_webhook_from_payload(
     )
 
 
+def _maybe_refresh_map(app: Any, webhook: Any) -> None:
+    """Drive the pre-meeting map refresh on a verified push (additive, guarded, never raises).
+
+    Resolves the map model provider + durable store + the push's tenant off ``app.state`` (a
+    funded deployment wires them; absent, this no-ops — the map is credit-blocked, D-032, and is
+    never fabricated). Runs the async ``premeeting.refresh.refresh_on_push`` on a fresh loop; any
+    fault is swallowed so a push can never 500 the ingress (§4.6 never-throw)."""
+    provider = getattr(app.state, "map_provider", None)
+    map_store = getattr(app.state, "map_store", None)
+    tenant_id = getattr(app.state, "map_tenant_resolver", None)
+    if provider is None:
+        return  # honest no-op: the map-build seam is unfunded (D-032) — no loop touched
+    try:
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+
+        from premeeting.refresh import refresh_on_push
+
+        tid = tenant_id(webhook.repo_url) if callable(tenant_id) else getattr(webhook, "tenant_id", "")
+        if not tid:
+            return
+
+        def _run() -> None:
+            # Own loop in a worker thread so the ingress's request loop is never disturbed.
+            asyncio.run(
+                refresh_on_push(
+                    tenant_id=str(tid),
+                    repo_url=webhook.repo_url,
+                    provider=provider,
+                    map_store=map_store,
+                    changed_files=list(getattr(webhook, "changed_files", []) or []),
+                )
+            )
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(_run).result()
+    except Exception:  # noqa: BLE001 - never-throw ingress; the map refresh is best-effort
+        return
+
+
 def _github_webhook_secret() -> str:
     """The GitHub-App webhook signing secret from Secret Manager via settings.
 
@@ -272,4 +312,11 @@ def install_github_webhook_route(app: "FastAPI") -> None:
             pipeline.webhook_handler.handle(webhook)
         except Exception:  # noqa: BLE001 - never-throw ingress; the rebuild is best-effort
             return JSONResponse({"status": "accepted"}, status_code=202)
+
+        # PRE-MEETING MAP REFRESH (additive): the SAME verified push drives a delta-pull +
+        # map re-build + re-store + re-verify for THAT repo (PM-REFRESH-01). Additive to the
+        # graph rebuild above; guarded so a map-refresh fault never 500s the ingress. The
+        # map-build model seam is credit-blocked (D-032), so this no-ops honestly unless a
+        # funded provider + map store are wired onto ``app.state`` (never a fabricated map).
+        _maybe_refresh_map(request.app, webhook)
         return JSONResponse({"status": "ok"}, status_code=200)

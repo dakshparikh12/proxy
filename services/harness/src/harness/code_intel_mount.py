@@ -50,6 +50,34 @@ async def resolve_code_intel_context_for_meeting(
     return await _context_for_repo(meeting["repo_id"], db=db)
 
 
+async def resolve_map_text_from_row(resolved: dict[str, Any], *, db: Database) -> str | None:
+    """Resolve the pre-meeting MAP (``index.md``) text for a meeting's repo, or ``None``.
+
+    Loads the latest durable map the pre-meeting system stored in Postgres ``repo_maps`` for this
+    meeting's ``(tenant, repo)`` — the SAME identity the code_intel context resolves from. The
+    live wake turn mounts it as an orientation prefix. Fail-closed (Rule 6): a meeting with no
+    repo, an unmapped repo, or any resolution fault yields ``None`` — the wake turn is unaffected
+    (it still wakes; it just has no map to prime on). Never a cross-tenant read: the load is
+    ALWAYS scoped to this repo's ``tenant_id``."""
+    repo_id = resolved.get("repo_id")
+    if repo_id is None:
+        return None
+    try:
+        from code_intel.paths import repo_name_from_url
+        from premeeting.map_store import load_latest_map
+
+        async with db.acquire() as conn:
+            repo = await repos.meetings.get_repo_by_id(conn, repo_id)
+        if repo is None or not repo.get("full_name"):
+            return None
+        repo_name = repo_name_from_url(str(repo["full_name"]))
+        async with db.acquire() as conn:
+            latest = await load_latest_map(conn, tenant_id=str(repo["tenant_id"]), repo=repo_name)
+        return None if latest is None else latest[1]
+    except Exception:  # noqa: BLE001 - Rule 6: a resolution fault degrades to no map, never a crash
+        return None
+
+
 async def _context_for_repo(repo_id: Any, *, db: Database) -> Any | None:
     """Resolve a repo id → its tenant + name → the durable index/clone context (fail closed)."""
     from code_intel.paths import repo_name_from_url
@@ -68,4 +96,5 @@ async def _context_for_repo(repo_id: Any, *, db: Database) -> Any | None:
 __all__ = [
     "resolve_code_intel_context_for_meeting",
     "resolve_code_intel_context_from_row",
+    "resolve_map_text_from_row",
 ]

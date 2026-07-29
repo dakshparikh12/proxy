@@ -157,10 +157,18 @@ async def provision_meeting(
     # Fail-closed to None (an unindexed/unknown repo mounts no code_intel server; Proxy still
     # wakes) — never a raise on the join path (§3.8 / Rule 6).
     code_intel_ctx = None
+    map_text = None
     try:
-        from .code_intel_mount import resolve_code_intel_context_from_row
+        from .code_intel_mount import (
+            resolve_code_intel_context_from_row,
+            resolve_map_text_from_row,
+        )
 
         code_intel_ctx = await resolve_code_intel_context_from_row(resolved, db=db)
+        # Additively resolve the pre-meeting MAP so the wake turn primes on it (the pre-meeting
+        # system's downstream contribution). Independent of the code_intel ctx — an unmapped
+        # repo simply yields None and the wake turn is unaffected.
+        map_text = await resolve_map_text_from_row(resolved, db=db)
     except Exception:  # noqa: BLE001 - a resolution fault degrades to no code_intel, never blocks join
         code_intel_ctx = None
 
@@ -172,6 +180,7 @@ async def provision_meeting(
         handle=handle,
         provider=provider,
         code_intel_ctx=code_intel_ctx,
+        map_text=map_text,
     )
     return ProvisionOutcome(claimed=True, run_id=run_id, resumed=resumed)
 
@@ -185,6 +194,7 @@ def _assemble_runtime(
     handle: OperationHandle,
     provider: Any = None,
     code_intel_ctx: Any = None,
+    map_text: str | None = None,
 ) -> Any:
     """Instantiate all four subsystems in ONE scope + subscribe the carrier once.
 
@@ -216,7 +226,9 @@ def _assemble_runtime(
     # ``code_intel_ctx`` (this meeting's tenant graph.db + clone) rides onto the runtime so the
     # live wake turn builds the meeting's ``code_intel`` SDK server and grounded codebase
     # questions can be answered (§11.6). None ctx → no code_intel server (honest degradation).
-    runtime = registry.start_meeting(header, carrier, code_intel_ctx=code_intel_ctx)
+    runtime = registry.start_meeting(
+        header, carrier, code_intel_ctx=code_intel_ctx, map_text=map_text
+    )
     # Open the consent hard-gate on the LIVE hearing path (§3.1, AC-JOIN-04, Law 3): reaching
     # this assembly means the bot won the claim on a confirmed ``in_call`` event, and a bot is
     # only ``in_call`` after ``JoinSession.join`` posted the consent notice as its FIRST

@@ -283,6 +283,8 @@ def trigger_connect_index(
     repo_url: str,
     sha: str | None = None,
     registry: Any = None,
+    map_provider: Any = None,
+    map_store: Any = None,
 ) -> Any:
     """The connect→index TRIGGER — the product spine (first live run_full_pipeline caller).
 
@@ -349,6 +351,15 @@ def trigger_connect_index(
         except Exception:  # noqa: BLE001 - a registry hiccup never fails the connect flow
             pass
 
+    # PRE-MEETING MAP (additive): on the SAME already-materialised clone, build + store + verify
+    # the durable ``index.md`` repo map — the pre-meeting system's downstream artifact the wake
+    # turn + Workroom mount. This is ADDITIVE: the graph index + readiness above are the referent
+    # seam's producer and are untouched. The map-build model seam is credit-blocked (D-032), so
+    # this NO-OPS honestly unless a funded ``map_provider`` + ``map_store`` are injected; it never
+    # fakes a map and never fails the connect flow (Rule 6).
+    _maybe_build_map(tenant_id=tenant_id, repo_url=repo_url, pipeline=pipeline,
+                     map_provider=map_provider, map_store=map_store)
+
     # Terminal readiness — read the REAL result off the pipeline (never a faked number).
     record = pipeline.readiness_record
     reached_ready = record is not None and record.indexed_at is not None
@@ -362,6 +373,49 @@ def trigger_connect_index(
         gaps = _gaps_from_pipeline(pipeline)
         store.set_not_ready(install_id, gaps=gaps)
     return pipeline
+
+
+def _maybe_build_map(
+    *, tenant_id: str, repo_url: str, pipeline: Any, map_provider: Any, map_store: Any
+) -> Any:
+    """Run the pre-meeting map-build hook on the already-materialised clone (guarded, additive).
+
+    A thin bridge from the SYNC connect trigger to the ASYNC ``premeeting.connect_hook``. The
+    build is credit-blocked (D-032), so with no ``map_provider`` it returns immediately without
+    touching an event loop (the common live path). When a provider IS injected, the coroutine is
+    driven on its OWN event loop IN A DEDICATED THREAD so it never creates/closes the CALLING
+    thread's default loop — a bare ``asyncio.run`` here would close the caller's loop and strand a
+    later ``asyncio.get_event_loop()`` (the doc08 trigger tests do exactly that). Never raises out
+    — a map-build fault never fails the connect flow (Rule 6)."""
+    # Fast path: no funded model seam → no map build, no loop touched (D-032 honest no-op).
+    if map_provider is None:
+        return None
+    clone_root = getattr(pipeline, "clone_path", None)
+    if clone_root is None:
+        return None
+    try:
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+
+        from premeeting.connect_hook import run_map_build_for_clone
+        from premeeting.paths import repo_name_from_url
+
+        def _run() -> Any:
+            # A private loop confined to THIS worker thread — the caller's loop state is untouched.
+            return asyncio.run(
+                run_map_build_for_clone(
+                    tenant_id=tenant_id,
+                    repo=repo_name_from_url(repo_url),
+                    clone_path=clone_root,
+                    provider=map_provider,
+                    map_store=map_store,
+                )
+            )
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(_run).result()
+    except Exception:  # noqa: BLE001 - Rule 6: a map-build hook fault never fails the connect flow
+        return None
 
 
 def _gaps_from_pipeline(pipeline: Any) -> list[str]:

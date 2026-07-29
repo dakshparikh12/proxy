@@ -80,6 +80,11 @@ class MeetingRuntime:
     # process-global handle — it is per-meeting-tenant, so one meeting can never read another
     # tenant's volume (isolation triad, Hard Rule 4).
     code_intel_ctx: Any = None
+    # The pre-meeting MAP (``index.md``) for this meeting's repo — the durable, verified repo
+    # map the pre-meeting system built + stored in Postgres. The live wake turn mounts it as an
+    # ORIENTATION prefix on the system prompt so Proxy primes on the codebase mental model before
+    # it reads. ``None`` when the repo has no stored map (unindexed) — the wake turn is unaffected.
+    map_text: str | None = None
     operation_handle: Any = None
     # The ONE abort registry (§11.9) this meeting's run loop mints per-wake controllers
     # through, shared with the registry so meeting-end / "Proxy, quiet" reach the LIVE
@@ -503,6 +508,7 @@ class MeetingRuntimeRegistry:
         *,
         referent_corpus: ReferentCorpus | None = None,
         code_intel_ctx: Any = None,
+        map_text: str | None = None,
     ) -> MeetingRuntime:
         """Create + start the runtime for one meeting; return the existing one on repeat.
 
@@ -525,6 +531,7 @@ class MeetingRuntimeRegistry:
             host_budget=self._host_budget,
             referent_corpus=referent_corpus,
             code_intel_ctx=code_intel_ctx,
+            map_text=map_text,
             stt_refresh_fn=self._stt_refresh_fn,
             stt_refresh_interval_s=self._stt_refresh_interval_s,
             abort_registry=self._abort_registry,

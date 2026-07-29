@@ -167,6 +167,7 @@ class WakeTurn:
         compaction_every: int = DEFAULT_COMPACTION_EVERY,
         cost_meter: Any | None = None,
         mcp_servers: Mapping[str, Any] | None = None,
+        map_text: str | None = None,
     ) -> None:
         self.meeting_id = meeting_id
         self._behavior = behavior
@@ -178,11 +179,18 @@ class WakeTurn:
         # ``None`` = no servers (a behavior with only delivery verbs needs none) — the runner
         # then builds queries with no mcp_servers, exactly as before.
         self._mcp_servers = dict(mcp_servers) if mcp_servers else None
+        # The pre-meeting MAP (``index.md``) — mounted as an ORIENTATION prefix on every wake's
+        # system prompt so Proxy primes on the codebase mental model before it reads (the
+        # pre-meeting system's downstream contribution). ``None`` (an unindexed repo) leaves the
+        # wake prompt exactly as before. The map is trusted first-party context; it rides ahead
+        # of the untrusted-transcript guardrail, which stays the final authoritative segment.
+        self._map_text = map_text
         self._runner = BehaviorRunner(
             registry=self._registry,
             provider=provider,
             cost_meter=cost_meter,
             mcp_servers=self._mcp_servers,
+            context_prefix=map_text,
         )
         self._regenerate = regenerate_digest or _default_regenerate
         # The initial digest: an explicit one, else built from the regenerator.

@@ -3,7 +3,7 @@ name = "harness"
 version = "0.0.0"
 description = "services.harness — per-meeting asyncio harness + control_plane assembly."
 requires-python = ">=3.12"
-dependencies = ["contracts", "agentkit", "http", "db", "llm", "ops", "claude-agent-sdk>=0.2.128", "pydantic>=2", "pydantic-settings>=2", "fastapi", "authlib", "itsdangerous"]
+dependencies = ["contracts", "agentkit", "http", "db", "llm", "ops", "premeeting", "claude-agent-sdk>=0.2.128", "pydantic>=2", "pydantic-settings>=2", "fastapi", "authlib", "itsdangerous"]
 
 [tool.uv.sources]
 contracts = { workspace = true }
@@ -12,6 +12,7 @@ http = { workspace = true }
 db = { workspace = true }
 llm = { workspace = true }
 ops = { workspace = true }
+premeeting = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

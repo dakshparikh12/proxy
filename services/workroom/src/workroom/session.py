@@ -333,7 +333,8 @@ class SessionDriver:
             # C-NOTESREAD (§3.5): read the LIVE notes off the durable /internal/notes fold and
             # embed them in the volatile prompt (the bundle carries only the meeting_id ref).
             notes_text = await self._read_live_notes(meeting_id)
-            prompt = self._render_bundle_prompt(bundle, notes_text=notes_text)
+            map_text = await self._resolve_map_text(meeting_id)
+            prompt = self._render_bundle_prompt(bundle, notes_text=notes_text, map_text=map_text)
             # Resolve THIS meeting's code_intel SDK server (the tenant graph.db + clone) so a
             # Workroom task can query the codebase graph — its ``mcp__code_intel__*`` MAP tools
             # currently resolve to nothing (the seam gap this closes). Async because the repo
@@ -485,7 +486,10 @@ class SessionDriver:
             runner = _ProviderRunner(self._provider_for(options), options, task_id, self._on_progress)
             # C-NOTESREAD (§3.5): the resumed task also orients on the LIVE notes fold, not the bare ref.
             notes_text = await self._read_live_notes(meeting_id)
-            inputs: dict[str, Any] = {"prompt": self._render_bundle_prompt(bundle, notes_text=notes_text)}
+            map_text = await self._resolve_map_text(meeting_id)
+            inputs: dict[str, Any] = {
+                "prompt": self._render_bundle_prompt(bundle, notes_text=notes_text, map_text=map_text)
+            }
             result_meta: dict[str, Any] = {}
             wrote_paths: list[str] = []
             # The IMPORTED replay seam (never redefined here, §11.9): resume the persisted
@@ -608,9 +612,43 @@ class SessionDriver:
         except Exception:  # noqa: BLE001 - Rule 6: a resolution/build fault degrades to no server
             return None
 
+    async def _resolve_map_text(self, meeting_id: str) -> str | None:
+        """Resolve the pre-meeting MAP (``index.md``) for THIS meeting's repo, or ``None``.
+
+        The Workroom code-task agent gets the SAME durable map as orientation as the wake turn
+        (PM-DOWN-02 — "help the Workroom"): it skips re-exploration before it starts coding.
+        Loads the latest stored map for the meeting's ``(tenant, repo)`` from Postgres
+        ``repo_maps`` — ALWAYS tenant-scoped (no cross-tenant read). Fail-closed to ``None`` (no
+        db, no repo, an unmapped repo, or any fault) so a task never crashes for lack of a map."""
+        if self._db is None or not meeting_id:
+            return None
+        try:
+            from code_intel.paths import repo_name_from_url
+            from db import repos
+            from premeeting.map_store import load_latest_map
+
+            async with self._db.acquire() as conn:
+                meeting = await repos.meetings.get_by_id(conn, meeting_id)
+            if meeting is None or meeting.get("repo_id") is None:
+                return None
+            async with self._db.acquire() as conn:
+                repo = await repos.meetings.get_repo_by_id(conn, meeting["repo_id"])
+            if repo is None or not repo.get("full_name"):
+                return None
+            repo_name = repo_name_from_url(str(repo["full_name"]))
+            async with self._db.acquire() as conn:
+                latest = await load_latest_map(
+                    conn, tenant_id=str(repo["tenant_id"]), repo=repo_name
+                )
+            return None if latest is None else latest[1]
+        except Exception:  # noqa: BLE001 - Rule 6: a resolution fault degrades to no map, never a crash
+            return None
+
     # -- (2) the volatile bundle rides the prompt; the prefix is cached -------
 
-    def _render_bundle_prompt(self, bundle: Bundle, *, notes_text: str | None = None) -> str:
+    def _render_bundle_prompt(
+        self, bundle: Bundle, *, notes_text: str | None = None, map_text: str | None = None
+    ) -> str:
         """Render ONLY the volatile bundle into the per-task ``prompt`` (§3.9 cache split).
 
         The stable prefix (the disposition + tool defs) is the cached SYSTEM prompt, placed
@@ -634,7 +672,14 @@ class SessionDriver:
             if notes_text is not None
             else f"Notes ref (meeting): {bundle.notes_ref}\n"
         )
+        # The pre-meeting MAP rides FIRST as trusted orientation (PM-DOWN-02): the code-task
+        # agent skips re-exploration. It is first-party, verified context — placed ahead of the
+        # untrusted, spotlight-fenced transcript tail (which stays DATA, never instructions).
+        map_block = (
+            f"Repo map (orientation — trusted):\n{map_text}\n\n" if map_text and map_text.strip() else ""
+        )
         return (
+            f"{map_block}"
             f"Ask (from {bundle.speaker}): {bundle.ask}\n"
             f"Task id: {bundle.task_id}\n"
             f"{notes_block}"

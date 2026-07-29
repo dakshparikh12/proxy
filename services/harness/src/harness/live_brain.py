@@ -159,6 +159,10 @@ def build_wake_turn(
     reg = registry if registry is not None else behaviors.REGISTRY
     reader = notes_reader if notes_reader is not None else _durable_notes_reader(runtime)
     servers = mcp_servers if mcp_servers is not None else _build_code_intel_servers(runtime)
+    # The pre-meeting MAP resolved onto the runtime at join — mounted as the wake turn's
+    # orientation prefix so Proxy primes on the codebase mental model (PM-DOWN-01). ``None``
+    # (an unmapped repo) leaves the wake prompt unchanged.
+    map_text = getattr(runtime, "map_text", None)
     return WakeTurn(
         meeting_id=runtime.header.meeting_id,
         provider=provider,
@@ -166,6 +170,7 @@ def build_wake_turn(
         notes_reader=reader,
         history_fn=history_fn,
         mcp_servers=servers,
+        map_text=map_text,
     )
 
 

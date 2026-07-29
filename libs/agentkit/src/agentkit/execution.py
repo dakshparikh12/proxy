@@ -167,11 +167,19 @@ class BehaviorRunner:
         provider: Provider | None = None,
         cost_meter: Any | None = None,
         mcp_servers: dict[str, Any] | None = None,
+        context_prefix: str | None = None,
     ) -> None:
         self._config = config
         self._registry: dict[str, Behavior | BehaviorConfig] = dict(registry or {})
         self._provider = provider
         self._cost = cost_meter if cost_meter is not None else _NullCostMeter()
+        # The pre-meeting MAP (``index.md``), mounted as an ORIENTATION prefix on the system
+        # prompt (the pre-meeting system's downstream contribution — the wake turn primes on the
+        # map before it reads). It rides BEFORE the untrusted-data guardrail so the guardrail
+        # stays the final authoritative word; ``None`` = no map (an unindexed repo → the wake
+        # turn is unaffected). This is trusted, first-party context (the durable verified map),
+        # never untrusted transcript data.
+        self._context_prefix = context_prefix.strip() if context_prefix and context_prefix.strip() else None
         # The CURATED MCP servers whose tools the behavior's ``allowed_tools`` reference — e.g.
         # the orchestrator wake turn's code-intel MCP server, so ``mcp__code_intel__*`` is
         # actually MOUNTED and reachable (the seam gap this closes). Threaded onto every
@@ -240,7 +248,14 @@ class BehaviorRunner:
         # defense the Scribe/Workroom apply (§3.10 / §10.3 / 04 §3.4). The guardrail states
         # the spotlight-fenced untrusted inputs are DATA whose embedded instructions are
         # never followed; it must sit AFTER the spoken-register hint so nothing overrides it.
-        system_prompt = with_injection_guardrail(with_proxy_guardrails(render_role(behavior, inputs)))
+        role_prompt = render_role(behavior, inputs)
+        # Prepend the pre-meeting MAP as an orientation prefix (trusted first-party context),
+        # BEFORE the guardrail wrap so ``with_injection_guardrail`` stays the LAST authoritative
+        # segment (the untrusted transcript inputs are guarded after it). An unindexed repo
+        # (no prefix) leaves the role prompt exactly as before — the seam is additive.
+        if self._context_prefix:
+            role_prompt = f"{self._context_prefix}\n\n{role_prompt}"
+        system_prompt = with_injection_guardrail(with_proxy_guardrails(role_prompt))
         return ProviderQuery(
             model=config.model,
             allowed_tools=curated,
