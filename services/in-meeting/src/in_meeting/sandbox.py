@@ -2,8 +2,9 @@
 
 The last piece of Proxy's access surface: the ability to EXECUTE code in a real,
 isolated sandbox. :func:`provision_sandbox` spins exactly ONE E2B sandbox for the
-meeting at join (kept warm for the meeting's lifetime — the caller owns teardown
-via the handle's ``kill()``); :func:`build_sandbox_server` mounts that handle as
+meeting at join (kept warm for the meeting's lifetime — provisioned with a
+meeting-length ``timeout`` because e2b's own default is only 300s; the caller owns
+teardown via the handle's ``kill()``); :func:`build_sandbox_server` mounts that handle as
 COMPOSABLE MCP tools — run a command, write a file, read a file — under the
 ``sandbox`` server name, the exact ``create_sdk_mcp_server`` recipe
 ``meeting_control.build_meeting_control_server`` and premeeting's
@@ -48,6 +49,19 @@ from claude_agent_sdk import McpSdkServerConfig, create_sdk_mcp_server, tool
 # The server name the fully-qualified ``mcp__sandbox__*`` allowed_tools resolve against.
 SERVER_NAME = "sandbox"
 
+#: The sandbox lifetime threaded to the confirmed e2b ``create(timeout=...)`` kwarg
+#: (seconds). e2b's OWN ``default_sandbox_timeout`` is only 300s — five minutes into
+#: a real 30-60 min meeting the sandbox would silently die, so provisioning threads
+#: a meeting-length hour by default. A meeting LONGER than this must be kept alive
+#: by the runtime periodically extending the handle (``set_timeout``) — a keep-warm
+#: heartbeat that is a documented runtime follow-up, not built here.
+SANDBOX_TIMEOUT_S: int = 3600
+
+#: The per-command timeout threaded to the confirmed e2b ``commands.run(timeout=...)``
+#: kwarg (seconds). e2b's own per-command default is 60s — too short for the
+#: heavy/code work this toolbelt exists for (test suites, builds).
+COMMAND_TIMEOUT_S: int = 300
+
 # The sandbox-access tool basenames, in the order the server advertises them.
 TOOL_BASENAMES: tuple[str, ...] = ("run_command", "write_file", "read_file")
 
@@ -61,8 +75,9 @@ SANDBOX_TOOLS: tuple[str, ...] = (
 
 #: The injectable provision backend: an async factory with the e2b
 #: ``AsyncSandbox.create`` keyword surface (``envs=``, ``metadata=``,
-#: ``allow_internet_access=``) returning the live sandbox handle. Tests inject a
-#: recording fake; the default is the real create THROUGH the call_external seam.
+#: ``allow_internet_access=``, ``timeout=``) returning the live sandbox handle.
+#: Tests inject a recording fake; the default is the real create THROUGH the
+#: call_external seam.
 SandboxBackend = Callable[..., Awaitable[Any]]
 
 
@@ -119,6 +134,7 @@ async def provision_sandbox(
     env: Mapping[str, str] | None = None,
     metadata: Mapping[str, str] | None = None,
     allow_internet_access: bool = False,
+    timeout_s: int = SANDBOX_TIMEOUT_S,
 ) -> Any:
     """Provision exactly ONE warm E2B sandbox for the meeting; returns the live handle.
 
@@ -127,13 +143,22 @@ async def provision_sandbox(
     the backend sees exactly the entries the caller passed — never the host process
     environment. Egress is default-DENY (``allow_internet_access=False`` threaded to
     the confirmed e2b create kwarg); a caller that needs the network opens it
-    explicitly. The caller owns the handle's lifetime (``kill()`` at meeting end).
+    explicitly.
+
+    The sandbox is provisioned with ``timeout_s`` (default 1 hour — a meeting-length
+    lifetime) threaded to the confirmed e2b ``create(timeout=)`` kwarg, because e2b's
+    own default is only 300s — five minutes into a real meeting the sandbox would
+    silently die. A meeting LONGER than the timeout must be kept alive by the runtime
+    periodically extending the handle (``set_timeout``) — a keep-warm heartbeat that
+    is a documented follow-up for the runtime, NOT built here. The caller still owns
+    teardown via the handle's ``kill()`` at meeting end.
     """
     create = backend if backend is not None else _real_create
     return await create(
         envs=dict(env or {}),
         metadata=dict(metadata or {}),
         allow_internet_access=allow_internet_access,
+        timeout=timeout_s,
     )
 
 
@@ -158,7 +183,12 @@ def build_sandbox_server(sandbox: SandboxHandle) -> McpSdkServerConfig:
                 return _error_result("run_command error: command is required")
             # max_retries=1 — a command run is NOT idempotent; the seam must never
             # re-execute it on a transport blip (retry stays for the idempotent verbs).
-            result = await _via_seam(lambda: sandbox.commands.run(command), max_retries=1)
+            # timeout=COMMAND_TIMEOUT_S — e2b's per-command default is 60s, too short
+            # for the heavy/code work this tool exists for.
+            result = await _via_seam(
+                lambda: sandbox.commands.run(command, timeout=COMMAND_TIMEOUT_S),
+                max_retries=1,
+            )
             return _text_result(
                 {
                     "stdout": str(getattr(result, "stdout", "") or ""),
@@ -222,6 +252,8 @@ def build_sandbox_server(sandbox: SandboxHandle) -> McpSdkServerConfig:
 
 
 __all__ = [
+    "COMMAND_TIMEOUT_S",
+    "SANDBOX_TIMEOUT_S",
     "SANDBOX_TOOLS",
     "SERVER_NAME",
     "TOOL_BASENAMES",

@@ -52,14 +52,16 @@ class FakeCommandResult:
 
 
 class FakeCommands:
-    """Records every ``run(cmd)``; returns a canned CommandResult."""
+    """Records every ``run(cmd, timeout=...)``; returns a canned CommandResult."""
 
     def __init__(self, result: FakeCommandResult | None = None) -> None:
         self.calls: list[str] = []
+        self.timeouts: list[float | None] = []
         self.result = result if result is not None else FakeCommandResult()
 
-    async def run(self, cmd: str) -> FakeCommandResult:
+    async def run(self, cmd: str, *, timeout: float | None = None) -> FakeCommandResult:
         self.calls.append(cmd)
+        self.timeouts.append(timeout)
         return self.result
 
 
@@ -90,7 +92,7 @@ class FakeSandbox:
 
 
 class RaisingCommands:
-    async def run(self, cmd: str) -> Any:
+    async def run(self, cmd: str, *, timeout: float | None = None) -> Any:
         raise RuntimeError("e2b 502")
 
 
@@ -127,7 +129,7 @@ class ExitRaisingCommands:
     def __init__(self, exc: FakeCommandExit) -> None:
         self.exc = exc
 
-    async def run(self, cmd: str) -> Any:
+    async def run(self, cmd: str, *, timeout: float | None = None) -> Any:
         raise self.exc
 
 
@@ -213,6 +215,39 @@ async def test_provision_threads_an_explicit_network_allow_override() -> None:
     assert seen["allow_internet_access"] is True
 
 
+@pytest.mark.asyncio
+async def test_provision_threads_a_meeting_length_timeout_by_default() -> None:
+    """e2b's own ``default_sandbox_timeout`` is 300s — five minutes into a real
+    30-60 min meeting the sandbox would silently die. ``provision_sandbox`` must
+    thread a meeting-length ``timeout=`` (the confirmed e2b create kwarg) so the
+    handle genuinely stays warm for the meeting's lifetime."""
+    from in_meeting.sandbox import SANDBOX_TIMEOUT_S
+
+    seen: dict[str, Any] = {}
+
+    async def fake_create(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return object()
+
+    await provision_sandbox(backend=fake_create)
+
+    assert SANDBOX_TIMEOUT_S == 3600
+    assert seen["timeout"] == SANDBOX_TIMEOUT_S
+
+
+@pytest.mark.asyncio
+async def test_provision_threads_a_custom_timeout_override() -> None:
+    seen: dict[str, Any] = {}
+
+    async def fake_create(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return object()
+
+    await provision_sandbox(backend=fake_create, timeout_s=7200)
+
+    assert seen["timeout"] == 7200
+
+
 # ── AC2: build → sdk server config; each tool drives the matching sandbox verb ──
 
 
@@ -234,6 +269,23 @@ async def test_run_command_runs_in_the_sandbox_and_returns_stdout_stderr_exit_co
     assert "__error__" not in out
     assert out == {"stdout": "3 passed\n", "stderr": "", "exit_code": 0}
     assert sandbox.commands.calls == ["pytest -q"]
+
+
+@pytest.mark.asyncio
+async def test_run_command_threads_the_heavy_work_command_timeout() -> None:
+    """e2b's default per-command timeout is 60s — too short for the heavy/code
+    work this toolbelt exists for. ``run_command`` must thread the module's
+    ``COMMAND_TIMEOUT_S`` to the confirmed ``commands.run(timeout=)`` kwarg."""
+    from in_meeting.sandbox import COMMAND_TIMEOUT_S
+
+    sandbox = FakeSandbox(FakeCommandResult(stdout="ok\n"))
+    server = build_sandbox_server(sandbox)
+
+    out = await _call(server, "run_command", {"command": "pytest -q"})
+
+    assert "__error__" not in out
+    assert COMMAND_TIMEOUT_S == 300
+    assert sandbox.commands.timeouts == [COMMAND_TIMEOUT_S]
 
 
 @pytest.mark.asyncio
