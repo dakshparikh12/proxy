@@ -94,6 +94,25 @@ class PostMeetingTaskStore:
                 state.value,
             )
 
+    async def downgrade_to_ticket(self, task_id: Any, *, outcome: str) -> None:
+        """§3.4 downgrade: tier → ticket, back to TRIAGED, plan and clock cleared.
+
+        Clearing ``planned_at`` is what removes the task from the expiry sweep — there is
+        no longer a plan awaiting an answer. Clearing ``plan`` avoids leaving a document on
+        a ticket nobody is going to action.
+        """
+        async with self._db.acquire() as conn:
+            await conn.execute(
+                "UPDATE post_meeting_tasks "
+                "   SET tier = $2, state = $3, plan = NULL, planned_at = NULL, "
+                "       outcome = $4, updated_at = now() "
+                " WHERE task_id = $1",
+                task_id,
+                Tier.TICKET.value,
+                TaskState.TRIAGED.value,
+                outcome,
+            )
+
     async def planned_tasks_for_sweep(self, *, tenant_id: Any = None) -> list[dict[str, Any]]:
         """The rows ``plan.expire_stale_plans`` needs: task_id, state, planned_at.
 

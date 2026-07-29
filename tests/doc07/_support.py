@@ -75,6 +75,12 @@ class FakeTaskStore:
         # Mirrors the real store: writing a plan stamps the §3.4 expiry clock.
         self._update(task_id, plan=plan, state=_val(state), planned_at=_now())
 
+    async def downgrade_to_ticket(self, task_id: Any, *, outcome: str) -> None:
+        self._update(
+            task_id, tier=Tier.TICKET.value, state=TaskState.TRIAGED.value,
+            plan=None, planned_at=None, outcome=outcome,
+        )
+
     async def planned_tasks_for_sweep(self, *, tenant_id: Any = None) -> list[dict[str, Any]]:
         return [
             {"task_id": tid, "state": r["state"], "planned_at": r.get("planned_at")}
