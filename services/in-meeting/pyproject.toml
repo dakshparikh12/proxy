@@ -8,7 +8,10 @@ dependencies = [
     "agentkit",
     "db",
     "http",
+    "llm",
     "claude-agent-sdk>=0.2.115",
+    "pydantic>=2",
+    "pydantic-settings>=2",
 ]
 
 [tool.uv.sources]
@@ -16,6 +19,7 @@ contracts = { workspace = true }
 agentkit = { workspace = true }
 db = { workspace = true }
 http = { workspace = true }
+llm = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
