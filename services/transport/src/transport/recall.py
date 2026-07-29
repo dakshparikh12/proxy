@@ -27,6 +27,13 @@ _RECALL_BASE = "https://api.recall.ai/api/v1"
 # Per-round-trip client timeout (seconds) — matches the workspace seam convention
 # (premeeting's token mint); the retry policy above this lives in ``call_external``.
 _HTTP_TIMEOUT_S = 15.0
+# The realtime transcript event names Recall's create-bot schema enumerates for a
+# ``recording_config.realtime_endpoints`` webhook (finals + partials) — protocol
+# identifiers (wire physics), consumed by the harness webhook drain under the same
+# names. Bot STATUS events are NOT subscribable here: Recall delivers those only
+# through the account webhook configured in its dashboard (the §4.6 route verified
+# by ``recall_webhook_secret``), never per-bot.
+_REALTIME_TRANSCRIPT_EVENTS = ("transcript.data", "transcript.partial_data")
 
 
 class _RecallOutputMedia:
@@ -66,18 +73,73 @@ class RecallTransport:
         *,
         api_key: str,
         dm_available: bool = False,
+        webhook_url: str = "",
+        output_media_url: str = "",
     ) -> None:
         # ``api_key`` is sourced from Secret Manager by the caller and never logged
         # (AC-XCUT-02); stored only to pass into signed round-trips via the seam.
+        # ``webhook_url`` is the absolute public URL of OUR Recall receiver
+        # (``/webhooks/recall``) — where the per-bot realtime transcript events are
+        # delivered. ``output_media_url`` is the webpage the bot streams as its
+        # camera (Recall Output Media) — the low-latency surface that plays Proxy's
+        # audio into the call. Both are deployment facts injected by the caller
+        # (env/settings), never baked in here (Law 4).
         self._call_external = call_external
         self._api_key = api_key
         self._dm_available = dm_available
+        self._webhook_url = webhook_url
+        self._output_media_url = output_media_url
         self._roster: dict[str, asyncio.Queue[RosterEvent]] = {}
         self._chat: dict[str, asyncio.Queue[ChatMessage]] = {}
 
+    def _join_body(self, meeting_link: str) -> dict[str, Any]:
+        """The create-bot body, per Recall's REAL ``bot_create`` schema.
+
+        Beyond ``meeting_url`` it carries the full config that makes the bot a live
+        participant rather than a mute recorder:
+
+        * ``recording_config.transcript.provider.assembly_ai_v3_streaming`` — runs
+          AssemblyAI Universal-Streaming transcription. BYOK: our AssemblyAI key is
+          registered in Recall's dashboard, so the provider object rides EMPTY — no
+          credential ever enters the body (AC-XCUT-02).
+        * ``recording_config.realtime_endpoints`` — one ``webhook`` endpoint at our
+          receiver, subscribed to the transcript finals + partials Recall enumerates
+          (``transcript.data``/``transcript.partial_data``). Bot status events cannot
+          ride here (dashboard-webhook only — see ``_REALTIME_TRANSCRIPT_EVENTS``).
+        * ``output_media.camera`` — ``{kind: "webpage", config: {url}}``, Recall's
+          Output Media: the bot streams our webpage as its camera, the designated
+          low-latency path for an agent to emit audio (the ``output_audio`` clip
+          endpoint is explicitly not for conversational audio).
+
+        Transcription + delivery ride together behind ``webhook_url``: a transport
+        with no configured receiver cannot consume live transcripts, so it asks for
+        none (and never ships an empty-string URL, which Recall's schema rejects).
+        ``output_media`` likewise appears only when a surface URL is configured.
+        """
+        body: dict[str, Any] = {"meeting_url": meeting_link}
+        if self._webhook_url:
+            body["recording_config"] = {
+                "transcript": {"provider": {"assembly_ai_v3_streaming": {}}},
+                "realtime_endpoints": [
+                    {
+                        "type": "webhook",
+                        "url": self._webhook_url,
+                        "events": list(_REALTIME_TRANSCRIPT_EVENTS),
+                    }
+                ],
+            }
+        if self._output_media_url:
+            body["output_media"] = {
+                "camera": {
+                    "kind": "webpage",
+                    "config": {"url": self._output_media_url},
+                }
+            }
+        return body
+
     async def join(self, meeting_link: str) -> str:
         outcome = await self._call_external(
-            lambda: self._api("POST", "/bot", {"meeting_url": meeting_link}),
+            lambda: self._api("POST", "/bot", self._join_body(meeting_link)),
             service="recall",
             unit_cost_usd=0.50,
         )

@@ -37,8 +37,18 @@ def _default_transport() -> TransportProvider:
 
     # RECALL_API_KEY is surfaced from Secret Manager as env (the settings boot gate
     # validates its presence at startup); read it here without re-running that gate.
+    # RECALL_WEBHOOK_URL (our public /webhooks/recall receiver) and
+    # RECALL_OUTPUT_MEDIA_URL (the webpage the bot streams as its camera) are
+    # deployment facts fed the same way: they drive the full create-bot config
+    # (streaming transcription + realtime transcript delivery + Output Media) on
+    # the real join path — unset, the bot joins without those capabilities.
     api_key = os.environ.get("RECALL_API_KEY", "")
-    return RecallTransport(call_external, api_key=api_key)
+    return RecallTransport(
+        call_external,
+        api_key=api_key,
+        webhook_url=os.environ.get("RECALL_WEBHOOK_URL", ""),
+        output_media_url=os.environ.get("RECALL_OUTPUT_MEDIA_URL", ""),
+    )
 
 
 @dataclass(frozen=True)
