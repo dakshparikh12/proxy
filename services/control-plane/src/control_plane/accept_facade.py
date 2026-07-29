@@ -1,8 +1,8 @@
 """POST /m/{meeting}/drafts/{draft}/accept — the human-approval accept route.
 
 Accepting a staged draft is the one world-touching click (Law 3, AC-INV-011). This
-module is the ``services.harness.accept_route`` import surface the M13 invariant
-imports (``from services.harness.accept_route import handle_accept``); it is a thin
+module is the ``services.control_plane.accept_facade`` import surface the M13 invariant
+imports (``from services.control_plane.accept_facade import handle_accept``); it is a thin
 DELEGATION facade over the REAL, durable-backed handler in
 :mod:`control_plane.accept_route`.
 

@@ -259,10 +259,10 @@ def test_c2_unconfigured_receiver_ships_no_dangling_config(monkeypatch: Any) -> 
 
 
 def test_c2_production_default_transport_feeds_the_join_config(monkeypatch: Any) -> None:
-    """The REAL construction site (``harness.meetings._default_transport``) feeds the
+    """The REAL construction site (``control_plane.meetings._default_transport``) feeds the
     join config from the environment — production joins carry the full body, exactly
     the way this suite's mocked-seam joins do."""
-    from services.harness.src.harness.meetings import _default_transport
+    from control_plane.meetings import _default_transport
 
     monkeypatch.setenv("RECALL_API_KEY", "rk_c2_env_key")
     monkeypatch.setenv("RECALL_WEBHOOK_URL", "https://prod.proxy.example/webhooks/recall")

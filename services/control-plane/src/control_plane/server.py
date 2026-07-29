@@ -341,8 +341,8 @@ async def _real_tracing(app: Any) -> None:
 
 
 async def _real_pool(app: Any) -> None:
+    from control_plane import settings as settings_mod
     from libs.db import open_pool
-    from services.harness.src.harness import settings as settings_mod
 
     # The one asyncpg pool-construction site lives in libs/db (§11 canonical
     # config); the boot step just opens it and stashes it on app.state.
@@ -363,7 +363,7 @@ async def _real_provisioner_ready(app: Any) -> None:
     # bot provisioner) resolve one MeetingRuntime — its in-process SignalCarrier +
     # its live Scribe notes engine — per meeting. This is the production wiring that
     # makes ``run_scribe`` actually run for a real meeting (DOC03-SCRIBE-PIPELINE).
-    from services.harness.src.harness.meeting_runtime import MeetingRuntimeRegistry
+    from control_plane.meeting_runtime import MeetingRuntimeRegistry
 
     # The close-pass vendor edges (GCS finalized-notes bucket + Recall chat poster +
     # the Sonnet close caller). When configured, the registry runs the ordered close
@@ -378,7 +378,7 @@ async def _real_provisioner_ready(app: Any) -> None:
     # make_provision_launcher's ``launch`` routes an in_call THROUGH the provisioner (atomic
     # claim + one-scope assembly + loop launch) instead of the Scribe-only start; the drain
     # loop below is the ONE production caller that keeps this seam live, not a test-only path.
-    from services.harness.src.harness.provisioner import make_provision_launcher
+    from control_plane.provisioner import make_provision_launcher
 
     app.state.meeting_tasks = set()
     # The routine MIG-drain state rides the SAME in-flight meeting-task set the
@@ -403,8 +403,8 @@ def _build_close_config(db: Any) -> Any | None:
     the registry-level poster resolves the meeting's Recall bot from the URL and posts
     through transport — no per-meeting poster state is needed on the registry.
     """
-    from services.harness.src.harness import settings as settings_mod
-    from services.harness.src.harness.scribe_runtime import CloseConfig
+    from control_plane import settings as settings_mod
+    from control_plane.scribe_runtime import CloseConfig
 
     cfg = settings_mod.settings
     bucket_name = getattr(cfg, "gcs_bucket", "") or ""
@@ -472,7 +472,7 @@ async def _drain_webhooks_forever(app: Any) -> None:
     so the provisioner is live on the real path — not a test-only island. A drain fault is
     logged and the loop continues (a poison row never stalls the whole queue).
     """
-    from services.harness.src.harness.webhooks import drain_pending_webhooks
+    from control_plane.webhooks import drain_pending_webhooks
 
     while True:
         try:

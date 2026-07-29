@@ -1,6 +1,6 @@
 """CUTOVER — the NEW in-meeting engine owns the REAL production boot path.
 
-The swap node: ``harness.provisioner`` assembles the NEW engine
+The swap node: ``control_plane.provisioner`` assembles the NEW engine
 (``in_meeting.runtime.assemble_engine``) instead of the old live brain, the
 webhook drain adapts transcript + chat events onto ``Engine.feed_transcript`` /
 ``Engine.feed_chat``, the meeting-end lifecycle drains the engine + closes the
@@ -236,7 +236,7 @@ async def test_boot_assembly_constructs_engine_with_full_access_and_tenant_roote
     the loader got the meeting's exact pinned (tenant, repo, sha) key, the model
     is the ORCHESTRATOR seat, and the clone_path is the TENANT-ROOTED
     ``premeeting.paths.tenant_repo_dir(...)/checkout`` derivation."""
-    from harness import provisioner as prov
+    from control_plane import provisioner as prov
     from in_meeting import runtime as im_runtime
     from premeeting.paths import tenant_repo_dir
 
@@ -309,7 +309,7 @@ async def test_sandbox_provision_failure_degrades_honestly(
     """AC4 — ``provision_sandbox`` raising must NOT kill the meeting: the engine
     still assembles (no sandbox server, no sandbox tool names) and the fault is
     logged honestly."""
-    from harness import provisioner as prov
+    from control_plane import provisioner as prov
     from in_meeting import runtime as im_runtime
 
     monkeypatch.setenv("PROXY_TENANT_VOLUME_ROOT", str(tmp_path))
@@ -389,7 +389,7 @@ async def test_transcript_event_feeds_engine_the_exact_line() -> None:
     """AC2 — a drained transcript event reaches ``engine.feed_transcript`` as the
     exact TranscriptLine adaptation of the wire body (and the notes plane's
     carrier ingest keeps its feed — the durable ledger is not starved)."""
-    from harness.webhooks import _dispatch_meeting_event
+    from control_plane.webhooks import _dispatch_meeting_event
 
     engine = FakeEngine()
     runtime = FakeRuntime(engine)
@@ -420,7 +420,7 @@ async def test_partial_transcript_is_not_fed_to_the_engine() -> None:
     """AC2 (dedupe) — a partial (interim) transcript event must NOT feed the
     engine: only finals reach the notes/trigger, or one spoken ask would wake
     Proxy twice (partial + final carry the same words)."""
-    from harness.webhooks import _dispatch_meeting_event
+    from control_plane.webhooks import _dispatch_meeting_event
 
     engine = FakeEngine()
     runtime = FakeRuntime(engine)
@@ -445,7 +445,7 @@ async def test_chat_event_feeds_engine_the_exact_chatline() -> None:
     docs.recall.ai real-time event payloads) routes the documented payload
     nesting (data.data.participant.name + data.data.data.text) onto
     ``engine.feed_chat`` as the exact ChatLine."""
-    from harness.webhooks import _CHAT_EVENTS, _dispatch_meeting_event
+    from control_plane.webhooks import _CHAT_EVENTS, _dispatch_meeting_event
 
     assert "participant_events.chat_message" in _CHAT_EVENTS
 
@@ -472,7 +472,7 @@ async def test_chat_event_feeds_engine_the_exact_chatline() -> None:
 @pytest.mark.asyncio
 async def test_chat_event_before_boot_is_a_safe_noop() -> None:
     """AC3 (fail closed) — a chat event with no booted engine never raises."""
-    from harness.webhooks import _dispatch_meeting_event
+    from control_plane.webhooks import _dispatch_meeting_event
 
     runtime = FakeRuntime(engine=None)
     db = FakeDb(FakeConn(meeting_row=_resolved_row()))
@@ -501,7 +501,7 @@ async def test_engine_feed_escape_never_poisons_the_drain(
     never-raise, but an ESCAPE must not leave the webhook row unprocessed: the
     drain logs the fault, still marks BOTH rows processed (never a poison row),
     and the notes-plane carrier ingest still received the transcript body."""
-    from harness.webhooks import drain_pending_webhooks
+    from control_plane.webhooks import drain_pending_webhooks
 
     engine = RaisingEngine()
     runtime = FakeRuntime(engine)
@@ -563,8 +563,8 @@ async def test_meeting_end_drains_engine_kills_sandbox_completes_row(
     """AC5 — the end signal ends the launched meeting: the engine is drained,
     the speak pipe closed, the sandbox killed, and the operation_runs row is
     completed (the existing fencing/close machinery intact)."""
-    from harness import meeting_runtime as mr
-    from harness import provisioner as prov
+    from control_plane import meeting_runtime as mr
+    from control_plane import provisioner as prov
     from in_meeting import runtime as im_runtime
 
     monkeypatch.setenv("PROXY_TENANT_VOLUME_ROOT", str(tmp_path))
@@ -647,8 +647,8 @@ async def test_hanging_sandbox_kill_is_bounded_and_row_still_completes(
     raises) must not wedge meeting end: every teardown step rides the same
     wall-clock bound, so the launched entry still returns promptly and the
     operation_runs row still completes."""
-    from harness import meeting_runtime as mr
-    from harness import provisioner as prov
+    from control_plane import meeting_runtime as mr
+    from control_plane import provisioner as prov
     from in_meeting import runtime as im_runtime
 
     monkeypatch.setenv("PROXY_TENANT_VOLUME_ROOT", str(tmp_path))

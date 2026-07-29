@@ -39,7 +39,7 @@ def test_readiness_200_then_503_on_meeting_runtime_app():
     """The meeting_runtime app's GET /readiness returns 200 normally and 503 once draining is set."""
     from starlette.testclient import TestClient
 
-    from services.harness import server
+    from services.control_plane import server
 
     app = server.build_meeting_runtime_readiness_app()
 
@@ -90,7 +90,7 @@ def test_readiness_200_then_503_on_code_intel_app():
 @pytest.mark.integration
 def test_sigterm_registered_for_mig_drain():
     """SIGTERM is registered to the routine MIG-drain path (set draining → finish in-flight → exit)."""
-    from services.harness import server
+    from services.control_plane import server
 
     registered: dict[int, object] = {}
 
@@ -112,7 +112,7 @@ def test_sigterm_registered_for_mig_drain():
 @pytest.mark.integration
 def test_begin_drain_lets_inflight_finish_within_grace_then_exits():
     """begin_drain sets draining, waits for an in-flight meeting to finish within the grace window, then exits."""
-    from services.harness import server
+    from services.control_plane import server
 
     async def _drive():
         app = server.build_meeting_runtime_readiness_app()
@@ -159,7 +159,7 @@ def test_begin_drain_lets_inflight_finish_within_grace_then_exits():
 @pytest.mark.integration
 def test_begin_drain_bounded_by_grace_window():
     """begin_drain exits when the grace window elapses even if an in-flight meeting overruns (never hangs forever)."""
-    from services.harness import server
+    from services.control_plane import server
 
     async def _drive():
         app = server.build_meeting_runtime_readiness_app()

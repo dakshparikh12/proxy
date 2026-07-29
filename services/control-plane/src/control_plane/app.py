@@ -71,7 +71,7 @@ async def _resolve_session_from_request(request: Request) -> dict[str, Any] | No
     db = getattr(request.app.state, "db", None)
     if db is not None:
         try:
-            from harness.session import resolve_session
+            from control_plane.session import resolve_session
 
             resolved = await resolve_session(db, request.cookies)
         except Exception:  # noqa: BLE001 - a resolution fault falls through to the middleware read
@@ -138,7 +138,7 @@ def create_app() -> FastAPI:
     from .gateway_route import install_gateway_route
     from .internal import install_internal_routes
     from .meeting_home import install_meeting_home_route
-    from .webhooks import install_recall_webhook_route
+    from .webhook_routes import install_recall_webhook_route
 
     install_internal_routes(app)
     # §2.8: the authenticated dual-mode per-meeting home GET /m/{meeting_id}. It
@@ -251,7 +251,7 @@ def create_app() -> FastAPI:
         email = userinfo.get("email")
         db = getattr(request.app.state, "db", None)
         if email and db is not None:
-            from harness.session import complete_signin
+            from control_plane.session import complete_signin
 
             result = await complete_signin(db, email=email)
             response.set_cookie(
@@ -268,7 +268,7 @@ def create_app() -> FastAPI:
         # resolves the signed-out user any longer.
         db = getattr(request.app.state, "db", None)
         if db is not None:
-            from harness.session import logout_session
+            from control_plane.session import logout_session
 
             await logout_session(db, request.cookies)
         response.delete_cookie(SESSION_COOKIE)

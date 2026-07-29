@@ -219,7 +219,7 @@ def install_meeting_home_route(app: "FastAPI") -> None:
             # cookie, one source of truth). No/invalid cookie → None → Not found; the capability
             # token path above is separate and unaffected.
             try:
-                from harness.session import resolve_session
+                from control_plane.session import resolve_session
 
                 session = await resolve_session(db, request.cookies)
             except Exception:  # noqa: BLE001 - a resolution fault is treated as no session (fail-closed)

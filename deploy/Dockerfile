@@ -9,7 +9,7 @@ WORKDIR /app
 COPY . /app
 # Per-service, self-contained: --package pins the single service package;
 # --frozen forbids lockfile drift; --no-dev keeps dev deps out of prod.
-RUN uv sync --frozen --no-dev --no-editable --package harness
+RUN uv sync --frozen --no-dev --no-editable --package control-plane
 
 FROM python:3.12-slim
 WORKDIR /app
@@ -30,4 +30,4 @@ USER appuser
 # Parallel-boot safe: losers retry `alembic upgrade head` (bounded 30x5s ~= 150s,
 # inside the startup-probe deadline) while the winner migrates under an advisory
 # lock (see migrations/env.py); then every boot exec's the server.
-CMD ["sh","-c","n=0; until alembic upgrade head; do n=$((n+1)); [ $n -ge 30 ] && exit 1; sleep 5; done && exec python -m harness.server"]
+CMD ["sh","-c","n=0; until alembic upgrade head; do n=$((n+1)); [ $n -ge 30 ] && exit 1; sleep 5; done && exec python -m control_plane.server"]

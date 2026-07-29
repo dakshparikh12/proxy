@@ -52,7 +52,7 @@ def test_invite_launches_real_bot_and_writes_back_recall_id():
 
     criterion_id: AC-JOIN-10
     """
-    from services.harness import invite_proxy, resolve_bot_id
+    from control_plane.meetings import invite_proxy, resolve_bot_id
     from libs.db import Database
     from transport.recall import RecallTransport
 
@@ -118,7 +118,7 @@ def test_invite_posts_pinned_consent_before_observation():
 
     criterion_id: AC-JOIN-15
     """
-    from services.harness import invite_proxy
+    from control_plane.meetings import invite_proxy
     from libs.db import Database
     from transport.recall import RecallTransport
     from transport.consent import consent_notice

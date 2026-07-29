@@ -3,7 +3,7 @@
 Node: ``orchestrator.heartbeat-fence`` (fix). Decision D-003: the
 ``operation_runs`` fencing heartbeat in ``libs/ops/operation_run.py`` (§3.7 /
 CANONICAL §12.10) is the CANONICAL liveness authority; the
-``services/harness/heartbeat.py`` Healthchecks.io dead-man ping is AUXILIARY
+``services/control-plane/src/control_plane/heartbeat.py`` Healthchecks.io dead-man ping is AUXILIARY
 observability, never the fence. Two liveness stories is a split-brain risk, so
 this bundle proves one story:
 
@@ -34,9 +34,9 @@ import re
 import pytest
 
 _ROOT = pathlib.Path(__file__).resolve().parents[3]
-_HEARTBEAT_SRC = _ROOT / "services" / "harness" / "src" / "harness" / "heartbeat.py"
+_HEARTBEAT_SRC = _ROOT / "services" / "control-plane" / "src" / "control_plane" / "heartbeat.py"
 _OPRUN_SRC = _ROOT / "libs" / "ops" / "src" / "ops" / "operation_run.py"
-_EMIT_SRC = _ROOT / "services" / "harness" / "src" / "harness" / "emit.py"
+_EMIT_SRC = _ROOT / "services" / "control-plane" / "src" / "control_plane" / "emit.py"
 
 
 def _dsn() -> str | None:
@@ -94,7 +94,7 @@ def test_heartbeat_fence_rowcount_zero_drives_is_owner_false() -> None:
 
 def test_heartbeat_fence_fenced_out_zombie_emits_nothing() -> None:
     """A handle whose fence dropped (is_owner False) gates EVERY side-effect emit to silence."""
-    from harness.emit import EMIT_FRONTIER, Emitter
+    from control_plane.emit import EMIT_FRONTIER, Emitter
 
     class _FencedHandle:
         """Stand-in for an OperationHandle that just lost the fence."""
@@ -122,7 +122,7 @@ def test_heartbeat_fence_fenced_out_zombie_emits_nothing() -> None:
 
 def test_heartbeat_fence_live_handle_regains_and_loses_ownership() -> None:
     """The emitter reads is_owner LIVE: flipping the handle mid-turn instantly (un)gates the wire."""
-    from harness.emit import Emitter
+    from control_plane.emit import Emitter
 
     class _Handle:
         is_owner = True
@@ -187,7 +187,7 @@ def test_recovery_replans_rejoin_never_resumes_media_session() -> None:
         pytest.skip("no local Postgres DSN (run under build/setup-test-env.sh)")
 
     from libs.db import Database
-    from harness.recovery import recover_meeting_harness
+    from control_plane.recovery import recover_meeting_harness
 
     async def _run() -> None:
         db = await Database.connect(dsn)

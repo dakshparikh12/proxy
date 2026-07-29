@@ -157,7 +157,7 @@ def install_gateway_route(app: "FastAPI") -> None:
             db = getattr(websocket.app.state, "db", None)
             if db is None:
                 return None  # no durable substrate handle → cannot authenticate → reject
-            from harness.session import resolve_session
+            from control_plane.session import resolve_session
 
             resolved: dict[str, Any] | None = await resolve_session(db, cookies)
             return resolved

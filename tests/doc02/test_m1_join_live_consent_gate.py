@@ -46,7 +46,7 @@ def _live_runtime(monkeypatch):
     constructs the LIVE ``HearingStage``). We stub only the Scribe consumer so no DB/notes
     engine is needed; the transport ``HearingStage`` + its consent gate are the REAL ones.
     """
-    from harness import meeting_runtime as mr
+    from control_plane import meeting_runtime as mr
     from scribe.prefix import MeetingHeader
     from transport.carrier import SignalCarrier
 
@@ -152,8 +152,8 @@ def test_provisioner_grants_consent_on_in_call(monkeypatch):
     Without this the whole live path would deadlock closed; without the gate it would leak
     pre-consent records. This proves the provisioner opens the gate on the confirmed-join event.
     """
-    from harness import meeting_runtime as mr
-    from harness import provisioner as prov
+    from control_plane import meeting_runtime as mr
+    from control_plane import provisioner as prov
     from scribe.prefix import MeetingHeader
     from transport.carrier import SignalCarrier
 

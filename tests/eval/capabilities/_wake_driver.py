@@ -188,7 +188,7 @@ def build_live_code_intel_ctx(fixture: Any) -> Any:
     Persists the fixture's REAL graph (built by the REAL structural indexer) to a per-repo
     ``graph.db`` via the REAL ``code_intel.graph_store.GraphStore.write_graph`` and points the
     context at that DB + the fixture clone — the EXACT durable artifacts the product resolves at
-    meeting time (``harness.webhooks`` / ``harness.code_intel_mount``). So the product path this
+    meeting time (``control_plane.webhooks`` / ``control_plane.code_intel_mount``). So the product path this
     driver exercises loads its graph from disk the same way the live meeting does, not from an
     in-memory handle."""
     import tempfile

@@ -5,11 +5,11 @@ Two responsibilities, both environment wiring (no product code lives here):
 1. ``services`` stays a namespace package (no ``services/__init__.py``) so
    importing a service never writes ``services/__pycache__`` — which would
    otherwise appear as a sixth entry under ``services/`` and break the exact-set
-   check in ``tests/doc00/test_m01_repo.py::test_repo_006``. The harness-hosted
-   ``control_plane`` deployable-assembly is exposed at ``services.control_plane``
-   by extending the namespace ``__path__`` to ``services/harness/src`` (where the
-   assembly lives). AC-REPO-006 fixes ``services/*`` to exactly five directories,
-   so ``control_plane`` is a package-config exposure only, never a sixth dir.
+   check in ``tests/doc00/test_m01_repo.py::test_repo_006``. The ``control_plane``
+   deployable-assembly (member ``services/control-plane``, a dashed dir that is
+   not itself dotted-importable) is exposed at ``services.control_plane`` by
+   extending the namespace ``__path__`` to ``services/control-plane/src`` (where
+   the assembly lives).
 
 2. The Doc-00 durable-substrate tests (tests/doc00/test_m03_sub.py) exercise a
    real Postgres via ``_support._local_dsn()`` / ``pg_conn()``. Most bodies SKIP
@@ -39,14 +39,14 @@ def _wire_control_plane() -> None:
     # launched — same import-resolution-gap hardening as _wire_workspace_src(); no product code.
     if root not in sys.path:
         sys.path.insert(0, root)
-    harness_src = os.path.join(root, "services", "harness", "src")
-    if not os.path.isdir(harness_src):
+    cp_src = os.path.join(root, "services", "control-plane", "src")
+    if not os.path.isdir(cp_src):
         return
     import services  # namespace package (no __init__.py)
 
     current = list(getattr(services, "__path__", []))
-    if harness_src not in current:
-        services.__path__ = current + [harness_src]  # type: ignore[attr-defined]
+    if cp_src not in current:
+        services.__path__ = current + [cp_src]  # type: ignore[attr-defined]
 
 
 def _wire_libs_lint() -> None:

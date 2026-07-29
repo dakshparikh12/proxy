@@ -150,7 +150,7 @@ def test_live_ws_route_drives_the_funnel_on_an_authenticated_frame():
     async def _fake_resolve_session(db: Any, cookies: dict[str, Any]) -> dict[str, Any] | None:
         return {"user_id": str(uuid4()), "tenant_id": tenant_a}
 
-    import harness.session as sess
+    import control_plane.session as sess
 
     orig = sess.resolve_session
     sess.resolve_session = _fake_resolve_session  # type: ignore[assignment]
@@ -214,7 +214,7 @@ def test_live_ws_route_routes_an_owned_frame_through_to_the_capability_gated_han
     async def _fake_resolve_session(db: Any, cookies: dict[str, Any]) -> dict[str, Any] | None:
         return {"user_id": str(uuid4()), "tenant_id": tenant_a}
 
-    import harness.session as sess
+    import control_plane.session as sess
 
     orig = sess.resolve_session
     sess.resolve_session = _fake_resolve_session  # type: ignore[assignment]
@@ -282,7 +282,7 @@ def test_live_ws_route_refuses_a_malformed_frame_generically_and_keeps_the_loop_
     async def _fake_resolve_session(db: Any, cookies: dict[str, Any]) -> dict[str, Any] | None:
         return {"user_id": str(uuid4()), "tenant_id": tenant_a}
 
-    import harness.session as sess
+    import control_plane.session as sess
 
     orig = sess.resolve_session
     sess.resolve_session = _fake_resolve_session  # type: ignore[assignment]

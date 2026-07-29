@@ -1,7 +1,7 @@
 """AC-REFM-CORPUS-WIRED — the in_call webhook builds the meeting's referent corpus.
 
 Gap DOC03-REFERENT-CORPUS-UNWIRED-IN-PRODUCTION: on the SOLE production meeting-join
-path (``harness.webhooks._dispatch_meeting_event`` ``is_start`` branch) the Scribe was
+path (``control_plane.webhooks._dispatch_meeting_event`` ``is_start`` branch) the Scribe was
 started with ``registry.start_meeting(header, carrier)`` and NO ``referent_corpus``. The
 binding logic (``_bind_referents`` -> ``bind_referent`` over ``graph_nodes``) is correct
 and threads end-to-end from ``start_meeting`` -> ``MeetingRuntime`` -> ``build_real_seams``
@@ -39,9 +39,9 @@ from scribe.notes_reader import Notes, read_notes
 from scribe.prefix import MeetingHeader
 from scribe.schema import AddOp, Claim, Firmness, NoteDelta, Provenance
 
-from harness.meeting_runtime import MeetingRuntimeRegistry
-from harness.scribe_runtime import build_real_seams
-from harness.webhooks import drain_pending_webhooks
+from control_plane.meeting_runtime import MeetingRuntimeRegistry
+from control_plane.scribe_runtime import build_real_seams
+from control_plane.webhooks import drain_pending_webhooks
 
 _DSN = os.environ.get("TEST_DATABASE_URL", "").strip()
 requires_pg = pytest.mark.skipif(

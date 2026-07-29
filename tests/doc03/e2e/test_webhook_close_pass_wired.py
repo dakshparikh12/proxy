@@ -9,7 +9,7 @@ runtime down, but NEVER produces the permanent markdown deliverable: no GCS note
 object, no chat link, no ``meeting-close`` operation_runs row. The close pass only
 ran when a test called ``run_close_pass`` directly.
 
-This drives the REAL meeting-end entrypoint — ``harness.webhooks.drain_pending_webhooks``
+This drives the REAL meeting-end entrypoint — ``control_plane.webhooks.drain_pending_webhooks``
 on a Recall ``call_ended`` webhook row — NOT ``run_close_pass`` directly. A meeting
 with a folded ``note_deltas`` ledger ends, and the drain must:
 
@@ -34,9 +34,9 @@ import pytest
 from db import Database, open_pool, repos
 from db.repos import notes as notes_repo
 
-from harness.meeting_runtime import MeetingRuntimeRegistry
-from harness.scribe_runtime import CloseConfig
-from harness.webhooks import drain_pending_webhooks
+from control_plane.meeting_runtime import MeetingRuntimeRegistry
+from control_plane.scribe_runtime import CloseConfig
+from control_plane.webhooks import drain_pending_webhooks
 
 _DSN = os.environ.get("TEST_DATABASE_URL", "").strip()
 requires_pg = pytest.mark.skipif(

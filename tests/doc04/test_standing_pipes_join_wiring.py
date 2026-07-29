@@ -8,7 +8,7 @@ asyncio interval (§3.8 split — NOT the scale-to-zero reconcile cron). The Scr
 serial consumer starts on the Recall ``in_call`` callback and stops on ``call_ended``.
 
 These tests drive the REAL production join path — the webhook drain
-(``harness.webhooks.drain_pending_webhooks``) through ``MeetingRuntimeRegistry`` —
+(``control_plane.webhooks.drain_pending_webhooks``) through ``MeetingRuntimeRegistry`` —
 against the live test Postgres, exactly as a real Recall callback would. They assert:
 
   * ``stt_refresh`` — the STT credential refresh loop runs on its OWN in-process
@@ -30,8 +30,8 @@ import pytest
 
 from db import Database, open_pool, repos
 
-from harness.meeting_runtime import MeetingRuntimeRegistry
-from harness.webhooks import drain_pending_webhooks
+from control_plane.meeting_runtime import MeetingRuntimeRegistry
+from control_plane.webhooks import drain_pending_webhooks
 
 _DSN = os.environ.get("TEST_DATABASE_URL", "").strip()
 requires_pg = pytest.mark.skipif(

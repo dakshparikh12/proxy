@@ -100,7 +100,7 @@ def _recall_webhook_secret() -> str:
     (401) — an unverifiable delivery is never accepted.
     """
     try:
-        from harness.settings import Settings
+        from control_plane.settings import Settings
 
         return str(Settings().recall_webhook_secret)
     except Exception:  # pragma: no cover - settings unavailable ⇒ fail closed below

@@ -30,7 +30,7 @@ import _support as S
 # harness package; each still exec's its OWN server module.
 PER_SERVICE = {
     "control_plane": "control_plane.server",
-    "meeting_runtime": "harness.server",
+    "meeting_runtime": "control_plane.server",
     "code_intel": "code_intel.server",
 }
 

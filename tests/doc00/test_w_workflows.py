@@ -95,7 +95,7 @@ def test_w03_reclaimed_zombie_emits_nothing():
     """W03: a reclaimed owner (fencing rowcount 0) sets is_owner=False, self-terminates, and every emit verb is refused.
     Chains AC-SUB-007, AC-SUB-008, AC-SUB-009, AC-SUB-035."""
     from libs.ops import with_operation_run
-    from services.harness.emit import Emitter
+    from services.control_plane.emit import Emitter
 
     with S.pg_conn() as conn:
         S.apply_migrations(S._local_dsn())
@@ -122,7 +122,7 @@ def test_w03_reclaimed_zombie_emits_nothing():
 def test_w04_webhook_land_then_200_then_dedupe_then_drain():
     """W04: webhook INSERT-on-conflict lands durably -> 200 before processing -> duplicate is a no-op -> pending drained on boot.
     Chains AC-SUB-022, AC-SUB-023, AC-SUB-024."""
-    from services.control_plane.webhooks import ingest, drain_pending
+    from services.control_plane.webhook_routes import ingest, drain_pending
 
     with S.pg_conn() as conn:
         S.apply_migrations(S._local_dsn())
@@ -270,7 +270,7 @@ def test_w06_workroom_task_cost_survives_recycle_and_resume_guard():
     """W06: dispatch a Workroom task -> spend accrues to meeting_cost -> orchestrator recycles and reloads spend (not 0) -> restart-unless-deliverable-exists.
     Chains AC-SUB-029, AC-SUB-033, AC-SUB-026, AC-SUB-020."""
     from libs.db import Database
-    from services.harness.budget import check_meeting_budget
+    from services.control_plane.budget import check_meeting_budget
     from services.workroom.recovery import should_restart
 
     with S.pg_conn() as conn:
@@ -382,7 +382,7 @@ def test_w10_ordered_boot_fail_fast_then_health():
     saved = os.environ.pop("DATABASE_URL", None)
     try:
         with _pt.raises(Exception) as exc:
-            settings = importlib.import_module("services.harness.settings")
+            settings = importlib.import_module("services.control_plane.settings")
             importlib.reload(settings)
         assert "DATABASE_URL" in str(exc.value), "the boot crash must name the missing required key"
     finally:
@@ -390,7 +390,7 @@ def test_w10_ordered_boot_fail_fast_then_health():
             os.environ["DATABASE_URL"] = saved
 
     # ordered lifespan with an instrumented trace.
-    from services.harness.server import lifespan_trace
+    from services.control_plane.server import lifespan_trace
     steps = lifespan_trace()
     for earlier, later in (("tracing", "pool"), ("pool", "database"), ("database", "provisioner_ready"),
                            ("provisioner_ready", "reaper"), ("reaper", "routers")):

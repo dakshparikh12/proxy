@@ -1,7 +1,7 @@
 [project]
-name = "harness"
+name = "control-plane"
 version = "0.0.0"
-description = "services.harness — old-brain residual modules (wake_turn/behaviors/provider/dispatch); dissolving. The control_plane assembly + runtime boot now live in services/control-plane."
+description = "services.control-plane — the control_plane deployable (webhooks, connect, accept/reject, sessions) + the per-meeting runtime boot (server, provisioner, meeting_runtime)."
 requires-python = ">=3.12"
 dependencies = ["contracts", "agentkit", "http", "db", "llm", "ops", "premeeting", "claude-agent-sdk>=0.2.128", "pydantic>=2", "pydantic-settings>=2", "fastapi", "authlib", "itsdangerous"]
 
@@ -19,4 +19,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/harness"]
+packages = ["src/control_plane"]

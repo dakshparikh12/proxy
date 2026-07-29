@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# control_plane deployable (Cloud Run). Built from the harness package, which
+# control_plane deployable (Cloud Run). Built from the control-plane package, which
 # hosts the control_plane assembly (webhooks, connect page, API, WS gateway, auth).
 #
 # Doc 00 §9. Multi-stage uv build: a builder stage that installs a single,
@@ -11,8 +11,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 WORKDIR /app
 COPY . /app
 # Self-contained, never editable (AC-REPO-005): resolve just this deployable's
-# package. The harness package hosts the control_plane assembly.
-RUN uv sync --frozen --no-dev --no-editable --package harness
+# package. The control-plane package hosts the control_plane assembly.
+RUN uv sync --frozen --no-dev --no-editable --package control-plane
 
 FROM python:3.12-slim
 WORKDIR /app

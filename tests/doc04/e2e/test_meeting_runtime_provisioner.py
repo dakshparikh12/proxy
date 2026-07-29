@@ -36,14 +36,14 @@ import pytest
 # async persisted claim, and the ``db``-package alias is a DIFFERENT class object.
 from libs.db import Database, open_pool, repos
 
-from harness.meeting_runtime import MeetingRuntimeRegistry
-from harness.provisioner import (
+from control_plane.meeting_runtime import MeetingRuntimeRegistry
+from control_plane.provisioner import (
     ProvisionOutcome,
     make_provision_launcher,
     provision_meeting,
     run_meeting_until_end,
 )
-from harness.webhooks import drain_pending_webhooks
+from control_plane.webhooks import drain_pending_webhooks
 
 _DSN = os.environ.get("TEST_DATABASE_URL", "").strip()
 requires_pg = pytest.mark.skipif(
@@ -282,7 +282,7 @@ async def test_recycle_replacement_reclaims_and_resumes() -> None:
     assert blocked.claimed is False, "a replacement must not steal a LIVE meeting"
 
     # The owning instance dies: the reaper flips its stale running row to interrupted
-    # (exactly what harness.server.reap_orphans / sweep_stale_operation_runs does).
+    # (exactly what control_plane.server.reap_orphans / sweep_stale_operation_runs does).
     async with db1.acquire() as conn:
         await conn.execute(
             "UPDATE operation_runs SET status = 'interrupted', completed_at = now() "

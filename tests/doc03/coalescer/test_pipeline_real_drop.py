@@ -4,7 +4,7 @@ The pure-simulation tier (``test_pipeline.py``) injects a fake ``scribe_call`` t
 raises the *pipeline-local* typed errors, so it can pass while the production path is
 broken. This test closes the 'capability only works when a test injects it' gap by
 driving the REAL ``run_scribe`` consumer with the REAL ``scribe.call.scribe_call``
-bound in exactly as ``harness.scribe_runtime.build_real_seams`` wires it — the ONLY
+bound in exactly as ``control_plane.scribe_runtime.build_real_seams`` wires it — the ONLY
 injected boundary is the vendor seam (``call_external``), which returns a real
 ``stop_reason == "max_tokens"`` / no-tool-use vendor response.
 

@@ -10,7 +10,7 @@ elsewhere are documented at the bottom of this file (not re-authored).
 
 Two production seams are exercised here, each the REAL one:
 
-* ``harness.scribe_runtime.build_real_seams(...).apply_delta`` — the fold-path
+* ``control_plane.scribe_runtime.build_real_seams(...).apply_delta`` — the fold-path
   applier that appends to the append-only ``note_deltas`` ledger; the durable
   notes object is the deterministic left-fold of that ledger
   (``scribe.notes_reader.read_notes`` → ``Notes.fold_all``). This is where the
@@ -47,7 +47,7 @@ from scribe.schema import (
     Provenance,
 )
 
-from harness.scribe_runtime import build_real_seams
+from control_plane.scribe_runtime import build_real_seams
 
 pytestmark = pytest.mark.asyncio
 

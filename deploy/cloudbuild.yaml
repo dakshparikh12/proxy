@@ -7,7 +7,7 @@
 # Three per-service deployable images are built, one per Dockerfile under
 # deploy/<service>/Dockerfile, each tagged with its own service name:
 #   * proxy-control-plane   (deploy/control_plane/Dockerfile   -> control_plane.server)
-#   * proxy-meeting-runtime (deploy/meeting_runtime/Dockerfile -> harness.server)
+#   * proxy-meeting-runtime (deploy/meeting_runtime/Dockerfile -> control_plane.server)
 #   * proxy-code-intel      (deploy/code_intel/Dockerfile      -> code_intel.server)
 #
 # Migrations run as their OWN separate step (id: migrate-db) between build and

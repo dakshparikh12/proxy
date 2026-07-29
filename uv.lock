@@ -13,6 +13,7 @@ members = [
     "agentkit",
     "code-intel",
     "contracts",
+    "control-plane",
     "db",
     "harness",
     "http",
@@ -630,6 +631,43 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "pydantic", specifier = ">=2" }]
+
+[[package]]
+name = "control-plane"
+version = "0.0.0"
+source = { editable = "services/control-plane" }
+dependencies = [
+    { name = "agentkit" },
+    { name = "authlib" },
+    { name = "claude-agent-sdk" },
+    { name = "contracts" },
+    { name = "db" },
+    { name = "fastapi" },
+    { name = "http" },
+    { name = "itsdangerous" },
+    { name = "llm" },
+    { name = "ops" },
+    { name = "premeeting" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "agentkit", editable = "libs/agentkit" },
+    { name = "authlib" },
+    { name = "claude-agent-sdk", specifier = ">=0.2.128" },
+    { name = "contracts", editable = "libs/contracts" },
+    { name = "db", editable = "libs/db" },
+    { name = "fastapi" },
+    { name = "http", editable = "libs/http" },
+    { name = "itsdangerous" },
+    { name = "llm", editable = "libs/llm" },
+    { name = "ops", editable = "libs/ops" },
+    { name = "premeeting", editable = "services/premeeting" },
+    { name = "pydantic", specifier = ">=2" },
+    { name = "pydantic-settings", specifier = ">=2" },
+]
 
 [[package]]
 name = "coverage"

@@ -1,6 +1,6 @@
 """Doc 08 · §2.5 — the three V0 screen content modes + §2.4 #12/#13 human activation.
 
-The node ``experience.screen-content-modes`` (``services/harness/src/control_plane/
+The node ``experience.screen-content-modes`` (``services/control-plane/src/control_plane/
 screen_modes.py``) realizes §2.5: the three V0 screen render modes, each a render of
 something that ALREADY EXISTS in the workroom envelope —
 

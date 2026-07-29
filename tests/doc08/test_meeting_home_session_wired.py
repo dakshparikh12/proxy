@@ -4,7 +4,7 @@ The route previously read ``request.session["user"]`` (the Starlette SessionMidd
 which ``auth_callback`` DELIBERATELY never populates (it writes the durable HMAC ``session``
 cookie via ``complete_signin`` instead) — so a signed-in tenant member was unreachable on their
 OWN meeting home and could not accept a draft. This proves the route now resolves the member
-from the durable cookie via ``harness.session.resolve_session`` (the SAME resolver the WS gateway
+from the durable cookie via ``control_plane.session.resolve_session`` (the SAME resolver the WS gateway
 uses), so a signed-in member sees notes + that meeting's staged-draft cards — while a
 cross-tenant session and a no-session request still get Not found (the anti-leak refusal holds).
 
@@ -25,7 +25,7 @@ def _member_app(monkeypatch, store, *, member_tenant):
     for ``member_tenant`` (the WS-gateway resolver, monkeypatched in place of a real DB read)."""
     import scribe.notes_reader as nr
 
-    import harness.session as sess
+    import control_plane.session as sess
 
     from control_plane import create_app
 

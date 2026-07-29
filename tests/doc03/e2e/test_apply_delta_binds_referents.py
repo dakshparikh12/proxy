@@ -47,7 +47,7 @@ from scribe.schema import (
     Reversibility,
 )
 
-from harness.scribe_runtime import build_real_seams
+from control_plane.scribe_runtime import build_real_seams
 
 pytestmark = pytest.mark.asyncio
 

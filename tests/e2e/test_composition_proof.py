@@ -2,7 +2,7 @@
 
 Phase-1 Structural-Convergence gate (§Stage D), re-anchored by THE CUTOVER: the brain on
 the production boot path is the NEW in-meeting engine (``in_meeting.engine.Engine``,
-assembled by ``harness.provisioner._assemble_engine``). This is the whole-product assembly
+assembled by ``control_plane.provisioner._assemble_engine``). This is the whole-product assembly
 proof: it BOOTS the real harness (real Postgres, real ``SignalCarrier`` + ``MeetingRuntime``
 + webhook drain + close + reconcile) and drives a single meeting through the entire arc
 
@@ -45,9 +45,9 @@ import pytest
 from libs.db import Database, open_pool, repos
 from libs.contracts import AgentChunk
 
-from harness.meeting_runtime import MeetingRuntimeRegistry
-from harness.provisioner import provision_meeting, run_meeting_until_end
-from harness.webhooks import drain_pending_webhooks
+from control_plane.meeting_runtime import MeetingRuntimeRegistry
+from control_plane.provisioner import provision_meeting, run_meeting_until_end
+from control_plane.webhooks import drain_pending_webhooks
 
 _DSN = os.environ.get("TEST_DATABASE_URL", "").strip()
 requires_pg = pytest.mark.skipif(
@@ -176,7 +176,7 @@ class _CreateOnlyBucket:
 def _make_close_config():
     """A ``CloseConfig`` with every vendor faked at its seam — recording close model, in-mem
     create-only bucket, a no-op chat-link poster. No live vendor call fires in the close leg."""
-    from harness.scribe_runtime import CloseConfig
+    from control_plane.scribe_runtime import CloseConfig
 
     posted: list[str] = []
 
@@ -247,7 +247,7 @@ async def test_composition_proof_direct_answer_arc(monkeypatch) -> None:
         return []  # no note deltas — this proof asserts the reactive/deliver arc, not the fold
 
     monkeypatch.setattr(
-        "harness.scribe_runtime._real_scribe_call", _fake_scribe_call, raising=False
+        "control_plane.scribe_runtime._real_scribe_call", _fake_scribe_call, raising=False
     )
 
     pool = await open_pool(_DSN)
@@ -382,7 +382,7 @@ async def test_composition_proof_sandbox_arm_and_meeting_end_lifecycle(monkeypat
         return []
 
     monkeypatch.setattr(
-        "harness.scribe_runtime._real_scribe_call", _fake_scribe_call, raising=False
+        "control_plane.scribe_runtime._real_scribe_call", _fake_scribe_call, raising=False
     )
 
     pool = await open_pool(_DSN)

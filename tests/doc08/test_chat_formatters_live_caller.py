@@ -4,7 +4,7 @@ The deterministic chat formatters (``transport.chat.format_note_deltas``) are pr
 isolation by ``tests/doc08/test_chat_formatters.py``. C-CHATFORMAT is the WIRING gap: they
 had no live caller, so a committed decision/action/correction note-delta never became a chat
 line on a real meeting. This proves the caller exists on the REAL applier path:
-``harness.scribe_runtime.build_real_seams(..., chat_sink=...).apply_delta`` renders each
+``control_plane.scribe_runtime.build_real_seams(..., chat_sink=...).apply_delta`` renders each
 COMMITTED note-delta to its §2.4 NoteLine and hands it to the injected chat sink — over the
 real ``note_deltas`` ledger on live Postgres (provisioned by ``build/setup-test-env.sh``),
 no in-memory substitute for the commit.
@@ -34,7 +34,7 @@ from scribe.schema import (
     Reversibility,
 )
 
-from harness.scribe_runtime import _post_note_deltas_to_chat, build_real_seams
+from control_plane.scribe_runtime import _post_note_deltas_to_chat, build_real_seams
 
 _DSN = os.environ.get("TEST_DATABASE_URL", "").strip()
 requires_pg = pytest.mark.skipif(

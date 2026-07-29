@@ -249,7 +249,7 @@ def test_inv_004_no_transcript_path_to_outward_side_effect_without_human_click()
     try:
         from services.harness import orchestrator  # noqa: F401  (transcript-triggered wake loop)
     except ImportError:
-        from services.harness import server as orchestrator  # noqa: F401  spec-derived fallback
+        from services.control_plane import server as orchestrator  # noqa: F401  spec-derived fallback
 
     # Static reachability: outward side-effects (push/PR/outbound HTTP/write) must
     # never be reachable directly from a transcript-triggered code path. The only
@@ -586,7 +586,7 @@ def test_inv_011_accept_authz_matrix_idempotent_csrf_audit():
     """AC-INV-011: POST /m/{meeting}/drafts/{draft}/accept rejects unauth + cross-tenant callers, is idempotent for the correct tenant member, and is CSRF-protected + audited."""
     # Import the product accept-route handler FIRST -> red before it exists.
     try:
-        from services.harness.accept_route import handle_accept
+        from services.control_plane.accept_facade import handle_accept
     except ImportError:
         from services.harness.routes import handle_accept
 

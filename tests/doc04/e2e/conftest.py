@@ -1,7 +1,7 @@
 """doc04 e2e conftest — fake the in-meeting engine's VENDOR seams (the cutover).
 
 Since the cutover, the provisioner's boot path assembles the NEW in-meeting engine
-(``harness.provisioner._assemble_engine``): sandbox provision (E2B), the Cartesia
+(``control_plane.provisioner._assemble_engine``): sandbox provision (E2B), the Cartesia
 speak pipe, and the Haiku disambiguator are its vendor edges. These e2e tests prove
 the CLAIM/LOOP/TEARDOWN physics on live Postgres — no vendor call may fire, and
 under ``build/setup-test-env.sh`` the real keys ARE in the env, so the vendor seams

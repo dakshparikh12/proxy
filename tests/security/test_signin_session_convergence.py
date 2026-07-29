@@ -92,7 +92,7 @@ def test_auth_callback_populates_the_durable_session_resolve_reads():
                     cookie_val = v.decode().split("session=", 1)[1].split(";", 1)[0]
             captured["cookie"] = cookie_val or ""
 
-            from harness.session import resolve_session
+            from control_plane.session import resolve_session
 
             resolved = await resolve_session(db, {"session": captured["cookie"]})
             return captured["cookie"], resolved
@@ -118,7 +118,7 @@ def test_auth_callback_populates_the_durable_session_resolve_reads():
     async def _tampered() -> dict | None:
         db = await Database.connect(dsn)
         try:
-            from harness.session import resolve_session
+            from control_plane.session import resolve_session
 
             return await resolve_session(db, {"session": cookie + "TAMPER"})
         finally:
@@ -143,7 +143,7 @@ def test_logout_clears_the_durable_session():
     async def _flow() -> dict | None:
         db = await Database.connect(dsn)
         try:
-            from harness.session import (
+            from control_plane.session import (
                 complete_signin,
                 logout_session,
                 resolve_session,
@@ -197,7 +197,7 @@ def test_callback_emits_exactly_one_session_cookie_the_durable_hmac_one():
     async def _fake_signin(db, *, email):  # noqa: ANN001, ANN202, ARG001
         return _Res()
 
-    import harness.session as HS
+    import control_plane.session as HS
 
     orig_oauth = app_mod._google_oauth
     orig_signin = HS.complete_signin

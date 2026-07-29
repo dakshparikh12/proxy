@@ -288,7 +288,7 @@ async def _principal_and_key(request: Any) -> "tuple[_AuthzedRequest | None, str
     db = getattr(request.app.state, "db", None)
     if db is not None:
         try:
-            from harness.session import resolve_session
+            from control_plane.session import resolve_session
 
             resolved = await resolve_session(db, request.cookies)
         except Exception:  # noqa: BLE001 - a resolution fault falls through to the middleware read

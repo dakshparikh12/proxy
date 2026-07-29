@@ -157,7 +157,7 @@ def _claim(text="checkout ships Friday", contradicts=None) -> Claim:
 
 
 async def _run_apply(monkeypatch, delta, existing=None, sink=None, window=None):
-    from harness.scribe_runtime import build_real_seams
+    from control_plane.scribe_runtime import build_real_seams
 
     fake = _FakeNotesRepo(existing=existing)
     _install_fake_repo(monkeypatch, fake)

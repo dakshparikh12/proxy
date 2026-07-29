@@ -25,7 +25,7 @@ def _runtime():
     from scribe.prefix import MeetingHeader
     from transport.carrier import SignalCarrier
 
-    from harness.meeting_runtime import MeetingRuntime
+    from control_plane.meeting_runtime import MeetingRuntime
 
     header = MeetingHeader(meeting_id="m-signalwire", agenda="", participants=())
     carrier = SignalCarrier()
@@ -107,7 +107,7 @@ def test_drain_classification_routes_roster_and_bot_status_not_drops_them():
     """The live drain classifies roster + non-terminal bot-status as a signal to bind, and a
     terminal bot-status as a meeting-end — the exact routing the C-SIGNALWIRE binding needs.
     """
-    from harness import webhooks as wh
+    from control_plane import webhooks as wh
 
     assert "participant.join" in wh._ROSTER_EVENTS
     assert "participant.leave" in wh._ROSTER_EVENTS

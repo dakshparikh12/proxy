@@ -7,7 +7,7 @@ The sibling e2e (``test_meeting_runtime_provisioner``) proves the provisioner wo
 called directly. This test closes the REACHABILITY gap the fresh verifier flagged: that
 no BOOTED deployable wired the provisioner into a webhook drain, so the in_call→running-
 meeting chain was a test-only island. Here we drive the ACTUAL production boot step
-``harness.server._real_provisioner_ready`` (the step the FastAPI lifespan runs) against
+``control_plane.server._real_provisioner_ready`` (the step the FastAPI lifespan runs) against
 the live test Postgres and prove:
 
   * the boot step wires the provisioner launcher onto ``app.state.provision_launch`` and
@@ -29,7 +29,7 @@ import pytest
 
 from libs.db import Database, open_pool, repos
 
-from harness import server as server_mod
+from control_plane import server as server_mod
 
 _DSN = os.environ.get("TEST_DATABASE_URL", "").strip()
 requires_pg = pytest.mark.skipif(

@@ -34,8 +34,8 @@ import pytest
 
 from db import Database, open_pool, repos
 
-from harness.meeting_runtime import MeetingRuntimeRegistry
-from harness.webhooks import drain_pending_webhooks
+from control_plane.meeting_runtime import MeetingRuntimeRegistry
+from control_plane.webhooks import drain_pending_webhooks
 
 _DSN = os.environ.get("TEST_DATABASE_URL", "").strip()
 requires_pg = pytest.mark.skipif(
