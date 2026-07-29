@@ -83,7 +83,7 @@ ignore_missing_imports = true
 # under its walk name. (Doc 02 transport is the first cross-member runtime importer;
 # it imports both ``contracts`` and ``agentkit`` — the AbortRegistry reused for barge-in.)
 [[tool.mypy.overrides]]
-module = ["contracts.*", "agentkit.*", "harness.*", "control_plane.*", "code_intel.*", "transport.*", "scribe.*", "workroom.*", "llm.*", "db.*"]
+module = ["contracts.*", "agentkit.*", "harness.*", "control_plane.*", "code_intel.*", "premeeting.*", "in_meeting.*", "transport.*", "scribe.*", "workroom.*", "llm.*", "db.*"]
 ignore_missing_imports = true
 
 # ``libs.contracts`` binds itself to the canonical ``contracts`` package via a runtime
