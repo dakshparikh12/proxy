@@ -25,10 +25,13 @@ mechanical passthrough for the caller to arm the follow-up window (no "?"
 parsing, no NLP, lives here).
 
 Never blocked, never deaf (L7/W2, SPEC §4/§9): wake turns run as BACKGROUND
-TASKS. The feed path — notes append + trigger consult — is instant and never
-awaits a turn, so the loop keeps ingesting while Proxy works, and two asks a
-second apart run as two simultaneous turns, each isolated per ask (every turn
-carries its own local context/stream state; nothing of one leaks into another).
+TASKS. The feed path — notes append + trigger consult — never awaits a turn;
+non-hit lines return instantly, while a voice name-hit awaits the trigger's ONE
+bounded confirm call (a single Haiku turn, wall-clock capped by the
+disambiguator's timeout fail-open) before the wake turn is spawned. The loop
+keeps ingesting while Proxy works, and two asks a second apart run as two
+simultaneous turns, each isolated per ask (every turn carries its own local
+context/stream state; nothing of one leaks into another).
 Every completed turn lands in :attr:`Engine.turns` (completion order — which
 may differ from ask order); :attr:`Engine.last_turn` is the most recently
 COMPLETED turn; :meth:`Engine.drain` awaits everything in flight (tests +
@@ -231,10 +234,11 @@ class Engine:
         hits), not an accident. Non-hit and Proxy-own lines never await inside
         the consult, so the append+consult step stays effectively atomic for
         them. Honest consequence of the hit-path await: a reply line racing an
-        in-flight confirmation is a bounded sub-second physics window — the
-        pending-ask state is read/updated when each line's consult actually
-        runs, and a tiny Haiku turn bounds how long a hit line can hold the
-        feed.
+        in-flight confirmation is a window bounded by one Haiku confirm turn
+        (itself wall-clock capped by the disambiguator's timeout fail-open) —
+        the pending-ask state is read/updated when each line's consult
+        actually runs, so a hit line can hold the feed for at most that one
+        bounded confirm, never open-ended.
         """
         self._notes.append(line)
         engagement = await self._trigger.on_transcript(line)

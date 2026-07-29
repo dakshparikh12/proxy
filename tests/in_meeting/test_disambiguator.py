@@ -12,6 +12,7 @@ is the controller's, not this file's.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncIterator, Callable
 from typing import Any
@@ -19,12 +20,13 @@ from typing import Any
 import pytest
 
 from in_meeting.disambiguator import (
+    CONFIRM_TIMEOUT_S,
     DEFAULT_DISAMBIGUATOR_MODEL,
     Disambiguator,
     build_disambiguator,
 )
 from in_meeting.notes import TranscriptLine
-from in_meeting.trigger import EngagementTrigger
+from in_meeting.trigger import Engagement, EngagementTrigger
 
 # ---------------------------------------------------------------------------
 # Fake SDK-shaped messages (duck-typed like claude_agent_sdk.types — the same
@@ -287,6 +289,52 @@ async def test_trigger_awaits_the_async_confirm_only_on_hits() -> None:
 
 
 @pytest.mark.asyncio
+async def test_feed_suspends_on_the_confirm_and_the_reply_arm_resolves_after() -> None:
+    """The suspension point, pinned with a REAL suspension (an ``asyncio.Event``).
+
+    A pending confirm genuinely SUSPENDS the trigger consult (the feed path's
+    awaited step) — it does not return early. Once the confirm resolves, the
+    wake fires, and only THEN does the next un-prefixed human line consume the
+    pending-ask arm as the reply: the sequential feeder guarantees the reply
+    line's window handling runs strictly AFTER the hit line's confirm resolved
+    (the ordering the review proved by inspection).
+    """
+    gate = asyncio.Event()
+
+    async def _gated(prompt: str) -> AsyncIterator[Any]:
+        await gate.wait()  # the confirm is PENDING until the test releases it
+        yield _FakeResultMessage("YES")
+
+    disambiguate = build_disambiguator(query_fn=_gated)
+    trig = EngagementTrigger(disambiguate=disambiguate)
+    trig.arm_pending_ask()  # Proxy asked a question earlier; the window is open
+
+    feed: asyncio.Task[Engagement | None] = asyncio.create_task(
+        trig.on_transcript(_line("Proxy, what's the retry logic in billing-worker?"))
+    )
+    for _ in range(10):  # give the feed every chance to (wrongly) return early
+        await asyncio.sleep(0)
+    assert not feed.done(), "the feed must be SUSPENDED at the confirm await, not returned"
+
+    gate.set()  # the confirm completes...
+    engagement = await asyncio.wait_for(feed, timeout=2.0)
+    assert engagement is not None
+    assert engagement.source == "voice"  # ...and the wake fires
+    assert disambiguate.last_error is None
+
+    # AFTER the confirm resolved: the un-prefixed follow-up consumes the arm as
+    # the reply — the hit line only SPENT an intervening line while suspended,
+    # it never consumed the window mid-confirm.
+    reply = await trig.on_transcript(_line("It's in billing-worker/retry.py."))
+    assert reply is not None
+    assert reply.source == "reply"
+    assert reply.text == "It's in billing-worker/retry.py."
+
+    # The arm was consumed exactly once.
+    assert await trig.on_transcript(_line("Moving on to the deploy.")) is None
+
+
+@pytest.mark.asyncio
 async def test_trigger_wired_to_the_REAL_disambiguator_offline() -> None:
     """The real Disambiguator satisfies the trigger's async seam end-to-end."""
     reject: Disambiguator = build_disambiguator(query_fn=_fake_query([_FakeResultMessage("NO")]))
@@ -298,3 +346,87 @@ async def test_trigger_wired_to_the_REAL_disambiguator_offline() -> None:
     engagement = await trig2.on_transcript(_line("Proxy, what's the retry logic in billing-worker?"))
     assert engagement is not None
     assert engagement.source == "voice"
+
+
+# ---------------------------------------------------------------------------
+# AC6 — WALL-CLOCK bound: a WEDGED stream (hangs, never raises) times out and
+# fails OPEN promptly. ``max_turns=1`` bounds turns, not time — without this
+# bound a hung CLI holds the trigger consult forever and the feed goes deaf.
+# ---------------------------------------------------------------------------
+
+
+def test_confirm_timeout_constant_pins_the_production_bound() -> None:
+    """The module constant is the production wall-clock cap on one confirm."""
+    assert CONFIRM_TIMEOUT_S == 10.0
+
+
+@pytest.mark.asyncio
+async def test_wedged_stream_times_out_fails_open_and_tears_down() -> None:
+    """A hung stream: prompt fail-open True, the timeout recorded, the stream CLOSED.
+
+    ``confirm_timeout_s`` is injectable so the test uses a tiny bound; the
+    outer ``wait_for`` proves PROMPT completion (pre-fix this await never
+    returned — the exact deaf-forever hang). The fake's ``finally`` is the
+    teardown seam: on the real path the SDK generator's own cleanup (subprocess
+    teardown) runs at the same point, so ``closed`` set == the stream was torn
+    down, not abandoned mid-suspend.
+    """
+    entered = asyncio.Event()
+    closed = asyncio.Event()
+    never = asyncio.Event()
+
+    async def _wedged(prompt: str) -> AsyncIterator[Any]:
+        entered.set()
+        try:
+            await never.wait()  # a wedged transport: yields nothing, forever
+            yield _FakeResultMessage("YES")  # pragma: no cover
+        finally:
+            closed.set()
+
+    disambiguate = build_disambiguator(query_fn=_wedged, confirm_timeout_s=0.05)
+    verdict = await asyncio.wait_for(disambiguate("Proxy, are you there?"), timeout=2.0)
+
+    assert verdict is True, "a timed-out confirm must WAKE (fail-open)"
+    assert disambiguate.last_error is not None
+    assert "timed out" in disambiguate.last_error
+    assert entered.is_set(), "the stream must actually have been opened"
+    assert closed.is_set(), "the underlying stream must be torn down on timeout"
+
+
+@pytest.mark.asyncio
+async def test_a_clean_call_after_a_timeout_clears_the_fault() -> None:
+    """The timeout is per-call state, like every other fault (an honest gauge)."""
+    hang_first = True
+
+    async def _q(prompt: str) -> AsyncIterator[Any]:
+        nonlocal hang_first
+        if hang_first:
+            hang_first = False
+            await asyncio.Event().wait()  # wedged on the FIRST call only
+        yield _FakeResultMessage("NO")
+
+    disambiguate = build_disambiguator(query_fn=_q, confirm_timeout_s=0.05)
+    assert await asyncio.wait_for(disambiguate("Proxy?"), timeout=2.0) is True
+    assert disambiguate.last_error is not None
+    assert "timed out" in disambiguate.last_error
+    assert await disambiguate("The proxy server is fine.") is False
+    assert disambiguate.last_error is None
+
+
+# ---------------------------------------------------------------------------
+# AC7 — adversarial parse: near-token outputs ("YESTERDAY", "NOISE") carry NO
+# whole-word YES/NO token — fail-open True with the fault visible, never a
+# bogus verdict ("NOISE" read as NO would be a false SLEEP: ignoring a human).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_text",
+    ["YESTERDAY", "NOISE", "Noted.", "Eyes on the logs.", "yesno"],
+)
+async def test_adversarial_near_tokens_never_match_and_fail_open(model_text: str) -> None:
+    disambiguate = build_disambiguator(query_fn=_fake_query([_FakeResultMessage(model_text)]))
+    assert await disambiguate("Proxy, are you there?") is True
+    assert disambiguate.last_error is not None
+    assert "no YES/NO token" in disambiguate.last_error
