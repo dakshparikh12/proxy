@@ -117,9 +117,24 @@ bullet is annotated SUPERSEDED for the same reason). Unmounting is the mechanism
 
 ## Closing it
 
-1. Register a `dispatch_workroom` tool handler in `libs.agentkit.tools.TOOL_HANDLERS`,
-   honouring the never-throw contract that `AC-CON-003` pins (the sealed criterion covers
-   the **contract**, not the membership, so adding a handler does not break the seal).
+1. Register `dispatch_workroom` as a **host-side SDK MCP tool** via
+   `create_sdk_mcp_server`, mirroring `propose_change` at
+   `services/workroom/src/workroom/drafts.py:345` (`make_propose_change_server` /
+   `make_propose_change_tool`), and mount it into the wake turn's `mcp_servers` the way
+   `code_intel` is mounted (`wake_turn.py:179,184`).
+
+   > **Correction (2026-07-29).** An earlier version of this step said to add a handler to
+   > `libs.agentkit.tools.TOOL_HANDLERS`. **That is the wrong surface.** Nothing in
+   > production imports `TOOL_HANDLERS`: the only references are
+   > `tests/doc00/test_m12_con.py:168`, which asserts merely that *a* registry exists (the
+   > `AC-CON-003` never-throw contract), and the docstrings in this repo that cite it as
+   > evidence. The model never reaches it. Tools the wake turn can actually call are
+   > mounted as SDK MCP servers — that is how both `propose_change` and `code_intel` work.
+   >
+   > The original evidence item ("`TOOL_HANDLERS` has no `dispatch_workroom` handler")
+   > remains factually true and is left in the evidence list above, but it is *not* the
+   > thing to fix. The never-throw contract still binds the new tool: it must return
+   > `{accepted: false, reason: …}` rather than raising.
 2. Have the harness wrapper call `harness.dispatch.dispatch_workroom`, then
    `asyncio.create_task(SessionDriver.run_task(bundle, run_id=handle.run_id))` with the
    done-callback Doc 04 §112 describes.
