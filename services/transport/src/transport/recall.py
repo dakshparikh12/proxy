@@ -28,13 +28,18 @@ _RECALL_BASE = "https://api.recall.ai/api/v1"
 # Per-round-trip client timeout (seconds) — matches the workspace seam convention
 # (premeeting's token mint); the retry policy above this lives in ``call_external``.
 _HTTP_TIMEOUT_S = 15.0
-# The realtime transcript event names Recall's create-bot schema enumerates for a
-# ``recording_config.realtime_endpoints`` webhook (finals + partials) — protocol
-# identifiers (wire physics), consumed by the harness webhook drain under the same
-# names. Bot STATUS events are NOT subscribable here: Recall delivers those only
-# through the account webhook configured in its dashboard (the §4.6 route verified
-# by ``recall_webhook_secret``), never per-bot.
-_REALTIME_TRANSCRIPT_EVENTS = ("transcript.data", "transcript.partial_data")
+# The realtime event names Recall's create-bot schema enumerates for a
+# ``recording_config.realtime_endpoints`` webhook — transcript finals + partials plus
+# the meeting-chat event (without it Recall never DELIVERS the chat webhooks the
+# harness drain consumes) — protocol identifiers (wire physics), consumed by the
+# harness webhook drain under the same names. Bot STATUS events are NOT subscribable
+# here: Recall delivers those only through the account webhook configured in its
+# dashboard (the §4.6 route verified by ``recall_webhook_secret``), never per-bot.
+_REALTIME_EVENTS = (
+    "transcript.data",
+    "transcript.partial_data",
+    "participant_events.chat_message",
+)
 
 
 #: The transport's bound ``_api`` round-trip — (method, path, body) → parsed JSON body.
@@ -150,8 +155,13 @@ class RecallTransport:
           credential ever enters the body (AC-XCUT-02).
         * ``recording_config.realtime_endpoints`` — one ``webhook`` endpoint at our
           receiver, subscribed to the transcript finals + partials Recall enumerates
-          (``transcript.data``/``transcript.partial_data``). Bot status events cannot
-          ride here (dashboard-webhook only — see ``_REALTIME_TRANSCRIPT_EVENTS``).
+          (``transcript.data``/``transcript.partial_data``) plus the meeting-chat
+          event (``participant_events.chat_message``) — the subscription that makes
+          Recall actually deliver chat to the harness drain. Bot status events cannot
+          ride here (dashboard-webhook only — see ``_REALTIME_EVENTS``).
+        * ``recording_config.participant_events`` — ``{}``, the enabling block
+          Recall's receiving-chat-messages guide names for participant-event capture;
+          carried so chat rides even when no recording artifact is live.
         * ``output_media.camera`` — ``{kind: "webpage", config: {url}}``, Recall's
           Output Media: the bot streams our webpage as its camera, the designated
           low-latency path for an agent to emit audio (the ``output_audio`` clip
@@ -166,11 +176,12 @@ class RecallTransport:
         if self._webhook_url:
             body["recording_config"] = {
                 "transcript": {"provider": {"assembly_ai_v3_streaming": {}}},
+                "participant_events": {},
                 "realtime_endpoints": [
                     {
                         "type": "webhook",
                         "url": self._webhook_url,
-                        "events": list(_REALTIME_TRANSCRIPT_EVENTS),
+                        "events": list(_REALTIME_EVENTS),
                     }
                 ],
             }

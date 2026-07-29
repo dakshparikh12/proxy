@@ -13,10 +13,15 @@ create-bot schema (confirmed against the ``bot_create`` OpenAPI definition):
       audio (Recall's ``output_audio`` clip endpoint is explicitly not for
       conversational audio),
   (c) ``recording_config.realtime_endpoints`` = one ``webhook`` endpoint at OUR
-      receiver carrying ``transcript.data`` + ``transcript.partial_data`` — the exact
-      event names Recall's schema enumerates and the harness drain consumes. Bot
-      STATUS events cannot be subscribed per-bot (Recall delivers them only through
-      the dashboard-configured webhook, verified by ``recall_webhook_secret``).
+      receiver carrying ``transcript.data`` + ``transcript.partial_data`` +
+      ``participant_events.chat_message`` — the exact event names Recall's schema
+      enumerates and the harness drain consumes (CHAT-JOIN: without the chat event
+      here, Recall never DELIVERS the chat webhooks the CUTOVER wired). Bot STATUS
+      events cannot be subscribed per-bot (Recall delivers them only through the
+      dashboard-configured webhook, verified by ``recall_webhook_secret``),
+  (d) ``recording_config.participant_events`` = ``{}`` — the enabling block Recall's
+      receiving-chat-messages guide names for participant-event capture; carried so
+      chat delivery never silently depends on the recording artifact being live.
 
 Deterministic: the ONLY fake is the httpx client at the ``http_client`` seam (the
 C1 precedent); ``call_external`` is the real funnel. No live network call is
@@ -126,16 +131,24 @@ def test_c2_join_body_carries_the_full_recall_config(monkeypatch: Any) -> None:
         "assembly_ai_v3_streaming": {}
     }
 
-    # (c) Real-time transcript delivery to OUR receiver: one webhook realtime
-    # endpoint with the exact event names Recall's schema enumerates (finals +
-    # partials — the same two names the harness drain consumes).
+    # (c) Real-time delivery to OUR receiver: one webhook realtime endpoint with the
+    # exact event names Recall's schema enumerates — transcript finals + partials
+    # AND the meeting-chat event (the same names the harness drain consumes).
     assert body["recording_config"]["realtime_endpoints"] == [
         {
             "type": "webhook",
             "url": _WEBHOOK_URL,
-            "events": ["transcript.data", "transcript.partial_data"],
+            "events": [
+                "transcript.data",
+                "transcript.partial_data",
+                "participant_events.chat_message",
+            ],
         }
     ]
+
+    # (d) Participant-event capture is explicitly enabled (empty block per Recall's
+    # docs — no credential, no options) so chat rides even without a live recording.
+    assert body["recording_config"]["participant_events"] == {}
 
     # (b) Output media: the bot streams OUR webpage as its camera — Recall's real
     # agent audio-output capability (kind 'webpage' is the only kind the schema
@@ -186,9 +199,14 @@ def test_c2_join_config_generalizes_to_any_link_and_endpoints(monkeypatch: Any) 
             {
                 "type": "webhook",
                 "url": webhook_url,
-                "events": ["transcript.data", "transcript.partial_data"],
+                "events": [
+                    "transcript.data",
+                    "transcript.partial_data",
+                    "participant_events.chat_message",
+                ],
             }
         ]
+        assert body["recording_config"]["participant_events"] == {}
         assert body["output_media"]["camera"]["config"]["url"] == output_media_url
 
 
@@ -261,9 +279,14 @@ def test_c2_production_default_transport_feeds_the_join_config(monkeypatch: Any)
         {
             "type": "webhook",
             "url": "https://prod.proxy.example/webhooks/recall",
-            "events": ["transcript.data", "transcript.partial_data"],
+            "events": [
+                "transcript.data",
+                "transcript.partial_data",
+                "participant_events.chat_message",
+            ],
         }
     ]
+    assert body["recording_config"]["participant_events"] == {}
     assert body["output_media"] == {
         "camera": {
             "kind": "webpage",
