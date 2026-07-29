@@ -11,7 +11,6 @@ carrier to the Orchestrator stays an in-process ``asyncio`` path (AC-SEAM-07).
 from __future__ import annotations
 
 import asyncio
-import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -25,6 +24,9 @@ from .signals import ChatMessage, RosterEvent
 # Recall rate card (managed V0, §4). Home for the accrual constant is config; this
 # per-call unit is the telemetry hint passed to the seam.
 _RECALL_BASE = "https://api.recall.ai/api/v1"
+# Per-round-trip client timeout (seconds) — matches the workspace seam convention
+# (premeeting's token mint); the retry policy above this lives in ``call_external``.
+_HTTP_TIMEOUT_S = 15.0
 
 
 class _RecallOutputMedia:
@@ -128,14 +130,25 @@ class RecallTransport:
         self._chat.setdefault(bot_id, asyncio.Queue()).put_nowait(message)
 
     async def _api(self, method: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        # Sole raw round-trip closure; invoked only via ``call_external``. Until the
-        # raw HTTP client is wired, POST /bot stands in for Recall's create-bot
-        # response — which carries the launched bot's UNIQUE id (``{"id": ...}``);
-        # a live seam that performs the real round-trip overrides this payload.
-        out: dict[str, Any] = {"method": method, "url": f"{_RECALL_BASE}{path}", "body": body}
-        if method == "POST" and path == "/bot":
-            out["id"] = f"recall-{uuid.uuid4().hex}"
-        return out
+        """The sole raw Recall round-trip; invoked only via ``call_external`` (AC-XCUT-03).
+
+        Issues the REAL HTTP request: the raw client is constructed ONLY inside
+        ``libs.http`` (``http_client`` — the single raw-client home per §14), imported
+        lazily here so transport holds no client and no provider SDK at import time.
+        Auth rides Recall's ``Authorization: Token <key>`` scheme; the key is placed
+        on the request and never logged (AC-XCUT-02). A non-2xx raises (honest
+        degrade, Law 2 — retried/absorbed by the seam and the never-throw delivery
+        boundary above); a 2xx returns the parsed JSON body Recall actually sent —
+        never a fabricated payload.
+        """
+        from libs.http.src.http.external import http_client
+
+        headers = {"Authorization": f"Token {self._api_key}"}
+        async with http_client(timeout=_HTTP_TIMEOUT_S) as client:
+            resp = await client.request(method, f"{_RECALL_BASE}{path}", headers=headers, json=body)
+            resp.raise_for_status()
+            payload: dict[str, Any] = resp.json()
+            return payload
 
 
 async def _drain(queue: asyncio.Queue[Any]) -> AsyncIterator[Any]:
