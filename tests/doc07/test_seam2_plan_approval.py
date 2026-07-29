@@ -13,7 +13,6 @@ import pytest
 from control_plane.plan_approval_route import (
     APPROVE_PATH,
     ApproveResponse,
-    WorkroomDispatchUnavailable,
     handle_approve_plan,
 )
 
@@ -154,39 +153,9 @@ async def test_ac_pme_07_neg_a_non_named_human_cannot_approve():
     assert w.calls == []
 
 
-# ── the BLOCKED dispatch boundary (Doc 04 §112) ───────────────────────────
-async def test_dispatch_is_blocked_and_says_exactly_why():
-    res = _approve()
-    assert res.approved is True, "the approval itself must still land"
-    assert res.dispatch_blocked is True
-    assert res.status == 202, "recorded, not completed"
-
-    d = res.detail
-    assert "Doc 04 §112" in d
-    assert "no production caller" in d
-    assert "SessionDriver is constructed only in tests" in d
-    assert "TOOL_HANDLERS" in d
-    assert "live in-meeting path has the same gap" in d
-    assert "docs/gaps/DOC04-WORKROOM-DISPATCH-UNWIRED.md" in d
-
-
-async def test_the_approval_is_durable_even_though_dispatch_is_blocked():
-    """A human's decision is not rolled back because downstream machinery is missing."""
-    w = Writes()
-    res = _approve(writes=w)
-    assert res.dispatch_blocked is True
-    assert len(w.calls) == 1, "the approval was rolled back by the blocked dispatch"
-
-
-async def test_the_boundary_raises_rather_than_claiming_a_dead_row():
-    """Calling dispatch_workroom would claim an operation_runs row nothing executes."""
-    with pytest.raises(WorkroomDispatchUnavailable):
-        raise WorkroomDispatchUnavailable("x")
-    assert issubclass(WorkroomDispatchUnavailable, RuntimeError)
-
-
-async def test_a_real_dispatch_would_be_used_when_one_exists():
-    """The boundary is the ABSENCE of a dispatcher, not a hard-coded refusal."""
+# ── dispatch, now that §112 is built ──────────────────────────────────────
+async def test_the_dispatcher_is_called_with_the_task_and_meeting():
+    """The route's whole remaining job after the write: hand off to the dispatcher."""
     seen: list = []
 
     def dispatcher(conn, *, task_id, meeting_id):
@@ -195,7 +164,59 @@ async def test_a_real_dispatch_would_be_used_when_one_exists():
     res = _approve(dispatch=dispatcher)
     assert res.status == 200
     assert res.dispatch_blocked is False
+    assert res.detail == "approved and dispatched"
     assert seen == [(TASK, MEETING)]
+
+
+async def test_a_route_mounted_without_a_dispatcher_says_so_rather_than_raising():
+    """Was WorkroomDispatchUnavailable. §112 exists, so a missing dispatcher is a WIRING
+    fault in whoever mounted the route — reported, not modelled as a system property."""
+    w = Writes()
+    res = _approve(writes=w)
+    assert res.approved is True, "the approval itself must still land"
+    assert res.dispatch_blocked is True
+    assert res.status == 202, "recorded, not completed"
+    assert "no dispatcher is configured" in res.detail
+    assert len(w.calls) == 1, "the approval was rolled back by the missing dispatcher"
+
+
+async def test_a_dispatcher_that_raises_never_unwinds_the_approval():
+    """The human's decision is durable whatever happens downstream of it.
+
+    202 rather than 500 on purpose: a 500 invites the caller to retry the APPROVAL, which
+    would then 409 on the PLANNED check and read as "your click did not work" when it did.
+    """
+    w = Writes()
+
+    def exploding(conn, *, task_id, meeting_id):
+        raise RuntimeError("sandbox pool exhausted")
+
+    res = _approve(dispatch=exploding, writes=w)
+    assert res.status == 202
+    assert res.approved is True
+    assert res.dispatch_blocked is True
+    assert len(w.calls) == 1, "a failed dispatch rolled back the approval"
+    assert "RuntimeError" in res.detail, "the failure must be nameable by a human"
+    assert "remains APPROVED" in res.detail, "the retryable state must be stated"
+
+
+async def test_the_production_dispatcher_matches_the_route_signature():
+    """The route and ``make_plan_dispatcher`` must actually fit — a wiring test, not a mock.
+
+    ``_approve`` cannot call the real one (it schedules onto the running loop and reaches
+    Postgres), so this asserts the contract between them: it accepts the route's exact call
+    shape, and it returns None rather than an awaitable the sync route would silently drop.
+    """
+    import inspect
+
+    from harness.post_meeting.wire import make_plan_dispatcher
+
+    dispatcher = make_plan_dispatcher(db=object(), store=object())
+    assert not inspect.iscoroutinefunction(dispatcher), (
+        "a coroutine function here would be scheduled by nobody — the route is sync"
+    )
+    sig = inspect.signature(dispatcher)
+    sig.bind(object(), task_id=TASK, meeting_id=MEETING)  # raises if the shapes diverge
 
 
 async def test_no_poller_scheduler_or_queue_exists_in_this_route():

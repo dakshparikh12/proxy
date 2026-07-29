@@ -207,9 +207,10 @@ def _build_dispatch_server(runtime: Any) -> dict[str, Any] | None:
     ``MeetingEvent`` and Proxy re-wakes to deliver it (§3.2). Post-meeting execution uses
     the other sink and does NOT mount this tool — it has no wake turn to call it.
 
-    Fail-closed like ``_build_code_intel_servers``: without a ``db`` handle or a run loop
-    there is nothing to dispatch into, so the tool is not mounted and the turn degrades to
-    having no dispatch verb rather than mounting one that cannot work.
+    Fail-closed like ``_build_code_intel_servers``: without a ``db`` handle there is no
+    ``operation_runs`` row to claim, so the tool is not mounted and the turn degrades to
+    having no dispatch verb rather than mounting one that cannot work. The run loop is
+    explicitly NOT part of that test — see the note in the body.
     """
     db = getattr(runtime, "db", None)
     if db is None:

@@ -12,13 +12,12 @@ provider, queue, scheduler or broker) true by construction rather than by discip
 only thing added here is the decision of *whether* to dispatch — caps, cost, and the
 approval gate.
 
-The intended injections are ``harness.dispatch.assemble_bundle`` and
-``harness.dispatch.dispatch_workroom``. **Neither is wired in production today**:
-``dispatch_workroom`` has no production caller and Doc 05's ``SessionDriver`` is
-constructed only in tests, so a dispatched task would claim an ``operation_runs`` row
-that nothing executes. SEAM 2 therefore refuses rather than calling into that —
-see ``control_plane.plan_approval_route.WorkroomDispatchUnavailable`` and
-``docs/gaps/DOC04-WORKROOM-DISPATCH-UNWIRED.md``.
+The injections are ``harness.dispatch.assemble_bundle`` and a workroom dispatcher, and
+``harness.post_meeting.wire.make_plan_dispatcher`` is what supplies both in production —
+called from SEAM 2's approve route, on the human's click. Note what the wire module joins
+that this module deliberately does not: ``dispatch_workroom`` only CLAIMS the run row, so a
+caller that claims and stops leaves a task ``running`` that nothing ever finishes. The claim
+and Doc 05's ``SessionDriver`` are therefore paired in one place there.
 
 **The run row is Doc 04's, not ours.** Per amendment P10 (ruling C-A) the row is keyed
 ``scope_id`` = meeting id and ``operation_type`` = ``workroom:{task_id}``, which is what

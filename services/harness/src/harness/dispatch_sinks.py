@@ -19,6 +19,7 @@ the event loop, so they may only hand off — never await. The live sink uses
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from typing import Any, Callable
 from uuid import UUID
@@ -98,30 +99,59 @@ def post_meeting_sink(
     ``ensure_future`` and the sink returns immediately. The task handle is held in the
     module set for the same reason ``run_and_notify`` holds its own: an unheld task can be
     garbage-collected mid-write.
+
+    ``draft_row_for`` and ``bundle_exists`` MAY return awaitables, and they are resolved
+    inside the scheduled coroutine rather than here. That is not a convenience: the draft row
+    is a ``staged_drafts`` read against Postgres, and a synchronous callback on the event
+    loop cannot do one. Resolving them eagerly in this sink would force the caller to have
+    the row in hand before the run even finished — which it cannot, because the ``draft_id``
+    only exists once the task has proposed it.
     """
     _pending: set[Any] = _POST_MEETING_WRITES
 
+    async def _record(envelope: Any) -> Any:
+        from .post_meeting.final_gate import run_final_gate
+
+        draft_row = await _resolve(draft_row_for, envelope) if draft_row_for else None
+        exists = (
+            await _resolve(bundle_exists, envelope)
+            if bundle_exists
+            else draft_row is not None
+        )
+        return await run_final_gate(
+            task_id=task_id,
+            envelope=envelope,
+            draft_row=draft_row,
+            bundle_exists=bool(exists),
+            store=store,
+        )
+
     def _sink(envelope: Any) -> None:
         try:
-            from .post_meeting.final_gate import run_final_gate
-
-            draft_row = draft_row_for(envelope) if draft_row_for else None
-            exists = bundle_exists(envelope) if bundle_exists else draft_row is not None
-            fut = asyncio.ensure_future(
-                run_final_gate(
-                    task_id=task_id,
-                    envelope=envelope,
-                    draft_row=draft_row,
-                    bundle_exists=bool(exists),
-                    store=store,
-                )
-            )
+            fut = asyncio.ensure_future(_record(envelope))
             _pending.add(fut)
-            fut.add_done_callback(_pending.discard)
+            fut.add_done_callback(_on_recorded)
         except BaseException:  # noqa: BLE001 - the run completed; bookkeeping must not fail it
             log.exception("could not record the post-meeting outcome for task %s", task_id)
 
+    def _on_recorded(fut: Any) -> None:
+        """Discard the handle AND surface a failure — a swallowed write is the old bug."""
+        _pending.discard(fut)
+        if not fut.cancelled() and fut.exception() is not None:
+            log.error(
+                "the post-meeting outcome for task %s was not recorded: %r",
+                task_id, fut.exception(),
+            )
+
     return _sink
+
+
+async def _resolve(fn: Callable[[Any], Any], envelope: Any) -> Any:
+    """Call ``fn(envelope)`` and await the result if it is awaitable."""
+    result = fn(envelope)
+    if inspect.isawaitable(result):
+        return await result
+    return result
 
 
 #: Strong refs to in-flight post-meeting outcome writes (see ``dispatch._INFLIGHT``).

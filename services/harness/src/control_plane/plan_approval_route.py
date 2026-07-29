@@ -16,7 +16,11 @@ default"*, and a background sweep that dispatched approved tasks would be procee
 default. The only sweep in Doc 07 is B4's expiry, which closes tasks rather than starting
 them.
 
-**Dispatch is a declared BLOCKED boundary.** See :class:`WorkroomDispatchUnavailable`.
+**Dispatch is wired.** It used to be a declared BLOCKED boundary: ``dispatch=None`` raised
+``WorkroomDispatchUnavailable``, because Doc 04 §112's tool wrapper and completion callback
+did not exist and calling into them would have claimed an ``operation_runs`` row that nothing
+executed. §112 is built, so the refusal and the exception it raised are gone, and
+``harness.post_meeting.wire.make_plan_dispatcher`` is what goes in ``dispatch=``.
 """
 from __future__ import annotations
 
@@ -33,42 +37,15 @@ _LOG = logging.getLogger("services.harness.control_plane.plan_approval")
 APPROVE_PATH = "/m/{meeting_id}/tasks/{task_id}/approve"
 
 
-class WorkroomDispatchUnavailable(RuntimeError):
-    """Raised where a dispatched task would be handed to the Workroom.
-
-    **This is a real, unbuilt dependency — not a placeholder for convenience.** Doc 04
-    §112 assigns the harness *"the registered tool functions (speak/chat/screen/dispatch/…
-    — thin wrappers over the other docs' APIs)"* and states that *"every dispatched
-    workroom is an ``asyncio.create_task(...)`` with a done-callback"*. Neither the wrapper
-    nor the callback exists. Three pieces of evidence, all re-checkable:
-
-      1. ``harness.dispatch.dispatch_workroom`` has **no production caller**. The only
-         reference under ``services/`` is a docstring.
-      2. ``SessionDriver`` — Doc 05's driver that actually runs a task — is **constructed
-         only in ``tests/doc05/*``**, never in ``services/`` or ``libs/``.
-      3. ``libs.agentkit.tools.TOOL_HANDLERS`` is ``{"echo", "answer"}``; there is no
-         ``dispatch_workroom`` handler. The behaviors mount the *string*
-         ``"dispatch_workroom"`` in an allow-list, which is a name the model may emit, not
-         a wired call.
-
-    The **live in-meeting path has the identical gap** — this is not specific to
-    post-meeting execution. Full write-up:
-    ``docs/gaps/DOC04-WORKROOM-DISPATCH-UNWIRED.md``.
-
-    Raising here is deliberate. Calling ``dispatch_workroom`` would claim an
-    ``operation_runs`` row that nothing executes, leaving a task RUNNING forever while its
-    tests passed — a green suite over a dead end. An explicit refusal keeps the gap
-    visible in the code and in any error a human sees.
-    """
-
-
 @dataclass(frozen=True)
 class ApproveResponse:
     """The route's typed response. Mirrors ``accept_route.AcceptResponse``'s shape."""
 
     status: int
     approved: bool = False
-    #: True when the approval landed but dispatch could not be attempted (the §112 gap).
+    #: True when the approval landed but the task did not start. Approved-and-unstarted is a
+    #: real state and must be distinguishable from approved-and-running: the task is still
+    #: APPROVED, so it is re-dispatchable, and nothing about the human's click was lost.
     dispatch_blocked: bool = False
     task_id: Optional[str] = None
     approved_by: Optional[str] = None
@@ -138,29 +115,40 @@ def handle_approve_plan(
             f"tenant={caller_tenant} user={approver}"
         )
 
-    # (5) Dispatch. The approval above has ALREADY landed and is not rolled back by a
-    #     dispatch failure — a human's decision is durable regardless of whether the
-    #     machinery downstream of it exists yet.
-    try:
-        if dispatch is None:
-            raise WorkroomDispatchUnavailable(
-                "Doc 04 §112's registered tool wrapper and completion callback are "
-                "unbuilt: harness.dispatch.dispatch_workroom has no production caller, "
-                "SessionDriver is constructed only in tests/doc05/*, and "
-                "libs.agentkit.tools.TOOL_HANDLERS is {'echo','answer'} with no "
-                "dispatch_workroom handler. The live in-meeting path has the same gap. "
-                "See docs/gaps/DOC04-WORKROOM-DISPATCH-UNWIRED.md"
-            )
-        dispatch(conn, task_id=task_id, meeting_id=meeting_id)
-    except WorkroomDispatchUnavailable as exc:
-        _LOG.warning("plan approved but dispatch is blocked: %s", exc)
+    # (5) Dispatch. The approval above has ALREADY landed and is NOT rolled back by a
+    #     dispatch failure — a human's decision is durable whatever happens downstream of
+    #     it. The task stays APPROVED, which is a re-dispatchable state, rather than being
+    #     dragged back to PLANNED and asking the same human the same question again.
+    if dispatch is None:
+        # No dispatcher configured. Previously this raised WorkroomDispatchUnavailable
+        # because §112's wrapper did not exist; it does now, so a missing dispatcher is a
+        # wiring fault in whoever mounted the route, not a property of the system. Reported
+        # as 202 (approved, not started) so the human's click is never silently discarded.
+        _LOG.error(
+            "plan approved but no dispatcher is configured on this route; task %s stays "
+            "APPROVED and unstarted. Pass dispatch=make_plan_dispatcher(db=...) at install.",
+            task_id,
+        )
         return ApproveResponse(
-            status=202,  # accepted-and-recorded, not completed
-            approved=True,
-            dispatch_blocked=True,
-            task_id=task_id,
+            status=202, approved=True, dispatch_blocked=True, task_id=task_id,
             approved_by=approver,
-            detail=str(exc),
+            detail="approved; no dispatcher is configured, so the task has not started",
+        )
+    try:
+        dispatch(conn, task_id=task_id, meeting_id=meeting_id)
+    except Exception as exc:  # noqa: BLE001 - the approval stands; report, never unwind
+        # A dispatch that fails to START is reported as 202, not 500: the human's decision
+        # is recorded and durable, and the task is retryable from APPROVED. A 500 would
+        # invite the caller to retry the APPROVAL, which would then 409 on the state check
+        # and read as "your click did not work" when in fact it did.
+        _LOG.exception("plan approved but dispatch could not start for task %s", task_id)
+        return ApproveResponse(
+            status=202, approved=True, dispatch_blocked=True, task_id=task_id,
+            approved_by=approver,
+            detail=(
+                f"approved; the task did not start ({type(exc).__name__}) and remains "
+                "APPROVED, so it can be dispatched again"
+            ),
         )
 
     return ApproveResponse(
@@ -186,9 +174,9 @@ def install_approve_route(
     rather than raw. The handler keeps its own auth/tenant/state checks as defence in
     depth — plan approval is the gate that lets work start (D07.2).
 
-    ``dispatch`` defaults to ``None``, which makes the handler return **202 with
-    ``dispatch_blocked``** and the Doc 04 §112 explanation. That is the honest state of the
-    system today; pass a real dispatcher once §112's tool wrapper exists.
+    Pass ``dispatch=make_plan_dispatcher(db=...)`` (``harness.post_meeting.wire``). It is
+    still keyword-optional so a caller can mount the approval gate alone, but a route mounted
+    without it approves tasks that never start, and says so at ERROR and in the 202 body.
     """
     from fastapi import Request, Response
     from fastapi.responses import JSONResponse
