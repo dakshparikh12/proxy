@@ -48,6 +48,7 @@ run loop is built) so the live path carries a real brain, not a hollow spine.
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -64,6 +65,8 @@ from .name_gate import NameGate
 from .reflex import BoundaryGatedAck
 from .run_loop import MeetingEvent
 from .wake_turn import DEFAULT_BEHAVIOR, WakeEvent, WakeTurn
+
+log = logging.getLogger(__name__)
 
 #: The behaviors that field a spoken/typed conversational ask — selected mechanically by a
 #: small keyword scan over the ask text (§3.4 "selecting a behavior by name IS the branch",
@@ -209,9 +212,20 @@ def _build_dispatch_server(runtime: Any) -> dict[str, Any] | None:
     having no dispatch verb rather than mounting one that cannot work.
     """
     db = getattr(runtime, "db", None)
-    run_loop = getattr(runtime, "run_loop", None)
-    if db is None or run_loop is None:
+    if db is None:
+        # No durable substrate: there is no operation_runs row to claim, so a mounted
+        # dispatch verb could not work. Loud, because a meeting with no db is a wiring
+        # fault rather than an expected degradation like an unindexed repo.
+        log.error(
+            "dispatch_workroom NOT mounted: the runtime has no db handle, so no "
+            "operation_runs row can be claimed. Proxy cannot dispatch work this meeting."
+        )
         return None
+    # NOTE: runtime.run_loop is deliberately NOT read here. assemble_live_brain builds the
+    # wake turn (this mount) BEFORE it builds the run loop — it must, because
+    # build_run_loop needs the wake adapter the wake turn produces. So run_loop is always
+    # None at this point, and an eager read made the tool silently fail to mount on every
+    # live meeting. The sink resolves it lazily at completion time instead.
     try:
         from datetime import datetime, timezone
 
@@ -229,7 +243,10 @@ def _build_dispatch_server(runtime: Any) -> dict[str, Any] | None:
             )
 
         def _on_complete(envelope: Any) -> None:
-            live_sink(run_loop, task_id=envelope.task_id)(envelope)
+            # Resolved LATE: getattr at fire time, not at mount time (see the note above).
+            live_sink(
+                lambda: getattr(runtime, "run_loop", None), task_id=envelope.task_id
+            )(envelope)
 
         server = make_dispatch_workroom_server(
             db=db,
@@ -238,7 +255,11 @@ def _build_dispatch_server(runtime: Any) -> dict[str, Any] | None:
             run_task=_run_task,
             on_complete=_on_complete,
         )
-    except Exception:  # noqa: BLE001 - a build fault degrades to no-mount, never a crash
+    except Exception:  # noqa: BLE001 - never crash the meeting over a mount
+        # LOUD: unlike an unindexed repo (a legitimate no-code_intel degradation), a failed
+        # dispatch mount means Proxy silently cannot do real work all meeting. That must
+        # appear in the log, not be inferred from the absence of dispatches.
+        log.exception("dispatch_workroom NOT mounted: the server could not be built")
         return None
     return {"dispatch_workroom": server}
 

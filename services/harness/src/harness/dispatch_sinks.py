@@ -26,24 +26,48 @@ from uuid import UUID
 log = logging.getLogger(__name__)
 
 
-def live_sink(run_loop: Any, *, task_id: UUID) -> Callable[[Any], None]:
+class RunLoopUnavailable(RuntimeError):
+    """A completion fired but there is no run loop to notify. Loud, never silent."""
+
+
+def live_sink(
+    resolve_run_loop: Callable[[], Any], *, task_id: UUID
+) -> Callable[[Any], None]:
     """The in-meeting sink: enqueue the envelope so Proxy re-wakes and delivers.
+
+    **``resolve_run_loop`` is a callable, resolved at COMPLETION time, not at mount time.**
+    That is a correctness requirement, not a style choice. ``assemble_live_brain`` builds
+    the wake turn (and therefore mounts this tool) at line ~501 and only builds the run loop
+    at ~515 — it cannot do otherwise, because ``build_run_loop`` needs the wake adapter the
+    wake turn produces. So at mount time ``runtime.run_loop`` is always ``None``. An eager
+    read here made the tool silently fail to mount on every live meeting. A task completion
+    necessarily happens long after assembly, so resolving late always sees the built loop.
 
     ``put_nowait`` and nothing else. An ``await`` here would block the event loop inside a
     done-callback, and an unbounded queue means there is nothing to wait for anyway.
 
-    A full or closed queue is logged rather than raised: the run itself already completed
-    and its envelope is durable in the ``operation_runs`` row, so losing the *notification*
-    must not look like losing the *work*.
+    A missing run loop at completion time raises :class:`RunLoopUnavailable` into the log at
+    ERROR rather than passing quietly — a dropped completion means the room never hears the
+    result, which is exactly the class of silence this whole seam exists to remove. A full
+    queue is also logged: the run itself completed and its envelope is durable on the
+    ``operation_runs`` row, so losing the *notification* must not look like losing the *work*.
     """
 
     def _sink(envelope: Any) -> None:
         try:
             from .run_loop import MeetingEvent
 
+            run_loop = resolve_run_loop()
+            if run_loop is None or getattr(run_loop, "queue", None) is None:
+                raise RunLoopUnavailable(
+                    f"no run loop when task {task_id} completed; the room will not hear "
+                    "this result. The envelope is still durable on the operation_runs row."
+                )
             run_loop.queue.put_nowait(
                 MeetingEvent(payload=envelope, ask_id=str(task_id))
             )
+        except RunLoopUnavailable as exc:
+            log.error("%s", exc)
         except asyncio.QueueFull:
             log.error(
                 "meeting queue full; the completion for task %s was not enqueued. "
