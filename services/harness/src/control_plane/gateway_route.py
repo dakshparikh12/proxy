@@ -10,7 +10,7 @@ funnel needs to actually run in the running product:
 2. **Driving the funnel per inbound frame** — once authenticated, the route runs the LIVE
    inbound message loop: every ``channel_action`` frame the client sends is fed through the
    ONE :func:`libs.http.dispatch` funnel (§4.3) against a repos-backed store (meeting→tenant
-   resolved SERVER-SIDE from OUR ``meetings`` table) and the real capability-gated handler
+   resolved SERVER-SIDE from OUR ``meetings`` table) and the real inbound handler
    :func:`libs.http.handlers.channel_action.handle_channel_action`. dispatch() runs on the
    REAL product path — not isolation-only. The two generic error strings the funnel emits
    (``"Not found"`` / ``"Slow down."``) are written back over the socket; nothing else.
@@ -97,7 +97,7 @@ def build_live_dispatch_ctx(db: Any) -> DispatchCtx:
     """Build the live :class:`libs.http.DispatchCtx` — repos-backed store + the real handler.
 
     Injects the repos-backed :class:`_MeetingStore` (meeting→tenant from OUR ``meetings``
-    table) and the real capability-gated :func:`handle_channel_action`, with the pinned
+    table) and the real inbound :func:`handle_channel_action`, with the pinned
     ``limits`` in-memory rate limiter (§11.11). This is what makes the funnel run on the
     REAL product path — the same ctx the tests build with a fake store, here bound to the
     live durable substrate. Built once per accepted connection off ``app.state.db``.
