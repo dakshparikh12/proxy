@@ -25,10 +25,11 @@ the PIPE between them — pure physics, no situation→action:
   is CARRIED into the next chunk, and a final dangling byte is padded with one
   zero byte (half an s16 sample of silence — inaudible; s16le playback breaks
   on misaligned writes, so every ``write_audio`` payload is even-length).
-* **Never-throw** — a synth failure is swallowed into an honest no-audio for
-  that sentence (the engine already "spoke" the text; the turn must not
-  crash); the fault is recorded on ``last_error``. Cancellation is never
-  swallowed.
+* **Never-throw** — a fault while piping a sentence is swallowed into an
+  honest no-audio for that sentence, whether the SYNTH raised or the CHANNEL
+  did (``write_audio``/``set_speaking``) — the engine already "spoke" the
+  text; the turn must not crash. The fault is recorded on ``last_error``.
+  Cancellation is never swallowed.
 * **``cut()``** — the barge-in PRIMITIVE only: drops the buffered text, the
   queued sentences, and the in-flight synth immediately (detection lives in
   the barge-in reflex, not here). **``aclose()``** — meeting end: flush the
@@ -111,9 +112,10 @@ class SpeakPipe:
     """The per-meeting speak pipe: text deltas → sentences → synth → channel.
 
     ``say`` (and ``__call__`` — the ``engine.SpeakFn`` shape) accepts arbitrary
-    text fragments and never raises on a synth fault; ``flush`` forces the tail
-    out and drains; ``cut`` is the barge-in primitive; ``aclose`` is meeting
-    end. ``last_error`` carries the most recent synth fault, honestly.
+    text fragments and never raises on a synth or channel fault mid-sentence;
+    ``flush`` forces the tail out and drains; ``cut`` is the barge-in
+    primitive; ``aclose`` is meeting end. ``last_error`` carries the most
+    recent piping fault, honestly.
     """
 
     def __init__(
@@ -157,8 +159,11 @@ class SpeakPipe:
         self._buffer = ""
         if tail:
             self._queue.append(tail)
-        if self._queue:
-            self._ensure_worker()
+        # Run the worker even with nothing queued: a whitespace-only buffer
+        # strips to no tail, but it may have blocked the worker's idle branch
+        # (the only place set_speaking(False) lands) — the wake-up lets the
+        # idle path fire; a no-op worker exits immediately.
+        self._ensure_worker()
         while True:
             worker = self._worker
             if worker is None or worker.done():
@@ -252,7 +257,11 @@ class SpeakPipe:
         self._buffer = ""
         if tail:
             self._queue.append(tail)
-            self._ensure_worker()
+        # Ensure the worker runs even when the tail stripped to NOTHING: a
+        # whitespace-only buffer (e.g. a trailing "\n" delta) blocked the
+        # worker's idle branch, and set_speaking(False) only lands there —
+        # without this wake-up the orb stays lit forever.
+        self._ensure_worker()
 
 
 def build_speak_sink(

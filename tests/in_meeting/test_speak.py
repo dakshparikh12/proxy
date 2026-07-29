@@ -21,6 +21,12 @@ recording fake. No real Cartesia, no network. Seven AC[det] criteria:
    ``say`` starts clean;
 7. alignment — odd-length pcm chunks reach the channel as 2-byte-aligned
    writes only (s16le playback breaks on misalignment); no audio byte lost.
+
+Plus post-review regression coverage (findings on the SPEAK-SINK commit): a
+whitespace-only trailing delta must still land ``set_speaking(False)`` — via
+the quiet window AND via ``flush()`` (LLM streams routinely end a turn with a
+trailing ``"\\n"``); and ``cut()`` while audibly mid-utterance sends
+``set_speaking(False)`` immediately.
 """
 from __future__ import annotations
 
@@ -257,3 +263,103 @@ async def test_odd_length_chunks_written_two_byte_aligned() -> None:
     # Odd carry rides into the next chunk; the final dangling byte is padded
     # with one zero byte to complete the s16 sample — nothing dropped.
     assert b"".join(channel.audio) == b"\x01\x02\x03\x04\x05\x00"
+
+
+# ---------------------------------------------------------------------------
+# Regression: a whitespace-only trailing delta must NOT strand speaking True.
+# LLM streams routinely end a turn with a trailing "\n" delta; the engine
+# filters only EMPTY deltas, so the pipe sees it. The buffered "\n" blocks the
+# worker's idle branch, and the tail flush strips it to nothing — speaking
+# must still land False.
+# ---------------------------------------------------------------------------
+
+
+def _held_synth(calls: list[str], audio_landed: asyncio.Event, release: asyncio.Event):
+    """One-chunk synth that HOLDS open after its audio lands — lets the test
+    inject a trailing delta while the worker is provably still in flight."""
+
+    async def synthesize(text: str) -> AsyncIterator[_Chunk]:
+        calls.append(text)
+        yield _Chunk(pcm=b"\x51\x52", seq=0, is_final=True)
+        audio_landed.set()  # the chunk above has been written to the channel
+        await release.wait()
+
+    return synthesize
+
+
+@pytest.mark.asyncio
+async def test_whitespace_only_tail_releases_speaking_after_quiet_window() -> None:
+    """The reviewer's exact repro: say("Done.") → audio drained → say("\\n")
+    → past the quiet window → the channel's LAST speaking event is False."""
+    calls: list[str] = []
+    audio_landed = asyncio.Event()
+    release = asyncio.Event()
+    channel = _RecordingChannel()
+    pipe = build_speak_sink(
+        synthesize=_held_synth(calls, audio_landed, release), channel=channel, flush_after_s=_TINY
+    )
+
+    await pipe.say("Done.")
+    await audio_landed.wait()  # Done.'s audio drained to the channel; synth held open
+    await pipe.say("\n")  # the trailing whitespace-only delta arms the quiet window
+    release.set()  # worker's idle check now runs with the "\n" still buffered
+    await asyncio.sleep(0.3)  # let the worker exit and the quiet window elapse
+
+    speaking = [payload for kind, payload in channel.calls if kind == "speaking"]
+    assert speaking and speaking[0] is True
+    assert speaking[-1] is False, f"speaking stranded True: channel.calls={channel.calls}"
+
+
+@pytest.mark.asyncio
+async def test_flush_with_whitespace_only_buffer_releases_speaking() -> None:
+    """Same hole via flush(): a whitespace-only buffer strips to nothing —
+    flush must still drive the pipe idle so speaking lands False."""
+    calls: list[str] = []
+    audio_landed = asyncio.Event()
+    release = asyncio.Event()
+    channel = _RecordingChannel()
+    pipe = build_speak_sink(
+        synthesize=_held_synth(calls, audio_landed, release), channel=channel, flush_after_s=_NEVER
+    )
+
+    await pipe.say("Done.")
+    await audio_landed.wait()  # audio drained; synth held open
+    await pipe.say("  ")  # whitespace-only trailing delta buffered
+    release.set()
+    await asyncio.sleep(0.02)  # worker exits — its idle check saw the non-empty buffer
+    await pipe.flush()
+
+    speaking = [payload for kind, payload in channel.calls if kind == "speaking"]
+    assert speaking and speaking[0] is True
+    assert speaking[-1] is False, f"speaking stranded True: channel.calls={channel.calls}"
+
+
+# ---------------------------------------------------------------------------
+# Regression: cut() while AUDIBLY speaking (first chunk already landed) must
+# send speaking False immediately — the orb goes dark on barge-in.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cut_while_audibly_speaking_sends_speaking_false() -> None:
+    calls: list[str] = []
+    audio_landed = asyncio.Event()
+    hold = asyncio.Event()
+
+    async def synthesize(text: str) -> AsyncIterator[_Chunk]:
+        calls.append(text)
+        yield _Chunk(pcm=b"\x71\x72", seq=0, is_final=False)
+        audio_landed.set()
+        await hold.wait()  # never released — held mid-utterance, orb lit
+
+    channel = _RecordingChannel()
+    pipe = build_speak_sink(synthesize=synthesize, channel=channel, flush_after_s=_NEVER)
+
+    await pipe.say("Sentence one.")
+    await audio_landed.wait()  # the first chunk landed → _speaking is True at cut
+    assert ("speaking", True) in channel.calls
+    await pipe.cut()
+
+    assert channel.calls[-1] == ("speaking", False)
+    speaking = [payload for kind, payload in channel.calls if kind == "speaking"]
+    assert speaking == [True, False]  # exactly one drop, no flicker
