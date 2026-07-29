@@ -91,9 +91,29 @@ enforced by anything.
 
 | Site | Behaviour today |
 |---|---|
-| `control_plane/plan_approval_route.py` | Raises `WorkroomDispatchUnavailable`; the route returns **202 `dispatch_blocked`**. The approval still lands. |
+| `control_plane/plan_approval_route.py` | **Built, tested, and deliberately NOT MOUNTED** — see below. If mounted it raises `WorkroomDispatchUnavailable` and returns **202 `dispatch_blocked`**, with the approval still landing. |
 | `harness/post_meeting/dispatch.py` | Injected `assemble_bundle` / `workroom_dispatch`; never imports them. Callable once a real dispatcher exists. |
 | `acceptance/doc07/` | **AC-PME-09, AC-PME-09-NEG, AC-PME-10, AC-PME-10-NEG stay BLOCKED**, and that is correct. The sealed `assurance_limits` records the blocker as the no-media worker; the real blocker is this, one layer down. Re-sealing is a founder action (`builder_writes: DENIED`). |
+
+## The approve route is built and unmounted
+
+`install_approve_route` exists, is tested, and is **not called from
+`control_plane/app.py`**. That is deliberate, and it is the safe state until §112 lands.
+
+The route's two halves fail asymmetrically. The APPROVED write is **durable** — it lands
+in `post_meeting_tasks` with `approved_by` and `approved_at`. The dispatch is **blocked**.
+And Doc 07 §3.4 forbids a poller (*"Proxy does not nag and never proceeds by default"*),
+so nothing sweeps for approved-but-undispatched tasks. The result is that **every approval
+taken before §112 lands is a permanently orphaned task** — approved, unrunnable, and
+invisible to any retry path. Returning 202 makes the block honest to the caller but does
+not make the row recoverable.
+
+There is no feature flag guarding it, deliberately: doc00 §7 pins V0 at **zero active
+runtime flags**, and a flags table is machinery for nothing (PLATFORM-ADOPTION's flags
+bullet is annotated SUPERSEDED for the same reason). Unmounting is the mechanism.
+
+**Mounting it is the last step of closing this gap** — step 4 below. One line in
+`app.py`, beside the accept/reject pair, once steps 1–3 make dispatch real.
 
 ## Closing it
 
@@ -105,5 +125,13 @@ enforced by anything.
    done-callback Doc 04 §112 describes.
 3. Pass the resulting dispatcher into `install_approve_route(dispatch=…)` — SEAM 2 then
    returns 200 instead of 202 with no other change.
-4. Generate `acceptance/doc04/`, so the next gap of this shape fails a gate instead of
+4. **Mount the approve route** in `control_plane/app.py`, beside the accept/reject pair:
+
+   ```python
+   from .plan_approval_route import install_approve_route
+   install_approve_route(app, dependencies=[protected(_resolve_session_from_request)], dispatch=…)
+   ```
+
+   Not before. Until dispatch is real, a mounted route manufactures orphaned tasks.
+5. Generate `acceptance/doc04/`, so the next gap of this shape fails a gate instead of
    being found by hand.

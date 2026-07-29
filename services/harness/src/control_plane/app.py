@@ -169,15 +169,21 @@ def create_app() -> FastAPI:
     # nothing, never pushes). A separate protected() instance per route keeps each
     # route's dependant tree independently stamped for the enumeration test.
     install_reject_route(app, dependencies=[protected(_resolve_session_from_request)])
-    # Doc 07 §3.4 PLAN approval (SEAM 2) — POST /m/{id}/tasks/{id}/approve, behind the
-    # SAME auth wall. Distinct from draft acceptance above: plan approval is the gate that
-    # lets work START, draft acceptance is the click that lands the artifact. It lives here
-    # for the same reason the accept route does — it must work long after the meeting
-    # harness is gone. Dispatch is left unwired: it returns 202 dispatch_blocked naming
-    # Doc 04 §112's missing tool wrapper (docs/gaps/DOC04-WORKROOM-DISPATCH-UNWIRED.md).
-    from .plan_approval_route import install_approve_route
-
-    install_approve_route(app, dependencies=[protected(_resolve_session_from_request)])
+    # Doc 07 §3.4 PLAN approval (SEAM 2) is DELIBERATELY NOT MOUNTED.
+    #
+    # `control_plane.plan_approval_route.install_approve_route` is built and tested and
+    # would slot in here beside the accept/reject pair. It stays unmounted until Doc 04
+    # §112's tool wrapper exists, because the route's two halves are durable and blocked
+    # respectively: it writes APPROVED to post_meeting_tasks and then cannot dispatch. By
+    # design there is no poller (§3.4 — Proxy never proceeds by default), so nothing would
+    # ever pick the task up: every approval taken before §112 lands is a permanently
+    # orphaned task, approved and unrunnable.
+    #
+    # No feature flag guards it, deliberately: doc00 §7 pins V0 at ZERO active runtime
+    # flags, and a flags table is machinery for nothing. The mount is one line, and adding
+    # it is the LAST step of closing the gap — see
+    # docs/gaps/DOC04-WORKROOM-DISPATCH-UNWIRED.md.
+    #
     # The WS upgrade gateway (§4.3/§12.9): /ws authenticates at the connection UPGRADE —
     # an unauthenticated upgrade is rejected (401) BEFORE the 101, never per-message.
     install_gateway_route(app)
