@@ -2,4 +2,3 @@
 # workspace — never `uv sync`'d (AC-REPO-008).
 packages:
   - "connect"
-  - "tile"
