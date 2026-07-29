@@ -279,14 +279,19 @@ def _scenario_retro() -> MeetingScenario:
                 speaker="Marcus",
                 text="Proxy, how big can the cache get before things start falling out?",
             ),
+            # Calibrated (iter-2): asking is ONE correct path, not the only one — explicitly
+            # answering for BOTH caches by name is equally correct; only silently answering for
+            # a single, silently-chosen cache remains the failure.
             expect=(
-                "Two behaviors, both required. FIRST TURN: the question is ambiguous — the repo "
-                "has two caches (the redis session cache in cache_redis.py, which expires by TTL, "
-                "and the in-process LRU profile cache in cache_lru.py, which evicts by capacity) — "
-                "so Proxy asks WHICH cache is meant instead of guessing. AFTER the clarification "
-                "('the in-memory one, the LRU'): it answers that the LRU holds 128 entries (the "
-                "CAPACITY constant in cache_lru.py) and evicts least-recently-used beyond that. "
-                "Guessing on the first turn without clarifying, or a wrong capacity after, fails."
+                "The question is ambiguous — the repo has two caches (the redis session cache in "
+                "cache_redis.py, which expires by TTL, and the in-process LRU profile cache in "
+                "cache_lru.py, which evicts by capacity). FIRST TURN, either behavior is fully "
+                "correct: Proxy asks WHICH cache is meant, OR Proxy explicitly answers for BOTH "
+                "caches by name so the ambiguity is surfaced rather than silently resolved. What "
+                "fails is silently answering for just one cache without naming the other. AFTER "
+                "the clarification ('the in-memory one, the LRU'): it answers that the LRU holds "
+                "128 entries (the CAPACITY constant in cache_lru.py) and evicts "
+                "least-recently-used beyond that. A wrong capacity after the clarification fails."
             ),
             follow_up=Line(
                 speaker="Marcus",
@@ -618,12 +623,17 @@ def _scenario_architecture() -> MeetingScenario:
                     "today, or is it TTL-only?"
                 ),
             ),
+            # Calibrated (iter-2): the TTL value and the LRU contrast are optional enrichments —
+            # a fully correct, grounded core answer merits full marks and must not be docked for
+            # omitting them; the hard bar (no invented invalidate/delete) is unchanged.
             expect=(
                 "The response says NO — the RedisCache in cache_redis.py exposes only put and get, "
-                "so entries die only by TTL expiry (DEFAULT_TTL_S; naming 600 seconds is a plus); "
-                "there is no invalidate/delete method today. Contrasting with the in-process "
-                "LRUCache in cache_lru.py which DOES have an invalidate() is a plus. Claiming an "
-                "invalidate/delete exists on the redis cache, or inventing a method, fails hard."
+                "so entries die only by TTL expiry; there is no invalidate/delete method today. "
+                "That grounded core answer alone merits full marks. Naming DEFAULT_TTL_S or its "
+                "600-second value, or contrasting with the in-process LRUCache in cache_lru.py "
+                "which DOES have an invalidate(), are optional pluses whose absence must not "
+                "lower the score. Claiming an invalidate/delete exists on the redis cache, or "
+                "inventing a method, fails hard."
             ),
         ),
         _s(
@@ -656,13 +666,19 @@ def _scenario_architecture() -> MeetingScenario:
                 speaker="Zach",
                 text="Proxy, remind me — what's the limit we keep citing in these designs?",
             ),
+            # Calibrated (iter-2): same behavior space as A-clarify-cache — asking OR laying the
+            # candidate limits out explicitly by name are both correct; silently picking one
+            # referent (or one file) without naming the others stays the failure.
             expect=(
-                "Two behaviors, both required. FIRST TURN: 'the limit' is genuinely ambiguous "
-                "here (per-minute rate limit, burst allowance, LRU cache capacity are all live "
-                "candidates in this repo/meeting), so Proxy asks WHICH limit is meant instead of "
-                "guessing. AFTER the clarification ('the burst allowance in the limiter file'): "
-                "it answers BURST = 20 in ratelimit.py (the token bucket's cap). Guessing on the "
-                "first turn, or a wrong value/file after the clarification, fails."
+                "'The limit' is genuinely ambiguous here (per-minute rate limit, burst "
+                "allowance, LRU cache capacity are all live candidates in this repo/meeting). "
+                "FIRST TURN, either behavior is fully correct: Proxy asks WHICH limit is meant, "
+                "OR Proxy explicitly lays out the candidate limits by name so the ambiguity is "
+                "surfaced rather than silently resolved. What fails is silently answering for "
+                "one limit (or one file's limits) without naming the other candidates. AFTER "
+                "the clarification ('the burst allowance in the limiter file'): it answers "
+                "BURST = 20 in ratelimit.py (the token bucket's cap). A wrong value or file "
+                "after the clarification fails."
             ),
             follow_up=Line(
                 speaker="Zach",
