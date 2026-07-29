@@ -111,14 +111,6 @@ class MeetingRuntime:
     # transport) is wired by the provisioner/media pass, so a runtime with no chat surface
     # simply posts nothing rather than crashing. A callable taking one rendered ProxyMessage.
     chat_sink: "Callable[[Any], None] | None" = None
-    # C-TILE — the outbound tile render sink the wake path drives the §2.2 tile state machine
-    # into: when a wake turn's projector emits a work-tool ``ToolStart`` "working…" line, the
-    # live brain drives the machine to its ``working`` state and posts the registered
-    # ``TileState`` frame here (the render carrier). ``None`` (the default) → the tile isn't
-    # driven this meeting — honest degradation mirroring the NullTTS media placeholder (the
-    # tile ambience surface is wired by the provisioner/media pass). A callable taking one
-    # rendered ``TileState`` ProxyMessage.
-    tile_sink: "Callable[[Any], None] | None" = None
     _scribe: ScribeRuntimeHandle | None = field(default=None, init=False)
     _hearing: Any = field(default=None, init=False)
     _stt_refresh: "asyncio.Task[None] | None" = field(default=None, init=False)
