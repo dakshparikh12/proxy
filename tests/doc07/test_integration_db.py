@@ -22,7 +22,6 @@ the integration tier").
 """
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
 
 import pytest
@@ -35,13 +34,6 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
 NOW = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
 
-
-def _dsn() -> str | None:
-    for var in ("TEST_DATABASE_URL", "DATABASE_URL"):
-        dsn = os.environ.get(var, "").strip()
-        if dsn:
-            return dsn
-    return None
 
 
 class _Pool:
@@ -58,13 +50,6 @@ class _Pool:
     def acquire(self):
         return self._pool.acquire()
 
-
-@pytest.fixture(scope="module")
-def dsn():
-    d = _dsn()
-    if not d:
-        pytest.skip("no local Postgres (set TEST_DATABASE_URL or DATABASE_URL)")
-    return d
 
 
 @pytest_asyncio.fixture()

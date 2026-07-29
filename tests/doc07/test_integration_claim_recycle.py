@@ -19,7 +19,6 @@ not collide the way the index intends.
 from __future__ import annotations
 
 import asyncio
-import os
 import uuid
 
 import pytest
@@ -28,20 +27,6 @@ import pytest_asyncio
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
 
-def _dsn() -> str | None:
-    for var in ("TEST_DATABASE_URL", "DATABASE_URL"):
-        dsn = os.environ.get(var, "").strip()
-        if dsn:
-            return dsn
-    return None
-
-
-@pytest.fixture(scope="module")
-def dsn():
-    d = _dsn()
-    if not d:
-        pytest.skip("no local Postgres (set TEST_DATABASE_URL or DATABASE_URL)")
-    return d
 
 
 @pytest_asyncio.fixture()
