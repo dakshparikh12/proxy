@@ -159,18 +159,13 @@ def test_provisioner_grants_consent_on_in_call(monkeypatch):
 
     monkeypatch.setattr(mr, "start_meeting_scribe", lambda *a, **k: _NullScribe())
 
-    # A fake live_brain assembly so _assemble_runtime does not need the real model seam.
-    monkeypatch.setattr(prov, "_assemble_runtime", prov._assemble_runtime)
-
     registry = mr.MeetingRuntimeRegistry(db=None)
 
     # Drive just the assembly step the way provision_meeting does on a WON claim.
+    # (The OLD live-brain assembly is deleted — _assemble_runtime wires no model seam,
+    # so no stub is needed: the engine is assembled separately on the async chokepoint.)
     payload = {"event": "bot.in_call", "data": {"bot_id": "bot-xyz"}}
     resolved = {"id": "m-live-2", "tenant_id": "t", "repo_id": None}
-
-    # Stub the live-brain assembly to a no-op so we isolate the consent-grant wiring.
-    import harness.live_brain as lb
-    monkeypatch.setattr(lb, "assemble_live_brain", lambda runtime, provider=None: None)
 
     runtime = prov._assemble_runtime(
         payload, resolved, db=None, registry=registry, handle=None, provider=None

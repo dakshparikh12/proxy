@@ -10,39 +10,36 @@ Recall ``in_call`` webhook it:
    harness per meeting, no broker, no Redis** (§3.6). The winner's instance-id is
    written onto ``created_by`` (affinity, §3.6/§11.11).
 
-2. **Assembles the four subsystems in ONE scope** — transport (the ``SignalCarrier``),
-   the Scribe runtime, the orchestrator run-loop, and the abort seam — on a single
+2. **Assembles the subsystems in ONE scope** — transport (the ``SignalCarrier``),
+   the Scribe runtime, the NEW in-meeting engine, and the abort seam — on a single
    :class:`~harness.meeting_runtime.MeetingRuntime`, and **binds the claimed row's
-   fencing handle** onto the run loop's gated emitter so every side-effect reads
-   ``is_owner`` live (§3.7 fencing). The ``SignalCarrier`` is subscribed **ONCE at
-   join** (the Scribe consumer + the transport→orchestrator pipe share the one carrier);
-   it is never re-wired per event.
+   fencing handle** onto the runtime so every side-effect reads ``is_owner`` live
+   (§3.7 fencing). The ``SignalCarrier`` is subscribed **ONCE at join** (the Scribe
+   consumer + the meeting-end listener share the one carrier); it is never re-wired
+   per event.
 
-3. **Launches the run-loop event queue** — :func:`run_meeting_until_end` is the
-   ``asyncio.run``-style entry: it drives the transport→orchestrator standing pipe so
-   every carrier signal routes THROUGH the loop, and runs until the ``MeetingEnd``
-   signal closes the carrier (or a wall-clock timeout elapses).
+3. **Launches the meeting-end spine** — :func:`run_meeting_until_end` is the
+   ``asyncio.run``-style entry: it pumps the runtime's meeting-end listener and runs
+   until the explicit ``MeetingEnd`` signal closes the carrier (or a wall-clock
+   timeout elapses).
 
 4. **Survives a recycle** — when the owning instance dies its heartbeat goes stale, the
    reaper (§3.8) flips the row off ``running``, the partial index frees, and a
    REPLACEMENT provisioner handed the same webhook **re-claims** the meeting. It then
    **confirms the transcript plane is reachable** so the first wake after the swap
-   replays from it via the pinned §3.5 seam (``libs.agentkit.resume_with_fallback``,
-   fired inside :meth:`~harness.wake_turn.WakeTurn.run`, not here). The media session
-   cannot be resumed (restart-not-resume, §3.10) but Proxy's judgment history is
-   rebuilt from Doc 03's transcript plane on that first wake so the room stays coherent.
+   replays from it (restart-not-resume, §3.10): the media session cannot be resumed,
+   but Proxy's judgment history is rebuilt from Doc 03's transcript plane on that
+   first wake so the room stays coherent.
 
-The provisioner does NOT redefine the claim, the run loop, the assembly, or the resume
-fallback — it is the thin entry that wires those built pieces into a live meeting.
+The provisioner does NOT redefine the claim, the assembly, or the resume fallback —
+it is the thin entry that wires those built pieces into a live meeting.
 
 THE CUTOVER (this node): the brain seat on the boot path is the NEW in-meeting engine
 (``in_meeting.runtime.assemble_engine`` — map + code + meeting + sandbox access, the
 Cartesia→Output-Media speak pipe, the real async disambiguator), assembled per meeting in
 :func:`_assemble_engine` and stashed on the runtime (``runtime.engine``) so the webhook
-drain feeds it transcript/chat by meeting id. The OLD live brain
-(``assemble_live_brain``/``wake_turn``/``run_loop`` wake path) is no longer wired here —
-its modules survive untouched until the delete wave; the standing pipe remains ONLY as
-the meeting-end signal spine (the silent default loop makes zero wake turns).
+drain feeds it transcript/chat by meeting id. The OLD live brain is DELETED; the only
+carrier-side spine left here is the runtime's meeting-end listener (zero wake turns).
 """
 from __future__ import annotations
 
@@ -127,7 +124,7 @@ async def provision_meeting(
     The atomic-claim entry (§3.6): resolve the bot back to its meeting, then INSERT the
     ``meeting-harness`` ``operation_runs`` row via ``ops.claim_meeting``. On a WIN this
     instance owns the meeting — it assembles the runtime (transport carrier + Scribe +
-    run loop + abort in ONE scope), binds the claimed row's fencing handle so ``is_owner``
+    engine + abort in ONE scope), binds the claimed row's fencing handle so ``is_owner``
     gates every emit, and subscribes the carrier ONCE at join. On a LOSS (a concurrent
     duplicate join, or an already-running harness) it returns ``claimed=False`` and opens
     NO second runtime — one harness per meeting.
@@ -259,18 +256,16 @@ def _assemble_runtime(
     Builds the frozen §3.2 meeting header from the same webhook envelope, opens the ONE
     ``SignalCarrier``, and hands both to the registry's ``start_meeting`` — which wires
     the Scribe consumer + STT refresh on that carrier (subscribe-once at join). Then binds
-    the claimed row's fencing handle onto the runtime and wires the transport→orchestrator
-    standing pipe ONCE — the second carrier subscription, also at join, never per event.
+    the claimed row's fencing handle onto the runtime and wires the meeting-end listener
+    ONCE — the second carrier subscription, also at join, never per event.
 
-    THE CUTOVER: the OLD live brain (``assemble_live_brain`` — wake turn + name-gate on the
-    run loop) is NO LONGER assembled here. The brain seat is the NEW in-meeting engine,
-    assembled by :func:`_assemble_engine` on the async chokepoint (this function is sync and
-    cannot await the map load / sandbox provision). The standing pipe stays because it is
-    the meeting-END machinery: the ``MeetingEnd`` signal routes through the (now silent)
-    loop and trips ``run_until_meeting_end`` — the run loop makes zero wake turns
-    (``wake_turn=None``/never-addressed defaults). ``provider`` is accepted for signature
-    compatibility with existing callers; the engine's provider is threaded through
-    :func:`_assemble_engine`, not here.
+    THE CUTOVER: the OLD live brain is DELETED — the brain seat is the NEW in-meeting
+    engine, assembled by :func:`_assemble_engine` on the async chokepoint (this function
+    is sync and cannot await the map load / sandbox provision). The meeting-end listener
+    is the only carrier-side spine wired here: the explicit ``MeetingEnd`` signal trips
+    ``run_until_meeting_end`` (zero wake turns ride the carrier). ``provider`` is accepted
+    for signature compatibility with existing callers; the engine's provider is threaded
+    through :func:`_assemble_engine`, not here.
     """
     _ = provider  # engine seams ride _assemble_engine; kept for caller compatibility
     from scribe.prefix import MeetingHeader
@@ -303,13 +298,12 @@ def _assemble_runtime(
     # Bind the claimed row's fencing handle so the gated emitter reads is_owner off this
     # handle (a fenced-out harness emits nothing).
     runtime.operation_handle = handle
-    # THE CUTOVER: the old brain is NOT assembled here any more — the NEW in-meeting engine
-    # (assembled async in :func:`_assemble_engine`, stashed as ``runtime.engine``) owns the
-    # wake/speak seat. Wire the transport→orchestrator standing pipe ONCE at join (the
-    # second, and last, carrier subscription) — it is the meeting-end spine: the loop it
-    # builds is the SILENT default (never-addressed, zero wake turns), and the explicit
-    # ``MeetingEnd`` signal routing through it is what ends :func:`run_meeting_until_end`.
-    runtime.wire_orchestrator_pipe()
+    # THE CUTOVER: the old brain is deleted — the NEW in-meeting engine (assembled async
+    # in :func:`_assemble_engine`, stashed as ``runtime.engine``) owns the wake/speak
+    # seat. Wire the meeting-end listener ONCE at join (the second, and last, carrier
+    # subscription): the explicit ``MeetingEnd`` signal landing on it is what ends
+    # :func:`run_meeting_until_end`.
+    runtime.wire_meeting_end_listener()
     return runtime
 
 
@@ -449,10 +443,8 @@ async def _resume_session(
     """Confirm the transcript plane is reachable for the first-wake replay (§3.5).
 
     The replacement instance's SDK session is empty; the durable meeting history lives in
-    Doc 03's Postgres transcript plane. This does NOT itself replay — the §3.5
-    ``resume_with_fallback`` seam fires on the first wake inside
-    :meth:`~harness.wake_turn.WakeTurn.run` (rebuild from the transcript-plane
-    ``history_fn``, emit the "session restored" notice, retry without resume). Here we only
+    Doc 03's Postgres transcript plane. This does NOT itself replay — the first wake
+    after the swap rebuilds from the transcript-plane ``history_fn``. Here we only
     confirm that durable history plane is reachable at re-claim time, so the re-claim can
     honestly report a resumable meeting. Returns True iff the transcript plane was read.
     """
@@ -489,8 +481,8 @@ async def run_meeting_until_end(
     """The ``asyncio.run``-style meeting entry: claim, launch the loop, run to close.
 
     This is what the harness process runs per meeting. It provisions (claim + assemble —
-    including the NEW in-meeting engine), then LAUNCHES the standing pipe as the end-signal
-    spine and runs until the explicit ``MeetingEnd`` signal closes the carrier (or
+    including the NEW in-meeting engine), then LAUNCHES the meeting-end listener as the
+    end-signal spine and runs until the explicit ``MeetingEnd`` signal closes the carrier (or
     ``timeout_s`` elapses). The engine is fed by the webhook dispatch (push), not by an
     async-iterator source, so ``in_meeting.runtime.run_meeting`` (the pull driver) is NOT
     launched here. A loss (no claim) returns immediately without launching. On meeting end
@@ -525,9 +517,9 @@ async def run_meeting_until_end(
     if runtime is None:
         return outcome
 
-    # Launch the loop spine: the transport→orchestrator pipe (wired ONCE at join) forwards
-    # every carrier signal THROUGH the run loop until the explicit MeetingEnd signal routes
-    # through (§3.1), or the wall-clock backstop elapses.
+    # Launch the end-signal spine: the meeting-end listener (wired ONCE at join) consumes
+    # carrier signals until the explicit MeetingEnd signal lands (§3.1), or the wall-clock
+    # backstop elapses.
     ran_to_end = False
     try:
         await asyncio.wait_for(runtime.run_until_meeting_end(), timeout=timeout_s)

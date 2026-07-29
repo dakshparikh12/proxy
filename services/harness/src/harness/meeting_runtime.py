@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,7 +29,6 @@ from scribe.pipeline import HostBudget
 from scribe.prefix import MeetingHeader
 from scribe.referent import ReferentCorpus
 
-from .run_loop import MeetingEvent, RunLoop, StandingPipe
 from .scribe_runtime import (
     CloseConfig,
     ScribeRuntimeHandle,
@@ -86,9 +85,9 @@ class MeetingRuntime:
     # it reads. ``None`` when the repo has no stored map (unindexed) — the wake turn is unaffected.
     map_text: str | None = None
     operation_handle: Any = None
-    # The ONE abort registry (§11.9) this meeting's run loop mints per-wake controllers
-    # through, shared with the registry so meeting-end / "Proxy, quiet" reach the LIVE
-    # controllers. Defaults to a fresh one so a standalone runtime still wires cleanly.
+    # The ONE abort registry (§11.9) shared with the registry so meeting-end /
+    # "Proxy, quiet" reach the LIVE controllers of this meeting's model turns.
+    # Defaults to a fresh one so a standalone runtime still wires cleanly.
     abort_registry: Any = None
     # The availability-critical STT-credential refresh seam (§3.8): its cadence and the
     # bound refresh callable, threaded from the registry. The loop runs on its OWN
@@ -122,16 +121,13 @@ class MeetingRuntime:
     tile_sink: "Callable[[Any], None] | None" = None
     _scribe: ScribeRuntimeHandle | None = field(default=None, init=False)
     _hearing: Any = field(default=None, init=False)
-    _run_loop: RunLoop | None = field(default=None, init=False)
     _stt_refresh: "asyncio.Task[None] | None" = field(default=None, init=False)
-    _orchestrator_pipe: StandingPipe | None = field(default=None, init=False)
+    _end_listener: "AsyncIterator[Any] | None" = field(default=None, init=False)
     _meeting_ended: "asyncio.Event | None" = field(default=None, init=False)
-    # The assembled live brain (wake turn + name-gate + barge-in seam), stashed by the
-    # provisioner so the live VAD "Proxy, quiet" / whisper-stop trigger reaches the
-    # §3.11 model-loop cancel. None until :func:`harness.live_brain.assemble_live_brain`
-    # wires it (a bare runtime with no brain still tears down cleanly). SINCE THE
-    # CUTOVER the production boot path no longer assembles it (the NEW engine below
-    # owns the brain seat); the field stays until the old-brain delete wave retires it.
+    # THE RETIRED BRAIN SEAT: always ``None`` since the cutover — the OLD live brain is
+    # deleted and the NEW in-meeting engine (``engine`` below) owns the brain seat. The
+    # field survives as the structural negative the cutover proofs pin
+    # (``runtime.live_brain is None`` — the old brain must never own the boot path again).
     live_brain: Any = field(default=None, init=False)
     # THE CUTOVER (in-meeting engine on the boot path): the NEW always-on engine
     # (``in_meeting.engine.Engine``) the provisioner assembles at join. Stashed HERE so
@@ -255,7 +251,7 @@ class MeetingRuntime:
         Built once and cached so its once-only dedupe state (the initial present-set snapshot,
         the exactly-once meeting-end guard, the participant name cache) persists across the
         meeting's roster/bot-status/meeting-end webhooks. It emits onto :attr:`carrier` — the
-        SAME in-process stream the Scribe consumer and the Orchestrator pipe subscribe to — so
+        SAME in-process stream the Scribe consumer and the meeting-end listener subscribe to — so
         every one of the nine §3.10 signals reaches its live consumer through the ONE binding.
         The drain already persisted the row durably, so callers drive the pure ``_emit_for``
         emit step (never a second persist).
@@ -266,142 +262,71 @@ class MeetingRuntime:
             self._webhook_processor = WebhookProcessor(self.carrier)
         return self._webhook_processor
 
-    # ── the orchestrator run loop — THE per-meeting asyncio spine (§3.2, D-008) ──
-    @property
-    def run_loop(self) -> RunLoop | None:
-        """The per-meeting :class:`~harness.run_loop.RunLoop`, once built (§3.2)."""
-        return self._run_loop
+    # ── the meeting-end listener — the ONE spine signal the launch waits on (§3.1) ──
+    def wire_meeting_end_listener(self) -> AsyncIterator[Any]:
+        """Wire (synchronously) the meeting-end listener ONCE at join (§3.1/§3.2).
 
-    def build_run_loop(
-        self,
-        *,
-        wake_turn: Any = None,
-        addressed: Any = None,
-        max_in_flight: int = 5,
-    ) -> RunLoop:
-        """Construct (once) this meeting's run loop — the RUN block of §3's diagram.
-
-        The loop's single delivery seam is the gated :class:`~harness.emit.Emitter`
-        bound to this meeting's ``operation_runs`` handle (§3.7 fencing): every
-        wake-turn side-effect reads ``is_owner`` live, so a fenced-out harness (a
-        replacement re-claimed the meeting) reaches the wire zero times. ``wake_turn``
-        is the ONE generic judgment entry (the model); ``addressed`` is the
-        mechanical front-gate verdict (the name-gate). Both are injectable so the
-        spine assembles before the SDK session/name-gate are wired in later steps.
-        """
-        if self._run_loop is None:
-            emitter = None
-            if self.operation_handle is not None:
-                from .emit import Emitter
-
-                emitter = Emitter(handle=self.operation_handle)
-            # Share the meeting's ONE abort registry (§11.9) with the run loop so the
-            # controller a wake mints (``registry.make(meeting_id|ask_id)``) is the SAME
-            # handle meeting-end (``cancel_meeting``) and "Proxy, quiet" (``cancel``) reach.
-            if self.abort_registry is None:
-                self.abort_registry = AbortRegistry()
-            self._run_loop = RunLoop(
-                wake_turn=wake_turn,
-                addressed=addressed,
-                emitter=emitter,
-                max_in_flight=max_in_flight,
-                registry=self.abort_registry,
-                meeting_id=self.header.meeting_id,
-            )
-        return self._run_loop
-
-    def wire_orchestrator_pipe(self) -> StandingPipe:
-        """Wire (synchronously) the transport→orchestrator standing pipe ONCE (§3.2).
-
-        Subscribing to the carrier is done HERE, synchronously, so the pipe is
+        Subscribing to the carrier is done HERE, synchronously, so the listener is
         registered as a subscriber the instant this returns — before any signal is
         emitted. (A carrier subscription registered lazily inside the pump task
-        would miss signals that raced ahead of the task's first scheduling.) The
-        pipe forwards **every** emitted signal onto the run loop's ONE queue as a
-        :class:`~harness.run_loop.MeetingEvent` and routes each THROUGH the loop —
-        PURE forwarding, no decision, no branch, no agent (the routing IS the wake
-        turn). Builds a default (silent) loop if none was wired.
+        would miss a ``MeetingEnd`` that raced ahead of the task's first
+        scheduling.) The listener is PURE forwarding with zero agent involvement:
+        it consumes every emitted signal and trips the end event when the explicit
+        ``MeetingEnd`` signal lands — detected by a structural marker (the signal's
+        own class name), never a per-type action mapping. The brain seat is the NEW
+        in-meeting engine (fed by the webhook drain); nothing here routes a wake.
 
-        **Idempotent (subscribe-once at join, §3.2).** The pipe — and thus the
-        carrier subscription — is created exactly once and cached; a second call
-        returns the already-wired pipe rather than registering a second subscriber.
-        This is the invariant the provisioner leans on: assembly wires the pipe once
-        at join, and launching the loop reuses it (never a per-event re-wire).
+        **Idempotent (subscribe-once at join).** The subscription is created
+        exactly once and cached; a second call returns the already-wired source
+        rather than registering a second subscriber. This is the invariant the
+        provisioner leans on: assembly wires the listener once at join, and
+        launching the spine reuses it (never a per-event re-wire).
         """
-        if self._orchestrator_pipe is not None:
-            return self._orchestrator_pipe
-        loop = self._run_loop if self._run_loop is not None else self.build_run_loop()
+        if self._end_listener is not None:
+            return self._end_listener
         self._meeting_ended = asyncio.Event()
+        # subscribe() registers this consumer's queue synchronously (no await),
+        # so the listener is live before run_until_meeting_end is even scheduled.
+        self._end_listener = self.carrier.subscribe()
+        return self._end_listener
 
-        async def _route(signal: Any) -> None:
-            # The ask id keys in-flight bookkeeping (dedupe/attach, correction-inject,
-            # detach): a spoken/typed line carries one; ambient signals do not.
-            ask_id = self._ask_id_for(signal)
-            await loop.route(MeetingEvent(payload=signal, ask_id=ask_id))
-            # Meeting end is EXPLICIT (§3.1): the MeetingEnd signal — routed through the
-            # loop like everything else, never a per-type dispatch branch on the routing
-            # decision — trips the end event so the launched spine returns. Detected by a
-            # structural marker (the signal's own class name), not an action mapping.
+    async def _consume_until_meeting_end(self) -> None:
+        """Drain the listener's subscription, tripping the end event on ``MeetingEnd``.
+
+        Meeting end is EXPLICIT (§3.1) — the ``MeetingEnd`` signal on the carrier, never
+        inferred from silence. Every other signal is consumed and dropped here (the
+        Scribe consumer holds its OWN subscription; the engine is fed by the drain), so
+        the subscriber queue never backs up over a long meeting.
+        """
+        source = self.wire_meeting_end_listener()
+        async for signal in source:
             if type(signal).__name__ == "MeetingEnd" and self._meeting_ended is not None:
                 self._meeting_ended.set()
 
-        # subscribe() registers this consumer's queue synchronously (no await),
-        # so the pipe is live before run_orchestrator_loop is even scheduled.
-        self._orchestrator_pipe = StandingPipe(
-            source=self.carrier.subscribe(), sink=_route
-        )
-        return self._orchestrator_pipe
-
-    async def run_orchestrator_loop(self) -> None:
-        """Run the transport→orchestrator standing pipe until the carrier closes (§3.2).
-
-        The RUN-block spine for one meeting: it forwards carrier signals onto the run
-        loop, routing each through the loop. Runs until meeting end closes the carrier
-        and drains the subscriber. A silent meeting is just this pipe forwarding
-        ambient signals while the loop makes zero wake turns. Reuses the pipe wired at
-        join (subscribe-once) rather than opening a second subscription.
-        """
-        pipe = self.wire_orchestrator_pipe()
-        await pipe.run()
-
     async def run_until_meeting_end(self) -> None:
-        """Launch the run-loop spine; return when the explicit MeetingEnd signal lands.
+        """Run the meeting-end listener; return when the explicit MeetingEnd signal lands.
 
-        The provisioner's launch seam (§3.2 RUN block). Runs the transport→orchestrator
-        pipe (wired ONCE at join) as a task so every carrier signal routes THROUGH the
-        loop, and returns the instant a ``MeetingEnd`` signal has routed through — end is
-        EXPLICIT (§3.1), never inferred from silence. On return the carrier is closed and
-        the pump cancelled so both carrier subscribers (Scribe + orchestrator) drain; the
-        caller then runs the ordered close/teardown.
+        The provisioner's launch seam. Pumps the listener (wired ONCE at join) as a
+        task and returns the instant a ``MeetingEnd`` signal has landed — end is
+        EXPLICIT (§3.1), never inferred from silence. On return the carrier is closed
+        and the pump cancelled so both carrier subscribers (Scribe + this listener)
+        drain; the caller then runs the ordered close/teardown.
         """
-        pipe = self.wire_orchestrator_pipe()
+        self.wire_meeting_end_listener()
         ended = self._meeting_ended
-        pump = asyncio.ensure_future(pipe.run())
+        pump = asyncio.ensure_future(self._consume_until_meeting_end())
         try:
             if ended is not None:
                 await ended.wait()
         finally:
-            # Close the carrier + stop the pump so the pipe's async-for drains and both
-            # carrier subscribers (Scribe consumer + this pipe) terminate cleanly.
+            # Close the carrier + stop the pump so the listener's async-for drains and
+            # both carrier subscribers (Scribe consumer + this listener) terminate cleanly.
             close = getattr(self.carrier, "close", None)
             if close is not None:
                 close()
             pump.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await pump
-
-    @staticmethod
-    def _ask_id_for(signal: Any) -> str | None:
-        """The in-flight ask id for a signal — the verbatim ask text, else None.
-
-        Pure bookkeeping (§3.15): a spoken transcript / chat line carries its words
-        as the ask identity so a duplicate of an in-flight ask attaches to it; an
-        ambient signal (boundary, speaking, roster, heartbeat) has none. This reads
-        a structural attribute — it is NOT a per-type dispatch branch (the routing
-        decision stays the front-gate verdict inside the loop).
-        """
-        words = getattr(signal, "words", None) or getattr(signal, "message", None)
-        return str(words) if isinstance(words, str) and words else None
 
     async def _drain(self, *, reason: str = "call_ended") -> None:
         """Signal meeting end onto the carrier, then wait for the consumer to drain (bounded).
@@ -505,7 +430,7 @@ class MeetingRuntimeRegistry:
         self._db = db
         self._host_budget = HostBudget(limit=host_inflight)
         self._runtimes: dict[str, MeetingRuntime] = {}
-        # The ONE abort registry (§11.9) shared across every meeting's run loop, so
+        # The ONE abort registry (§11.9) shared across every meeting's runtime, so
         # ``end_meeting`` can ``cancel_meeting`` every in-flight model-loop controller of
         # a meeting (AC-CTRL-012). One registry for all meetings is safe: keys are scoped
         # ``meeting_id|task_id``, so ``cancel_meeting`` never touches a sibling meeting.
