@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Proxy</title>
+    <link rel="stylesheet" href="./src/tile.css" />
+  </head>
+  <body>
+    <!-- The in-meeting tile (Doc 08 §2.2): one canvas page streamed as Proxy's camera.
+         The breathing teal orb + the eight §2.2 states, each driven ONLY by an inbound
+         tile.state frame. Outbound-only (§12.9): it receives frames, never sends one. -->
+    <main class="tile" role="img" aria-label="Proxy presence">
+      <canvas id="tile-canvas" class="tile__canvas" width="1280" height="720"></canvas>
+    </main>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
