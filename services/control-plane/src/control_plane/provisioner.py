@@ -20,8 +20,10 @@ Recall ``in_call`` webhook it:
 
 3. **Launches the meeting-end spine** — :func:`run_meeting_until_end` is the
    ``asyncio.run``-style entry: it pumps the runtime's meeting-end listener and runs
-   until the explicit ``MeetingEnd`` signal closes the carrier (or a wall-clock
-   timeout elapses).
+   until the explicit ``MeetingEnd`` signal closes the carrier. A meeting has NO time
+   cap (SPEC §9); the only wall clock is the generous env-configurable safety ceiling
+   (``MEETING_MAX_HOURS``, default 12h) so a loop whose end signal never arrives can't
+   leak an instance forever.
 
 4. **Survives a recycle** — when the owning instance dies its heartbeat goes stale, the
    reaper (§3.8) flips the row off ``running``, the partial index frees, and a
@@ -46,6 +48,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -55,11 +58,40 @@ from libs.ops import MEETING_HARNESS_OP, OperationHandle, claim_meeting
 
 _log = logging.getLogger(__name__)
 
-# Default wall-clock cap on how long the launched loop waits for the explicit
-# ``MeetingEnd`` signal before it tears the meeting down anyway. A live meeting ends
-# on the explicit signal (§3.1); the timeout is only a backstop so a launched entry can
-# never block a test / a shutdown forever. unit: seconds.
-DEFAULT_MEETING_TIMEOUT_S: float = 3600.0
+# A meeting has NO time cap (SPEC §9): the launched loop runs until the explicit
+# ``MeetingEnd`` signal (§3.1), never a wall-clock kill. The ONLY remaining wall clock
+# is a GENEROUS safety ceiling so a wedged loop can never leak an instance forever —
+# env-configurable via ``MEETING_MAX_HOURS`` and resolved at LAUNCH time (never frozen
+# at import), defaulting to 12 hours. The old 3600s hard cap force-closed every real
+# meeting at 60 minutes and is deleted.
+MEETING_MAX_HOURS_ENV = "MEETING_MAX_HOURS"
+DEFAULT_MEETING_MAX_HOURS: float = 12.0
+
+# Interval between sandbox keep-warm beats (IMP-3): the warm E2B sandbox is provisioned
+# with ``SANDBOX_TIMEOUT_S`` (1h) and self-times-out; with no meeting cap, a live
+# meeting can outlast it, so the provisioner extends the sandbox lifetime on this
+# cadence while the meeting runs. Comfortably inside the 1h sandbox lifetime so a
+# missed/failed beat still leaves a full beat before expiry. unit: seconds.
+SANDBOX_KEEPWARM_INTERVAL_S: float = 1800.0
+
+
+def _meeting_max_s() -> float:
+    """The wall-clock SAFETY CEILING on one meeting's run loop, in seconds.
+
+    NOT a meeting time cap (SPEC §9 — the meeting ends on the explicit ``MeetingEnd``
+    signal): this is the leak backstop for a loop whose end signal never arrives (a
+    dead carrier, a wedged listener). ``MEETING_MAX_HOURS`` overrides; an unset,
+    unparsable, or non-positive value falls back to the generous 12h default —
+    never unbounded-by-typo, never the old hard-coded hour.
+    """
+    raw = os.environ.get(MEETING_MAX_HOURS_ENV, "")
+    try:
+        hours = float(raw)
+    except ValueError:
+        hours = DEFAULT_MEETING_MAX_HOURS
+    if hours <= 0:
+        hours = DEFAULT_MEETING_MAX_HOURS
+    return hours * 3600.0
 
 # Bound on EACH meeting-end engine teardown step (drain the in-flight turns, flush +
 # close the speak pipe, kill the warm sandbox). Teardown must never deadlock meeting
@@ -237,6 +269,13 @@ async def provision_meeting(
         runtime.engine = engine
         runtime.speak_pipe = speak_pipe
         runtime.engine_sandbox = sandbox
+        if sandbox is not None:
+            # IMP-3 keep-warm: a meeting has no time cap, so the 1h-lifetime sandbox is
+            # periodically extended while the meeting is live. Cancelled in
+            # _teardown_engine before the kill; a failed beat logs, never crashes.
+            runtime.sandbox_keepwarm = asyncio.ensure_future(
+                _sandbox_keepwarm(sandbox, meeting_id)
+            )
     return ProvisionOutcome(claimed=True, run_id=run_id, resumed=resumed)
 
 
@@ -402,10 +441,9 @@ async def _assemble_engine(
 
     # Warm-at-join sandbox (the engine mounts SANDBOX_TOOLS off the live handle). The
     # provisioner OWNS its lifecycle: killed in the same meeting-end teardown that
-    # completes the operation row. NOTE: provisioned with SANDBOX_TIMEOUT_S (1 hour) —
-    # a meeting LONGER than that needs a ``set_timeout`` keep-warm heartbeat.
-    # TODO(keep-warm): add the set_timeout heartbeat for >1h meetings (documented
-    # runtime follow-up — deliberately NOT built in the cutover node).
+    # completes the operation row. Provisioned with SANDBOX_TIMEOUT_S (1 hour); a
+    # meeting LONGER than that stays warm via the :func:`_sandbox_keepwarm` heartbeat
+    # the caller spawns on a won claim (cancelled at teardown before the kill).
     sandbox: Any = None
     try:
         sandbox = await im_sandbox.provision_sandbox(
@@ -468,6 +506,49 @@ async def _assemble_engine(
     return engine, speak_pipe, sandbox
 
 
+async def _sandbox_keepwarm(
+    sandbox: Any, meeting_id: str, *, interval_s: float | None = None
+) -> None:
+    """Keep the meeting's warm E2B sandbox alive past its 1h self-timeout (IMP-3).
+
+    A meeting has no time cap, but the sandbox is provisioned with
+    ``SANDBOX_TIMEOUT_S`` (1h) and would silently die under a longer meeting, losing
+    code execution mid-conversation. This heartbeat extends the sandbox lifetime by
+    the full ``SANDBOX_TIMEOUT_S`` on every beat (the confirmed e2b
+    ``AsyncSandbox.set_timeout(seconds)`` — it RESETS the lifetime from now) every
+    ``SANDBOX_KEEPWARM_INTERVAL_S`` (30min — two chances per lifetime) while the
+    meeting is live. The extension rides the ONE ``call_external`` seam (§14) like
+    every E2B round-trip. NEVER-THROW: a failed beat logs for a human and the loop
+    keeps beating (a keep-warm fault must never crash a live meeting); cancellation
+    (the teardown path — cancelled in :func:`_teardown_engine` before the kill)
+    propagates. ``interval_s`` is injectable for tests; the default is resolved per
+    beat off the module constant so it stays patchable.
+    """
+    while True:
+        delay = interval_s if interval_s is not None else SANDBOX_KEEPWARM_INTERVAL_S
+        await asyncio.sleep(delay)
+        try:
+            from in_meeting.sandbox import SANDBOX_TIMEOUT_S
+
+            from libs.http.src.http import external as _http
+
+            await _http.call_external(
+                lambda: sandbox.set_timeout(SANDBOX_TIMEOUT_S),
+                service="e2b",
+                max_retries=1,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - never-throw: a failed beat must not kill the meeting
+            _log.warning(
+                "sandbox keep-warm extension failed for meeting %s — retrying on the "
+                "next beat; if the sandbox lapses the meeting continues without "
+                "sandbox tools (honest degrade)",
+                meeting_id,
+                exc_info=True,
+            )
+
+
 async def _resume_session(
     db: Database, meeting_id: str, *, history_fn: Any = None
 ) -> bool:
@@ -500,7 +581,7 @@ async def run_meeting_until_end(
     *,
     db: Database,
     registry: Any,
-    timeout_s: float = DEFAULT_MEETING_TIMEOUT_S,
+    timeout_s: float | None = None,
     resume: bool = False,
     provider: Any = None,
     transport: Any = None,
@@ -513,14 +594,19 @@ async def run_meeting_until_end(
 
     This is what the harness process runs per meeting. It provisions (claim + assemble —
     including the NEW in-meeting engine), then LAUNCHES the meeting-end listener as the
-    end-signal spine and runs until the explicit ``MeetingEnd`` signal closes the carrier (or
-    ``timeout_s`` elapses). The engine is fed by the webhook dispatch (push), not by an
-    async-iterator source, so ``in_meeting.runtime.run_meeting`` (the pull driver) is NOT
-    launched here. A loss (no claim) returns immediately without launching. On meeting end
-    the ENGINE lifecycle closes first — drain the in-flight turns, flush+close the speak
-    pipe, kill the warm sandbox, drop the Output-Media channel — then the runtime is torn
-    down and the ``operation_runs`` row completes (fencing untouched). The engine seam
-    kwargs thread to :func:`provision_meeting` (``None`` = the real vendor edges).
+    end-signal spine and runs until the explicit ``MeetingEnd`` signal closes the carrier.
+    A meeting has NO time cap (SPEC §9): ``timeout_s=None`` (production) resolves the
+    generous env-configurable safety ceiling (:func:`_meeting_max_s`, default 12h) — a
+    leak backstop for a loop whose end signal never arrives, never a meeting kill; an
+    explicit ``timeout_s`` is honored for tests/shutdown paths. The engine is fed by the
+    webhook dispatch (push), not by an async-iterator source, so
+    ``in_meeting.runtime.run_meeting`` (the pull driver) is NOT launched here. A loss (no
+    claim) returns immediately without launching. On meeting end the ENGINE lifecycle
+    closes first — cancel the sandbox keep-warm, drain the in-flight turns, flush+close
+    the speak pipe, kill the warm sandbox, drop the Output-Media channel — then the
+    runtime is torn down and the ``operation_runs`` row completes (fencing untouched).
+    The engine seam kwargs thread to :func:`provision_meeting` (``None`` = the real
+    vendor edges).
     """
     outcome = await provision_meeting(
         payload,
@@ -549,11 +635,14 @@ async def run_meeting_until_end(
         return outcome
 
     # Launch the end-signal spine: the meeting-end listener (wired ONCE at join) consumes
-    # carrier signals until the explicit MeetingEnd signal lands (§3.1), or the wall-clock
-    # backstop elapses.
+    # carrier signals until the explicit MeetingEnd signal lands (§3.1). No meeting time
+    # cap (SPEC §9) — the resolved bound is only the generous leak-backstop ceiling
+    # (env-configurable, default 12h), resolved at launch time so a deploy can raise it
+    # without a code change.
+    bound_s = timeout_s if timeout_s is not None else _meeting_max_s()
     ran_to_end = False
     try:
-        await asyncio.wait_for(runtime.run_until_meeting_end(), timeout=timeout_s)
+        await asyncio.wait_for(runtime.run_until_meeting_end(), timeout=bound_s)
         ran_to_end = True
     except asyncio.TimeoutError:
         ran_to_end = False
@@ -575,7 +664,8 @@ async def _teardown_engine(
 ) -> None:
     """Meeting-end lifecycle for the NEW engine — ordered, bounded, never-deadlock.
 
-    Order: ``engine.drain()`` (every in-flight wake turn finishes or the bound trips) →
+    Order: cancel the sandbox keep-warm heartbeat (so no beat re-extends a sandbox
+    mid-destruction) → ``engine.drain()`` (every in-flight wake turn finishes or the bound trips) →
     ``speak_pipe.aclose()`` (the trailing partial is flushed into the room, then quiet) →
     ``sandbox.kill()`` (the provisioner owns the warm handle's lifetime; the kill rides
     the ONE ``call_external`` seam like every E2B round-trip) → drop the meeting's
@@ -588,6 +678,14 @@ async def _teardown_engine(
     for callers/tests that need a tighter clock; resolved at call time.
     """
     bound = timeout_s if timeout_s is not None else ENGINE_TEARDOWN_TIMEOUT_S
+    # The sandbox keep-warm heartbeat stops FIRST (before the kill): a beat racing the
+    # kill could re-extend a sandbox the teardown is destroying. Cancellation is awaited
+    # (suppressed) so no orphan task outlives the meeting it served.
+    keepwarm = getattr(runtime, "sandbox_keepwarm", None)
+    if keepwarm is not None:
+        keepwarm.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await keepwarm
     engine = getattr(runtime, "engine", None)
     if engine is not None:
         with contextlib.suppress(Exception):
@@ -631,7 +729,7 @@ def make_provision_launcher(
     db: Database,
     registry: Any,
     *,
-    timeout_s: float = DEFAULT_MEETING_TIMEOUT_S,
+    timeout_s: float | None = None,
     tasks: set[asyncio.Task[Any]] | None = None,
 ) -> Any:
     """Build the ``launch`` callback the ``meeting_runtime`` webhook drain wires in.
@@ -658,7 +756,9 @@ def make_provision_launcher(
 
 
 __all__ = [
-    "DEFAULT_MEETING_TIMEOUT_S",
+    "DEFAULT_MEETING_MAX_HOURS",
+    "MEETING_MAX_HOURS_ENV",
+    "SANDBOX_KEEPWARM_INTERVAL_S",
     "ProvisionOutcome",
     "make_provision_launcher",
     "provision_meeting",

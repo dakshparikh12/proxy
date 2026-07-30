@@ -138,6 +138,12 @@ class MeetingRuntime:
     # completes the operation row. ``None`` = the meeting runs without sandbox tools (an
     # honest degrade — a provision fault never kills the meeting).
     engine_sandbox: Any = field(default=None, init=False)
+    # The sandbox keep-warm heartbeat task (``control_plane.provisioner._sandbox_keepwarm``):
+    # a meeting has NO time cap, so the 1h-lifetime sandbox is periodically re-extended
+    # (``set_timeout``) while the meeting is live. Spawned by the provisioner on a won
+    # claim with a live sandbox; cancelled in the meeting-end teardown BEFORE the kill.
+    # ``None`` when no sandbox was provisioned (nothing to keep warm).
+    sandbox_keepwarm: Any = field(default=None, init=False)
     # The per-meeting transport ``WebhookProcessor`` bound to THIS meeting's carrier
     # (C-SIGNALWIRE): the live webhook drain routes roster (present/join/leave), bot-status
     # (connected/dropped/rejoined) and meeting-end webhooks through it so those signals reach
