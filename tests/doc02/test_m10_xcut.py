@@ -20,7 +20,7 @@ def test_no_internal_names_in_user_visible_strings():
     result = subprocess.run(
         ["grep", "-rn", "-i",
          "orchestrator\\|scribe\\|workroom",
-         "/Users/daksh/Desktop/proxy/services/transport/src/transport/consent.py"],
+         "/Users/daksh/Desktop/proxy/services/in-meeting/src/transport/consent.py"],
         capture_output=True, text=True
     )
     assert not result.stdout.strip(), (
@@ -53,7 +53,7 @@ def test_no_secrets_hardcoded_in_transport():
     result = subprocess.run(
         ["grep", "-rn",
          "sk-\\|api_key\\s*=\\s*[\"'][^\"']*[\"']\\|secret\\s*=\\s*[\"'][^\"']*[\"']",
-         "/Users/daksh/Desktop/proxy/services/transport/src/transport/"],
+         "/Users/daksh/Desktop/proxy/services/in-meeting/src/transport/"],
         capture_output=True, text=True
     )
     assert not result.stdout.strip(), (
@@ -74,7 +74,7 @@ def test_all_external_calls_through_libs_http_seam():
     result = subprocess.run(
         ["grep", "-rn",
          "requests\\.\\|httpx\\.Client\\|aiohttp\\.\\|urllib\\.request",
-         "/Users/daksh/Desktop/proxy/services/transport/src/transport/"],
+         "/Users/daksh/Desktop/proxy/services/in-meeting/src/transport/"],
         capture_output=True, text=True
     )
     assert not result.stdout.strip(), (
@@ -108,7 +108,7 @@ def test_isolation_triad_no_cross_tenant_read():
 
     result = subprocess.run(
         ["grep", "-rn", "tenant_id.*!=\\|cross.tenant\\|other_tenant",
-         "/Users/daksh/Desktop/proxy/services/transport/src/transport/"],
+         "/Users/daksh/Desktop/proxy/services/in-meeting/src/transport/"],
         capture_output=True, text=True
     )
     # There should be no accidental cross-tenant merge logic

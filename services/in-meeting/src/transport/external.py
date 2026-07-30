@@ -4,7 +4,7 @@ Every Recall / AssemblyAI / Cartesia round-trip in this layer is issued through 
 single ``libs.http.call_external`` funnel (retry + cost telemetry). Transport itself
 holds **no raw provider client and imports no provider SDK** — the ``meeting_runtime``
 harness injects the real seam at wire-up, so a static scan finds every external-call
-site routed through ``call_external`` and no raw client anywhere in ``services/transport``.
+site routed through ``call_external`` and no raw client anywhere in ``services/in-meeting/src/transport``.
 """
 from __future__ import annotations
 

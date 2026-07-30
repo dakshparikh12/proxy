@@ -116,8 +116,18 @@ def test_no_hardcoded_literal_secrets() -> None:
     for f in py_files:
         text = f.read_text(encoding="utf-8")
         for pattern in forbidden_patterns:
-            if pattern in text:
+            for i in range(len(text)):
+                if not text.startswith(pattern, i):
+                    continue
+                # "Token " is a violation only as a LITERAL token value. The Recall
+                # transport (now homed in this member) legitimately builds the auth
+                # SCHEME with an injected key -- f"Token {key}" -- and documents it
+                # as ``Token <key>``; neither embeds a secret literal.
+                nxt = text[i + len(pattern): i + len(pattern) + 1]
+                if pattern == "Token " and nxt in ("{", "<"):
+                    continue
                 violations.append(f"{f}: contains '{pattern}'")
+                break
 
     assert not violations, "Hard-coded literal secrets found:\n" + "\n".join(violations)
 

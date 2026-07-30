@@ -62,9 +62,14 @@ _DEFAULT_FLUSH_AFTER_S = 0.5
 
 
 class AudioChunkLike(Protocol):
-    """The shape of one synth chunk — structurally ``transport.media.AudioChunk``."""
+    """The shape of one synth chunk — structurally ``transport.media.AudioChunk``.
 
-    pcm: bytes
+    ``pcm`` is a read-only property so frozen dataclasses (the real
+    ``transport.media.AudioChunk``) conform structurally.
+    """
+
+    @property
+    def pcm(self) -> bytes: ...
 
 
 #: The injected synth: text in → an async stream of pcm chunks out

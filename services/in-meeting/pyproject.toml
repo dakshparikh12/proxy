@@ -1,7 +1,7 @@
 [project]
 name = "in-meeting"
 version = "0.0.0"
-description = "services.in-meeting — the in-meeting engine: connections, loop, safeguards."
+description = "services.in-meeting — the in-meeting engine: connections (the transport package), loop, safeguards."
 requires-python = ">=3.12"
 dependencies = [
     "contracts",
@@ -10,6 +10,10 @@ dependencies = [
     "http",
     "llm",
     "claude-agent-sdk>=0.2.115",
+    # ``limits`` backs the transport outbound rate gate (AC-FAIL-16); carried over
+    # from the dissolved services/transport member (SPEC §10: connections belong to
+    # the in-meeting service).
+    "limits>=3.13",
     "pydantic>=2",
     "pydantic-settings>=2",
 ]
@@ -26,4 +30,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/in_meeting"]
+packages = ["src/in_meeting", "src/transport"]

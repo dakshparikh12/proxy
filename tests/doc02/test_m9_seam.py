@@ -88,7 +88,7 @@ def test_concrete_recall_sdk_only_in_impl_module():
     import subprocess
     result = subprocess.run(
         ["grep", "-r", "RecallSDK\|recall_client\|recall.Client",
-         "/Users/daksh/Desktop/proxy/services/transport/src/transport/join.py"],
+         "/Users/daksh/Desktop/proxy/services/in-meeting/src/transport/join.py"],
         capture_output=True, text=True
     )
     assert not result.stdout.strip(), "concrete Recall SDK must not appear in join.py"
@@ -169,7 +169,7 @@ def test_every_external_call_wrapped_with_call_external():
     # No raw httpx/aiohttp/requests calls in transport (only through libs.http)
     result = subprocess.run(
         ["grep", "-rn", "httpx.Client\|aiohttp.ClientSession\|requests.get",
-         "/Users/daksh/Desktop/proxy/services/transport/src/transport/"],
+         "/Users/daksh/Desktop/proxy/services/in-meeting/src/transport/"],
         capture_output=True, text=True
     )
     assert not result.stdout.strip(), (
@@ -266,7 +266,7 @@ def test_no_direct_assemblyai_client_in_stt_path():
     import subprocess
     result = subprocess.run(
         ["grep", "-rn", "assemblyai.Client\|aai.Client\|aai.Transcriber",
-         "/Users/daksh/Desktop/proxy/services/transport/src/transport/"],
+         "/Users/daksh/Desktop/proxy/services/in-meeting/src/transport/"],
         capture_output=True, text=True
     )
     assert not result.stdout.strip(), (
