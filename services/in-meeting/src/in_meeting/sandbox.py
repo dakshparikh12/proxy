@@ -52,9 +52,10 @@ SERVER_NAME = "sandbox"
 #: The sandbox lifetime threaded to the confirmed e2b ``create(timeout=...)`` kwarg
 #: (seconds). e2b's OWN ``default_sandbox_timeout`` is only 300s — five minutes into
 #: a real 30-60 min meeting the sandbox would silently die, so provisioning threads
-#: a meeting-length hour by default. A meeting LONGER than this must be kept alive
-#: by the runtime periodically extending the handle (``set_timeout``) — a keep-warm
-#: heartbeat that is a documented runtime follow-up, not built here.
+#: a meeting-length hour by default. A meeting LONGER than this is kept alive by the
+#: runtime periodically extending the handle (``set_timeout``) — the keep-warm
+#: heartbeat ``control_plane.provisioner._sandbox_keepwarm`` (meetings have no time
+#: cap), which also re-extends by this same lifetime on every beat.
 SANDBOX_TIMEOUT_S: int = 3600
 
 #: The per-command timeout threaded to the confirmed e2b ``commands.run(timeout=...)``
@@ -148,10 +149,11 @@ async def provision_sandbox(
     The sandbox is provisioned with ``timeout_s`` (default 1 hour — a meeting-length
     lifetime) threaded to the confirmed e2b ``create(timeout=)`` kwarg, because e2b's
     own default is only 300s — five minutes into a real meeting the sandbox would
-    silently die. A meeting LONGER than the timeout must be kept alive by the runtime
-    periodically extending the handle (``set_timeout``) — a keep-warm heartbeat that
-    is a documented follow-up for the runtime, NOT built here. The caller still owns
-    teardown via the handle's ``kill()`` at meeting end.
+    silently die. A meeting LONGER than the timeout is kept alive by the runtime
+    periodically extending the handle (``set_timeout``) — the keep-warm heartbeat
+    ``control_plane.provisioner._sandbox_keepwarm`` spawned on a won claim (meetings
+    have no time cap). The caller still owns teardown via the handle's ``kill()`` at
+    meeting end.
     """
     create = backend if backend is not None else _real_create
     return await create(
