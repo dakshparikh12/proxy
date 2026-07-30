@@ -40,6 +40,7 @@ from .src.http.registry import PUBLIC_ROUTES as PUBLIC_ROUTES
 # package seam so the live control_plane mount binds them without the ``src`` deep path.
 from .src.http.registry import AuthzCtx as AuthzCtx
 from .src.http.registry import PublicAuthzCtx as PublicAuthzCtx
+from .src.http.registry import SessionResolver as SessionResolver
 from .src.http.registry import classify_route as classify_route
 from .src.http.registry import mark_internal_scoped as mark_internal_scoped
 from .src.http.registry import protected as protected
@@ -61,6 +62,7 @@ __all__ = [
     "PUBLIC_ROUTES",
     "PublicAuthzCtx",
     "RejectUpgrade",
+    "SessionResolver",
     "WebhookVerificationError",
     "authorize_upgrade",
     "classify_route",

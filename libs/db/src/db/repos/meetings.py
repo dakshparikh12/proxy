@@ -109,6 +109,26 @@ async def get_by_id(conn: Any, meeting_id: Any) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
 
+async def get_repo_for_tenant(
+    conn: Any, *, tenant_id: Any, full_name: str
+) -> dict[str, Any] | None:
+    """Resolve a repo row by its ``full_name`` WITHIN one tenant (fail closed).
+
+    The invite route (``POST /meetings``) names the repo by ``full_name`` and must
+    prove it belongs to the CALLER's tenant before any meeting binds to it. The
+    query is tenant-filtered by construction (isolation triad, R-INV-09): a repo
+    owned by another tenant resolves to ``None`` exactly like a repo that does not
+    exist — the read itself cannot distinguish the two, so no existence leaks.
+    """
+    row = await conn.fetchrow(
+        "SELECT id, tenant_id, full_name, default_branch FROM repos "
+        " WHERE tenant_id = $1 AND full_name = $2",
+        tenant_id,
+        full_name,
+    )
+    return dict(row) if row is not None else None
+
+
 async def get_repo_by_id(conn: Any, repo_id: Any) -> dict[str, Any] | None:
     """Resolve a repo row (``id``/``tenant_id``/``full_name``) from its id.
 

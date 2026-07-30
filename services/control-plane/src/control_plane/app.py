@@ -186,6 +186,16 @@ def create_app() -> FastAPI:
     # nothing, never pushes). A separate protected() instance per route keeps each
     # route's dependant tree independently stamped for the enumeration test.
     install_reject_route(app, dependencies=[protected(_resolve_session_from_request)])
+    # The hosted invite route (the front door): POST /meetings — "give Proxy a
+    # meeting URL" over HTTP. BEHIND the SAME §4.6 protected() wall (the handler
+    # receives a credentials-only AuthzCtx; the tenant NEVER rides the body), it
+    # proves the named repo belongs to the caller's tenant, pins HEAD from the
+    # durable repo_maps index, and drives the EXISTING invite_proxy — the meetings
+    # row bound to (tenant, repo, pinned_sha=HEAD) + the REAL Recall bot launch
+    # through the transport seam. 201 {meeting_id, bot_id}.
+    from .meetings_route import install_meetings_route
+
+    install_meetings_route(app, session_resolver=_resolve_session_from_request)
     # The WS upgrade gateway (§4.3/§12.9): /ws authenticates at the connection UPGRADE —
     # an unauthenticated upgrade is rejected (401) BEFORE the 101, never per-message.
     install_gateway_route(app)
