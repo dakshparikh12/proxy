@@ -55,6 +55,7 @@ async def run_smoke(
     live_e2b: bool = True,
     build_map: bool = True,
     threshold: float = 0.7,
+    meeting_file: str | None = None,
 ) -> SmokeResult:
     """Run the whole pipeline for ONE meeting and write the readable trace.
 
@@ -62,7 +63,7 @@ async def run_smoke(
     fault surfaces rather than fakes). ``build_map`` attempts the real subscription
     map-build (degrades to prime-only honestly).
     """
-    from tests.eval.generate_meetings import generate_meeting
+    from tests.eval.generate_meetings import GeneratedMeeting, generate_meeting
     from tests.eval.judge_meeting import attribute_traces, judge_meeting
     from tests.eval.meeting_monitor import edges_from_traces, render_markdown
     from tests.eval.meeting_player import play_meeting
@@ -77,15 +78,21 @@ async def run_smoke(
     )
     print(f"[smoke] primed {primed.name} @ {primed.sha[:12]} — {map_note}")
 
-    # 2) GENERATE.
-    print(f"[smoke] generating a {meeting_type} meeting ...")
-    meeting = await generate_meeting(
-        meeting_type=meeting_type,
-        repo_facts=primed.facts.brief(),
-        repo_name=primed.name,
-        repo_sha=primed.sha,
-        meeting_id=f"{meeting_type}-{primed.name}",
-    )
+    # 2) GENERATE — or REPLAY a saved meeting (stable A/B: re-run the SAME meeting after
+    #    a prompt/context change to measure the lift, not a fresh random meeting).
+    if meeting_file:
+        import json
+        print(f"[smoke] replaying saved meeting {meeting_file}")
+        meeting = GeneratedMeeting.from_json(json.loads(Path(meeting_file).read_text()))
+    else:
+        print(f"[smoke] generating a {meeting_type} meeting ...")
+        meeting = await generate_meeting(
+            meeting_type=meeting_type,
+            repo_facts=primed.facts.brief(),
+            repo_name=primed.name,
+            repo_sha=primed.sha,
+            meeting_id=f"{meeting_type}-{primed.name}",
+        )
 
     # 3) PLAY (real-time, real engine + intake).
     print(f"[smoke] playing {len(meeting.lines)} lines "

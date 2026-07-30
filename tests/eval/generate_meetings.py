@@ -140,6 +140,28 @@ class GeneratedMeeting:
             "asks": [asdict(a) for a in self.asks],
         }
 
+    @classmethod
+    def from_json(cls, d: dict[str, Any]) -> GeneratedMeeting:
+        """Reconstruct a meeting from its :meth:`to_json` dict — for STABLE replay so a
+        re-run after a prompt/context change measures the SAME meeting (clean A/B, not a
+        fresh random meeting)."""
+        return cls(
+            id=str(d["id"]), meeting_type=str(d["meeting_type"]), title=str(d["title"]),
+            repo_name=str(d["repo_name"]), repo_sha=str(d["repo_sha"]),
+            participants=[str(p) for p in d.get("participants", [])],
+            lines=[MeetingLine(ts=float(l["ts"]), speaker=str(l["speaker"]), text=str(l["text"]))
+                   for l in d["lines"]],
+            asks=[PlantedAsk(
+                id=str(a["id"]), kind=str(a["kind"]), ts=float(a["ts"]),
+                speaker=str(a.get("speaker", "")), ask=str(a["ask"]), gold=str(a["gold"]),
+                nuance=str(a.get("nuance") or ""),
+                follow_up=(str(a["follow_up"]) if a.get("follow_up") else None),
+                follow_up_ts=(float(a["follow_up_ts"]) if a.get("follow_up_ts") is not None else None),
+                require_transport=tuple(a.get("require_transport") or ()),
+                cant_do=bool(a.get("cant_do")),
+            ) for a in d["asks"]],
+        )
+
 
 class MeetingGenError(RuntimeError):
     """The generator produced no usable meeting — surfaced loudly, never silently run."""

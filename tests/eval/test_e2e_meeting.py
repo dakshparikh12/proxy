@@ -178,6 +178,7 @@ def test_e2e_meeting_live_smoke() -> None:
         compression=float(os.environ.get("E2E_MEETING_COMPRESSION", "0.04")),
         live_e2b=os.environ.get("E2E_MEETING_LIVE_E2B") == "1",
         build_map=os.environ.get("E2E_MEETING_MAP", "1") == "1",
+        meeting_file=os.environ.get("E2E_MEETING_FILE") or None,
     ))
     print(f"\n=== TRACE: {result.trace_path} ===")
     print(f"=== EDGES: {result.edges.summary()} ===")
