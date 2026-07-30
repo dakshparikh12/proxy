@@ -87,6 +87,7 @@ class PlanAskResult:
     error: str | None
     tags: tuple[str, ...]
     follow_up_woke: bool | None = None
+    chat_posts: tuple[str, ...] = ()
 
     @property
     def bound_violations(self) -> list[str]:
@@ -238,6 +239,14 @@ async def run_plan_scenario(
         criteria = scenario.no_sandbox_behavior
 
     verbs = tuple(verb for verb, _ in transport.calls)
+    # The FULL text of every in-room chat post, straight off the transport —
+    # the room reads these whole, so the judge must too (the compact trace
+    # line truncates tool inputs; this is the untruncated ground truth).
+    chat_posts = tuple(
+        str(payload["message"])
+        for verb, payload in transport.calls
+        if verb == "post_chat" and payload.get("message")
+    )
     results: list[PlanAskResult] = []
 
     first_traces = _traces_for(traced, scenario.ask)
@@ -270,6 +279,7 @@ async def run_plan_scenario(
             error=next((t.error for t in first_traces if t.error), None),
             tags=scenario.tags,
             follow_up_woke=follow_up_woke,
+            chat_posts=chat_posts,
         )
     )
 
@@ -295,6 +305,7 @@ async def run_plan_scenario(
                 unexpected_wakes=0,
                 error=next((t.error for t in second_traces if t.error), None),
                 tags=scenario.tags,
+                chat_posts=chat_posts,
             )
         )
     return results
@@ -351,7 +362,11 @@ _PLAN_PREAMBLE = (
     "response, then a bracketed PLAN TRACE — ground-truth telemetry the harness "
     "recorded (ordered TOOL_USE events with their REAL inputs, spoken-text "
     "timing, wall-clock marks in seconds after the ask landed). The trace is "
-    "never model-claimed; trust it over any claim in the response. Judge "
+    "never model-claimed; trust it over any claim in the response. When Proxy "
+    "posted to this meeting's chat, the FULL posted text follows the trace "
+    "under 'chat posts' — also harness-recorded ground truth: judge posted "
+    "content from that section, never from the trace's truncated input lines. "
+    "Judge "
     "BEHAVIOR, not phrasing, on ALL of these dimensions together: "
     "(1) the ask-specific criteria below; "
     "(2) MINIMAL-SUFFICIENT PLAN — the trace shows no redundant steps (the same "
@@ -402,11 +417,22 @@ class ScoredAsk:
 def _judged_output(result: PlanAskResult) -> str:
     text = result.response_text.strip() or "(no spoken response was captured for this ask)"
     trace = result.trace_text.strip() or "(no provider turn was attributed to this ask)"
-    return (
+    out = (
         f"{text}\n\n"
         f"[plan trace — ground-truth telemetry recorded by the harness for this ask; "
         f"timings are seconds after the ask landed:]\n{trace}"
     )
+    if result.chat_posts:
+        posts = "\n\n".join(
+            f"--- chat post {i + 1} ---\n{post}" for i, post in enumerate(result.chat_posts)
+        )
+        out += (
+            "\n\n[chat posts — the FULL text Proxy posted to this meeting's chat, "
+            "recorded off the transport by the harness (the trace lines above "
+            "truncate tool inputs; THIS is the untruncated content the room reads):]\n"
+            f"{posts}"
+        )
+    return out
 
 
 def score_results(
@@ -592,6 +618,7 @@ def build_artifact(
                 ),
                 "response": s.result.response_text,
                 "trace": s.result.trace_text,
+                "chat_posts": list(s.result.chat_posts),
             }
             for s in scored
         ],
