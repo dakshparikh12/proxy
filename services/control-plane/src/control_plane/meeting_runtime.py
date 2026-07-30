@@ -129,6 +129,11 @@ class MeetingRuntime:
     # (the control-plane Scribe-only drain builds runtimes with no engine — those keep
     # the notes plane only).
     engine: Any = field(default=None, init=False)
+    # The WORKROOM bridge (``in_meeting.bridge.MeetingBridge``) — the alternative brain seat
+    # (native Claude in an E2B sandbox with the repo). Set by the provisioner instead of
+    # ``engine`` when ``PROXY_USE_WORKROOM=1``; the webhook drain routes transcript to
+    # ``bridge.on_line`` when it is not None. ``None`` = the old engine (or notes-plane only).
+    bridge: Any = field(default=None, init=False)
     # The engine's speak pipe (``in_meeting.speak.SpeakPipe`` — text→Cartesia→Output-Media
     # channel), held so meeting end can flush + close it (``aclose``) after the engine
     # drains. ``None`` when no engine was assembled.

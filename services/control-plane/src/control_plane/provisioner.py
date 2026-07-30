@@ -246,27 +246,43 @@ async def provision_meeting(
     # the runtime so the drain reaches it by meeting id. An assembly fault must not strand
     # the claimed meeting silently OR crash the webhook path — it degrades to an engine-less
     # runtime (notes plane only) with a CRITICAL log a human will see (§3.8 / Rule 6).
+    # PROXY_USE_WORKROOM selects the NEW brain (native Claude in an E2B sandbox with the repo,
+    # fronted by the meeting bridge) instead of the OLD in-meeting engine. Same
+    # (brain, speak_pipe, sandbox) shape + stash + teardown; the webhook drain routes transcript
+    # to ``runtime.bridge.on_line`` when the bridge is set (else ``runtime.engine``). Old path
+    # stays the default until the workroom serves a meeting end-to-end.
+    use_workroom = os.environ.get("PROXY_USE_WORKROOM") == "1"
+    engine = None
+    bridge = None
+    speak_pipe = None
+    sandbox = None
     try:
-        engine, speak_pipe, sandbox = await _assemble_engine(
-            resolved,
-            db=db,
-            bot_id=bot_id,
-            provider=provider,
-            transport=transport,
-            speak=speak,
-            disambiguate=disambiguate,
-            sandbox_backend=sandbox_backend,
-            model=model,
-        )
+        if use_workroom:
+            bridge, speak_pipe, sandbox = await _assemble_workroom(
+                resolved, db=db, bot_id=bot_id, transport=transport,
+            )
+        else:
+            engine, speak_pipe, sandbox = await _assemble_engine(
+                resolved,
+                db=db,
+                bot_id=bot_id,
+                provider=provider,
+                transport=transport,
+                speak=speak,
+                disambiguate=disambiguate,
+                sandbox_backend=sandbox_backend,
+                model=model,
+            )
     except Exception:  # noqa: BLE001 - never a raise on the webhook path; loud, not silent
         _log.critical(
-            "in-meeting engine assembly failed for meeting %s — the meeting runs WITHOUT "
+            "in-meeting brain assembly failed for meeting %s — the meeting runs WITHOUT "
             "its brain (notes plane only); this needs a human",
             meeting_id,
             exc_info=True,
         )
     else:
         runtime.engine = engine
+        runtime.bridge = bridge
         runtime.speak_pipe = speak_pipe
         runtime.engine_sandbox = sandbox
         if sandbox is not None:
@@ -506,6 +522,85 @@ async def _assemble_engine(
     return engine, speak_pipe, sandbox
 
 
+async def _assemble_workroom(
+    resolved: dict[str, Any],
+    *,
+    db: Database,
+    bot_id: str,
+    transport: Any = None,
+    oauth_token: str | None = None,
+) -> tuple[Any, Any, Any]:
+    """The WORKROOM assembly — the new brain (native Claude Code inside a per-meeting E2B
+    sandbox with the repo cloned in), fronted by the thin MEETING BRIDGE. Drop-in alternative
+    to :func:`_assemble_engine`, selected by the ``PROXY_USE_WORKROOM`` flag; returns the SAME
+    ``(bridge, speak_pipe, sandbox)`` shape so the caller stashes + tears it down identically
+    (``runtime.bridge`` instead of ``runtime.engine``; the webhook feed calls
+    ``bridge.on_line`` instead of ``engine.feed_transcript``).
+
+    Honest-degrade throughout (§3.8): a missing subscription token / repo / provision fault
+    surfaces in the log and yields ``(None, speak_pipe, None)`` — the meeting still boots, it
+    just can't wake a workroom this meeting. World-touching is impossible from the sandbox by
+    construction (no push/send creds; egress denied).
+    """
+    from in_meeting import speak as im_speak
+    from in_meeting.bridge import CartesiaSpeaker, MeetingBridge, RecallActions
+    from in_meeting.workroom import provision_workroom
+    from premeeting.paths import repo_name_from_url  # noqa: F401 — parity import w/ _assemble_engine
+
+    from libs.http.src.http.external import call_external
+
+    meeting_id = str(resolved["id"])
+    pinned_sha = str(resolved.get("pinned_sha") or "") or None
+    live_transport = transport if transport is not None else _default_meeting_transport()
+    speak_pipe = im_speak.real_speak_sink(meeting_id)
+
+    # The subscription token that lets native ``claude`` authenticate INSIDE the sandbox
+    # (Secret Manager in prod; env locally). The ONLY credential the sandbox receives.
+    token = oauth_token or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    if not token:
+        _log.warning(
+            "no CLAUDE_CODE_OAUTH_TOKEN for meeting %s — workroom cannot start; meeting boots "
+            "without a workroom (honest degrade)", meeting_id,
+        )
+        return None, speak_pipe, None
+
+    # The repo to clone INTO the sandbox (public URL from the bound repo's full_name; a
+    # read-only clone token for private repos is a follow-up via premeeting.github_auth).
+    repo_url = ""
+    repo_id = resolved.get("repo_id")
+    if repo_id is not None:
+        async with db.acquire() as conn:
+            repo_row = await repos.meetings.get_repo_by_id(conn, repo_id)
+        if repo_row is not None and repo_row.get("full_name"):
+            repo_url = f"https://github.com/{str(repo_row['full_name']).strip('/')}"
+    if not repo_url:
+        _log.warning(
+            "no bound repo for meeting %s — workroom cannot clone; meeting boots without a "
+            "workroom (honest degrade)", meeting_id,
+        )
+        return None, speak_pipe, None
+
+    try:
+        workroom = await provision_workroom(
+            call=call_external, token=token, repo_url=repo_url, sha=pinned_sha,
+        )
+    except Exception:  # noqa: BLE001 — a provision fault degrades honestly, never kills the join
+        _log.warning(
+            "workroom provision failed for meeting %s — meeting boots without a workroom "
+            "(honest degrade; %s)", meeting_id, repo_url, exc_info=True,
+        )
+        return None, speak_pipe, None
+
+    bridge = MeetingBridge(
+        workroom=workroom,
+        speaker=CartesiaSpeaker(pipe=speak_pipe),
+        actions=RecallActions(transport=live_transport, bot_id=bot_id),
+    )
+    _log.info("workroom assembled for meeting %s (sandbox=%s repo=%s)",
+              meeting_id, workroom.sandbox_id, repo_url)
+    return bridge, speak_pipe, workroom.sandbox
+
+
 async def _sandbox_keepwarm(
     sandbox: Any, meeting_id: str, *, interval_s: float | None = None
 ) -> None:
@@ -690,6 +785,12 @@ async def _teardown_engine(
     if engine is not None:
         with contextlib.suppress(Exception):
             await asyncio.wait_for(engine.drain(), timeout=bound)
+    # WORKROOM path: drain the bridge's in-flight wakes (the sandbox kill below owns the
+    # sandbox lifetime — bridge.drain awaits work, it does NOT kill, so no double-kill).
+    bridge = getattr(runtime, "bridge", None)
+    if bridge is not None:
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(bridge.drain(), timeout=bound)
     pipe = getattr(runtime, "speak_pipe", None)
     aclose = getattr(pipe, "aclose", None)
     if aclose is not None:

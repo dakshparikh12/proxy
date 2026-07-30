@@ -353,11 +353,23 @@ async def _dispatch_meeting_event(
             # (they never feed the engine below, but they DO cut).
             await _cut_speech_on_human_voice(runtime, body, meeting_id)
             engine = getattr(runtime, "engine", None)
-            if engine is not None and name in _ENGINE_TRANSCRIPT_EVENTS:
+            bridge = getattr(runtime, "bridge", None)
+            if (engine is not None or bridge is not None) and name in _ENGINE_TRANSCRIPT_EVENTS:
                 line = _engine_transcript_line(body)
                 if line is not None:
                     try:
-                        await engine.feed_transcript(line)
+                        if bridge is not None:
+                            # WORKROOM path: append the line into the sandbox transcript file +
+                            # run the trigger; a wake runs native Claude in the workroom.
+                            from in_meeting.bridge import Line as _BridgeLine
+
+                            await bridge.on_line(_BridgeLine(
+                                speaker=str(getattr(line, "speaker", "") or ""),
+                                text=str(getattr(line, "text", "") or ""),
+                                ts=float(getattr(line, "timestamp", 0.0) or 0.0),
+                            ))
+                        else:
+                            await engine.feed_transcript(line)
                     except Exception:  # noqa: BLE001 - the feed path is designed never-raise;
                         # an escape is logged for a human and the drain continues, so one
                         # bad line never leaves the row unprocessed (never a poison row) —
