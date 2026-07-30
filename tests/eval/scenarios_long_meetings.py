@@ -282,15 +282,23 @@ def _scenario_retro() -> MeetingScenario:
             # Calibrated (iter-2): asking is ONE correct path, not the only one — explicitly
             # answering for BOTH caches by name is equally correct; only silently answering for
             # a single, silently-chosen cache remains the failure.
+            # Calibrated (iter-3): the iter-2 failure clause ("without naming the other") was
+            # narrower than the intended behavior — it let answer-one-then-broaden escape the
+            # failure branch (run3 judge: "not fully triggered because the full output does
+            # name both caches"). The first-turn response must OPEN with the fork; eventually
+            # naming both does not cure a single-candidate opening. Precision raised, bar not
+            # lowered.
             expect=(
                 "The question is ambiguous — the repo has two caches (the redis session cache in "
                 "cache_redis.py, which expires by TTL, and the in-process LRU profile cache in "
                 "cache_lru.py, which evicts by capacity). FIRST TURN, either behavior is fully "
-                "correct: Proxy asks WHICH cache is meant, OR Proxy explicitly answers for BOTH "
-                "caches by name so the ambiguity is surfaced rather than silently resolved. What "
-                "fails is silently answering for just one cache without naming the other. AFTER "
-                "the clarification ('the in-memory one, the LRU'): it answers that the LRU holds "
-                "128 entries (the CAPACITY constant in cache_lru.py) and evicts "
+                "correct, and the response must OPEN with it: its first sentence asks WHICH "
+                "cache is meant, OR it answers for BOTH caches by name from the start, so the "
+                "ambiguity is surfaced rather than silently resolved. A first turn that opens "
+                "by answering one cache and only later names or broadens to the other fails — "
+                "answer-one-then-widen is a failure even when both caches eventually appear. "
+                "AFTER the clarification ('the in-memory one, the LRU'): it answers that the "
+                "LRU holds 128 entries (the CAPACITY constant in cache_lru.py) and evicts "
                 "least-recently-used beyond that. A wrong capacity after the clarification fails."
             ),
             follow_up=Line(
@@ -669,13 +677,21 @@ def _scenario_architecture() -> MeetingScenario:
             # Calibrated (iter-2): same behavior space as A-clarify-cache — asking OR laying the
             # candidate limits out explicitly by name are both correct; silently picking one
             # referent (or one file) without naming the others stays the failure.
+            # Calibrated (iter-3): same sharpening as A-clarify-cache — the first-turn response
+            # must OPEN with the fork (the question, or the candidates laid out from the very
+            # start); answering one limit or one file's limits first and widening later stays a
+            # failure, as does laying out only SOME of the live candidates. Precision raised,
+            # bar not lowered.
             expect=(
                 "'The limit' is genuinely ambiguous here (per-minute rate limit, burst "
                 "allowance, LRU cache capacity are all live candidates in this repo/meeting). "
-                "FIRST TURN, either behavior is fully correct: Proxy asks WHICH limit is meant, "
-                "OR Proxy explicitly lays out the candidate limits by name so the ambiguity is "
-                "surfaced rather than silently resolved. What fails is silently answering for "
-                "one limit (or one file's limits) without naming the other candidates. AFTER "
+                "FIRST TURN, either behavior is fully correct, and the response must OPEN with "
+                "it: its first sentence asks WHICH limit is meant, OR it lays out ALL the live "
+                "candidate limits by name from the start, so the ambiguity is surfaced rather "
+                "than silently resolved. A first turn that opens by answering one limit (or "
+                "one file's limits) and only later widens fails — answer-one-then-broaden is a "
+                "failure even if other candidates eventually appear, and laying out only some "
+                "of the candidates also fails. AFTER "
                 "the clarification ('the burst allowance in the limiter file'): it answers "
                 "BURST = 20 in ratelimit.py (the token bucket's cap). A wrong value or file "
                 "after the clarification fails."
