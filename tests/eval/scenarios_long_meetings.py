@@ -263,21 +263,27 @@ def _scenario_retro() -> MeetingScenario:
         _s("Priya", "Next factor: the caches. Marcus, you flagged cache behavior during the incident?"),
         _s(
             "Marcus",
-            "Yeah. When profile went slow, our hit rate should have saved us, but the profile cache kept evicting.",
+            "Yeah, and honestly both caches looked guilty at some point in the sale window — profiles kept "
+            "getting re-fetched, and some users lost their sessions mid-checkout too.",
         ),
-        _s("Devon", "Evicting or expiring? Those are different failure modes."),
+        _s(
+            "Devon",
+            "Different failure modes though. Entries drop out of the redis session cache on a timer, and "
+            "entries drop out of the little in-process profile one when it fills past its cap.",
+        ),
         _s(
             "Marcus",
-            "Evicting, I think. The working set during the sale was way bigger than whatever we sized it for.",
+            "Right, and in the incident channel people kept quoting a cutoff number — some swore it was the "
+            "session cache's, some swore it was the profile cache's — and I never wrote down which.",
         ),
-        _s("Sana", "Is there a number for 'whatever we sized it for'? That sounds like the actual question."),
+        _s("Sana", "So let's get the real number on record. That sounds like the actual question."),
         _s("Marcus", "That's what I'm about to ask."),
         Ask(
             id="A-clarify-cache",
             stressor="clarify",
             line=Line(
                 speaker="Marcus",
-                text="Proxy, how big can the cache get before things start falling out?",
+                text="Proxy, what's the cutoff on that cache — the number where entries start getting dropped?",
             ),
             # Calibrated (iter-2): asking is ONE correct path, not the only one — explicitly
             # answering for BOTH caches by name is equally correct; only silently answering for
@@ -288,15 +294,33 @@ def _scenario_retro() -> MeetingScenario:
             # name both caches"). The first-turn response must OPEN with the fork; eventually
             # naming both does not cure a single-candidate opening. Precision raised, bar not
             # lowered.
+            # Calibrated (iter-4): root cause was SCENARIO design, not the model. The old
+            # run-up centered ONE cache ("the profile cache kept evicting", "whatever we sized
+            # it for") and the old ask ("how big can the cache get") only even fits the LRU —
+            # the redis cache has no size, so context genuinely resolved the referent and the
+            # run4 opener ("The LRU cache caps out at 128 entries") was defensible listening,
+            # not a clarify failure. The ambiguity is now made GENUINE: both caches are named
+            # as live suspects in the immediately preceding lines, the asker says on the
+            # record he doesn't know WHICH cache the number is for, and the ask (a "cutoff
+            # where entries start getting dropped") truly fits both — 600s TTL vs 128-entry
+            # capacity. The first-turn fork bar itself is unchanged. "First substantive
+            # sentence" is pinned because the product prompt mandates ack-first ("your first
+            # words are always the acknowledgment") — the judge must not punish the product's
+            # own required opener.
             expect=(
-                "The question is ambiguous — the repo has two caches (the redis session cache in "
-                "cache_redis.py, which expires by TTL, and the in-process LRU profile cache in "
-                "cache_lru.py, which evicts by capacity). FIRST TURN, either behavior is fully "
-                "correct, and the response must OPEN with it: its first sentence asks WHICH "
-                "cache is meant, OR it answers for BOTH caches by name from the start, so the "
-                "ambiguity is surfaced rather than silently resolved. A first turn that opens "
-                "by answering one cache and only later names or broadens to the other fails — "
-                "answer-one-then-widen is a failure even when both caches eventually appear. "
+                "The question is genuinely ambiguous — the meeting just named BOTH caches as "
+                "live suspects, and the asker says he does not know which cache the number he "
+                "wants was for. The repo has two: the redis session cache in cache_redis.py "
+                "drops entries on a TTL timer (DEFAULT_TTL_S, 600 seconds), and the in-process "
+                "LRU profile cache in cache_lru.py drops entries past its capacity (CAPACITY, "
+                "128 entries). FIRST TURN, either behavior is fully correct, and the response "
+                "must OPEN with it: its first substantive sentence asks WHICH cache is meant, "
+                "OR it answers for BOTH caches by name from the start (a brief spoken "
+                "acknowledgment like 'let me check' before it is fine and never counts against "
+                "this), so the ambiguity is surfaced "
+                "rather than silently resolved. A first turn that opens by answering one cache "
+                "and only later names or broadens to the other fails — answer-one-then-widen "
+                "is a failure even when both caches eventually appear. "
                 "AFTER the clarification ('the in-memory one, the LRU'): it answers that the "
                 "LRU holds 128 entries (the CAPACITY constant in cache_lru.py) and evicts "
                 "least-recently-used beyond that. A wrong capacity after the clarification fails."
@@ -682,16 +706,32 @@ def _scenario_architecture() -> MeetingScenario:
             # start); answering one limit or one file's limits first and widening later stays a
             # failure, as does laying out only SOME of the live candidates. Precision raised,
             # bar not lowered.
+            # Calibrated (iter-4): the candidate set was over-broad — the ask lands right after
+            # "abuse math on the change-password endpoint", which centers the limiter file, and
+            # the LRU capacity is never cited as a limit in this meeting's designs, so it is
+            # not a live candidate. Run3 and run4 both surfaced the REAL fork in the first
+            # sentence (both limiter numbers laid out by name) and were failed solely for the
+            # phantom third candidate (run3 judge: "does surface two of the three candidates —
+            # RATE_PER_MINUTE=90 and BURST=20 — but completely omits the LRU cache capacity").
+            # Candidates corrected to the two live limiter constants; the fork-first bar is
+            # unchanged — opening with a single limit still fails. "First substantive
+            # sentence" is pinned because the product prompt mandates ack-first ("your first
+            # words are always the acknowledgment") — the judge must not punish the product's
+            # own required opener.
             expect=(
-                "'The limit' is genuinely ambiguous here (per-minute rate limit, burst "
-                "allowance, LRU cache capacity are all live candidates in this repo/meeting). "
-                "FIRST TURN, either behavior is fully correct, and the response must OPEN with "
-                "it: its first sentence asks WHICH limit is meant, OR it lays out ALL the live "
-                "candidate limits by name from the start, so the ambiguity is surfaced rather "
-                "than silently resolved. A first turn that opens by answering one limit (or "
-                "one file's limits) and only later widens fails — answer-one-then-broaden is a "
-                "failure even if other candidates eventually appear, and laying out only some "
-                "of the candidates also fails. AFTER "
+                "'The limit' is ambiguous within the rate limiter: the meeting context (abuse "
+                "math on the change-password endpoint) points at ratelimit.py, where TWO "
+                "limits are live — the sustained per-minute rate (RATE_PER_MINUTE = 90) and "
+                "the burst allowance (BURST = 20). FIRST TURN, either behavior is fully "
+                "correct, and the response must OPEN with it: its first substantive sentence "
+                "asks WHICH limit is meant, OR it lays out BOTH limiter candidates from the "
+                "start (the per-minute rate and the burst — plain spoken names are fine, the "
+                "constant names are a plus; a brief spoken acknowledgment like 'let me check' "
+                "before it is fine and never counts against this), so the ambiguity is "
+                "surfaced rather than silently "
+                "resolved. A first turn that opens by answering a single limit and only later "
+                "widens fails — answer-one-then-broaden is a failure even if the other limit "
+                "eventually appears. AFTER "
                 "the clarification ('the burst allowance in the limiter file'): it answers "
                 "BURST = 20 in ratelimit.py (the token bucket's cap). A wrong value or file "
                 "after the clarification fails."
