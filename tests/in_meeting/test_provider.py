@@ -17,9 +17,12 @@ from typing import Any
 from agentkit import ProviderQuery
 from claude_agent_sdk import ClaudeAgentOptions
 
+from contracts import AgentChunk
+
 from in_meeting.provider import (
     SDK_LOCAL_TOOLS,
     build_engine_options,
+    check_critical_tripwire,
     disallowed_tools,
     permission_mode,
 )
@@ -38,6 +41,24 @@ _PRIME_AND_MAP = (
 _ASK = "Proxy, what's the retry logic in billing-worker?"
 
 _HOST_BUILTINS = ("Read", "Grep", "Glob", "Bash", "Write", "Edit")
+
+#: The dangerous host built-ins BEYOND the local six — everything the installed
+#: bundled CLI advertises in an engine-shaped turn that executes, spawns,
+#: schedules, or fetches on the ENGINE HOST (introspected from the real init
+#: message + the CLI binary; ``Agent`` is the dispatch alias of the Task family
+#: that the plan-quality trace caught fabricating a "run"). All of these must be
+#: blocked on every engine call — only the curated ``mcp__*`` tools may act.
+_DANGEROUS_HOST_BUILTINS = (
+    "Agent", "Task", "TaskCreate", "TaskGet", "TaskList", "TaskOutput",
+    "TaskStop", "TaskUpdate",
+    "WebSearch", "WebFetch",
+    "NotebookEdit", "Skill", "SlashCommand",
+    "BashOutput", "KillShell", "KillBash",
+    "EnterWorktree", "ExitWorktree",
+    "Monitor", "SendMessage", "RemoteTrigger", "PushNotification",
+    "CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "Workflow",
+    "DesignSync", "ReportFindings",
+)
 
 
 def _query(**overrides: Any) -> ProviderQuery:
@@ -106,10 +127,22 @@ def test_permission_mode_and_host_builtins_blocked() -> None:
     assert options.permission_mode == "bypassPermissions"
     for tool in _HOST_BUILTINS:
         assert tool in options.disallowed_tools
-    # The module-level triad markers mirror the seam values verbatim.
+    # The module-level triad markers: the local six stay the seam-verbatim value,
+    # and the module block-list is a SUPERSET (local six + dangerous host built-ins).
     assert SDK_LOCAL_TOOLS == _HOST_BUILTINS
-    assert disallowed_tools == SDK_LOCAL_TOOLS
+    assert set(SDK_LOCAL_TOOLS) <= set(disallowed_tools)
     assert permission_mode == "bypassPermissions"
+
+
+def test_dangerous_host_builtins_blocked_on_every_call() -> None:
+    """The full dangerous built-in set (Agent/Task family, WebSearch/WebFetch,
+    worktree/cron/notify/skill executors) rides ``disallowed_tools`` so the CLI
+    blocks them — the SDK ``Agent`` fabricated-"run" hole is closed. Curated
+    ``mcp__*`` tools are never blocked."""
+    options = build_engine_options(_query())
+    for tool in (*_HOST_BUILTINS, *_DANGEROUS_HOST_BUILTINS):
+        assert tool in options.disallowed_tools, f"{tool} not blocked"
+    assert not any(t.startswith("mcp__") for t in options.disallowed_tools)
 
 
 def test_query_disallowed_tools_merge_dedup_order_preserving() -> None:
@@ -117,7 +150,7 @@ def test_query_disallowed_tools_merge_dedup_order_preserving() -> None:
     order-preserving) — a read-only turn's write block rides the options."""
     q = _query(disallowed_tools=("mcp__code__write", "Bash"))
     options = build_engine_options(q)
-    assert options.disallowed_tools == [*SDK_LOCAL_TOOLS, "mcp__code__write"]
+    assert options.disallowed_tools == [*disallowed_tools, "mcp__code__write"]
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +196,52 @@ def test_query_fields_thread_onto_options() -> None:
     assert options.allowed_tools == list(q.allowed_tools)
     assert options.max_turns == 6
     assert options.resume == "sess-abc123"
-    assert options.env == {"MAX_OUTPUT_TOKENS": "32000"}
+    # The per-query env rides through; the engine's own env pin is additive.
+    assert options.env["MAX_OUTPUT_TOKENS"] == "32000"
+
+
+# ---------------------------------------------------------------------------
+# AC 7 — curated MCP tool schemas load UP FRONT: no per-turn ToolSearch tax
+# ---------------------------------------------------------------------------
+
+def test_tool_search_deferral_disabled_on_every_call() -> None:
+    """``ENABLE_TOOL_SEARCH=false`` rides the subprocess env on EVERY engine call:
+    the CLI runs in standard tool-loading mode, so the 8 tiny curated ``mcp__*``
+    schemas are advertised up front and no ToolSearch round-trip is ever needed
+    (verified against the real bundled CLI: ToolSearch leaves the init tool set)."""
+    options = build_engine_options(_query())
+    assert options.env["ENABLE_TOOL_SEARCH"] == "false"
+
+
+def test_tool_search_pin_merges_with_query_env_and_cannot_be_overridden() -> None:
+    """The per-query env (e.g. the output-token clamp) is preserved, and nothing
+    a query carries can re-enable schema deferral — the engine owns this pin."""
+    q = _query(env={"MAX_OUTPUT_TOKENS": "32000", "ENABLE_TOOL_SEARCH": "true"})
+    options = build_engine_options(q)
+    assert options.env["MAX_OUTPUT_TOKENS"] == "32000"
+    assert options.env["ENABLE_TOOL_SEARCH"] == "false"
+
+
+# ---------------------------------------------------------------------------
+# AC 8 — the [CRITICAL] tripwire watches the FULL dangerous built-in set
+# ---------------------------------------------------------------------------
+
+def _tool_use(name: str) -> AgentChunk:
+    return AgentChunk(type="TOOL_USE", text="", metadata={"id": "tu-1", "name": name, "input": {}})
+
+
+def test_tripwire_flags_agent_and_the_dangerous_builtins_in_sandbox_mode() -> None:
+    """An ``Agent`` (or any dangerous host built-in) TOOL_USE in sandbox mode is an
+    isolation leak — the tripwire must fire, not just for the local six."""
+    for name in ("Agent", "Task", "WebSearch", "WebFetch", "Bash", "SendMessage"):
+        assert check_critical_tripwire(_tool_use(name), sandbox_mode=True), name
+    # Case-insensitive: the watch matches however the name is cased on the wire.
+    assert check_critical_tripwire(_tool_use("agent"), sandbox_mode=True)
+
+
+def test_tripwire_silent_for_curated_mcp_tools_and_outside_sandbox() -> None:
+    assert not check_critical_tripwire(_tool_use("mcp__code_intel__search"), sandbox_mode=True)
+    assert not check_critical_tripwire(_tool_use("Agent"), sandbox_mode=False)
 
 
 def test_thinking_off_by_default_adaptive_for_opus_budget_otherwise() -> None:

@@ -78,6 +78,14 @@ def test_no_enumerated_capability_menu() -> None:
         ("ask when ambiguous", ("clarif", "ambigu")),
         ("honesty about limits", ("honest", "can't")),
         ("act by composing access", ("access", "compos")),
+        # Law-2 under ABSENT access: no sandbox / no tool for it → say you can't
+        # run it here; never narrate a run or a result that never happened.
+        ("absent access is spoken, never faked", ("can't run", "cannot run", "didn't run")),
+        ("never narrate an unperformed run", ("never narrate", "never describe a run")),
+        # Ack-first even on quick lookups: the first words land BEFORE the first
+        # tool call, so the room never waits in silence during a lookup.
+        ("ack before the first tool call", ("before you reach", "before your first",
+                                            "before any tool", "before the first tool")),
     ],
 )
 def test_load_bearing_principle_present(principle: str, alternatives: tuple[str, ...]) -> None:

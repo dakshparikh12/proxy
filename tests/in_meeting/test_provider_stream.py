@@ -262,3 +262,32 @@ async def test_tripwire_logs_critical_but_still_yields_the_tool_use(
         r.levelno == logging.CRITICAL and "[CRITICAL]" in r.getMessage()
         for r in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_tripwire_flags_an_agent_tool_use_in_sandbox_mode(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The SDK ``Agent`` built-in (the sub-agent spawner the plan-quality trace caught
+    fabricating a "run") firing in sandbox mode is an isolation leak — the tripwire
+    logs [CRITICAL] on it exactly as it does for the local six."""
+    messages = [
+        AssistantMessage(
+            content=[ToolUseBlock(id="tu-10", name="Agent", input={"prompt": "run 90/60"})],
+            model=_MODEL,
+            message_id="msg-10",
+            session_id="sess-1",
+        ),
+    ]
+    with caplog.at_level(logging.CRITICAL):
+        chunks = await _drain(
+            EngineProvider(query_fn=_FakeQueryFn(messages), sandbox_mode=True),
+            _ASK,
+            _query(),
+        )
+
+    assert [c.type for c in chunks] == ["TOOL_USE"]
+    assert any(
+        r.levelno == logging.CRITICAL and "[CRITICAL]" in r.getMessage()
+        for r in caplog.records
+    )

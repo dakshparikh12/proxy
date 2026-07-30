@@ -10,7 +10,9 @@ as the prompt. This module builds the ``ClaudeAgentOptions`` for such a turn:
     ``setting_sources=[]`` (load no filesystem permissions/hooks/CLAUDE.md — both
     are required; neither suppresses connectors alone), a computed built-in
     ``tools`` list (``()`` in sandbox mode: no host-side ``Read``/``Grep``/``Bash``),
-    and the ``SDK_LOCAL_TOOLS`` block-list pinned into ``disallowed_tools``.
+    and the full host block-list — ``SDK_LOCAL_TOOLS`` plus ``HOST_AGENCY_TOOLS``
+    (``Agent``/``Task*``/``WebSearch``/``WebFetch``/cron/worktree/skill/notify) —
+    pinned into ``disallowed_tools``.
   * **Automatic prompt caching of the stable prefix** — the ``system_prompt``
     (prime + map) is static across wake turns, so the CLI/API caches it by default
     ("map = cached prefix ~90% cheaper", SPEC §8); ``cacheReadInputTokens`` confirms
@@ -77,14 +79,43 @@ SDK_LOCAL_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob", "Bash", "Write", "Ed
 # ``strict_mcp_config`` + ``setting_sources=[]`` + ``disallowed_tools``.
 # (``Final`` — not ``str`` — so mypy sees the SDK's PermissionMode literal; same value.)
 permission_mode: Final = "bypassPermissions"
+# The dangerous host built-ins BEYOND the local six. Introspected from the installed
+# bundled CLI (claude_agent_sdk 0.2.115 / CLI 2.1.191): with MCP servers mounted the
+# base ``tools`` set is the CLI DEFAULT, so everything below was reachable in an engine
+# turn until pinned here — the plan-quality trace caught the SDK ``Agent`` built-in
+# fabricating a "run" through exactly this hole. Every name that executes, spawns,
+# schedules, messages, or fetches ON THE ENGINE HOST is blocked; ``Agent`` is the
+# dispatch alias of the Task family (both names blocked). Deliberately NOT blocked:
+# ``ToolSearch`` (loads tool schemas only — no host side effect, and it is the model's
+# only path to a schema if deferral is ever re-enabled underneath us) and the inert
+# interactive/curated-scoped built-ins (AskUserQuestion, ExitPlanMode,
+# ListMcpResources, ReadMcpResource — no host execution surface).
+HOST_AGENCY_TOOLS: tuple[str, ...] = (
+    # sub-agent spawning + background-task control (the fabricated-"run" vector)
+    "Agent", "Task", "TaskCreate", "TaskGet", "TaskList", "TaskOutput",
+    "TaskStop", "TaskUpdate",
+    # host-side network search/fetch (bypasses the curated sandbox internet)
+    "WebSearch", "WebFetch",
+    # host filesystem / skill / command executors beyond the local six
+    "NotebookEdit", "Skill", "SlashCommand",
+    "BashOutput", "KillShell", "KillBash",
+    "EnterWorktree", "ExitWorktree",
+    # host/cloud scheduling, cross-session messaging, external sync + notify
+    "Monitor", "SendMessage", "RemoteTrigger", "PushNotification",
+    "CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "Workflow",
+    "DesignSync", "ReportFindings",
+)
+
 # World-touching built-ins that must never be advertised to an engine turn — they
-# would run on the engine host, not in the sandbox. Kept OUT of every computed list.
-disallowed_tools: tuple[str, ...] = SDK_LOCAL_TOOLS
+# would run on the engine host, not in the sandbox. Kept OUT of every computed list
+# AND pinned into ``ClaudeAgentOptions.disallowed_tools`` (the CLI removes them from
+# the model's context entirely, even when loadable via ToolSearch).
+disallowed_tools: tuple[str, ...] = (*SDK_LOCAL_TOOLS, *HOST_AGENCY_TOOLS)
 
 # The non-MCP built-in host tools the [CRITICAL] tripwire watches for. Same block-list
 # the isolation triad names — these run on the orchestrator host, never in E2B, so a
 # firing in sandbox mode means the triad leaked. Matched case-insensitively.
-_HOST_BUILTINS: frozenset[str] = frozenset(t.lower() for t in SDK_LOCAL_TOOLS)
+_HOST_BUILTINS: frozenset[str] = frozenset(t.lower() for t in disallowed_tools)
 
 # Prompt caching of the stable prefix (prime + map, SPEC §8) is AUTOMATIC: the
 # system_prompt is static across wake turns, so the CLI/API caches it by default
@@ -158,9 +189,15 @@ def build_engine_options(query: ProviderQuery) -> ClaudeAgentOptions:
         if not query.tools:
             options.tools = None
     # The curated per-turn env (e.g. the output-token clamp) rides the options the SDK
-    # subprocess enforces.
-    if query.env:
-        options.env = dict(query.env)
+    # subprocess enforces — and the engine pins ``ENABLE_TOOL_SEARCH=false`` LAST on
+    # every call: the CLI's tool-search mode defers MCP tool schemas behind a per-turn
+    # ToolSearch round-trip (~2-3s of dead air before the first real tool). The engine
+    # mounts ~8 tiny curated tools, so deferral buys nothing; "false" puts the CLI in
+    # standard tool-loading mode and the schemas ride the turn-1 prompt (verified
+    # against the real bundled CLI: ToolSearch leaves the advertised tool set). This
+    # is schema-loading only — the isolation gate (allowed/disallowed/strict/sources)
+    # is untouched, and no query-supplied env can re-enable deferral.
+    options.env = {**(dict(query.env) if query.env else {}), "ENABLE_TOOL_SEARCH": "false"}
     # The per-query ``disallowed_tools`` block-list (a read-only turn's write block)
     # MERGES into the module-level block-list (dedup, order-preserving): it must ride the
     # options because ``allowed_tools`` does not filter MCP tools.
@@ -317,10 +354,13 @@ def map_sdk_message(msg: Any) -> Iterator[AgentChunk]:
 def check_critical_tripwire(chunk: AgentChunk, *, sandbox_mode: bool) -> bool:
     """Log ``[CRITICAL]`` if a non-MCP built-in host tool fires while sandboxed.
 
-    A ``Read``/``Grep``/``Bash``/``Glob``/``Write``/``Edit`` TOOL_USE in sandbox mode
-    means the isolation triad leaked and the tool is executing on the orchestrator host
-    (not in E2B). Returns ``True`` iff the tripwire fired. Curated MCP tools (any name
-    outside the host block-list) and non-sandbox runs are silent.
+    Any blocked host built-in — the local six (``Read``/``Grep``/``Glob``/``Bash``/
+    ``Write``/``Edit``) or the dangerous agency set (``Agent``/``Task*``/``WebSearch``/
+    ``WebFetch``/cron/worktree/skill/notify, see ``HOST_AGENCY_TOOLS``) — firing as a
+    TOOL_USE in sandbox mode means the isolation triad leaked and something is executing
+    on the orchestrator host (not in E2B). Returns ``True`` iff the tripwire fired.
+    Curated MCP tools (any name outside the host block-list) and non-sandbox runs are
+    silent.
     """
     if not sandbox_mode or chunk.type != "TOOL_USE":
         return False
