@@ -1,0 +1,39 @@
+# Keep the production image build context to what the product needs at runtime:
+# workspace manifests (pyproject/uv.lock), libs/, services/, config/, migrations/.
+# Everything below is build-host-only and never belongs in a deployable image.
+.git
+.venv
+.claude
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.testmondata*
+node_modules
+
+# Test/acceptance estate (host-side gates, never runtime)
+tests/
+fixtures/
+goldens/
+acceptance/
+criteria/
+regressions/
+conftest.py
+
+# Docs / build-system / evidence (not read by live code)
+archive/
+evidence/
+product/
+slices/
+spike/
+build/
+orchestrator/
+apps/
+tools/
+infra/
+deploy/
+*.md
+.env
+.env.*
+!.env.example
