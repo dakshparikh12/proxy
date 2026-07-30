@@ -51,7 +51,9 @@ _CHAT_EVENTS = frozenset({"participant_events.chat_message"})
 # carries the same words its final will carry — feeding both would append duplicate notes
 # lines AND wake Proxy twice on one spoken ask (the trigger has no dedupe by design). The
 # carrier/notes-plane ingest below still receives every passthrough (its coalescer owns
-# partial/final semantics); only the engine feed is finals-gated.
+# partial/final semantics); only the engine feed is finals-gated. Partials still serve
+# the BARGE-IN trigger (``_cut_speech_on_human_voice``): a non-Proxy partial landing
+# while the meeting's speak pipe is mid-utterance cuts Proxy's audio (Law 3).
 _ENGINE_TRANSCRIPT_EVENTS = frozenset({"transcript.data", "transcript", "bot.transcript"})
 
 
@@ -203,6 +205,49 @@ def _engine_chat_line(payload: dict[str, Any]) -> Any | None:
     return ChatLine(sender=str(sender), message=text)
 
 
+async def _cut_speech_on_human_voice(
+    runtime: Any, body: dict[str, Any], meeting_id: str
+) -> None:
+    """THE BARGE-IN TRIGGER on the transcript-driven boot path (Law 3, AC-TURN-07/08).
+
+    The cut reflex existed (``SpeakPipe.cut`` — drop buffered text, queued sentences,
+    and the in-flight synth NOW) but nothing on the boot path fed it a human-speech
+    signal. The boot path ingests NO raw audio/VAD (the Recall bot subscribes only to
+    transcript finals + partials + chat webhooks), so the wired trigger is the
+    TRANSCRIPT stream itself: any transcript body — the ~300ms partial is the fastest
+    signal this path carries; a final also counts (finals-only delivery still barges
+    in) — from a NON-Proxy speaker, landing while THIS meeting's speak pipe is
+    mid-utterance, cuts the pipe.
+
+    Guards: never on Proxy's own speaker label (AC-TURN-11 — its transcribed output
+    audio must not cut itself); never on an unattributed line (cannot be proven
+    human); never with no active utterance (an idle pipe is left alone). Never-throw:
+    a cut fault logs and the drain continues (never a poison row).
+
+    HONEST LATENCY: this is transcript-bound, not the <200ms VAD reflex — the partial
+    takes ~300ms to exist, plus webhook delivery and the drain poll
+    (``server.WEBHOOK_DRAIN_INTERVAL_S`` = 2s), so the real cut lands in roughly
+    0.5–2.5s. True sub-200ms barge-in needs raw-audio ingestion feeding Silero VAD
+    (``transport.turn.on_vad_frame`` — built, unfed) — a flagged follow-up.
+    """
+    pipe = getattr(runtime, "speak_pipe", None)
+    if pipe is None or not bool(getattr(pipe, "speaking", False)):
+        return  # nothing mid-utterance — nothing to cut
+    speaker = str(body.get("speaker") or "").strip()
+    from transport.hearing import PROXY_SPEAKER
+
+    if not speaker or speaker == PROXY_SPEAKER:
+        return  # Proxy's own label / unattributed speech never cuts (AC-TURN-11)
+    try:
+        await pipe.cut()
+    except Exception:  # noqa: BLE001 - the reflex must never poison the drain
+        logging.getLogger(__name__).exception(
+            "barge-in cut failed on meeting %s — speech may keep playing; the row "
+            "still drains",
+            meeting_id,
+        )
+
+
 async def _dispatch_meeting_event(
     payload: dict[str, Any],
     *,
@@ -302,6 +347,11 @@ async def _dispatch_meeting_event(
         runtime = registry.get(meeting_id)
         if runtime is not None:
             body = _transcript_body(payload)
+            # The barge-in reflex runs FIRST (Law 3 — human control is absolute):
+            # human speech landing while Proxy is mid-utterance cuts the speak pipe
+            # before anything else touches this row. Partials are the fast path
+            # (they never feed the engine below, but they DO cut).
+            await _cut_speech_on_human_voice(runtime, body, meeting_id)
             engine = getattr(runtime, "engine", None)
             if engine is not None and name in _ENGINE_TRANSCRIPT_EVENTS:
                 line = _engine_transcript_line(body)

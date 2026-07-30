@@ -143,6 +143,20 @@ class SpeakPipe:
 
     # -- the engine-facing surface --------------------------------------------
 
+    @property
+    def speaking(self) -> bool:
+        """True while an utterance is IN FLIGHT — the barge-in trigger's guard.
+
+        Mid-utterance means any of: audio is actively playing (``set_speaking(True)``
+        landed and the pipe hasn't gone idle), the synth worker is mid-sentence, a
+        sentence is queued, or un-flushed text is buffered awaiting its tail timer —
+        i.e. exactly the state :meth:`cut` would silence. An idle pipe is False, so a
+        barge-in trigger reading this never cuts on nothing.
+        """
+        worker = self._worker
+        worker_live = worker is not None and not worker.done()
+        return self._speaking or worker_live or bool(self._queue) or bool(self._buffer)
+
     async def say(self, text: str) -> None:
         """Accept one TEXT delta; synthesize any newly completed sentences."""
         if not text:
