@@ -86,6 +86,11 @@ def test_no_enumerated_capability_menu() -> None:
         # tool call, so the room never waits in silence during a lookup.
         ("ack before the first tool call", ("before you reach", "before your first",
                                             "before any tool", "before the first tool")),
+        # Law-1/2 on CONNECTIONS: how two facts interact (what reads what, which
+        # limit bites) is asserted only after tracing that path — otherwise the
+        # facts are stated and the link is named as unverified.
+        ("untraced interactions are never asserted", ("interact", "facts connect",
+                                                      "two facts")),
     ],
 )
 def test_load_bearing_principle_present(principle: str, alternatives: tuple[str, ...]) -> None:
