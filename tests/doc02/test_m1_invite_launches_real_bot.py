@@ -152,12 +152,12 @@ def test_invite_posts_pinned_consent_before_observation():
     chat_calls = [
         c for c in seam.calls
         if isinstance(c["op_result"], dict)
-        and c["op_result"].get("url", "").endswith("/chat")
+        and c["op_result"].get("url", "").endswith("/send_chat_message/")
     ]
-    assert chat_calls, "consent notice must be posted via a real /chat round-trip"
+    assert chat_calls, "consent notice must be posted via a real send_chat_message round-trip"
     body = chat_calls[0]["op_result"]["body"]
     assert body.get("message") == consent_notice()
-    assert body.get("pinned") is True, "consent line must be PINNED where the platform allows"
+    assert body.get("pin") is True, "consent line must be PINNED where the platform allows"
 
     # The join result reports notice_posted honestly and observation is gated on it.
     assert meeting.notice_posted is True

@@ -174,10 +174,10 @@ def test_c1_every_api_caller_flows_through_the_real_transport(monkeypatch: Any) 
 
     assert [(c["method"], c["url"]) for c in calls] == [
         ("POST", "https://api.recall.ai/api/v1/bot/bot-77/leave"),
-        ("POST", "https://api.recall.ai/api/v1/bot/bot-77/chat"),
-        ("POST", "https://api.recall.ai/api/v1/bot/bot-77/chat"),
+        ("POST", "https://api.recall.ai/api/v1/bot/bot-77/send_chat_message/"),
+        ("POST", "https://api.recall.ai/api/v1/bot/bot-77/send_chat_message/"),
     ]
-    assert calls[1]["json"] == {"message": "consent notice", "pinned": True}
+    assert calls[1]["json"] == {"message": "consent notice", "pin": True}
     assert calls[2]["json"] == {"message": "hello", "to": "participant-9"}
     # Every round-trip carries the real auth header; the key never mutates per call.
     assert all(c["headers"]["Authorization"] == "Token rk_c1_acceptance_key" for c in calls)

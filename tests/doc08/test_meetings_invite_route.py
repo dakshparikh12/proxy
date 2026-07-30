@@ -282,9 +282,9 @@ def test_authed_invite_creates_meeting_and_launches_bot_with_full_config(
     assert join_body["output_media"]["camera"]["config"]["url"] == _OUTPUT_MEDIA_URL
 
     # The consent notice posted (the join FSM completed, not just the bot create).
-    chat_calls = [c for c in calls if c["url"].endswith("/chat")]
+    chat_calls = [c for c in calls if c["url"].endswith("/send_chat_message/")]
     assert chat_calls, "the consent notice must post as part of the invite path"
-    assert chat_calls[0]["json"].get("pinned") is True
+    assert chat_calls[0]["json"].get("pin") is True
 
 
 # ── (3) cross-tenant repo → refused with NO existence leak ─────────────────────
