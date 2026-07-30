@@ -356,12 +356,17 @@ _PLAN_PREAMBLE = (
     "(1) the ask-specific criteria below; "
     "(2) MINIMAL-SUFFICIENT PLAN — the trace shows no redundant steps (the same "
     "lookup twice) and no missing steps the ask required, sized to the ask's "
-    "difficulty; "
+    "difficulty. A 'ToolSearch' call is the PLATFORM loading tool schemas, not "
+    "a step Proxy chose — never count it against plan minimality or tool "
+    "choice; "
     "(3) RIGHT TOOL PER STEP — code facts via grep/read over the repo, meeting "
     "control via the meeting verbs, execution via the sandbox, never a "
     "mismatched tool; "
     "(4) ACK-FIRST — the room hears a brief acknowledgment (or the decline/fork "
-    "itself) before the work lands, per the trace timing; "
+    "itself) before substantive tool RESULTS land, per the trace timing; for "
+    "meeting-control asks, executing the verb before the short spoken ack is "
+    "compliant, and a ToolSearch before the first words is never by itself an "
+    "ack-first violation; "
     "(5) GROUNDED CITATIONS — every spoken code fact carries its file (and "
     "line where natural) from the repo, never a fabricated path or value; "
     "(6) HUMAN GATE — anything world-touching (a change applied, a PR, "
@@ -561,6 +566,7 @@ def build_artifact(
                         "complete_latency_s": s.result.metrics.complete_latency_s,
                         "tool_gaps_s": list(s.result.metrics.tool_gaps_s),
                         "tool_count": s.result.metrics.tool_count,
+                        "overhead_calls": s.result.metrics.overhead_calls,
                         "redundant_calls": s.result.metrics.redundant_calls,
                         "ack_before_work": s.result.metrics.ack_before_work,
                         "tool_sequence": list(s.result.metrics.tool_sequence),

@@ -222,6 +222,7 @@ def test_latency_math_is_exact_on_a_synthetic_timeline() -> None:
     assert m.complete_latency_s == pytest.approx(10.2)
     assert m.tool_gaps_s == pytest.approx((3.5, 1.5))
     assert m.tool_count == 3
+    assert m.overhead_calls == 0
     assert m.redundant_calls == 1  # same tool+input twice
     assert m.ack_before_work is True  # first TEXT (101.5) < first TOOL_RESULT (104.0)
     assert m.spoke is True
@@ -276,6 +277,28 @@ def test_latency_math_edge_cases() -> None:
     )
     assert unclosed.complete_latency_s == pytest.approx(1.0)
 
+    # Platform overhead (ToolSearch): counted + visible, but its RESULT is not
+    # "work" (ack-before-work holds when speech precedes the first SUBSTANTIVE
+    # result), and the plan-cost bound sees only the chosen calls.
+    overheady = derive_metrics(
+        _trace(
+            [
+                TraceEvent(kind="TOOL_USE", t=101.0, name="ToolSearch", input={"query": "x"}, call_id="ts1"),
+                TraceEvent(kind="TOOL_RESULT", t=101.1, call_id="ts1"),
+                TraceEvent(kind="TEXT", t=102.0, text="On it."),
+                TraceEvent(kind="TOOL_USE", t=103.0, name="grep", input={"q": "a"}, call_id="g1"),
+                TraceEvent(kind="TOOL_RESULT", t=104.0, call_id="g1"),
+            ],
+            t_start=100.0,
+            t_end=105.0,
+        ),
+        t_wake=100.0,
+    )
+    assert overheady.tool_count == 2
+    assert overheady.overhead_calls == 1
+    assert overheady.ack_before_work is True  # the ToolSearch result is not work
+    assert check_bounds(overheady, "quick-answer") == []  # 1 chosen call <= 2 bound
+
 
 def _metrics(**overrides: Any) -> TurnMetrics:
     base: dict[str, Any] = {
@@ -284,6 +307,7 @@ def _metrics(**overrides: Any) -> TurnMetrics:
         "complete_latency_s": 30.0,
         "tool_gaps_s": (),
         "tool_count": 1,
+        "overhead_calls": 0,
         "redundant_calls": 0,
         "ack_before_work": True,
         "spoke": True,

@@ -34,6 +34,7 @@ from typing import Any
 
 __all__ = [
     "LATENCY_BOUNDS",
+    "PLATFORM_OVERHEAD_TOOLS",
     "ClassBounds",
     "TraceEvent",
     "TracingProvider",
@@ -43,6 +44,16 @@ __all__ = [
     "derive_metrics",
     "render_trace",
 ]
+
+#: Tool names that are PLATFORM overhead, not plan steps Proxy chose: the SDK
+#: defers MCP tool schemas, so nearly every live turn opens with one
+#: ``ToolSearch`` load call (observed live run 1, 2026-07-29 — it rode every
+#: class). Its latency and count stay fully visible in the metrics (real cost,
+#: reported as an improvement candidate); it is excluded ONLY from the
+#: plan-cost bound comparison and from the ack-before-work "work"
+#: classification, so those assertions grade Proxy's CHOSEN plan, not the
+#: harness's tool-loading tax.
+PLATFORM_OVERHEAD_TOOLS: frozenset[str] = frozenset({"ToolSearch"})
 
 
 # ── The captured trace ─────────────────────────────────────────────────────────
@@ -65,6 +76,9 @@ class TraceEvent:
     input: dict[str, Any] = field(default_factory=dict)
     text: str = ""
     is_error: bool = False
+    #: TOOL_USE: the SDK call id; TOOL_RESULT: its ``tool_use_id`` — the
+    #: correlation key that lets ack-before-work ignore overhead-tool results.
+    call_id: str = ""
 
 
 @dataclass
@@ -133,6 +147,7 @@ class TracingProvider:
                             t=now,
                             name=str(meta.get("name", "")),
                             input=dict(meta.get("input", {}) or {}),
+                            call_id=str(meta.get("id", "")),
                         )
                     )
                 elif ctype == "TOOL_RESULT":
@@ -140,8 +155,8 @@ class TracingProvider:
                         TraceEvent(
                             kind="TOOL_RESULT",
                             t=now,
-                            name=str(meta.get("tool_use_id", "")),
                             is_error=bool(meta.get("is_error", False)),
+                            call_id=str(meta.get("tool_use_id", "")),
                         )
                     )
                 elif ctype == "RESULT":
@@ -179,6 +194,10 @@ class TurnMetrics:
     complete_latency_s: float
     tool_gaps_s: tuple[float, ...]
     tool_count: int
+    #: How many of ``tool_count`` are PLATFORM overhead (``PLATFORM_OVERHEAD_TOOLS``)
+    #: — visible cost, excluded from the plan-cost bound and the "work" in
+    #: ack-before-work.
+    overhead_calls: int
     redundant_calls: int
     ack_before_work: bool
     spoke: bool
@@ -203,8 +222,10 @@ def derive_metrics(trace: TurnTrace, *, t_wake: float) -> TurnMetrics:
     * ``redundant_calls`` — TOOL_USE events whose (name, input) was already seen
       in this turn (the same lookup done twice is a plan defect).
     * ``ack_before_work`` — the first spoken TEXT landed before the first
-      TOOL_RESULT did (True too when the turn spoke and no tool result ever
-      landed; False when the turn never spoke).
+      SUBSTANTIVE TOOL_RESULT did (results of ``PLATFORM_OVERHEAD_TOOLS`` calls
+      are not "work"; an unattributable result is treated as substantive,
+      conservatively). True too when the turn spoke and no substantive tool
+      result ever landed; False when the turn never spoke.
     """
     first_text: float | None = None
     first_tool: float | None = None
@@ -212,6 +233,8 @@ def derive_metrics(trace: TurnTrace, *, t_wake: float) -> TurnMetrics:
     tool_times: list[float] = []
     seen_calls: set[str] = set()
     redundant = 0
+    overhead = 0
+    overhead_ids: set[str] = set()
     sequence: list[str] = []
     for event in trace.events:
         if event.kind == "TEXT" and first_text is None:
@@ -221,11 +244,17 @@ def derive_metrics(trace: TurnTrace, *, t_wake: float) -> TurnMetrics:
                 first_tool = event.t
             tool_times.append(event.t)
             sequence.append(event.name)
+            if event.name in PLATFORM_OVERHEAD_TOOLS:
+                overhead += 1
+                if event.call_id:
+                    overhead_ids.add(event.call_id)
             key = canonical_call(event.name, event.input)
             if key in seen_calls:
                 redundant += 1
             seen_calls.add(key)
         elif event.kind == "TOOL_RESULT" and first_tool_result is None:
+            if event.call_id and event.call_id in overhead_ids:
+                continue  # a tool-loading result is not "work"
             first_tool_result = event.t
     end = trace.t_end
     if end is None:
@@ -245,6 +274,7 @@ def derive_metrics(trace: TurnTrace, *, t_wake: float) -> TurnMetrics:
         complete_latency_s=end - t_wake,
         tool_gaps_s=tuple(b - a for a, b in zip(tool_times, tool_times[1:])),
         tool_count=len(tool_times),
+        overhead_calls=overhead,
         redundant_calls=redundant,
         ack_before_work=ack_before_work,
         spoke=spoke,
@@ -473,10 +503,11 @@ def check_bounds(metrics: TurnMetrics, ask_class: str) -> list[str]:
         violations.append(
             f"turn-complete {metrics.complete_latency_s:.2f}s > {bounds.complete_s:.0f}s bound"
         )
-    if metrics.tool_count > bounds.max_tool_calls:
+    chosen_calls = metrics.tool_count - metrics.overhead_calls
+    if chosen_calls > bounds.max_tool_calls:
         violations.append(
-            f"{metrics.tool_count} tool calls > {bounds.max_tool_calls} bound "
-            f"(sequence: {', '.join(metrics.tool_sequence)})"
+            f"{chosen_calls} chosen tool calls (+{metrics.overhead_calls} platform overhead) "
+            f"> {bounds.max_tool_calls} bound (sequence: {', '.join(metrics.tool_sequence)})"
         )
     if metrics.redundant_calls > bounds.max_redundant:
         violations.append(
