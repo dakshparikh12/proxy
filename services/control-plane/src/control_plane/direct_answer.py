@@ -4,8 +4,8 @@ The ONE canonical resolver now lives in the ``code_intel`` layer
 (:mod:`code_intel.direct_answer`) because it composes THIS product's structural
 tools and depends on nothing from any upper layer. The harness *composes*
 code_intel, so it imports the resolver **downward** and re-exports it here under
-the historical ``harness.direct_answer`` name — every existing caller
-(``harness.wake``, ``harness.orchestrator``, ``code_intel.direct``) keeps working
+the historical ``control_plane.direct_answer`` name — every existing caller
+(``control_plane.wake``, ``control_plane.orchestrator``, ``code_intel.direct``) keeps working
 against a single implementation (G4-DUPLICATE-ANSWER-DIRECT-ENTRYPOINTS: no
 second copy, no layering inversion).
 

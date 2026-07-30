@@ -2,7 +2,7 @@
 
 This is the **session/bundle wiring** that turns a ``contracts.Bundle`` into a running
 ``query()`` — the site the ``harness`` bundle-dispatch invokes (the live-assembly seam,
-the doc04 lesson). Doc 04's dispatch (``harness.dispatch``) creates a ``contracts.Bundle``
+the doc04 lesson). Doc 04's dispatch (``control_plane.dispatch``) creates a ``contracts.Bundle``
 + claims a ``workroom:<id>`` ``operation_runs`` row (Bundle in ``progress``) and hands a
 ``WorkroomHandle``; **this driver is what that dispatch runs** — it consumes that REAL
 ``contracts.Bundle`` and produces a REAL ``contracts.Envelope`` on the reachable host
@@ -133,14 +133,14 @@ disallowed_tools: tuple[str, ...] = SDK_LOCAL_TOOLS
 permission_mode: str = "bypassPermissions"
 
 # A Workroom task is keyed operation_type='workroom:<task-id>' (§12.10) — the SAME key the
-# dispatch (harness.dispatch.workroom_op_type) claims the row under; the driver fills THAT row.
+# dispatch (control_plane.dispatch.workroom_op_type) claims the row under; the driver fills THAT row.
 WORKROOM_OP_PREFIX = "workroom:"
 
 
 def workroom_op_type(task_id: UUID | str) -> str:
     """The ``operation_runs.operation_type`` for a Workroom task (§12.10).
 
-    Identical to ``harness.dispatch.workroom_op_type`` — the driver persists into the SAME
+    Identical to ``control_plane.dispatch.workroom_op_type`` — the driver persists into the SAME
     row the dispatch claimed, so the two must agree on the key (no bespoke per-task table).
     """
     return f"{WORKROOM_OP_PREFIX}{task_id}"
@@ -529,7 +529,7 @@ class SessionDriver:
         The stale-session replay establishes a NEW session on the retry; its ``INIT``/
         ``RESULT`` ``session_id`` overwrites the stale pointer in ``result_meta``, so the
         persisted id always names the live session after a recovery (mirrors
-        ``harness.wake_turn._observe``). The ``RESULT``/write folding rides
+        ``control_plane.wake_turn._observe``). The ``RESULT``/write folding rides
         :meth:`_observe_chunk` so the cost/cache split + write paths land identically."""
         meta = chunk.metadata or {}
         if chunk.type == "INIT":

@@ -5,7 +5,7 @@ This is a **customer-scenario gate** (not a unit fake). It spawns a LIVE E2B san
 seeds a small real ``webapp/`` mini-codebase with an ``auth.py`` whose ``login`` does no
 input validation, builds a REAL ``contracts.Bundle`` for the ask "add input validation to
 login", and runs the REAL ``workroom.session.SessionDriver.run_task`` (the per-task session
-driver the harness dispatch invokes) with the REAL ``harness.provider.ClaudeAgentProvider``
+driver the harness dispatch invokes) with the REAL ``control_plane.provider.ClaudeAgentProvider``
 (the sole ``claude_agent_sdk.query()`` seam) against a REAL E2B-backed ``code`` MCP tool
 backend implementing the SAME 8-tool sandbox contract the production Node sidecar exposes
 (read_file/list_files/grep/glob/run_command/write_file/edit_file/ast_grep + validate_path
@@ -484,7 +484,7 @@ def test_workroom_real_task_end_to_end() -> None:
 def _run_gate(sbx: Any, evidence: _Evidence, failures: list[str]) -> None:
     from libs.ops import sandbox_provider
 
-    from harness.provider import register_claude_provider
+    from control_plane.provider import register_claude_provider
     from workroom.session import SessionDriver
 
     # -- 1. Seed the real mini-codebase into the LIVE sandbox -----------------
@@ -913,7 +913,7 @@ def _diagnose_seam_break(*, handle: Any, real_get_config: Any) -> str:
 
     Replays the real seam the session driver drives: build the REAL ``ClaudeAgentOptions``
     via the REAL ``get_agent_tool_config``/``workroom_options``, then feed it to the REAL
-    ``harness.provider.build_sdk_options`` (the first thing ``ClaudeAgentProvider.stream``
+    ``control_plane.provider.build_sdk_options`` (the first thing ``ClaudeAgentProvider.stream``
     calls) — capturing the verbatim traceback so the failure is cited from the current code.
     """
     import traceback
@@ -928,11 +928,11 @@ def _diagnose_seam_break(*, handle: Any, real_get_config: Any) -> str:
         )
         real_options = cfg.options
         lines.append(f"session driver builds a: {type(real_options).__module__}.{type(real_options).__name__}")
-        lines.append("the real provider (harness.provider.ClaudeAgentProvider.stream) expects an")
+        lines.append("the real provider (control_plane.provider.ClaudeAgentProvider.stream) expects an")
         lines.append("agentkit.provider.ProviderQuery and immediately calls build_sdk_options(prompt, query).")
         lines.append("")
         try:
-            from harness.provider import build_sdk_options
+            from control_plane.provider import build_sdk_options
 
             build_sdk_options("prompt", real_options)
             lines.append("build_sdk_options ACCEPTED the ClaudeAgentOptions (no seam break here).")
@@ -946,7 +946,7 @@ def _diagnose_seam_break(*, handle: Any, real_get_config: Any) -> str:
     lines.append("SEAM GAP #2 (deeper, independent of #1) — the `code` MCP server is NEVER mounted")
     lines.append("into the real SDK query():")
     lines.append("  * agentkit.provider.ProviderQuery has NO mcp_servers field, and")
-    lines.append("  * harness.provider.build_sdk_options() never sets options.mcp_servers on the")
+    lines.append("  * control_plane.provider.build_sdk_options() never sets options.mcp_servers on the")
     lines.append("    ClaudeAgentOptions it hands to claude_agent_sdk.query().")
     lines.append("  So even with SEAM BREAK #1 fixed, no Workroom path (session.py, big_build.py,")
     lines.append("  verify_gate.py) actually passes the `code` server to the SDK — the worker")

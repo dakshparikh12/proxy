@@ -20,7 +20,7 @@ from starlette.responses import JSONResponse, RedirectResponse
 GOOGLE_OIDC_DISCOVERY = "https://accounts.google.com/.well-known/openid-configuration"
 
 # The durable session cookie name. It carries the HMAC-signed ``sessions``-row id
-# that ``harness.session.resolve_session`` reads (the single source of truth is the
+# that ``control_plane.session.resolve_session`` reads (the single source of truth is the
 # DB row, not the cookie). This MUST match the name ``resolve_session`` /
 # ``complete_signin`` already use — do not invent a new scheme.
 SESSION_COOKIE = "session"

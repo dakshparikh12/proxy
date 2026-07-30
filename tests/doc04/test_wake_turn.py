@@ -5,7 +5,7 @@ per meeting — a wake = (event + a compacted state-digest) in → tool calls ou
 streaming through the provider seam via :class:`~agentkit.BehaviorRunner` with a
 mounted behavior. This suite drives the REAL wake-turn node end to end:
 
-    harness.wake_turn.WakeTurn.wake(event, ...)
+    control_plane.wake_turn.WakeTurn.wake(event, ...)
         → agentkit.resume_with_fallback(runner, behavior, inputs, resume_id, …)
         → agentkit.BehaviorRunner.run(...)  (mounts the behavior, isolation triad)
         → stream_deltas(provider.stream(...))  ← the injected FAKE provider seam
@@ -41,7 +41,7 @@ import pytest
 
 from libs.contracts import AgentChunk
 
-from harness.wake_turn import (
+from control_plane.wake_turn import (
     DEFAULT_COMPACTION_EVERY,
     StateDigest,
     WakeEvent,

@@ -39,7 +39,7 @@ async def test_abort_halts_the_model_loop_not_just_the_result():
     Proves the provider breaks the SDK ``async for message`` loop mid-stream — not
     that it ran to completion and then dropped the result on the floor.
     """
-    from harness.provider import ClaudeAgentProvider
+    from control_plane.provider import ClaudeAgentProvider
     from libs.agentkit import ProviderQuery
 
     controller = AbortController()

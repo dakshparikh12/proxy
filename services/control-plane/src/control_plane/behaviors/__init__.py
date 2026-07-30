@@ -1,4 +1,4 @@
-"""``harness.behaviors`` — Proxy's wake-behaviors as typed ``BehaviorConfig``
+"""``control_plane.behaviors`` — Proxy's wake-behaviors as typed ``BehaviorConfig``
 constants (§3.4; D-014 model-seat mapping, D-015 curated tool subsets, D-016 field
 set, D-023 no per-behavior branch).
 

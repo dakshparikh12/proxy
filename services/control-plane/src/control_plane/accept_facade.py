@@ -141,7 +141,7 @@ def handle_accept(
 ) -> AcceptResponse:
     """Authorize + apply a draft accept by DELEGATING to the real durable handler.
 
-    Exposes the ``services.harness.accept_route`` call shape the M13 invariant imports
+    Exposes the ``services.control_plane.accept_facade`` call shape the M13 invariant imports
     (no ``conn`` argument) and forwards to :func:`control_plane.accept_route.handle_accept`
     on a durable substrate. The referenced draft is materialised as server-side truth
     (owner tenant from the persisted meeting, never the caller's supplied tenant), so the

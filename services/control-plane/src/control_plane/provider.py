@@ -95,7 +95,7 @@ from claude_agent_sdk import (
 from claude_agent_sdk import query as _sdk_query
 from contracts import AgentChunk
 
-_LOG = logging.getLogger("services.harness.provider")
+_LOG = logging.getLogger("services.control_plane.provider")
 
 # The non-MCP built-in host tools the [CRITICAL] tripwire watches for. Same block-list
 # the isolation triad names — these run on the orchestrator host, never in E2B, so a

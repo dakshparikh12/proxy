@@ -8,7 +8,7 @@ transport emits its signal surface and to which the notes engine subscribes.
 This is the assembly point the rest of the codebase's docstrings name: it wires
 the carrier to the live notes engine so a real meeting maintains the ledger. On
 :func:`MeetingRuntime.start` it launches the Scribe serial consumer
-(``harness.scribe_runtime.start_meeting_scribe``) bound to the meeting's carrier;
+(``control_plane.scribe_runtime.start_meeting_scribe``) bound to the meeting's carrier;
 on :func:`MeetingRuntime.aclose` it tears the engine down. The Recall-bot launch
 (wired in a later doc's provisioner) shares this same carrier — transport's emit
 seam and the notes engine's subscribe are two ends of the one in-process stream.

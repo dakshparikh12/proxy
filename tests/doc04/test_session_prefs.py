@@ -35,7 +35,7 @@ room disable toggle) — never a hard-coded flag, never persisted past the sessi
 
 Product imports live INSIDE the test bodies (or are guarded) so this module
 COLLECTS clean and FAILS red before
-``services/harness/src/harness/behaviors/session_prefs.py`` exists.
+``services/control-plane/src/control_plane/behaviors/session_prefs.py`` exists.
 """
 from __future__ import annotations
 
@@ -47,9 +47,9 @@ _ROOT = pathlib.Path(__file__).resolve().parents[2]
 _SRC = (
     _ROOT
     / "services"
-    / "harness"
+    / "control-plane"
     / "src"
-    / "harness"
+    / "control_plane"
     / "behaviors"
     / "session_prefs.py"
 )
@@ -60,7 +60,7 @@ _SRC = (
 
 def test_shorter_answers_is_parsed_from_chat() -> None:
     """"keep answers shorter" parses to a verbosity=short preference."""
-    from harness.behaviors.session_prefs import parse_preferences
+    from control_plane.behaviors.session_prefs import parse_preferences
 
     prefs = parse_preferences("Proxy, keep answers shorter")
 
@@ -69,7 +69,7 @@ def test_shorter_answers_is_parsed_from_chat() -> None:
 
 def test_stop_posting_decision_notes_is_parsed_from_chat() -> None:
     """"stop posting decision notes" parses to decision_notes=off."""
-    from harness.behaviors.session_prefs import parse_preferences
+    from control_plane.behaviors.session_prefs import parse_preferences
 
     prefs = parse_preferences("Proxy, stop posting decision notes")
 
@@ -78,7 +78,7 @@ def test_stop_posting_decision_notes_is_parsed_from_chat() -> None:
 
 def test_one_line_can_carry_two_preferences() -> None:
     """The scenario's line carries BOTH prefs; both are parsed from the one line."""
-    from harness.behaviors.session_prefs import parse_preferences
+    from control_plane.behaviors.session_prefs import parse_preferences
 
     prefs = parse_preferences(
         "Proxy, keep answers shorter and stop posting decision notes"
@@ -95,14 +95,14 @@ def test_a_non_preference_line_parses_to_nothing() -> None:
     A grounded question must flow to the wake turn as an ASK, never be swallowed as
     a preference — so the parser returns no preferences on a non-preference line.
     """
-    from harness.behaviors.session_prefs import parse_preferences
+    from control_plane.behaviors.session_prefs import parse_preferences
 
     assert parse_preferences("Proxy, where's the checkout retry logic?") == []
 
 
 def test_parse_is_case_insensitive() -> None:
     """Preference recognition does not depend on casing."""
-    from harness.behaviors.session_prefs import parse_preferences
+    from control_plane.behaviors.session_prefs import parse_preferences
 
     prefs = parse_preferences("PROXY, KEEP ANSWERS SHORTER")
     assert any(p.key == "verbosity" and p.value == "short" for p in prefs)
@@ -117,7 +117,7 @@ def test_store_starts_empty_and_default() -> None:
     Session-scoped means "no memory at meeting start": the defaults are the
     product defaults (normal-length answers, decision notes posted).
     """
-    from harness.behaviors.session_prefs import SessionPreferences
+    from control_plane.behaviors.session_prefs import SessionPreferences
 
     prefs = SessionPreferences()
     assert prefs.is_empty is True
@@ -127,7 +127,7 @@ def test_store_starts_empty_and_default() -> None:
 
 def test_apply_a_chat_preference_updates_the_store() -> None:
     """Applying the scenario's chat line flips BOTH knobs on the store."""
-    from harness.behaviors.session_prefs import SessionPreferences
+    from control_plane.behaviors.session_prefs import SessionPreferences
 
     prefs = SessionPreferences()
     prefs.apply_chat("Proxy, keep answers shorter and stop posting decision notes")
@@ -143,7 +143,7 @@ def test_apply_chat_returns_only_the_recognized_preferences() -> None:
     (Doc 08 §2.4 #9: the preference is "acknowledged and held" — the caller needs
     to know WHICH prefs landed to speak the acknowledgement.)
     """
-    from harness.behaviors.session_prefs import SessionPreferences
+    from control_plane.behaviors.session_prefs import SessionPreferences
 
     prefs = SessionPreferences()
     captured = prefs.apply_chat("Proxy, keep answers shorter")
@@ -153,7 +153,7 @@ def test_apply_chat_returns_only_the_recognized_preferences() -> None:
 
 def test_a_non_preference_line_leaves_the_store_untouched() -> None:
     """Applying an ordinary ask captures nothing and changes no knob."""
-    from harness.behaviors.session_prefs import SessionPreferences
+    from control_plane.behaviors.session_prefs import SessionPreferences
 
     prefs = SessionPreferences()
     captured = prefs.apply_chat("Proxy, what's the retry policy?")
@@ -169,7 +169,7 @@ def test_a_non_preference_line_leaves_the_store_untouched() -> None:
 
 def test_default_store_contributes_nothing_to_the_digest() -> None:
     """With no preference set, the digest carries no preference block (free)."""
-    from harness.behaviors.session_prefs import SessionPreferences
+    from control_plane.behaviors.session_prefs import SessionPreferences
 
     assert SessionPreferences().render_for_digest() == ""
 
@@ -181,7 +181,7 @@ def test_captured_preferences_render_into_the_session_state_digest() -> None:
     session-state digest string, not a code branch. The render must name both
     honored preferences so the model's next turn is primed by them.
     """
-    from harness.behaviors.session_prefs import SessionPreferences
+    from control_plane.behaviors.session_prefs import SessionPreferences
 
     prefs = SessionPreferences()
     prefs.apply_chat("Proxy, keep answers shorter and stop posting decision notes")
@@ -221,7 +221,7 @@ def test_two_meetings_do_not_share_preferences() -> None:
     or persisted preference state. Meeting B starts at the product defaults even
     after meeting A shortened its answers.
     """
-    from harness.behaviors.session_prefs import SessionPreferences
+    from control_plane.behaviors.session_prefs import SessionPreferences
 
     meeting_a = SessionPreferences()
     meeting_a.apply_chat("Proxy, keep answers shorter")
@@ -269,7 +269,7 @@ def test_preference_folds_into_the_digest_a_wake_turn_reads() -> None:
     honored preference is present in that digest text — proving the preference is
     "applied to subsequent wake turns", via the digest, not a branch.
     """
-    from harness.behaviors.session_prefs import SessionPreferences, fold_into_digest
+    from control_plane.behaviors.session_prefs import SessionPreferences, fold_into_digest
 
     prefs = SessionPreferences()
     prefs.apply_chat("Proxy, keep answers shorter and stop posting decision notes")
@@ -293,7 +293,7 @@ def test_decision_note_disable_toggle_is_exposed_for_the_formatter() -> None:
     reads one flag rather than re-parsing chat — the room disable toggle from the
     scenario. Suppression is via that flag, never a second parse path.
     """
-    from harness.behaviors.session_prefs import SessionPreferences
+    from control_plane.behaviors.session_prefs import SessionPreferences
 
     prefs = SessionPreferences()
     assert prefs.decision_notes_enabled is True  # default: posted
@@ -307,7 +307,7 @@ def test_chatmessage_object_is_accepted_by_apply() -> None:
     The name-gate hands a ``ChatMessage`` forward; the preference path consumes the
     same shape (its ``.message`` text) so no re-shaping is needed at the call site.
     """
-    from harness.behaviors.session_prefs import SessionPreferences
+    from control_plane.behaviors.session_prefs import SessionPreferences
 
     prefs = SessionPreferences()
     msg = ChatMessage(message="Proxy, keep answers shorter", sender="Sam")

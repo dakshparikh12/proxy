@@ -438,7 +438,7 @@ def test_cfg_010_authlib_google_oidc_three_auth_routes_on_control_plane():
     for modpath, attr in (
         ("services.control_plane.app", "app"),
         ("services.control_plane.main", "app"),
-        ("services.harness.control_plane", "app"),
+        ("services.control_plane.control_plane", "app"),
         ("apps.control_plane.main", "app"),
     ):
         try:
@@ -455,7 +455,7 @@ def test_cfg_010_authlib_google_oidc_three_auth_routes_on_control_plane():
     cp_src = (
         S.read_all_text("*.py", root_parts=("services", "control_plane"))
         + S.read_all_text("*.py", root_parts=("apps", "control_plane"))
-        + S.read_all_text("*.py", root_parts=("services", "harness"))
+        + S.read_all_text("*.py", root_parts=("services", "control-plane"))
     )
     assert re.search(r"authlib", cp_src, re.I), "user auth must use Authlib"
     assert re.search(r"openid|oidc|\.well-known/openid-configuration|accounts\.google\.com", cp_src, re.I), (

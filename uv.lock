@@ -15,7 +15,6 @@ members = [
     "contracts",
     "control-plane",
     "db",
-    "harness",
     "http",
     "in-meeting",
     "llm",
@@ -1278,43 +1277,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/30/d4/a7d6fb3f58be99d65cbf2d3f766896217a2921d0f3ab10711c45dc1519ee/h2-4.4.0.tar.gz", hash = "sha256:46b551bdcdc7e83cf5c04d0bf93badb8a939bd2287d9fee1abb23a445b9e0580", size = 2156691, upload-time = "2026-07-23T19:14:19.442Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f6/df/5b14a118322d6097cb9bb30ec6bacad268e546a8ecfcb1f6d0de618dac2f/h2-4.4.0-py3-none-any.whl", hash = "sha256:6acffe1aeab79098d7eb0f8385c1add11f2c7a94815f6fa2b7060eeddee3d87c", size = 62368, upload-time = "2026-07-23T19:14:16.143Z" },
-]
-
-[[package]]
-name = "harness"
-version = "0.0.0"
-source = { editable = "services/harness" }
-dependencies = [
-    { name = "agentkit" },
-    { name = "authlib" },
-    { name = "claude-agent-sdk" },
-    { name = "contracts" },
-    { name = "db" },
-    { name = "fastapi" },
-    { name = "http" },
-    { name = "itsdangerous" },
-    { name = "llm" },
-    { name = "ops" },
-    { name = "premeeting" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "agentkit", editable = "libs/agentkit" },
-    { name = "authlib" },
-    { name = "claude-agent-sdk", specifier = ">=0.2.128" },
-    { name = "contracts", editable = "libs/contracts" },
-    { name = "db", editable = "libs/db" },
-    { name = "fastapi" },
-    { name = "http", editable = "libs/http" },
-    { name = "itsdangerous" },
-    { name = "llm", editable = "libs/llm" },
-    { name = "ops", editable = "libs/ops" },
-    { name = "premeeting", editable = "services/premeeting" },
-    { name = "pydantic", specifier = ">=2" },
-    { name = "pydantic-settings", specifier = ">=2" },
 ]
 
 [[package]]

@@ -266,7 +266,7 @@ def capabilities_catalog() -> tuple[dict[str, str], ...]:
     internal tool names, no model seat, nothing backend-only. Imported lazily to avoid
     an import cycle with the package ``__init__`` that assembles the registry.
     """
-    from harness import behaviors as _bdir
+    from control_plane import behaviors as _bdir
 
     catalog: list[dict[str, str]] = []
     for name in _bdir.REGISTRY:

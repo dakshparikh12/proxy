@@ -12,7 +12,7 @@ A *simple grounded lookup* ("where's the checkout retry logic?", "what writes th
 ``code_intel`` tools, which hit the **host-side ``code_intel`` internal API** (one
 ~50–100ms hop against the warm graph + pinned clone, §12.2) — the ~1–2s path.
 The turn resolves the ask through the ONE canonical
-:func:`harness.direct_answer.answer_direct` resolver (a cited ``file:line`` drawn
+:func:`control_plane.direct_answer.answer_direct` resolver (a cited ``file:line`` drawn
 from a real read at the pinned SHA) and returns a **final Envelope**
 (``status='done'``) *from the wake turn alone*.
 
@@ -114,7 +114,7 @@ def run_wake_turn(
     **Direct-answer path (§11.6).** When a live ``session`` (the SHA-pinned
     :class:`code_intel.meeting.MeetingSession`) or ``code_intel`` server is bound,
     the reactive ask in the transcript tail is resolved into a GROUNDED reply via
-    the ONE canonical :func:`harness.direct_answer.answer_direct` — the reply cites
+    the ONE canonical :func:`control_plane.direct_answer.answer_direct` — the reply cites
     a real ``file:line`` read out of the pinned clone (Law 1), honesty-tiered
     (Law 2). The answer is TERMINAL: the turn returns a **final Envelope**
     (``status='done'``) *from the wake turn alone*, provisioning **no** sandbox and

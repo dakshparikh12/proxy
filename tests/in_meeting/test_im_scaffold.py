@@ -45,6 +45,6 @@ def test_http_seam_importable() -> None:
 
 def test_provider_seam_reachable() -> None:
     """``ClaudeAgentProvider`` must be importable from its current harness home."""
-    from harness.provider import ClaudeAgentProvider  # noqa: PLC0415
+    from control_plane.provider import ClaudeAgentProvider  # noqa: PLC0415
 
     assert ClaudeAgentProvider is not None

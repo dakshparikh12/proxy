@@ -12,7 +12,7 @@ Recall ``in_call`` webhook it:
 
 2. **Assembles the subsystems in ONE scope** — transport (the ``SignalCarrier``),
    the Scribe runtime, the NEW in-meeting engine, and the abort seam — on a single
-   :class:`~harness.meeting_runtime.MeetingRuntime`, and **binds the claimed row's
+   :class:`~control_plane.meeting_runtime.MeetingRuntime`, and **binds the claimed row's
    fencing handle** onto the runtime so every side-effect reads ``is_owner`` live
    (§3.7 fencing). The ``SignalCarrier`` is subscribed **ONCE at join** (the Scribe
    consumer + the meeting-end listener share the one carrier); it is never re-wired
@@ -68,7 +68,7 @@ DEFAULT_MEETING_TIMEOUT_S: float = 3600.0
 ENGINE_TEARDOWN_TIMEOUT_S: float = 30.0
 
 # Recall bot-status event names that mean "the bot is now IN the room" — the moment the
-# harness claims + provisions the per-meeting runtime (mirrors ``harness.webhooks``).
+# harness claims + provisions the per-meeting runtime (mirrors ``control_plane.webhooks``).
 _IN_CALL_EVENTS = frozenset(
     {"bot.in_call", "in_call", "bot.in_call_recording", "bot.joining_call"}
 )
@@ -329,7 +329,7 @@ def _default_meeting_transport() -> Any:
 
     The harness holds no long-lived transport instance on the boot path (the invite
     path constructs one per call) — so the engine reuses the ONE production
-    construction site, ``harness.meetings._default_transport`` (RecallTransport bound
+    construction site, ``control_plane.meetings._default_transport`` (RecallTransport bound
     to the funded ``call_external`` funnel + the env/Secret-Manager config). One
     recipe, no second construction site.
     """

@@ -48,10 +48,10 @@ _CONTRACTS_SRC = (_REPO_ROOT / "libs" / "contracts" / "src").resolve()
 # canonical record lives beside each model) are present. A dropped read then surfaces as
 # a produced-but-unconsumed orphan rather than hiding behind an un-imported consumer.
 _CONSUMER_MODULES: tuple[str, ...] = (
-    "harness.provider",
-    "harness.dispatch",
-    "harness.orchestrator",
-    "harness.wake_turn",
+    "control_plane.provider",
+    "control_plane.dispatch",
+    "control_plane.orchestrator",
+    "control_plane.wake_turn",
     "workroom.verify_gate",
     "workroom.big_build",
     "workroom.session",

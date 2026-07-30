@@ -192,7 +192,7 @@ def test_host_007_direct_answer_touches_neither_e2b_nor_workroom():
 
     Driven end-to-end against the product entrypoints: run_full_pipeline builds
     the real graph+clone for flask@36e4a824, a SHA-pinned MeetingSession wraps the
-    live CodeIntelMCPServer, and harness.direct_answer.answer_direct composes the
+    live CodeIntelMCPServer, and control_plane.direct_answer.answer_direct composes the
     structural tools into a citation drawn from an ACTUAL file read — not a fixed
     string, not a graph edge. A stub that returns a hardcoded citation FAILS the
     'citation is present in the pinned clone' assertion below.
@@ -205,7 +205,7 @@ def test_host_007_direct_answer_touches_neither_e2b_nor_workroom():
     try:
         from services.code_intel import answer_direct  # scripted direct-answer wake turn entrypoint
     except ImportError:
-        from services.harness.direct_answer import answer_direct  # spec-derived fallback interface
+        from services.control_plane.direct_answer import answer_direct  # spec-derived fallback interface
 
     from services.code_intel.meeting import MeetingSession
     from services.code_intel.pipeline import run_full_pipeline
@@ -519,7 +519,7 @@ def test_host_014_key_destroy_crypto_shreds_only_that_tenant():
 # -- AC-HOST-007b (G4: one canonical answer_direct, no layering inversion) --
 def test_host_007b_single_canonical_answer_direct_no_layering_inversion():
     """G4-DUPLICATE-ANSWER-DIRECT-ENTRYPOINTS: exactly ONE canonical direct-answer
-    resolver (harness.direct_answer.answer_direct); the code_intel (Doc 01, lower
+    resolver (control_plane.direct_answer.answer_direct); the code_intel (Doc 01, lower
     layer) source imports nothing from harness (the upper layer that COMPOSES it
     -- a layering inversion); and whatever services.code_intel re-exports as
     answer_direct resolves to that one canonical resolver, never a parallel stub.
@@ -528,7 +528,7 @@ def test_host_007b_single_canonical_answer_direct_no_layering_inversion():
     import importlib
     import pathlib as _pl
 
-    from services.harness.direct_answer import answer_direct as canonical
+    from services.control_plane.direct_answer import answer_direct as canonical
     sig = inspect.signature(canonical)
     assert "ask" in sig.parameters, "canonical answer_direct is the (ask=...)-shaped resolver"
 

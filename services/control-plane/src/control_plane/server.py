@@ -53,7 +53,7 @@ DRAIN_GRACE_S: float = float(os.environ.get("DRAIN_GRACE_S", "300"))
 # spans/logs flush). unit: seconds.
 CRASH_FLUSH_DELAY_S: float = 0.05
 
-_log = get_logger("harness.server")
+_log = get_logger("control_plane.server")
 
 
 # ---------------------------------------------------------------------------

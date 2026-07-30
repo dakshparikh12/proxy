@@ -44,7 +44,7 @@ class CodeIntelContext:
     ``tenant_id`` scopes the server (isolation triad, Hard Rule 4). Both paths are on the
     tenant volume — one meeting's context can never point at another tenant's data. Built by
     :meth:`for_tenant_repo` from the identity the meeting already carries (tenant_id + repo
-    name), the SAME path ``harness.webhooks._resolve_referent_corpus`` locates the index at.
+    name), the SAME path ``control_plane.webhooks._resolve_referent_corpus`` locates the index at.
     """
 
     graph_db_path: Path

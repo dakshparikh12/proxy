@@ -160,7 +160,7 @@ def test_con_003_every_tool_handler_returns_errors_never_throws():
     # never throws") is realised as a registry of tool handlers plus a shared
     # never-throw boundary. Both must exist in the product.
     registry = None
-    for modname in ("libs.agentkit.tools", "libs.tools", "services.harness.tools"):
+    for modname in ("libs.agentkit.tools", "libs.tools", "services.control_plane.tools"):
         try:
             mod = import_module(modname)
         except Exception:

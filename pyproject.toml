@@ -83,7 +83,7 @@ ignore_missing_imports = true
 # under its walk name. (Doc 02 transport is the first cross-member runtime importer;
 # it imports both ``contracts`` and ``agentkit`` — the AbortRegistry reused for barge-in.)
 [[tool.mypy.overrides]]
-module = ["contracts.*", "agentkit.*", "harness.*", "control_plane.*", "code_intel.*", "premeeting.*", "in_meeting.*", "transport.*", "scribe.*", "workroom.*", "llm.*", "db.*"]
+module = ["contracts.*", "agentkit.*", "control_plane.*", "code_intel.*", "premeeting.*", "in_meeting.*", "transport.*", "scribe.*", "workroom.*", "llm.*", "db.*"]
 ignore_missing_imports = true
 
 # ``libs.contracts`` binds itself to the canonical ``contracts`` package via a runtime
@@ -105,7 +105,7 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-norecursedirs = ["harness", ".venv", "node_modules", "fixtures"]
+norecursedirs = [".venv", "node_modules", "fixtures"]
 # doc00 and doc01 each ship a `test_w_workflows.py` / `conftest.py` (no package
 # __init__.py); the default prepend import mode collides on the shared basenames.
 # importlib mode imports each by full path — no sys.path games, no collision.

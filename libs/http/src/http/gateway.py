@@ -10,7 +10,7 @@ then trusts for isolation) or raises :class:`RejectUpgrade` BEFORE the socket op
 The session resolver and the origin/limit policy are INJECTED (a callable + config),
 so ``libs/http`` stays free of a hard dependency on the ``sessions`` table plumbing:
 the live control_plane mount binds ``resolve_session`` to the harness session reader
-(``services.harness.resolve_session`` over ``app.state.db``), and the tests bind a
+(``control_plane.session.resolve_session`` over ``app.state.db``), and the tests bind a
 fake resolver. The gateway owns only the ORDER and the fail-closed rejection.
 
 Isolation lineage: the ``tenant_id`` on the returned :class:`Connection` is the one

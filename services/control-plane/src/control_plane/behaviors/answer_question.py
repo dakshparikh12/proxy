@@ -65,7 +65,7 @@ ANSWER_QUESTION = Behavior(
         # DIRECT-ANSWER + dispatch envelope (D-015): the code_intel read tools so it can
         # answer itself, PLUS the orchestration verbs. Curated subset, never the union. The
         # code-intel tools are MCP-namespaced ``mcp__code_intel__*`` so ``allowed_tools`` resolves
-        # to the MOUNTED code_intel SDK server (``harness.live_brain._build_code_intel_servers``);
+        # to the MOUNTED code_intel SDK server (``control_plane.live_brain._build_code_intel_servers``);
         # a bare ``get_dependents`` would name no mounted tool (the seam gap this closes). The
         # delivery/dispatch verbs stay bare — they are host-side SDK-local tools, not MCP tools.
         tools=(

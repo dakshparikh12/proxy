@@ -46,7 +46,7 @@ def test_no_context_prefix_leaves_prompt_unchanged() -> None:
 
 # ── PM-DOWN-01 (end-to-end): WakeTurn threads map_text → the runner's ProviderQuery ─────
 def test_pm_down_01_wake_turn_mounts_map_prefix() -> None:
-    from harness.wake_turn import WakeTurn
+    from control_plane.wake_turn import WakeTurn
 
     class _P:
         name = "claude"

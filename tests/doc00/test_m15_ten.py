@@ -202,7 +202,7 @@ def test_ten_002_cross_tenant_read_is_refused():
         try:
             from libs.http import dispatch as resolve  # the one dispatch funnel
         except ImportError:
-            from services.harness.authz import resolve_meeting_tenant as resolve  # accept-route check
+            from services.control_plane.authz import resolve_meeting_tenant as resolve  # accept-route check
 
     assert callable(resolve), "the server-side entity->tenant resolution must be a callable"
 
@@ -392,7 +392,7 @@ def test_ten_004_internal_notes_token_gated_and_tenant_scoped():
         try:
             from libs.http.internal import get_notes as handler
         except ImportError:
-            from services.harness.internal import internal_notes as handler
+            from services.control_plane.internal import internal_notes as handler
 
     assert callable(handler), "the /internal/notes handler must be a callable"
 

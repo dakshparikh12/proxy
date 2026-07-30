@@ -55,7 +55,7 @@ def _import_settings_module():
     """
     candidates = (
         "services.control_plane.settings",
-        "services.harness.config",
+        "services.control_plane.config",
         "libs.ops.settings",
         "libs.config.settings",
         "libs.config",
@@ -116,7 +116,7 @@ def test_boot_001_missing_required_key_crashes_at_import(monkeypatch):
     from importlib.util import find_spec
 
     settings_home = None
-    for name in ("services.control_plane.settings", "services.harness.config",
+    for name in ("services.control_plane.settings", "services.control_plane.config",
                  "libs.ops.settings", "libs.config.settings", "libs.config"):
         try:
             if find_spec(name) is not None:

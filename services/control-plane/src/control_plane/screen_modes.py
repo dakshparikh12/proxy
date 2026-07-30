@@ -9,7 +9,7 @@ never a fabrication, never a live-pixel sandbox mirror (deferred to Expansion):
     ``contracts.Envelope`` status + receipts) rendered as a legible step view;
   * **pin-to-source** — a citation's ``file:line`` pinned to its source. The
     ``file:line`` is the exact receipt the grounded answer envelope carried
-    (``harness.orchestrator._direct_answer_envelope`` writes ``receipts=[citation]``,
+    (``control_plane.orchestrator._direct_answer_envelope`` writes ``receipts=[citation]``,
     Law 1); a prose/tool-run receipt is NOT a source and is never pinned;
   * **final-artifact-preview** — the finished artifact a landed task produced
     (``Envelope.artifact`` — the diff/report/files), previewed for the room.
@@ -173,7 +173,7 @@ def render_pin_to_source(
     """Render **pin-to-source** (§2.5): the citation's ``file:line`` pinned to its source.
 
     The ``file:line`` is the EXACT receipt the grounded answer envelope carried
-    (``harness.orchestrator`` writes ``receipts=[citation]`` for a grounded direct answer,
+    (``control_plane.orchestrator`` writes ``receipts=[citation]`` for a grounded direct answer,
     Law 1). A receipt that is not a real ``path:line`` (a tool-run / prose receipt) is
     never pinned as a fabricated source. With no ``file:line`` receipt it refuses.
     """

@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 # on this channel IS the durable audit record in deployment (Cloud Logging), so the
 # DoD's "a world-touching action is recorded" holds on the LIVE route path — not only
 # when a caller hand-passes an ``audit_sink`` (§2.8, CANONICAL §12.9).
-_AUDIT_LOG = logging.getLogger("services.harness.control_plane.audit")
+_AUDIT_LOG = logging.getLogger("services.control_plane.audit")
 
 
 def _default_audit_sink(record: Any) -> None:

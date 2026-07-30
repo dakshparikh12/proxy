@@ -8,8 +8,8 @@ turn returns a **final Envelope** (``status='done'``) from the wake turn alone.
 
 These tests drive the REAL product path end to end:
 
-    harness.orchestrator.run_wake_turn
-        → harness.direct_answer.answer_direct   (the ONE canonical resolver)
+    control_plane.orchestrator.run_wake_turn
+        → control_plane.direct_answer.answer_direct   (the ONE canonical resolver)
         → code_intel.direct_answer.answer_direct (composes the structural tools)
 
 The ``code_intel`` handle here is a small HERMETIC fake server that returns the
@@ -44,7 +44,7 @@ from code_intel.results import (
 )
 from contracts import Envelope
 from contracts.envelopes import EnvelopeStatus
-from harness.orchestrator import WakeTurnResult, run_wake_turn
+from control_plane.orchestrator import WakeTurnResult, run_wake_turn
 
 
 # ── instrumented seams: any call is a contract violation (they only record) ──
@@ -317,7 +317,7 @@ def test_orchestrator_resolve_path_never_calls_a_dispatch_or_provision() -> None
     (Docstring / comment mentions explaining the contract are excluded.)"""
     from pathlib import Path
 
-    src = Path("services/harness/src/harness/orchestrator.py").read_text(encoding="utf-8")
+    src = Path("services/control-plane/src/control_plane/orchestrator.py").read_text(encoding="utf-8")
     code = _code_only(src)
     for forbidden in (".provision", ".dispatch", "dispatch_workroom"):
         assert forbidden not in code, (

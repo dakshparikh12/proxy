@@ -5,7 +5,7 @@ D-003). The CANONICAL liveness fence is the ``operation_runs`` fencing heartbeat
 in ``libs/ops/operation_run.py`` (spec §3.7 / CANONICAL §12.10): that heartbeat's
 ``UPDATE ... WHERE status='running'`` is what proves ownership — a zero-rowcount
 beat drives ``is_owner`` False and every side-effect emit is gated on that flag
-(``harness.emit``). Crash detection is a staleness read of that same row (the
+(``control_plane.emit``). Crash detection is a staleness read of that same row (the
 boot bulk sweep + lazy per-read reaper), never a broker ack.
 
 The Healthchecks.io ping is a SECONDARY, external alerting signal layered on top:

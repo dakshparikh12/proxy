@@ -6,7 +6,7 @@ The wake-behaviors are declared as **typed Python ``BehaviorConfig`` constants**
 NOT YAML (CANONICAL §12.5). Each is registered in a ``REGISTRY`` dict via one
 ``register()`` line; the runner reads the constant and never branches per behavior
 (D-023). Each test asserts one node clause against the *real* behaviors package
-(``harness.behaviors``), not a rebuilt fixture:
+(``control_plane.behaviors``), not a rebuilt fixture:
 
   * each behavior is a typed ``BehaviorConfig`` constant registered by one line;
   * ``config.tools`` is the D-015 curated subset, NEVER the union (§10.5);
@@ -37,10 +37,10 @@ from libs.agentkit import BehaviorRunner, ProviderQuery, with_proxy_guardrails
 from libs.contracts import AgentChunk
 from llm.routing import model_for
 
-from harness import behaviors as bdir
+from control_plane import behaviors as bdir
 
 
-_BEHAVIORS_DIR = Path("services/harness/src/harness/behaviors")
+_BEHAVIORS_DIR = Path("services/control-plane/src/control_plane/behaviors")
 
 
 # ── clause 1: every wake-behavior is a registered typed BehaviorConfig constant ──

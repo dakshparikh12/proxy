@@ -106,7 +106,7 @@ def test_registered_fields_are_grounded_in_the_real_consumer_source():
     """
     import inspect
 
-    import harness.provider as provider  # provider reads chunk.type/.text/.metadata
+    import control_plane.provider as provider  # provider reads chunk.type/.text/.metadata
     import transport.chat as chat  # chat gates on report.dm_available
 
     provider_src = inspect.getsource(provider)

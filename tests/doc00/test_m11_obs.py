@@ -189,7 +189,7 @@ def test_obs_005_health_endpoint_and_harness_heartbeat():
     try:
         from services.control_plane.app import app as control_plane_app  # ASGI/route surface with /health
     except ImportError:
-        from services.harness.app import app as control_plane_app  # spec-derived fallback surface
+        from services.control_plane.app import app as control_plane_app  # spec-derived fallback surface
     from services.control_plane.heartbeat import emit_heartbeat  # Healthchecks.io ping emitter
 
     # GET /health returns a healthy response (200). Prefer the framework TestClient if available.
@@ -286,7 +286,7 @@ def test_obs_007_live_ws_affinity_routes_to_operation_runs_claim_owner():
     try:
         from libs.ops.affinity import route_to_owner  # resolves owner instance-id from operation_runs
     except ImportError:
-        from services.harness.affinity import route_to_owner  # spec-derived fallback surface
+        from services.control_plane.affinity import route_to_owner  # spec-derived fallback surface
 
     owner_instance = "instance-X"
     non_owner_instance = "instance-Y"

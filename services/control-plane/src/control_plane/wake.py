@@ -5,7 +5,7 @@ pinned current clone, citing ``file:line`` — the fast path. It touches NEITHER
 E2B sandbox NOR a Workroom session (those are reserved for real asked WORK, Doc
 05); a direct answer that provisioned a sandbox would violate AC-HOST-007.
 
-The REAL resolver lives in :mod:`harness.direct_answer` — it composes the live
+The REAL resolver lives in :mod:`control_plane.direct_answer` — it composes the live
 :class:`~code_intel.mcp_server.CodeIntelMCPServer` tools into a grounded reply
 whose ``file:line`` is drawn from an actual file read at the pinned SHA. This
 module is the thin, back-compatible ``question=``-shaped façade over it: when a
@@ -46,7 +46,7 @@ def answer_direct(
     """Answer a grounded question via the structural index — no E2B, no Workroom.
 
     ONE canonical signature: the ask is passed as ``ask=`` (the name the canonical
-    :func:`harness.direct_answer.answer_direct` resolver uses). ``question=`` is a
+    :func:`control_plane.direct_answer.answer_direct` resolver uses). ``question=`` is a
     back-compatible alias for the same argument so a legacy caller keeps working;
     exactly one of the two must be supplied (they must not disagree). This façade
     delegates to the ONE resolver — there is no second implementation.
@@ -54,7 +54,7 @@ def answer_direct(
     ``e2b`` / ``workroom`` are accepted only so a caller can PROVE the direct path
     never invokes them; this function calls neither. When a live ``session``
     (a :class:`code_intel.meeting.MeetingSession`) or a ``code_intel`` server is
-    supplied, the answer is resolved for real by :func:`harness.direct_answer.answer_direct`
+    supplied, the answer is resolved for real by :func:`control_plane.direct_answer.answer_direct`
     (real tools → real file:line read). A bare ``callable`` ``code_intel`` (the
     legacy single-shot hook) is honoured as before. With no handle at all a
     deterministic clone-grounded citation stands in.
