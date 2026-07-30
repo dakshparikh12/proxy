@@ -340,6 +340,69 @@ async def test_flush_with_whitespace_only_buffer_releases_speaking() -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Regression: commit_tail() seals a turn's unterminated partial at the turn
+# boundary so a following turn's text can NEVER merge onto it (the cross-turn
+# speech-merge bug: the shared buffer held turn A's leftover and turn B's first
+# say() concatenated onto it, synthesizing one garbled sentence).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_commit_tail_seals_partial_now_and_prevents_cross_turn_merge() -> None:
+    """A turn ending on an unterminated partial: ``commit_tail`` synthesizes it
+    as its OWN sentence immediately (no quiet-window wait), so the next turn's
+    delta starts a fresh buffer — the two never merge into one synth call."""
+    calls: list[str] = []
+    script = {
+        "the retry logic is in client.py:42": [b"\xa1\xa1"],
+        "auth is handled in login.py:17": [b"\xb1\xb1"],
+    }
+    channel = _RecordingChannel()
+    pipe = build_speak_sink(
+        synthesize=_scripted_synth(script, calls), channel=channel, flush_after_s=_NEVER
+    )
+
+    # Turn A ends on an unterminated partial — with no terminator and _NEVER as
+    # the quiet window, it would otherwise sit in the buffer indefinitely.
+    await pipe.say("the retry logic is in client.py:42")
+    await pipe.commit_tail()  # the turn boundary seals it NOW
+    await asyncio.sleep(0.02)
+    assert calls == ["the retry logic is in client.py:42"]
+
+    # Turn B appends to an EMPTY buffer — no concatenation onto A's leftover.
+    await pipe.say("auth is handled in login.py:17")
+    await pipe.commit_tail()
+    await pipe.flush()
+
+    assert calls == [
+        "the retry logic is in client.py:42",
+        "auth is handled in login.py:17",
+    ]
+    assert channel.audio == [b"\xa1\xa1", b"\xb1\xb1"]
+
+
+@pytest.mark.asyncio
+async def test_commit_tail_on_empty_buffer_is_a_harmless_noop() -> None:
+    """A turn that spoke a fully-terminated sentence (empty buffer) commits to
+    nothing — no spurious synth, no crash."""
+    calls: list[str] = []
+    channel = _RecordingChannel()
+    pipe = build_speak_sink(
+        synthesize=_scripted_synth({"Done.": [b"\x01\x01"]}, calls),
+        channel=channel,
+        flush_after_s=_NEVER,
+    )
+
+    await pipe.say("Done.")  # terminated → synthesized, buffer already empty
+    await pipe.flush()
+    assert calls == ["Done."]
+
+    await pipe.commit_tail()  # nothing buffered → no-op, no crash
+    await asyncio.sleep(0.02)
+    assert calls == ["Done."]
+
+
 @pytest.mark.asyncio
 async def test_cut_while_audibly_speaking_sends_speaking_false() -> None:
     calls: list[str] = []

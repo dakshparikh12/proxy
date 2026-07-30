@@ -381,6 +381,79 @@ async def test_concurrent_turns_never_interleave_spoken_deltas() -> None:
     assert all(t.error is None for t in engine.turns)
 
 
+# ── Regression: cross-turn speech-merge in the REAL shared SpeakPipe buffer ───
+
+from in_meeting.speak import build_speak_sink  # noqa: E402 — grouped with its test
+
+
+class _SentenceChannel:
+    """A recording Output-Media channel: captures whole synthesized sentences."""
+
+    def __init__(self) -> None:
+        self.audio: list[bytes] = []
+
+    async def write_audio(self, pcm: bytes) -> None:
+        self.audio.append(pcm)
+
+    async def set_speaking(self, speaking: bool) -> None:  # noqa: FBT001
+        pass
+
+
+@pytest.mark.asyncio
+async def test_concurrent_turns_do_not_merge_across_the_shared_speak_buffer() -> None:
+    """Regression for the cross-turn speech-merge bug. With the REAL ``SpeakPipe``
+    as the sink and TWO concurrent turns whose spoken text ends WITHOUT a
+    terminator (the flagship "two asks at once" case), the shared ``_buffer`` used
+    to hold turn A's leftover when the mouth released, and turn B's first ``say``
+    concatenated onto it — synthesizing ONE garbled merged sentence. The engine
+    now commits each turn's trailing partial at the turn boundary, so each turn's
+    text synthesizes as its OWN sentence."""
+    synth_calls: list[str] = []
+
+    async def synthesize(text: str):  # noqa: ANN202 — local AudioChunk-shaped fake
+        synth_calls.append(text)
+
+        class _C:
+            pcm = b"\x00\x00"
+            seq = 0
+            is_final = True
+
+        yield _C()
+
+    channel = _SentenceChannel()
+    # _NEVER-equivalent quiet window: never fires inside the test, so the ONLY way
+    # A's unterminated tail reaches synth is the turn-boundary commit.
+    pipe = build_speak_sink(synthesize=synthesize, channel=channel, flush_after_s=5.0)
+
+    release = asyncio.Event()
+    # Both answers END UNTERMINATED (":42", ":17") → they sit in the buffer.
+    provider = SlowProvider(release, answers={_ASK_A: _ANSWER_A, _ASK_B: _ANSWER_B})
+
+    engine = Engine(
+        provider=provider,
+        model=_MODEL,
+        allowed_tools=(),
+        speak=pipe,  # the REAL pipe, not a recording callable
+        disambiguate=_confirm_every_hit,
+        map_text=_MAP,
+    )
+
+    assert await engine.feed_transcript(_line(_ASK_A, "Devon", 20.0)) is not None
+    assert await engine.feed_transcript(_line(_ASK_B, "Priya", 21.0)) is not None
+    await asyncio.sleep(0)
+    assert len(provider.calls) == 2  # both turns in flight at once
+
+    release.set()
+    await engine.drain()
+    await pipe.flush()  # drain any synth still in flight (nothing should remain buffered)
+
+    # Each turn's text synthesized as its OWN sentence — never merged into one.
+    assert sorted(synth_calls) == sorted([_ANSWER_A, _ANSWER_B]), (
+        f"cross-turn speech merged: {synth_calls!r}"
+    )
+    assert {t.spoken for t in engine.turns} == {_ANSWER_A, _ANSWER_B}
+
+
 @pytest.mark.asyncio
 async def test_pre_speech_work_runs_concurrently_speech_lock_never_serializes_starts() -> None:
     """AC7 — the speak lock serializes SPEECH, never turn STARTS or pre-speech

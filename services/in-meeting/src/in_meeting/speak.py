@@ -191,6 +191,22 @@ class SpeakPipe:
             # mid-drain) without re-raising into the caller.
             await asyncio.gather(worker, return_exceptions=True)
 
+    async def commit_tail(self) -> None:
+        """Turn-boundary commit: push this turn's buffered trailing partial into
+        the FIFO queue NOW, so a following turn's first delta can't concatenate
+        onto it and synthesize as one merged sentence.
+
+        Unlike :meth:`flush`, this does NOT wait for the queue to drain — the
+        worker keeps synthesizing in the background and cross-turn FIFO order is
+        preserved, so it never over-serializes concurrent turns (the caller holds
+        the one-mouth lock only long enough to close its own utterance)."""
+        self._cancel_tail_timer()
+        tail = self._buffer.strip()
+        self._buffer = ""
+        if tail:
+            self._queue.append(tail)
+            self._ensure_worker()
+
     async def cut(self) -> None:
         """Barge-in primitive: drop buffered text, queued sentences, and the
         in-flight synth NOW. Detection lives in the barge-in reflex, not here."""

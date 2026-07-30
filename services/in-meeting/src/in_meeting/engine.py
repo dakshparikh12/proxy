@@ -105,6 +105,19 @@ def _as_speak_fn(speak: SpeakFn | SpeakSink) -> SpeakFn:
     return speak
 
 
+#: A sink's optional turn-boundary commit: closes the current turn's utterance so
+#: the next turn's deltas start a fresh buffer (see :meth:`SpeakPipe.commit_tail`).
+SpeakBoundaryFn = Callable[[], Awaitable[None]]
+
+
+def _as_boundary_fn(speak: SpeakFn | SpeakSink) -> SpeakBoundaryFn | None:
+    """A sink that BUFFERS across ``say`` calls (the real :class:`SpeakPipe`)
+    exposes ``commit_tail`` to seal a turn's trailing partial at the boundary; a
+    plain callable or a bufferless test fake has nothing to commit → ``None``."""
+    commit = getattr(speak, "commit_tail", None)
+    return commit if callable(commit) else None
+
+
 @dataclass(frozen=True, slots=True)
 class TurnResult:
     """One wake turn's outcome, stated honestly.
@@ -176,6 +189,7 @@ class Engine:
         self._mcp_servers = mcp_servers
         self._max_turns = max_turns
         self._speak: SpeakFn = _as_speak_fn(speak)
+        self._speak_boundary: SpeakBoundaryFn | None = _as_boundary_fn(speak)
         self._provider: Provider = provider if provider is not None else EngineProvider()
         self._map_text = map_text
         self._prime = prime
@@ -380,7 +394,18 @@ class Engine:
             error = str(exc) or exc.__class__.__name__
         finally:
             if lock_held:
-                self._speak_lock.release()
+                try:
+                    if self._speak_boundary is not None:
+                        # Seal THIS turn's trailing partial into the FIFO queue
+                        # before releasing the mouth, so the next turn's first
+                        # delta appends to an empty buffer — two turns can never
+                        # merge into one synthesized sentence. Non-draining, so it
+                        # does not over-serialize concurrent turns.
+                        await self._speak_boundary()
+                except Exception:  # noqa: BLE001 — a boundary commit never crashes the turn (§9)
+                    logger.exception("speak boundary-commit failed at turn end")
+                finally:
+                    self._speak_lock.release()
         turn = TurnResult(
             source=engagement.source,
             spoken="".join(spoken_parts),
