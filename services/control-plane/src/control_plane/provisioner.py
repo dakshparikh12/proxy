@@ -259,7 +259,7 @@ async def provision_meeting(
     try:
         if use_workroom:
             bridge, speak_pipe, sandbox = await _assemble_workroom(
-                resolved, db=db, bot_id=bot_id, transport=transport,
+                resolved, db=db, bot_id=bot_id, transport=transport, map_text=map_text,
             )
         else:
             engine, speak_pipe, sandbox = await _assemble_engine(
@@ -529,6 +529,7 @@ async def _assemble_workroom(
     bot_id: str,
     transport: Any = None,
     oauth_token: str | None = None,
+    map_text: str | None = None,
 ) -> tuple[Any, Any, Any]:
     """The WORKROOM assembly — the new brain (native Claude Code inside a per-meeting E2B
     sandbox with the repo cloned in), fronted by the thin MEETING BRIDGE. Drop-in alternative
@@ -583,6 +584,7 @@ async def _assemble_workroom(
     try:
         workroom = await provision_workroom(
             call=call_external, token=token, repo_url=repo_url, sha=pinned_sha,
+            map_text=map_text or "",
         )
     except Exception:  # noqa: BLE001 — a provision fault degrades honestly, never kills the join
         _log.warning(

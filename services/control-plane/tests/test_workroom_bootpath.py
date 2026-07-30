@@ -152,9 +152,10 @@ def test_workroom_serves_a_meeting_on_the_real_bootpath(monkeypatch) -> None:
         from in_meeting.workroom import MAP_FILE, PRIME_FILE, TRANSCRIPT_FILE
 
         resolved = {"id": "m-boot-1", "repo_id": 42, "pinned_sha": None}
+        premeeting_map = "# cal.com pre-meeting map\n- packages/lib/slugify.ts — the slug helper"
         bridge, speak_pipe, sandbox = await provisioner._assemble_workroom(
             resolved, db=FakeDB(), bot_id="bot-xyz", transport=SimpleNamespace(),
-            oauth_token="sk-oauth-test",
+            oauth_token="sk-oauth-test", map_text=premeeting_map,
         )
 
         # (1) Assembly succeeded through the REAL _assemble_workroom + REAL provision_workroom.
@@ -165,10 +166,12 @@ def test_workroom_serves_a_meeting_on_the_real_bootpath(monkeypatch) -> None:
         setup = "\n".join(sandbox.cmd_log)
         assert "git clone" in setup
         assert "github.com/calcom/cal.com" in setup
-        # ...and seeded the orientation files inside the sandbox:
+        # ...and seeded the orientation files inside the sandbox — INCLUDING the pre-meeting map
+        # threaded from repo_maps through provision_meeting -> _assemble_workroom (MAP-LOAD: the
+        # pre-meeting system's contribution reaches the workroom, so Claude opens oriented):
         assert PRIME_FILE in sandbox._store
-        assert MAP_FILE in sandbox._store
         assert TRANSCRIPT_FILE in sandbox._store
+        assert sandbox._store[MAP_FILE] == premeeting_map
         # the sandbox was provisioned with a real timeout budget (the create seam ran):
         assert FakeSandbox.created_kwargs and "timeout" in FakeSandbox.created_kwargs[0]
 
