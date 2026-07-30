@@ -638,16 +638,21 @@ dependencies = [
     { name = "agentkit" },
     { name = "authlib" },
     { name = "claude-agent-sdk" },
+    { name = "code-intel" },
     { name = "contracts" },
     { name = "db" },
     { name = "fastapi" },
     { name = "http" },
+    { name = "in-meeting" },
     { name = "itsdangerous" },
     { name = "llm" },
     { name = "ops" },
     { name = "premeeting" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "scribe" },
+    { name = "uvicorn" },
+    { name = "workroom" },
 ]
 
 [package.metadata]
@@ -655,16 +660,21 @@ requires-dist = [
     { name = "agentkit", editable = "libs/agentkit" },
     { name = "authlib" },
     { name = "claude-agent-sdk", specifier = ">=0.2.128" },
+    { name = "code-intel", editable = "services/code_intel" },
     { name = "contracts", editable = "libs/contracts" },
     { name = "db", editable = "libs/db" },
     { name = "fastapi" },
     { name = "http", editable = "libs/http" },
+    { name = "in-meeting", editable = "services/in-meeting" },
     { name = "itsdangerous" },
     { name = "llm", editable = "libs/llm" },
     { name = "ops", editable = "libs/ops" },
     { name = "premeeting", editable = "services/premeeting" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pydantic-settings", specifier = ">=2" },
+    { name = "scribe", editable = "services/scribe" },
+    { name = "uvicorn", specifier = ">=0.30" },
+    { name = "workroom", editable = "services/workroom" },
 ]
 
 [[package]]

@@ -614,3 +614,43 @@ async def _shutdown_real(app: Any) -> None:
     db = getattr(app.state, "db", None)
     if db is not None:
         await db.close()
+
+
+# ---------------------------------------------------------------------------
+# Deploy entrypoint — ``python -m control_plane.server`` (the Dockerfile CMD)
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    """Serve the control_plane app: fail-fast config gate, then uvicorn on $PORT.
+
+    This is what the deploy CMD (``exec python -m control_plane.server``) runs.
+    Order is load-bearing:
+
+    1. Import the settings module FIRST — its import-time gate crashes NAMING any
+       missing hard-gate key (Doc 00 §6, fail loud at boot, never on first use).
+    2. Build the app via ``create_app`` and attach the ordered §6 ``lifespan``
+       (tracing → pool → database → provisioner_ready → reaper → routers), which
+       ``create_app`` deliberately does not attach so tests construct the app
+       without a live database.
+    3. Serve with uvicorn on ``0.0.0.0:$PORT`` (Cloud Run injects ``PORT``).
+    """
+    from control_plane import settings as settings_mod
+
+    _ = settings_mod.settings  # imported above => the §6 gate already ran; keep it explicit
+
+    import uvicorn
+
+    from control_plane.app import create_app
+
+    app = create_app()
+    # Attach the ordered boot lifespan to the served app (Starlette consults
+    # ``router.lifespan_context`` at startup; ``lifespan(app)`` is the async CM).
+    app.router.lifespan_context = lifespan
+    port = int(os.environ.get("PORT", "8080"))
+    # 0.0.0.0 is deliberate: this entrypoint runs inside the container; the
+    # platform (Cloud Run / the container runtime) owns external exposure.
+    uvicorn.run(app, host="0.0.0.0", port=port)  # nosec B104
+
+
+if __name__ == "__main__":
+    main()
