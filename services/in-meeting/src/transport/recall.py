@@ -241,14 +241,25 @@ class RecallTransport:
         await self._call_external(lambda: self._api("POST", f"/bot/{bot_id}/leave", {}), service="recall")
 
     async def post_chat(self, bot_id: str, message: str, *, pinned: bool = False) -> None:
+        # Recall's real chat endpoint is ``/bot/{id}/send_chat_message/`` (trailing
+        # slash, like every other resource verb) with the pin flag named ``pin`` —
+        # NOT ``/chat`` / ``pinned`` (verified against docs.recall.ai).
         await self._call_external(
-            lambda: self._api("POST", f"/bot/{bot_id}/chat", {"message": message, "pinned": pinned}),
+            lambda: self._api(
+                "POST", f"/bot/{bot_id}/send_chat_message/", {"message": message, "pin": pinned}
+            ),
             service="recall",
         )
 
     async def send_dm(self, bot_id: str, message: str, participant_id: str) -> None:
+        # Same endpoint; ``to`` names the recipient (Recall defaults to "everyone" —
+        # per-participant DM is Zoom-only, degraded honestly by the platform).
         await self._call_external(
-            lambda: self._api("POST", f"/bot/{bot_id}/chat", {"message": message, "to": participant_id}),
+            lambda: self._api(
+                "POST",
+                f"/bot/{bot_id}/send_chat_message/",
+                {"message": message, "to": participant_id},
+            ),
             service="recall",
         )
 
