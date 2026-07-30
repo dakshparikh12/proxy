@@ -365,7 +365,11 @@ async def _assemble_engine(
     * ``transport`` — the real RecallTransport verbs (mute/unmute/post_chat/send_dm);
     * ``sandbox`` — ONE warm E2B sandbox provisioned at join. A provision FAILURE must
       NOT kill the meeting: it degrades to ``sandbox=None`` (no sandbox tools mounted,
-      the caller-guard keeps names and servers aligned) with an honest log.
+      the caller-guard keeps names and servers aligned) with an honest log;
+    * ``drafts`` — the meeting-scoped draft-staging server (Law 3: the one
+      write-to-the-world stages a durable draft behind the human accept route),
+      built over the durable substrate and bound to THIS meeting; a substrate that
+      cannot stage mounts nothing (honest degrade, same caller-guard).
 
     Returns ``(engine, speak_pipe, sandbox)`` — the caller stashes all three on the
     runtime and OWNS the sandbox/pipe lifecycle (killed/closed at meeting end).
@@ -416,6 +420,32 @@ async def _assemble_engine(
             exc_info=True,
         )
 
+    # The meeting-scoped draft-staging server (Law 3 — the ONE write-to-the-world,
+    # staged behind the human accept route). Built over the durable substrate facade
+    # and bound to THIS meeting at build time, so a staged draft can never land in
+    # another meeting. ``build_drafts_server`` returns None when the handed substrate
+    # cannot stage (a stand-in db in an offline assembly) — the same caller-guard
+    # honesty as code/sandbox: no server, no advertised draft tools, and a fault
+    # never kills the join (§3.8 / Rule 6).
+    drafts_server: Any = None
+    try:
+        from in_meeting import drafts_access
+
+        drafts_server = drafts_access.build_drafts_server(db=db, meeting_id=meeting_id)
+        if drafts_server is None:
+            _log.warning(
+                "draft staging unavailable for meeting %s — the substrate cannot stage; "
+                "Proxy cannot stage a draft this meeting (honest degrade)",
+                meeting_id,
+            )
+    except Exception:  # noqa: BLE001 - a mount fault degrades honestly, never kills the join
+        _log.warning(
+            "draft-staging mount failed for meeting %s — Proxy cannot stage a draft "
+            "this meeting (honest degrade; other access unaffected)",
+            meeting_id,
+            exc_info=True,
+        )
+
     # ``clone_repo`` must never collapse to the shared repos/ dir: a meeting with no
     # bound repo gets a definitively-nonexistent tenant-rooted path (no code server).
     clone_repo = repo_name if repo_name else "__no-repo__"
@@ -433,6 +463,7 @@ async def _assemble_engine(
             disambiguate=confirm,
             provider=provider,
             sandbox=sandbox,
+            drafts=drafts_server,
         )
     return engine, speak_pipe, sandbox
 

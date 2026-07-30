@@ -9,8 +9,10 @@ harness boot path will call — and it does exactly two things:
   ``index.md`` map loaded by pinned sha (MAP-LOAD), the grounded code toolbelt served
   off the tenant's clone (``premeeting.repo_context`` — the KEEP integration seam),
   the meeting-control toolbelt bound to THIS meeting's bot
-  (``in_meeting.meeting_control``), and — when the caller passes a provisioned
-  sandbox handle — the sandbox execution toolbelt (``in_meeting.sandbox``).
+  (``in_meeting.meeting_control``), and — when the caller passes them — the sandbox
+  execution toolbelt (``in_meeting.sandbox``, off a provisioned handle) and the
+  meeting-scoped draft-staging toolbelt (``in_meeting.drafts_access``, the Law-3
+  write-to-the-world gate: propose stages, only the human accept route applies).
   Degradation is honest by construction: an unindexed repo / missing clone mounts no
   ``code_intel`` server and advertises no code tools, and no sandbox handle mounts
   no ``sandbox`` server and advertises no sandbox tools (the sim's caller-guard,
@@ -38,6 +40,7 @@ from agentkit import Provider
 from claude_agent_sdk import McpSdkServerConfig
 from premeeting.repo_context import RepoContext
 
+from in_meeting.drafts_access import DRAFT_TOOLS
 from in_meeting.engine import CODE_TOOLS, Engine, SpeakFn, SpeakSink
 from in_meeting.map_loader import load_meeting_map
 from in_meeting.meeting_control import (
@@ -67,6 +70,7 @@ async def assemble_engine(
     provider: Provider | None = None,
     prime: str = PROXY_SYSTEM_PROMPT,
     sandbox: Any | None = None,
+    drafts: McpSdkServerConfig | None = None,
 ) -> Engine:
     """Assemble ONE meeting's Engine with its full real access, honestly degraded.
 
@@ -85,6 +89,14 @@ async def assemble_engine(
     ``sandbox`` server and ``SANDBOX_TOOLS`` are advertised ONLY when it mounted
     (the same caller-guard as ``code_intel``, so names and servers never diverge).
 
+    ``drafts`` is the ALREADY-BUILT meeting-scoped draft-staging server
+    (``in_meeting.drafts_access.build_drafts_server`` — the boot path/provisioner
+    builds it over the durable substrate and passes it in, exactly as it passes the
+    provisioned ``sandbox`` handle) or ``None``: no server mounts no ``drafts``
+    access and advertises no draft tools (the same caller-guard, mirrored on both) —
+    Proxy then simply cannot stage a world-touching draft this meeting and must say
+    so honestly (Law 2) rather than hold a tool name that can't resolve.
+
     ``conn`` is a borrowed asyncpg connection (the ``premeeting.map_store`` shape);
     ``speak``/``disambiguate``/``provider`` are the Engine's injected seams, threaded
     through unchanged (``provider=None`` = the real :class:`EngineProvider`).
@@ -101,12 +113,15 @@ async def assemble_engine(
         (CODE_TOOLS if code_server is not None else ())
         + MEETING_TOOLS
         + (SANDBOX_TOOLS if sandbox is not None else ())
+        + (DRAFT_TOOLS if drafts is not None else ())
     )
     mcp_servers: dict[str, Any] = {"meeting": meeting_server}
     if code_server is not None:
         mcp_servers["code_intel"] = code_server
     if sandbox is not None:
         mcp_servers["sandbox"] = build_sandbox_server(sandbox)
+    if drafts is not None:
+        mcp_servers["drafts"] = drafts
 
     return Engine(
         model=model,
