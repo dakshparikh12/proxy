@@ -359,25 +359,17 @@ async def _real_provisioner_ready(app: Any) -> None:
     # The Recall bot + sandbox provisioner are created in startup (Doc 02 wires
     # the real provisioning); request handlers await this gate before use.
     #
-    # The per-meeting runtime registry is constructed HERE so meeting-join (and the
-    # bot provisioner) resolve one MeetingRuntime — its in-process SignalCarrier +
-    # its live Scribe notes engine — per meeting. This is the production wiring that
-    # makes ``run_scribe`` actually run for a real meeting (DOC03-SCRIBE-PIPELINE).
+    # The per-meeting runtime registry is constructed HERE so meeting-join (and the bot
+    # provisioner) resolve one MeetingRuntime — its workroom (a per-meeting E2B sandbox with
+    # the repo + the live transcript as files) + its one meeting connection — per meeting.
     from control_plane.meeting_runtime import MeetingRuntimeRegistry
 
-    # The close-pass vendor edges (GCS finalized-notes bucket + Recall chat poster +
-    # the Sonnet close caller). When configured, the registry runs the ordered close
-    # pass on meeting end so the permanent markdown notes record is produced live
-    # (gap DOC03-CLOSE-PASS-UNWIRED). Absent config -> bare teardown (dev/no-bucket).
-    close_config = _build_close_config(app.state.db)
-    app.state.meeting_runtimes = MeetingRuntimeRegistry(
-        app.state.db, close_config=close_config
-    )
-    # Wire the meeting_runtime deployable's provisioner seam so the webhook drain turns a
-    # Recall in_call into a RUNNING, atomically-claimed meeting on the real path (§3.6/§3.2).
-    # make_provision_launcher's ``launch`` routes an in_call THROUGH the provisioner (atomic
-    # claim + one-scope assembly + loop launch) instead of the Scribe-only start; the drain
-    # loop below is the ONE production caller that keeps this seam live, not a test-only path.
+    app.state.meeting_runtimes = MeetingRuntimeRegistry(app.state.db)
+    # Wire the provisioner seam so the webhook drain turns a Recall in_call into a RUNNING,
+    # atomically-claimed meeting on the real path (§3.6/§3.2). make_provision_launcher's
+    # ``launch`` routes an in_call THROUGH the provisioner (atomic claim + workroom provision
+    # + meeting-connection assembly + reactive loop); the drain loop below is the ONE
+    # production caller that keeps this seam live, not a test-only path.
     from control_plane.provisioner import make_provision_launcher
 
     app.state.meeting_tasks = set()
@@ -389,72 +381,6 @@ async def _real_provisioner_ready(app: Any) -> None:
     )
     _start_webhook_drain(app)
     set_provisioner_ready(gate)
-
-
-def _build_close_config(db: Any) -> Any | None:
-    """Build the real meeting-close vendor config from settings (production wiring).
-
-    Constructs the real GCS finalized-notes bucket handle from ``settings.gcs_bucket``
-    and a chat poster that routes the notes link through the real Recall ``post_chat``
-    seam (the ONE ``call_external`` funnel). Returns ``None`` when no notes bucket is
-    configured (a dev host with no GCS) so meeting end still tears the runtime down.
-
-    The notes URL embeds the meeting id (``gs://<bucket>/meetings/<id>/notes.md``), so
-    the registry-level poster resolves the meeting's Recall bot from the URL and posts
-    through transport — no per-meeting poster state is needed on the registry.
-    """
-    from control_plane import settings as settings_mod
-    from control_plane.scribe_runtime import CloseConfig
-
-    cfg = settings_mod.settings
-    bucket_name = getattr(cfg, "gcs_bucket", "") or ""
-    if not bucket_name:
-        return None
-
-    def _bucket() -> Any:
-        # Route through the ONE libs.http seam — the sole legitimate home for the
-        # raw GCS client construction (§14: no raw external client in services/).
-        # The SDK is imported lazily inside the accessor so boot stays offline.
-        from libs.http.src.http.external import gcs_bucket
-
-        return gcs_bucket(bucket_name)
-
-    class _LazyBucket:
-        """Defers GCS client construction to first blob access (boot stays offline)."""
-
-        def blob(self, name: str) -> Any:
-            return _bucket().blob(name)
-
-    async def _post_chat_link(url: str) -> None:
-        # Resolve the meeting id embedded in the notes URL, look up its Recall bot,
-        # and post the link through the REAL Recall chat seam via call_external.
-        import re
-
-        from transport.recall import RecallTransport
-
-        from libs.db import repos
-        from libs.http.src.http.external import call_external as real_call_external
-
-        m = re.search(r"/meetings/([^/]+)/notes\.md$", url)
-        if m is None:
-            return
-        meeting_id = m.group(1)
-        async with db.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT recall_bot_id FROM meetings WHERE id = $1::uuid", meeting_id
-            )
-        bot_id = row and row["recall_bot_id"]
-        if not bot_id:
-            return
-        transport = RecallTransport(real_call_external, api_key=cfg.recall_api_key)
-        await transport.post_chat(str(bot_id), f"Meeting notes: {url}", pinned=True)
-        _ = repos  # repos import kept for parity with the sibling resolve paths
-
-    return CloseConfig(
-        bucket=_LazyBucket(),
-        bucket_name=bucket_name,
-        post_chat_link=_post_chat_link,
-    )
 
 
 # The interval between periodic webhook drains (an in_call that raced boot, or a

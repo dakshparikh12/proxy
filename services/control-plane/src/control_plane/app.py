@@ -115,11 +115,10 @@ def _stamp_internal_scoped(app: FastAPI) -> None:
 def create_app() -> FastAPI:
     """Construct the control_plane ASGI app with the /auth routes + /health.
 
-    The /internal route group (POST /internal/reconcile + GET /internal/notes/
-    {meeting_id}) is mounted OUTSIDE the auth wall, gated by the internal bearer
-    token; the authenticated GET /m/{meeting_id} user surface is mounted behind
-    the wall. Both notes routes read the SAME note_deltas fold via the canonical
-    ``scribe.notes_reader`` reader (DOC03-CSREAD — the cross-service notes read).
+    The authenticated GET /m/{meeting_id} user surface is mounted behind the auth
+    wall. (The old /internal notes+reconcile route group and its scribe note_deltas
+    fold were removed in the reactive-workroom pivot — the new system has no scribe
+    note_deltas pipeline for those routes to read.)
     """
     app = FastAPI(title="proxy-control-plane")
     _install_signed_session(app)
@@ -131,19 +130,14 @@ def create_app() -> FastAPI:
 
     install_safe_error_handler(app)
 
-    # The token-gated /internal notes + reconcile routes and the /m user surface.
-    # Mounted here so the Workroom's cross-service notes read has a LIVE endpoint
-    # alongside /internal/reconcile (closes the DOC03-CSREAD mount gap).
+    # The /m user surface + the accept/reject/webhook routes.
     from .accept_route import install_accept_route, install_reject_route
     from .gateway_route import install_gateway_route
-    from .internal import install_internal_routes
     from .meeting_home import install_meeting_home_route
     from .webhook_routes import install_recall_webhook_route
 
-    install_internal_routes(app)
     # §2.8: the authenticated dual-mode per-meeting home GET /m/{meeting_id}. It
-    # renders the §2.6 notes (the SAME note_deltas fold /internal/notes uses) PLUS
-    # that meeting's staged-draft cards (§2.4 #8) for a signed-in tenant member —
+    # renders that meeting's staged-draft cards (§2.4 #8) for a signed-in tenant member —
     # behind a SERVER-SIDE meeting→tenant check (a cross-tenant member gets Not
     # found). A valid capability token gives a notes-ONLY view (NO drafts, Law 3);
     # no session + no token → Not found. It is in PUBLIC_ROUTES (public only via a

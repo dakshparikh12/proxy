@@ -57,12 +57,9 @@ class TranscriptRepository:
     async def backfill_segment_as_lost(self, segment_id: Any) -> None:
         """Mark-lost SQL primitive backing the close reconciler's backfill step (AC-FAIL-10, §3.7).
 
-        Flips one still-``pending`` segment to ``lost``. The reconciler's segment store
-        (``transport.failure.SegmentStore``) is a per-meeting-scoped adapter assembled in
-        ``meeting_runtime``; this global repo owns only the tenant-safe primitives that
-        adapter drives — this one plus :meth:`pending_segment_ids` (the read) and
-        :meth:`flip_and_append` (comprehend). The scoped-store composition itself is
-        assembly-time, not wired in this global repo.
+        Flips one still-``pending`` segment to ``lost``. This global repo owns only
+        the tenant-safe primitives — this one plus :meth:`pending_segment_ids` (the
+        read) and :meth:`flip_and_append` (comprehend).
         """
         async with self._db.acquire() as conn:
             await transcript.backfill_segment_as_lost(conn, segment_id)

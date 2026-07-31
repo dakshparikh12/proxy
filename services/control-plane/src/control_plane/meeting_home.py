@@ -1,10 +1,9 @@
 """control_plane ``GET /m/{meeting_id}`` — the authenticated per-meeting home (§2.8).
 
-The flagship's missing home (F1 + F9): it renders the **§2.6 notes markdown**,
-folded server-side from ``note_deltas`` via the SAME canonical fold
-``GET /internal/notes/{meeting_id}`` uses (``scribe.notes_reader.read_notes``,
-CANONICAL §11.4) — never a stale scribe cache — **plus that meeting's
-``staged_drafts`` cards** (§2.4 #8) for the authenticated view.
+Renders **that meeting's ``staged_drafts`` cards** (§2.4 #8) for the authenticated
+view. (The reactive-workroom pivot removed the scribe ``note_deltas`` pipeline, so
+the §2.6 notes section this page used to fold now reads nothing — the body carries
+an empty ``notes`` object alongside the draft cards.)
 
 Dual-mode, one route (§4.6):
 
@@ -16,18 +15,18 @@ Dual-mode, one route (§4.6):
   server-side session, never a client field.
 * a **forwarded-to recipient** presents a **signed, short-TTL, meeting-scoped,
   revocable capability token** — the ONLY public entry (this route is in
-  ``PUBLIC_ROUTES``). A valid grant unlocks a **read-only, notes-ONLY** view:
-  **NO drafts, ever** (Law 3 — the token grants read-only notes and nothing
+  ``PUBLIC_ROUTES``). A valid grant unlocks a **read-only** view:
+  **NO drafts, ever** (Law 3 — the token grants a read-only view and nothing
   world-touching; accept/reject stay ``protected()`` on a separate route).
 * **neither** (no session, no token, or a wrong-tenant/tenant-less session) →
   ``Not found`` (404, the generic refusal — never a 401/leak that would tell an
   anonymous caller the meeting exists).
 
-It is deliberately **not a dashboard**: one meeting's notes + drafts, addressable
-by its ``meeting_id`` UUID — no cross-meeting list, no analytics, no history.
+It is deliberately **not a dashboard**: one meeting's drafts, addressable by its
+``meeting_id`` UUID — no cross-meeting list, no analytics, no history.
 
 Two surfaces live here: :func:`meeting_home_handler` is the framework-agnostic
-host-side logic (unit-testable against the real fold + tenant seam), and
+host-side logic (unit-testable against the tenant seam), and
 :func:`install_meeting_home_route` mounts it as the LIVE ``GET /m/{meeting_id}``
 route on ``control_plane`` against ``app.state.db``. Handlers never throw — every
 failure collapses to an honest status (the never-throw boundary, §4.6 safeError).
@@ -88,28 +87,15 @@ async def _drafts_for_meeting(conn: Any, meeting_id: str) -> list[dict[str, Any]
     return cards
 
 
-async def _folded_notes(meeting_id: str, db: Any) -> Any:
-    """The §2.6 notes object, folded from ``note_deltas`` via the CANONICAL reader.
+def _render_body(drafts: list[dict[str, Any]]) -> str:
+    """The §2.4 #8 draft cards, one JSON body.
 
-    Delegates to ``scribe.notes_reader.read_notes`` — the SAME deterministic
-    left-fold ``GET /internal/notes/{meeting_id}`` and ``m_handler`` share
-    (CANONICAL §11.4). Notes are NEVER read from ``NOTES_CACHE`` or any other
-    source on this path; the fold-from-``note_deltas`` reader is the only origin.
+    The reactive-workroom pivot removed the scribe ``note_deltas`` pipeline, so the
+    §2.6 notes section this page used to fold reads nothing — ``notes`` is an empty
+    object and the page renders that meeting's staged-draft cards. ``drafts`` is the
+    per-meeting card list — an EMPTY list for the token path (no drafts, Law 3).
     """
-    from scribe.notes_reader import read_notes
-
-    return await read_notes(meeting_id, db=db)
-
-
-def _render_body(notes: Any, drafts: list[dict[str, Any]]) -> str:
-    """The §2.6 notes markdown object + the §2.4 #8 draft cards, one JSON body.
-
-    ``notes.to_serializable()`` is the byte-stable folded notes object (entries,
-    current_goal, freshness_flag). ``drafts`` is the per-meeting card list — an
-    EMPTY list for the token path (notes only, no drafts).
-    """
-    payload = dict(notes.to_serializable())
-    payload["drafts"] = drafts
+    payload: dict[str, Any] = {"notes": None, "drafts": drafts}
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
 
 
@@ -151,12 +137,11 @@ async def meeting_home_handler(
     never an unhandled exception — the never-throw boundary, §4.6).
     """
     try:
-        # (1) Capability-token path — notes only, NEVER drafts (Law 3).
+        # (1) Capability-token path — NEVER drafts (Law 3). A valid, unexpired,
+        # unrevoked, same-meeting grant unlocks the read-only view (notes now empty
+        # since the scribe note_deltas pipeline was removed in the workroom pivot).
         if cap_grant is not None:
-            notes = await _folded_notes(meeting_id, db)
-            if notes.freshness_flag.delta_count == 0:
-                return HomeResponse(404)  # unknown meeting — generic Not found
-            return HomeResponse(200, _render_body(notes, []))
+            return HomeResponse(200, _render_body([]))
 
         # (2) Session path — server-side meeting→tenant check FIRST.
         tenant_id = None
@@ -170,10 +155,7 @@ async def meeting_home_handler(
                     # A different tenant OR an unknown meeting — both Not found.
                     return HomeResponse(404)
                 drafts = await _drafts_for_meeting(conn, str(meeting_id))
-            notes = await _folded_notes(meeting_id, db)
-            if notes.freshness_flag.delta_count == 0:
-                return HomeResponse(404)
-            return HomeResponse(200, _render_body(notes, drafts))
+            return HomeResponse(200, _render_body(drafts))
 
         # (3) No token, no (tenant-bearing) session → Not found (generic).
         return HomeResponse(404)

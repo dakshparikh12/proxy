@@ -77,8 +77,8 @@ async def _latest_indexed_sha(db: Any, *, tenant_id: str, full_name: str) -> str
     its freshest sha IS the indexed HEAD a meeting pins. The clone is a rebuildable
     derived cache and per-host, so it is never consulted here. ``None`` means the
     repo has no built index yet — the caller refuses honestly (fail closed)."""
-    from code_intel.paths import repo_name_from_url
     from premeeting.map_store import load_latest_map
+    from premeeting.paths import repo_name_from_url
 
     async with db.acquire() as conn:
         latest = await load_latest_map(

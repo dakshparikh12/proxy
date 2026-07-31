@@ -1,19 +1,20 @@
-"""The connect page's public REST API + the connect→index trigger (Doc 08 §2.7/§4.6).
+"""The connect page's public REST API + the connect→index trigger (§2.7/§8).
 
 The connect page is the ONE out-of-meeting surface (§2.7): a small static app plus its
 two PUBLIC REST routes on control_plane. This module owns the backend half:
 
-  * **POST /connect/install/start** — launches the GitHub-App install flow (Doc 01) AND
-    fires the connect→index TRIGGER in a background task. This is the FIRST live caller of
-    ``code_intel.run_full_pipeline`` — the product spine that closes codeintel
-    pipeline_orchestration / coverage_readiness / freshness / precise_nav.
+  * **POST /connect/install/start** — launches the GitHub-App install flow AND fires the
+    connect→index TRIGGER in a background task. Pre-meeting (SPEC §8) is: connect → clone →
+    build the PROSE MAP → store it (Postgres ``repo_maps``, keyed by tenant/repo/pinned_sha).
+    The trigger drives ``premeeting.run_pipeline`` — the pre-meeting pass (mint → clone →
+    map-build → store → verify → ready). There is NO code_intel graph and NO ``mcp__code_intel__*``
+    mount in the new system: native Claude in the workroom greps the real repo directly.
   * **GET /connect/status** — the readiness POLL. It is **REST, not a WS message**
-    (CANONICAL §12.12) and renders ALL FIVE states of Doc 01's ``Readiness`` enum
+    (CANONICAL §12.12) and renders ALL FIVE states of the ``Readiness`` enum
     (CANONICAL §1.5): ``connecting → cloning → indexing → ready`` plus an explicit
-    ``not_ready`` terminal that NAMES the gaps. There is NO ``mapping`` state — indexing
-    already means clone + tree-sitter + LSP + dep-graph. The happy path carries the REAL
-    coverage number and the flagged files ("94% indexed · 12 files flagged: generated");
-    ``not_ready`` names what is missing rather than pretending (Law 1 / Law 2).
+    ``not_ready`` terminal that NAMES the gaps. There is NO ``mapping`` state — the map-build
+    IS the ``indexing`` phase (``premeeting.pipeline``). ``not_ready`` names what is missing
+    rather than pretending (Law 1 / Law 2).
 
 Readiness is DURABLE (CLAUDE.md §"Source of truth vs cache"): the ``ConnectStore`` writes
 and reads the ``connect_readiness`` Postgres row (``db.repos.connect``), NEVER a per-instance
@@ -29,11 +30,10 @@ untrusted and allowlisted, never trusted-by-default. A client-supplied ``install
 an opaque poll handle only; it authorizes NOTHING beyond reading its own readiness (the
 store never joins it to another tenant's data).
 
-The connect→index trigger sets ``pipeline.lsp = MultiLangResolver(clone_root)`` (so
-``find_references`` returns RESOLVED refs — closes precise_nav) and re-mints the query
-factory over it, and leaves the pipeline's freshness webhook handler live (closes
-freshness). Readiness progresses ``connecting → cloning → indexing → ready`` with the
-REAL ``coverage_pct`` + flagged files; ``not_ready`` surfaces named gaps.
+The connect→index trigger builds + stores the durable prose map (``repo_maps``) via
+``premeeting.run_pipeline``. Readiness progresses ``connecting → cloning → indexing →
+ready`` (the map-build is the ``indexing`` phase); ``not_ready`` surfaces the named gaps
+the pipeline/verify produced.
 """
 from __future__ import annotations
 
@@ -56,18 +56,6 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 # The canonical Readiness enum (CANONICAL §1.5). ``mapping`` is deliberately absent —
 # ``mark_state`` rejects any value outside this set so a 'mapping' state is unrepresentable.
 _VALID_STATES: frozenset[str] = frozenset({"connecting", "cloning", "indexing", "ready", "not_ready"})
-
-# Human-facing labels for the coverage flag reasons the code_intel build stamps
-# (``CoverageRow.flag_reason``). The happy path shows "N files flagged: <label>"; these map
-# the internal reason strings to the honest user-visible word. An unknown reason passes
-# through verbatim (never dropped) so the number always accounts for every flagged file.
-_FLAG_LABELS: dict[str, str] = {
-    "excluded": "excluded",
-    "parse-error": "failed to parse",
-    "unsupported-language": "unsupported",
-    "generated": "generated",
-}
-
 
 class ConnectStoreUnavailable(RuntimeError):
     """The durable readiness substrate (Postgres) could not be reached.
@@ -236,11 +224,11 @@ class ConnectStore:
 class _StoreReadinessListener:
     """A readiness listener that streams the pipeline's states into a :class:`ConnectStore`.
 
-    ``run_full_pipeline`` calls ``listener.emit(state)`` at each phase. We forward each
-    canonical progress state (connecting/cloning/indexing) into the store so the REST poll
-    renders the live progression; the terminal ``ready`` / ``not_ready`` write is done by
-    the trigger itself (with the real coverage number / named gaps), so those are ignored
-    here to avoid a terminal write without its payload.
+    ``premeeting.run_pipeline`` calls ``listener.emit(state)`` at each phase. We forward
+    each canonical progress state (connecting/cloning/indexing) into the store so the REST
+    poll renders the live progression; the terminal ``ready`` / ``not_ready`` write is done
+    by the trigger itself (with the named gaps), so those are ignored here to avoid a
+    terminal write without its payload.
     """
 
     def __init__(self, store: ConnectStore, install_id: str) -> None:
@@ -269,13 +257,6 @@ class _StoreReadinessListener:
         pass
 
 
-def _human_flagged(flag_reason: str | None) -> str:
-    """Map an internal coverage flag reason to the honest user-visible word."""
-    if not flag_reason:
-        return "flagged"
-    return _FLAG_LABELS.get(flag_reason, flag_reason)
-
-
 def trigger_connect_index(
     store: ConnectStore,
     install_id: str,
@@ -286,42 +267,67 @@ def trigger_connect_index(
     map_provider: Any = None,
     map_store: Any = None,
 ) -> Any:
-    """The connect→index TRIGGER — the product spine (first live run_full_pipeline caller).
+    """The connect→index TRIGGER — the pre-meeting map build (SPEC §8).
 
-    Drives ``code_intel.run_full_pipeline`` on the tenant's repo, streaming readiness into
-    ``store`` (the durable ``connect_readiness`` row) as it progresses (connecting → cloning
-    → indexing). On completion it:
+    Drives ``premeeting.run_pipeline`` on the tenant's repo — the pre-meeting pass: mint →
+    clone → build the PROSE MAP → store it durably in Postgres ``repo_maps`` (keyed by
+    tenant/repo/pinned_sha) → verify. Readiness streams into ``store`` (the durable
+    ``connect_readiness`` row) as it progresses (connecting → cloning → indexing — the
+    map-build IS the ``indexing`` phase). On completion it writes the terminal readiness:
+    ``ready`` when the map verified clean, else ``not_ready`` NAMING the gaps the
+    pipeline/verify produced (Law 1 / Law 2), never a fabricated success.
 
-      1. sets ``pipeline.lsp = MultiLangResolver(clone_root)`` so ``find_references``
-         returns a RESOLVED result (closes precise_nav) and RE-MINTS the query factory over
-         it (the factory reads ``pipeline.lsp`` at construction, so it must be re-bound);
-      2. leaves the pipeline's freshness webhook handler live AND registers the pipeline in
-         the live push-ingress ``registry`` (keyed by repo) so a real GitHub push delivery
-         reaches THIS pipeline's ``webhook_handler.handle`` — closing freshness end-to-end
-         (a live caller, not isolation-only);
-      3. writes the terminal readiness — ``ready`` with the REAL ``coverage_pct`` + flagged
-         files, or ``not_ready`` naming the gaps.
+    There is NO code_intel graph and NO ``mcp__code_intel__*`` mount in the new system:
+    native Claude in the workroom greps the real repo directly, so the trigger builds ONLY
+    the prose map — no LSP resolver, no MCP server, no dependency graph.
 
-    ``registry`` is the per-host :class:`~control_plane.github_webhook.LivePipelineRegistry`
-    off ``app.state`` (passed by the install/start route). It is optional so a direct caller
-    (a test / a script) may drive the trigger without an app; when present the built pipeline
-    is registered so ``POST /webhooks/github`` can find it.
+    ``map_provider`` is the model seam ``run_pipeline`` needs (the pre-meeting map-build
+    agent); ``map_store`` is the durable :class:`~premeeting.map_store.MapStore`. Both are
+    injected by a funded deployment. The map-build model key is credit-blocked (D-032), so on
+    the live path today ``map_provider`` is ``None`` — the trigger records an honest
+    ``not_ready`` naming that gap rather than fabricating a map (Law 2). ``registry`` is
+    accepted for call-site compatibility; push-freshness is now ``premeeting.refresh_on_push``,
+    wired by the meeting/webhook spine (this trigger no longer registers a code_intel pipeline).
 
-    Returns the built :class:`Pipeline` (the caller may retain it; the route fires this in a
-    background task and discards it). Never raises out to the caller — a pipeline failure is
+    Returns the :class:`~premeeting.pipeline.PipelineResult` (the route fires this in a
+    background thread and discards it). Never raises out to the caller — a build failure is
     surfaced as an honest ``not_ready`` with the reason named, never a silent success.
     """
-    from code_intel.mcp_server import MCPServerFactory
-    from code_intel.pipeline import run_full_pipeline
-    from code_intel.warm_resolver import MultiLangResolver
+    import asyncio
+
+    from premeeting.pipeline import run_pipeline
+
+    # Honest no-op when the map-build model seam is unfunded (D-032): no provider → no map.
+    # We NEVER fabricate a map; the readiness poll gets an honest not_ready naming the gap.
+    if map_provider is None:
+        try:
+            store.mark_state(install_id, "connecting")
+        except (KeyError, ValueError, ConnectStoreUnavailable):
+            pass
+        try:
+            store.set_not_ready(
+                install_id,
+                gaps=["map-build skipped: no model provider (D-032, unfunded key)"],
+            )
+        except (KeyError, ConnectStoreUnavailable):
+            pass
+        return None
 
     listener = _StoreReadinessListener(store, install_id)
     try:
-        pipeline = run_full_pipeline(
-            tenant_id=tenant_id,
-            repo_url=repo_url,
-            sha=sha,
-            readiness_listener=listener,
+        # This runs in a dedicated daemon background thread (see ``_spawn_trigger``) with no
+        # pre-existing event loop, so a private ``asyncio.run`` here is safe — it never
+        # creates/closes another thread's loop. run_pipeline never raises out (it returns an
+        # honest PipelineResult), so this is the ONE async→sync bridge for the sync trigger.
+        result = asyncio.run(
+            run_pipeline(
+                tenant_id=tenant_id,
+                repo_url=repo_url,
+                provider=map_provider,
+                map_store=map_store,
+                sha=sha,
+                readiness_listener=listener,
+            )
         )
     except Exception as exc:  # noqa: BLE001 - honest not_ready, never a silent success
         try:
@@ -330,111 +336,16 @@ def trigger_connect_index(
             pass
         raise
 
-    # precise_nav: set the warm multi-language resolver and re-mint the query factory over
-    # it so find_references resolves (the factory captured ``pipeline.lsp`` at build time,
-    # which was None; re-binding here is what makes the first query a RESOLVED result).
-    clone_root = pipeline.clone_path
-    if clone_root is not None and clone_root.exists():
-        pipeline.lsp = MultiLangResolver(clone_root)
-        pipeline.server_factory = MCPServerFactory.for_pipeline(pipeline)
-        if pipeline.server is not None:
-            pipeline.server._lsp = pipeline.lsp
-
-    # freshness: the pipeline's webhook handler is already registered by run_full_pipeline;
-    # it stays live on the pipeline so a push delivery drives a delta-pull + rebuild. Register
-    # the pipeline in the live push-ingress registry (keyed by repo) so POST /webhooks/github
-    # can resolve THIS tenant's pipeline server-side and drive its handler — the LIVE caller
-    # that turns a real GitHub push into a delta-pull + full drop/re-extract (not iso-only).
-    if registry is not None:
-        try:
-            registry.register(repo_url, pipeline)
-        except Exception:  # noqa: BLE001 - a registry hiccup never fails the connect flow
-            pass
-
-    # PRE-MEETING MAP (additive): on the SAME already-materialised clone, build + store + verify
-    # the durable ``index.md`` repo map — the pre-meeting system's downstream artifact the wake
-    # turn + Workroom mount. This is ADDITIVE: the graph index + readiness above are the referent
-    # seam's producer and are untouched. The map-build model seam is credit-blocked (D-032), so
-    # this NO-OPS honestly unless a funded ``map_provider`` + ``map_store`` are injected; it never
-    # fakes a map and never fails the connect flow (Rule 6).
-    _maybe_build_map(tenant_id=tenant_id, repo_url=repo_url, pipeline=pipeline,
-                     map_provider=map_provider, map_store=map_store)
-
-    # Terminal readiness — read the REAL result off the pipeline (never a faked number).
-    record = pipeline.readiness_record
-    reached_ready = record is not None and record.indexed_at is not None
-    if reached_ready:
-        coverage = pipeline.coverage_record
-        flagged_rows = [r for r in coverage.all_rows() if r.status == "flagged"]
-        flagged = [(r.path, _human_flagged(r.flag_reason)) for r in flagged_rows]
-        pct = record.coverage_pct if record is not None else 0.0
-        store.set_ready(install_id, coverage_pct=pct, flagged=flagged)
+    # Terminal readiness — read the REAL verdict off the pipeline result (never a faked pass).
+    # A verified map covers the whole clone (verify_map is a full-tree check), so a clean
+    # ``ready`` carries 100.0 and no per-file flags — the prose map has no partial-coverage /
+    # flagged-file concept the old graph index had; ``not_ready`` names the gaps verify found.
+    if result.ready:
+        store.set_ready(install_id, coverage_pct=100.0, flagged=[])
     else:
-        gaps = _gaps_from_pipeline(pipeline)
-        store.set_not_ready(install_id, gaps=gaps)
-    return pipeline
-
-
-def _maybe_build_map(
-    *, tenant_id: str, repo_url: str, pipeline: Any, map_provider: Any, map_store: Any
-) -> Any:
-    """Run the pre-meeting map-build hook on the already-materialised clone (guarded, additive).
-
-    A thin bridge from the SYNC connect trigger to the ASYNC ``premeeting.connect_hook``. The
-    build is credit-blocked (D-032), so with no ``map_provider`` it returns immediately without
-    touching an event loop (the common live path). When a provider IS injected, the coroutine is
-    driven on its OWN event loop IN A DEDICATED THREAD so it never creates/closes the CALLING
-    thread's default loop — a bare ``asyncio.run`` here would close the caller's loop and strand a
-    later ``asyncio.get_event_loop()`` (the doc08 trigger tests do exactly that). Never raises out
-    — a map-build fault never fails the connect flow (Rule 6)."""
-    # Fast path: no funded model seam → no map build, no loop touched (D-032 honest no-op).
-    if map_provider is None:
-        return None
-    clone_root = getattr(pipeline, "clone_path", None)
-    if clone_root is None:
-        return None
-    try:
-        import asyncio
-        from concurrent.futures import ThreadPoolExecutor
-
-        from premeeting.connect_hook import run_map_build_for_clone
-        from premeeting.paths import repo_name_from_url
-
-        def _run() -> Any:
-            # A private loop confined to THIS worker thread — the caller's loop state is untouched.
-            return asyncio.run(
-                run_map_build_for_clone(
-                    tenant_id=tenant_id,
-                    repo=repo_name_from_url(repo_url),
-                    clone_path=clone_root,
-                    provider=map_provider,
-                    map_store=map_store,
-                )
-            )
-
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(_run).result()
-    except Exception:  # noqa: BLE001 - Rule 6: a map-build hook fault never fails the connect flow
-        return None
-
-
-def _gaps_from_pipeline(pipeline: Any) -> list[str]:
-    """Name the gaps that kept a pipeline from ``ready`` — honest, never a pretended pass.
-
-    Derives the named gaps from the coverage record: any flagged file is a file the index
-    could not fully ground, surfaced by name so ``not_ready`` explains itself (Law 1). If
-    nothing is flagged (e.g. an empty clone / unreachable upstream), that root cause is
-    named instead of an empty, unexplained ``not_ready``.
-    """
-    coverage = getattr(pipeline, "coverage_record", None)
-    rows = coverage.all_rows() if coverage is not None else []
-    flagged = [r for r in rows if getattr(r, "status", "") == "flagged"]
-    if flagged:
-        return [f"{r.path}: {_human_flagged(r.flag_reason)}" for r in flagged]
-    clone_path = getattr(pipeline, "clone_path", None)
-    if clone_path is None or not clone_path.exists():
-        return ["the repository could not be cloned"]
-    return ["no files could be indexed"]
+        gaps = result.reasons or ["not ready: no reason recorded"]
+        store.set_not_ready(install_id, gaps=list(gaps))
+    return result
 
 
 # ── GitHub-App install URL ────────────────────────────────────────────────────
@@ -533,8 +444,8 @@ def install_connect_routes(app: "FastAPI") -> None:
         """Launch the GitHub-App install flow AND fire the connect→index trigger.
 
         Registers a fresh durable install (immediately pollable at ``connecting``), spawns
-        the trigger as a background task (the first live ``run_full_pipeline`` caller), and
-        returns the poll handle + the GitHub-App install URL to open. A malformed body
+        the trigger as a background task (the connect→index map-build, ``premeeting.run_pipeline``),
+        and returns the poll handle + the GitHub-App install URL to open. A malformed body
         (missing ``repo_url``) is a FastAPI validation error (the caller's own bad input),
         never a 500 — the never-throw boundary. A substrate fault registering the install
         degrades HONESTLY to a 503, never a fabricated install handle.

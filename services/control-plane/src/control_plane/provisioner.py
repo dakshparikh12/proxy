@@ -1,47 +1,32 @@
-"""``provisioner`` — the per-meeting runtime entry-point (04 §3.2/§3.6, CANONICAL §12.1).
+"""``provisioner`` — the per-meeting join spine for the reactive-workroom model.
 
-This is the entry-point that turns the built pieces into a RUNNING meeting. On a
-Recall ``in_call`` webhook it:
+On a Recall ``in_call`` webhook this turns the built pieces into a RUNNING meeting
+(SPEC §0/§2/§3/§8):
 
 1. **Atomically claims** the meeting via ``ops.claim_meeting`` — an INSERT ... ON
    CONFLICT DO NOTHING against the ``operation_runs`` partial-unique index
-   (``(scope_id, operation_type) WHERE status='running'``). The non-null returner
-   owns the meeting; a concurrent duplicate join gets ``None`` and backs off — **one
-   harness per meeting, no broker, no Redis** (§3.6). The winner's instance-id is
-   written onto ``created_by`` (affinity, §3.6/§11.11).
+   (``(scope_id, operation_type) WHERE status='running'``). The non-null returner owns
+   the meeting; a concurrent duplicate join gets ``None`` and backs off — **one harness
+   per meeting, no broker, no Redis**. The claim/fencing substrate is unchanged.
 
-2. **Assembles the subsystems in ONE scope** — transport (the ``SignalCarrier``),
-   the Scribe runtime, the NEW in-meeting engine, and the abort seam — on a single
-   :class:`~control_plane.meeting_runtime.MeetingRuntime`, and **binds the claimed row's
-   fencing handle** onto the runtime so every side-effect reads ``is_owner`` live
-   (§3.7 fencing). The ``SignalCarrier`` is subscribed **ONCE at join** (the Scribe
-   consumer + the meeting-end listener share the one carrier); it is never re-wired
-   per event.
+2. **Provisions the workroom** (``in_meeting.workroom.provision_workroom`` — a per-meeting
+   E2B sandbox with the repo cloned in, seeded with the prime ``CLAUDE.md``, ``MEETING_
+   INFO.md``, ``REPO_MAP.md`` from the pre-meeting map, and an empty ``MEETING_NOTES.md``)
+   and **builds the host-side meeting connection** (``in_meeting.meeting_connection.
+   MeetingConnection`` over the Cartesia speak pipe + the Recall room verbs — creds stay
+   host-side). Both are stashed on the :class:`MeetingRuntime` with a :class:`MeetingSession`
+   that runs the transcript→wake→respond loop the webhook drain feeds.
 
-3. **Launches the meeting-end spine** — :func:`run_meeting_until_end` is the
-   ``asyncio.run``-style entry: it pumps the runtime's meeting-end listener and runs
-   until the explicit ``MeetingEnd`` signal closes the carrier. A meeting has NO time
-   cap (SPEC §9); the only wall clock is the generous env-configurable safety ceiling
-   (``MEETING_MAX_HOURS``, default 12h) so a loop whose end signal never arrives can't
-   leak an instance forever.
+3. **Launches the run loop** — :func:`run_meeting_until_end` provisions, then runs until
+   the meeting-end webhook (routed via the registry's ``end_meeting``) tears the workroom
+   down. A meeting has NO time cap (SPEC §9); the only wall clock is the generous env-
+   configurable safety ceiling (``MEETING_MAX_HOURS``, default 12h) so a run whose end
+   never arrives can't leak an instance forever.
 
-4. **Survives a recycle** — when the owning instance dies its heartbeat goes stale, the
-   reaper (§3.8) flips the row off ``running``, the partial index frees, and a
-   REPLACEMENT provisioner handed the same webhook **re-claims** the meeting. It then
-   **confirms the transcript plane is reachable** so the first wake after the swap
-   replays from it (restart-not-resume, §3.10): the media session cannot be resumed,
-   but Proxy's judgment history is rebuilt from Doc 03's transcript plane on that
-   first wake so the room stays coherent.
-
-The provisioner does NOT redefine the claim, the assembly, or the resume fallback —
-it is the thin entry that wires those built pieces into a live meeting.
-
-THE CUTOVER (this node): the brain seat on the boot path is the NEW in-meeting engine
-(``in_meeting.runtime.assemble_engine`` — map + code + meeting + sandbox access, the
-Cartesia→Output-Media speak pipe, the real async disambiguator), assembled per meeting in
-:func:`_assemble_engine` and stashed on the runtime (``runtime.engine``) so the webhook
-drain feeds it transcript/chat by meeting id. The OLD live brain is DELETED; the only
-carrier-side spine left here is the runtime's meeting-end listener (zero wake turns).
+Honest-degrade throughout (§3.8 / Rule 6): a missing subscription token, an unbound repo,
+or a provision fault surfaces in the log and yields a runtime with no workroom — the
+meeting still boots, it just cannot wake a workroom this meeting. World-touching is
+impossible from the sandbox by construction (no push/send creds; egress denied — Law 3).
 """
 from __future__ import annotations
 
@@ -50,54 +35,32 @@ import contextlib
 import logging
 import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from libs.db import Database, repos
 from libs.ops import MEETING_HARNESS_OP, OperationHandle, claim_meeting
 
+from .meeting_runtime import MeetingRuntime
+from .meeting_session import MeetingSession
+
 _log = logging.getLogger(__name__)
 
-# A meeting has NO time cap (SPEC §9): the launched loop runs until the explicit
-# ``MeetingEnd`` signal (§3.1), never a wall-clock kill. The ONLY remaining wall clock
-# is a GENEROUS safety ceiling so a wedged loop can never leak an instance forever —
-# env-configurable via ``MEETING_MAX_HOURS`` and resolved at LAUNCH time (never frozen
-# at import), defaulting to 12 hours. The old 3600s hard cap force-closed every real
-# meeting at 60 minutes and is deleted.
+# A meeting has NO time cap (SPEC §9): the launched loop runs until the meeting-end
+# webhook, never a wall-clock kill. The ONLY remaining wall clock is a GENEROUS safety
+# ceiling so a wedged loop can never leak an instance forever — env-configurable via
+# ``MEETING_MAX_HOURS`` and resolved at LAUNCH time (never frozen at import), default 12h.
 MEETING_MAX_HOURS_ENV = "MEETING_MAX_HOURS"
 DEFAULT_MEETING_MAX_HOURS: float = 12.0
 
-# Interval between sandbox keep-warm beats (IMP-3): the warm E2B sandbox is provisioned
-# with ``SANDBOX_TIMEOUT_S`` (1h) and self-times-out; with no meeting cap, a live
-# meeting can outlast it, so the provisioner extends the sandbox lifetime on this
-# cadence while the meeting runs. Comfortably inside the 1h sandbox lifetime so a
+# Interval between sandbox keep-warm beats: the warm E2B sandbox self-times-out (1h); with
+# no meeting cap a live meeting can outlast it, so the provisioner extends the sandbox
+# lifetime on this cadence while the meeting runs. Comfortably inside the 1h lifetime so a
 # missed/failed beat still leaves a full beat before expiry. unit: seconds.
 SANDBOX_KEEPWARM_INTERVAL_S: float = 1800.0
 
-
-def _meeting_max_s() -> float:
-    """The wall-clock SAFETY CEILING on one meeting's run loop, in seconds.
-
-    NOT a meeting time cap (SPEC §9 — the meeting ends on the explicit ``MeetingEnd``
-    signal): this is the leak backstop for a loop whose end signal never arrives (a
-    dead carrier, a wedged listener). ``MEETING_MAX_HOURS`` overrides; an unset,
-    unparsable, or non-positive value falls back to the generous 12h default —
-    never unbounded-by-typo, never the old hard-coded hour.
-    """
-    raw = os.environ.get(MEETING_MAX_HOURS_ENV, "")
-    try:
-        hours = float(raw)
-    except ValueError:
-        hours = DEFAULT_MEETING_MAX_HOURS
-    if hours <= 0:
-        hours = DEFAULT_MEETING_MAX_HOURS
-    return hours * 3600.0
-
-# Bound on EACH meeting-end engine teardown step (drain the in-flight turns, flush +
-# close the speak pipe, kill the warm sandbox). Teardown must never deadlock meeting
-# end (§3.8): a hung turn, a stuck synth, or a hanging E2B kill is abandoned after
-# this bound and the close still completes the operation row. unit: seconds.
-ENGINE_TEARDOWN_TIMEOUT_S: float = 30.0
+# The sandbox lifetime (seconds) each keep-warm beat resets from now (the workroom
+# provisions the sandbox with its own PROVISION_TIMEOUT_S; the beat re-extends by this).
+SANDBOX_TIMEOUT_S: float = 3600.0
 
 # Recall bot-status event names that mean "the bot is now IN the room" — the moment the
 # harness claims + provisions the per-meeting runtime (mirrors ``control_plane.webhooks``).
@@ -112,15 +75,29 @@ class ProvisionOutcome:
 
     ``claimed`` is the load-bearing bit: True iff THIS instance won the atomic claim and
     opened the harness; False iff a concurrent/existing harness already owns the meeting
-    (this instance backed off). ``resumed`` records that a re-claim confirmed Doc 03's
-    transcript plane is reachable for the first-wake §3.5 replay. ``ran_to_end`` is set by
-    :func:`run_meeting_until_end` when the loop ran to the meeting-end signal (vs a timeout).
+    (this instance backed off). ``ran_to_end`` is set by :func:`run_meeting_until_end`
+    when the loop ran to the meeting-end signal (vs a timeout).
     """
 
     claimed: bool
     run_id: Any = None
-    resumed: bool = False
     ran_to_end: bool = False
+
+
+def _meeting_max_s() -> float:
+    """The wall-clock SAFETY CEILING on one meeting's run loop, in seconds.
+
+    NOT a meeting time cap (SPEC §9): this is the leak backstop for a loop whose end never
+    arrives. ``MEETING_MAX_HOURS`` overrides; an unset, unparsable, or non-positive value
+    falls back to the generous 12h default — never unbounded-by-typo, never a hard hour."""
+    raw = os.environ.get(MEETING_MAX_HOURS_ENV, "")
+    try:
+        hours = float(raw)
+    except ValueError:
+        hours = DEFAULT_MEETING_MAX_HOURS
+    if hours <= 0:
+        hours = DEFAULT_MEETING_MAX_HOURS
+    return hours * 3600.0
 
 
 def _event_name(payload: dict[str, Any]) -> str:
@@ -137,42 +114,138 @@ def _bot_id(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _default_meeting_transport() -> Any:
+    """The REAL RecallTransport for the meeting connection's room verbs.
+
+    Reuses the ONE production construction site, ``control_plane.meetings._default_transport``
+    (RecallTransport bound to the funded ``call_external`` funnel + env/Secret-Manager
+    config). One recipe, no second construction site."""
+    from .meetings import _default_transport
+
+    return _default_transport()
+
+
+@dataclass
+class _SpeakSink:
+    """Adapt the sentence-buffering ``SpeakPipe`` to the connection's ``SpeakSink`` shape.
+
+    ``MeetingConnection`` carries the agent's spoken text with a single ``say`` per send;
+    the underlying ``SpeakPipe`` buffers by sentence and would leave a trailing partial to a
+    0.5s tail timer, so this flushes after each ``say`` — the whole utterance reaches the
+    room deterministically (physics, not a decision). ``cut`` is the barge-in primitive,
+    forwarded unchanged."""
+
+    pipe: Any
+
+    async def say(self, text: str) -> None:
+        await self.pipe.say(text)
+        flush = getattr(self.pipe, "flush", None)
+        if flush is not None:
+            await flush()
+
+    async def cut(self) -> None:
+        cut = getattr(self.pipe, "cut", None)
+        if cut is not None:
+            await cut()
+
+
+def _meeting_info_md(payload: dict[str, Any]) -> str:
+    """Render ``MEETING_INFO.md`` (who's in the room) from the ``in_call`` webhook payload.
+
+    Title + participant names are read VERBATIM from the same Recall callback the join
+    already processes (``data.title`` / ``data.participants[].name``) — never synthesized.
+    Delegates the markdown to the KEEP ``in_meeting.prime.render_meeting_info`` so the
+    workroom's who's-in-the-room file uses the one canonical shape. A payload with no
+    metadata renders an honest "(no meeting metadata available)" body."""
+    from in_meeting.prime import render_meeting_info
+
+    data = payload.get("data")
+    data = data if isinstance(data, dict) else {}
+    title = str(data.get("title", "") or "")
+    raw_parts = data.get("participants")
+    participants = tuple(
+        str(p.get("name", "") or "")
+        for p in (raw_parts if isinstance(raw_parts, list) else [])
+        if isinstance(p, dict) and p.get("name")
+    )
+    return render_meeting_info(title=title, participants=participants)
+
+
+async def _resolve_map_text(resolved: dict[str, Any], *, db: Database) -> str | None:
+    """Load the pre-meeting MAP for this meeting's repo from ``premeeting.map_store``.
+
+    The pre-meeting system stored the durable ``index.md`` repo map in Postgres
+    ``repo_maps`` for ``(tenant, repo, sha)``; the workroom seeds it as ``REPO_MAP.md`` so
+    native Claude opens oriented (SPEC §8). Resolved off the SAME repo row the join path
+    already uses (repo_id → tenant + full_name). Prefer the exact ``pinned_sha`` map, then
+    fall back to the latest for the repo. Fail-closed to ``None`` (an unmapped repo simply
+    has no map to prime on — the meeting is unaffected); ALWAYS tenant-scoped so a
+    cross-tenant read is impossible (PM-STORE-02). Never a raise on the join path."""
+    repo_id = resolved.get("repo_id")
+    if repo_id is None:
+        return None
+    try:
+        from premeeting.map_store import load_latest_map, load_map
+        from premeeting.paths import repo_name_from_url
+
+        async with db.acquire() as conn:
+            repo = await repos.meetings.get_repo_by_id(conn, repo_id)
+        if repo is None or not repo.get("full_name"):
+            return None
+        tenant_id = str(repo["tenant_id"])
+        repo_name = repo_name_from_url(str(repo["full_name"]))
+        pinned_sha = str(resolved.get("pinned_sha") or "")
+        async with db.acquire() as conn:
+            if pinned_sha:
+                exact = await load_map(
+                    conn, tenant_id=tenant_id, repo=repo_name, sha=pinned_sha
+                )
+                if exact is not None:
+                    return exact
+            latest = await load_latest_map(conn, tenant_id=tenant_id, repo=repo_name)
+        return None if latest is None else latest[1]
+    except Exception:  # noqa: BLE001 - Rule 6: a resolution fault degrades to no map, never a crash
+        return None
+
+
+async def _repo_clone_url(resolved: dict[str, Any], *, db: Database) -> str:
+    """The public GitHub URL of the meeting's bound repo (``""`` when unbound).
+
+    Resolved off the SAME repo row the map/claim paths use (repo_id → full_name). A
+    read-only clone token for private repos is a follow-up via ``premeeting.github_auth``.
+    """
+    repo_id = resolved.get("repo_id")
+    if repo_id is None:
+        return ""
+    async with db.acquire() as conn:
+        repo = await repos.meetings.get_repo_by_id(conn, repo_id)
+    if repo is None or not repo.get("full_name"):
+        return ""
+    return f"https://github.com/{str(repo['full_name']).strip('/')}"
+
+
 async def provision_meeting(
     payload: dict[str, Any],
     *,
     db: Database,
     registry: Any,
-    resume: bool = False,
-    history_fn: Any = None,
-    provider: Any = None,
     transport: Any = None,
     speak: Any = None,
-    disambiguate: Any = None,
-    sandbox_backend: Any = None,
-    model: str | None = None,
+    oauth_token: str | None = None,
 ) -> ProvisionOutcome:
-    """Claim + assemble the per-meeting harness from a Recall ``in_call`` webhook.
+    """Claim + provision the per-meeting workroom runtime from a Recall ``in_call`` webhook.
 
-    The atomic-claim entry (§3.6): resolve the bot back to its meeting, then INSERT the
+    The atomic-claim entry: resolve the bot back to its meeting, then INSERT the
     ``meeting-harness`` ``operation_runs`` row via ``ops.claim_meeting``. On a WIN this
-    instance owns the meeting — it assembles the runtime (transport carrier + Scribe +
-    engine + abort in ONE scope), binds the claimed row's fencing handle so ``is_owner``
-    gates every emit, and subscribes the carrier ONCE at join. On a LOSS (a concurrent
-    duplicate join, or an already-running harness) it returns ``claimed=False`` and opens
-    NO second runtime — one harness per meeting.
+    instance owns the meeting — it provisions the workroom, builds the meeting connection,
+    wires the reactive session, and stashes all three on a :class:`MeetingRuntime` bound to
+    the claimed row's fencing handle. On a LOSS (a concurrent duplicate join, or an
+    already-running harness) it returns ``claimed=False`` and opens NO second runtime.
 
-    ``resume=True`` marks a REPLACEMENT re-claim after a recycle: the win confirms Doc 03's
-    transcript plane is reachable so the first wake after the swap replays from it via the
-    §3.5 ``resume_with_fallback`` seam (which fires in :meth:`WakeTurn.run`, not here),
-    keeping the room coherent across the instance swap. A non-``in_call`` event, or an
-    unresolvable bot, is a safe no-op (``claimed=False``) — never a raise on the webhook path.
-
-    THE CUTOVER: on a WON claim this is also where the NEW in-meeting engine is assembled
-    (:func:`_assemble_engine` — map + code + meeting + sandbox access) and stashed on the
-    runtime (``runtime.engine``) so the webhook drain feeds it by meeting id. The injection
-    kwargs (``provider``/``transport``/``speak``/``disambiguate``/``sandbox_backend``/
-    ``model``) are the engine's vendor seams — ``None`` everywhere means the REAL production
-    edges (Claude provider, RecallTransport, Cartesia speak pipe, Haiku confirm, real E2B).
+    A non-``in_call`` event, or an unresolvable bot, is a safe no-op (``claimed=False``) —
+    never a raise on the webhook path. The injection kwargs (``transport``/``speak``/
+    ``oauth_token``) are the vendor seams — ``None`` everywhere means the REAL production
+    edges (RecallTransport, Cartesia speak pipe, the subscription token from env).
     """
     if _event_name(payload) not in _IN_CALL_EVENTS:
         return ProvisionOutcome(claimed=False)
@@ -187,339 +260,58 @@ async def provision_meeting(
         return ProvisionOutcome(claimed=False)  # unknown bot never opens a harness
     meeting_id = str(resolved["id"])
 
-    # An already-assembled runtime on THIS instance means we already own the meeting; a
-    # redelivered in_call must NOT re-claim or re-wire (idempotent, subscribe-once).
+    # An already-registered runtime on THIS instance means we already own the meeting; a
+    # redelivered in_call must NOT re-claim or re-wire (idempotent).
     if registry.get(meeting_id) is not None:
         return ProvisionOutcome(claimed=False)
 
-    # THE atomic claim (§3.6): the partial-unique index arbitrates the race. A non-null
-    # id → we won and own the meeting; None → a concurrent/existing harness owns it.
+    # THE atomic claim: the partial-unique index arbitrates the race. A non-null id → we
+    # won and own the meeting; None → a concurrent/existing harness owns it.
     run_id = await claim_meeting(
         db, meeting_id, MEETING_HARNESS_OP, created_by=db.instance_id
     )
     if run_id is None:
         return ProvisionOutcome(claimed=False)  # lost the race — back off, no harness
 
-    # WON: assemble the four subsystems in ONE scope on the meeting's runtime, binding the
-    # claimed row's fencing handle so every emit reads is_owner live (§3.7).
     handle = OperationHandle(db, run_id, meeting_id, MEETING_HARNESS_OP)
-    resumed = False
-    if resume:
-        # A replacement re-claim after a recycle: confirm Doc 03's transcript plane is
-        # reachable before the loop runs, so the first wake replays Proxy's context from
-        # it via the §3.5 seam (fired in WakeTurn.run) and the room stays coherent across
-        # the instance swap (restart-not-resume, §3.10).
-        resumed = await _resume_session(db, meeting_id, history_fn=history_fn)
+    runtime = MeetingRuntime(meeting_id=meeting_id, operation_handle=handle)
+    registry.register(runtime)
 
-    # Resolve THIS meeting's code_intel grounding (the tenant's durable graph.db + pinned
-    # clone) from the SAME repo row the referent corpus uses (repo_id -> tenant + name) — the
-    # async chokepoint where a db read is allowed (the sync ``_assemble_runtime`` cannot).
-    # Fail-closed to None (an unindexed/unknown repo mounts no code_intel server; Proxy still
-    # wakes) — never a raise on the join path (§3.8 / Rule 6).
-    code_intel_ctx = None
-    map_text = None
+    # Provision the workroom + build the connection + wire the session. A provision fault
+    # must never strand the claimed meeting OR crash the webhook path — it degrades to a
+    # runtime with no workroom (the meeting boots without a brain) with a loud log.
     try:
-        from .code_intel_mount import (
-            resolve_code_intel_context_from_row,
-            resolve_map_text_from_row,
+        map_text = await _resolve_map_text(resolved, db=db)
+        session, workroom, connection, speak_pipe = await _assemble_workroom(
+            resolved,
+            db=db,
+            bot_id=bot_id,
+            transport=transport,
+            speak=speak,
+            oauth_token=oauth_token,
+            map_text=map_text,
+            meeting_info=_meeting_info_md(payload),
         )
-
-        code_intel_ctx = await resolve_code_intel_context_from_row(resolved, db=db)
-        # Additively resolve the pre-meeting MAP so the wake turn primes on it (the pre-meeting
-        # system's downstream contribution). Independent of the code_intel ctx — an unmapped
-        # repo simply yields None and the wake turn is unaffected.
-        map_text = await resolve_map_text_from_row(resolved, db=db)
-    except Exception:  # noqa: BLE001 - a resolution fault degrades to no code_intel, never blocks join
-        code_intel_ctx = None
-
-    runtime = _assemble_runtime(
-        payload,
-        resolved,
-        db=db,
-        registry=registry,
-        handle=handle,
-        provider=provider,
-        code_intel_ctx=code_intel_ctx,
-        map_text=map_text,
-    )
-    # THE CUTOVER: assemble the NEW in-meeting engine onto the boot path and stash it on
-    # the runtime so the drain reaches it by meeting id. An assembly fault must not strand
-    # the claimed meeting silently OR crash the webhook path — it degrades to an engine-less
-    # runtime (notes plane only) with a CRITICAL log a human will see (§3.8 / Rule 6).
-    # PROXY_USE_WORKROOM selects the NEW brain (native Claude in an E2B sandbox with the repo,
-    # fronted by the meeting bridge) instead of the OLD in-meeting engine. Same
-    # (brain, speak_pipe, sandbox) shape + stash + teardown; the webhook drain routes transcript
-    # to ``runtime.bridge.on_line`` when the bridge is set (else ``runtime.engine``). Old path
-    # stays the default until the workroom serves a meeting end-to-end.
-    use_workroom = os.environ.get("PROXY_USE_WORKROOM") == "1"
-    engine = None
-    bridge = None
-    speak_pipe = None
-    sandbox = None
-    try:
-        if use_workroom:
-            bridge, speak_pipe, sandbox = await _assemble_workroom(
-                resolved, db=db, bot_id=bot_id, transport=transport, map_text=map_text,
-            )
-        else:
-            engine, speak_pipe, sandbox = await _assemble_engine(
-                resolved,
-                db=db,
-                bot_id=bot_id,
-                provider=provider,
-                transport=transport,
-                speak=speak,
-                disambiguate=disambiguate,
-                sandbox_backend=sandbox_backend,
-                model=model,
-            )
     except Exception:  # noqa: BLE001 - never a raise on the webhook path; loud, not silent
         _log.critical(
-            "in-meeting brain assembly failed for meeting %s — the meeting runs WITHOUT "
-            "its brain (notes plane only); this needs a human",
+            "workroom assembly failed for meeting %s — the meeting runs WITHOUT its brain; "
+            "this needs a human",
             meeting_id,
             exc_info=True,
         )
     else:
-        runtime.engine = engine
-        runtime.bridge = bridge
+        runtime.session = session
+        runtime.workroom = workroom
+        runtime.connection = connection
         runtime.speak_pipe = speak_pipe
-        runtime.engine_sandbox = sandbox
-        if sandbox is not None:
-            # IMP-3 keep-warm: a meeting has no time cap, so the 1h-lifetime sandbox is
-            # periodically extended while the meeting is live. Cancelled in
-            # _teardown_engine before the kill; a failed beat logs, never crashes.
+        if workroom is not None:
+            # Keep-warm: a meeting has no time cap, so the 1h-lifetime sandbox is
+            # periodically re-extended while the meeting is live. Cancelled at meeting end
+            # before the kill; a failed beat logs, never crashes.
             runtime.sandbox_keepwarm = asyncio.ensure_future(
-                _sandbox_keepwarm(sandbox, meeting_id)
+                _sandbox_keepwarm(workroom, meeting_id)
             )
-    return ProvisionOutcome(claimed=True, run_id=run_id, resumed=resumed)
-
-
-def _assemble_runtime(
-    payload: dict[str, Any],
-    resolved: dict[str, Any],
-    *,
-    db: Database,
-    registry: Any,
-    handle: OperationHandle,
-    provider: Any = None,
-    code_intel_ctx: Any = None,
-    map_text: str | None = None,
-) -> Any:
-    """Instantiate the runtime SHELL in ONE scope + subscribe the carrier once.
-
-    Builds the frozen §3.2 meeting header from the same webhook envelope, opens the ONE
-    ``SignalCarrier``, and hands both to the registry's ``start_meeting`` — which wires
-    the Scribe consumer + STT refresh on that carrier (subscribe-once at join). Then binds
-    the claimed row's fencing handle onto the runtime and wires the meeting-end listener
-    ONCE — the second carrier subscription, also at join, never per event.
-
-    THE CUTOVER: the OLD live brain is DELETED — the brain seat is the NEW in-meeting
-    engine, assembled by :func:`_assemble_engine` on the async chokepoint (this function
-    is sync and cannot await the map load / sandbox provision). The meeting-end listener
-    is the only carrier-side spine wired here: the explicit ``MeetingEnd`` signal trips
-    ``run_until_meeting_end`` (zero wake turns ride the carrier). ``provider`` is accepted
-    for signature compatibility with existing callers; the engine's provider is threaded
-    through :func:`_assemble_engine`, not here.
-    """
-    _ = provider  # engine seams ride _assemble_engine; kept for caller compatibility
-    from scribe.prefix import MeetingHeader
-    from transport.carrier import SignalCarrier
-    from transport.events import meeting_metadata
-
-    meeting_id = str(resolved["id"])
-    metadata = meeting_metadata(payload)
-    header = MeetingHeader(
-        meeting_id=meeting_id,
-        agenda=metadata.title,
-        participants=metadata.participants,
-    )
-    carrier = SignalCarrier()
-    # start_meeting subscribes the Scribe consumer to the carrier ONCE at join. The resolved
-    # ``code_intel_ctx`` (this meeting's tenant graph.db + clone) rides onto the runtime so the
-    # live wake turn builds the meeting's ``code_intel`` SDK server and grounded codebase
-    # questions can be answered (§11.6). None ctx → no code_intel server (honest degradation).
-    runtime = registry.start_meeting(
-        header, carrier, code_intel_ctx=code_intel_ctx, map_text=map_text
-    )
-    # Open the consent hard-gate on the LIVE hearing path (§3.1, AC-JOIN-04, Law 3): reaching
-    # this assembly means the bot won the claim on a confirmed ``in_call`` event, and a bot is
-    # only ``in_call`` after ``JoinSession.join`` posted the consent notice as its FIRST
-    # observable action (consent-notice-first is a hard gate, not a courtesy). Before this grant
-    # the live ``HearingStage`` DROPS every record (records_before_consent_allowed=0); it never
-    # defaults to always-allow. An un-granted runtime (a partial/other assembly path) stays
-    # fail-closed rather than silently observing pre-consent audio (F-RECORD-BEFORE-CONSENT).
-    runtime.grant_consent()
-    # Bind the claimed row's fencing handle so the gated emitter reads is_owner off this
-    # handle (a fenced-out harness emits nothing).
-    runtime.operation_handle = handle
-    # THE CUTOVER: the old brain is deleted — the NEW in-meeting engine (assembled async
-    # in :func:`_assemble_engine`, stashed as ``runtime.engine``) owns the wake/speak
-    # seat. Wire the meeting-end listener ONCE at join (the second, and last, carrier
-    # subscription): the explicit ``MeetingEnd`` signal landing on it is what ends
-    # :func:`run_meeting_until_end`.
-    runtime.wire_meeting_end_listener()
-    return runtime
-
-
-def _engine_clone_path(tenant_id: str, repo_name: str) -> Path:
-    """The TENANT-ROOTED clone work-tree for this meeting's repo (the caller's duty).
-
-    The runtime review pinned that the CALLER of ``assemble_engine`` passes a
-    tenant-rooted ``clone_path``: it is ALWAYS derived from
-    ``premeeting.paths.tenant_repo_dir(tenant_id, repo_name)`` (``<root>/<tenant>/repos/
-    <repo>``), so one meeting's toolbelt can never name another tenant's volume — the
-    cross-tenant read is unrepresentable at the path layer (PM-ISO-01). The work-tree
-    itself lives one level down at ``checkout/`` (``premeeting.cloner`` materialises
-    ``<repo_dir>/checkout``; ``CodeIntelContext.for_tenant_repo`` reads the same layout),
-    so that is the directory the live-search tools serve from.
-    """
-    from premeeting.paths import tenant_repo_dir
-
-    return Path(tenant_repo_dir(tenant_id, repo_name)) / "checkout"
-
-
-def _default_meeting_transport() -> Any:
-    """The REAL RecallTransport for the engine's meeting-control toolbelt.
-
-    The harness holds no long-lived transport instance on the boot path (the invite
-    path constructs one per call) — so the engine reuses the ONE production
-    construction site, ``control_plane.meetings._default_transport`` (RecallTransport bound
-    to the funded ``call_external`` funnel + the env/Secret-Manager config). One
-    recipe, no second construction site.
-    """
-    from .meetings import _default_transport
-
-    return _default_transport()
-
-
-async def _assemble_engine(
-    resolved: dict[str, Any],
-    *,
-    db: Database,
-    bot_id: str,
-    provider: Any = None,
-    transport: Any = None,
-    speak: Any = None,
-    disambiguate: Any = None,
-    sandbox_backend: Any = None,
-    model: str | None = None,
-) -> tuple[Any, Any, Any]:
-    """THE CUTOVER core: assemble the NEW in-meeting engine for one claimed meeting.
-
-    Resolves the meeting's identity off the already-fetched ``meetings`` row
-    (``tenant_id``/``repo_id``/``pinned_sha``) + its repo row (``full_name`` → repo
-    name), then hands ``in_meeting.runtime.assemble_engine`` its full real access:
-
-    * ``model`` — the ORCHESTRATOR seat from ``llm.routing`` (``PROXY_MODEL_ORCHESTRATOR``
-      env-overridable), never hard-coded;
-    * ``clone_path`` — the TENANT-ROOTED :func:`_engine_clone_path` derivation (isolation);
-    * ``speak`` — the real Cartesia→Output-Media ``SpeakPipe`` for THIS meeting
-      (``real_speak_sink(meeting_id)``) unless injected;
-    * ``disambiguate`` — the real async Haiku confirm (``build_disambiguator``);
-    * ``transport`` — the real RecallTransport verbs (mute/unmute/post_chat/send_dm);
-    * ``sandbox`` — ONE warm E2B sandbox provisioned at join. A provision FAILURE must
-      NOT kill the meeting: it degrades to ``sandbox=None`` (no sandbox tools mounted,
-      the caller-guard keeps names and servers aligned) with an honest log;
-    * ``drafts`` — the meeting-scoped draft-staging server (Law 3: the one
-      write-to-the-world stages a durable draft behind the human accept route),
-      built over the durable substrate and bound to THIS meeting; a substrate that
-      cannot stage mounts nothing (honest degrade, same caller-guard).
-
-    Returns ``(engine, speak_pipe, sandbox)`` — the caller stashes all three on the
-    runtime and OWNS the sandbox/pipe lifecycle (killed/closed at meeting end).
-    """
-    from in_meeting import disambiguator as im_disambiguator
-    from in_meeting import runtime as im_runtime
-    from in_meeting import sandbox as im_sandbox
-    from in_meeting import speak as im_speak
-    from llm.routing import model_for
-    from premeeting.paths import repo_name_from_url
-
-    meeting_id = str(resolved["id"])
-    tenant_id = str(resolved.get("tenant_id") or "")
-    pinned_sha = str(resolved.get("pinned_sha") or "")
-
-    # The repo identity (name) from the SAME repo row every join-path resolver uses.
-    # No repo / unknown repo → honest degrade: no map, no clone, meeting tools only.
-    repo_name = ""
-    repo_id = resolved.get("repo_id")
-    if repo_id is not None:
-        async with db.acquire() as conn:
-            repo_row = await repos.meetings.get_repo_by_id(conn, repo_id)
-        if repo_row is not None and repo_row.get("full_name"):
-            repo_name = repo_name_from_url(str(repo_row["full_name"]))
-
-    seat = model if model is not None else model_for("ORCHESTRATOR")
-    live_transport = transport if transport is not None else _default_meeting_transport()
-    speak_pipe = speak if speak is not None else im_speak.real_speak_sink(meeting_id)
-    confirm = disambiguate if disambiguate is not None else im_disambiguator.build_disambiguator()
-
-    # Warm-at-join sandbox (the engine mounts SANDBOX_TOOLS off the live handle). The
-    # provisioner OWNS its lifecycle: killed in the same meeting-end teardown that
-    # completes the operation row. Provisioned with SANDBOX_TIMEOUT_S (1 hour); a
-    # meeting LONGER than that stays warm via the :func:`_sandbox_keepwarm` heartbeat
-    # the caller spawns on a won claim (cancelled at teardown before the kill).
-    sandbox: Any = None
-    try:
-        sandbox = await im_sandbox.provision_sandbox(
-            backend=sandbox_backend,
-            metadata={"meeting_id": meeting_id},
-        )
-    except Exception:  # noqa: BLE001 - a provision fault degrades honestly, never kills the join
-        _log.warning(
-            "sandbox provision failed for meeting %s — the meeting boots WITHOUT sandbox "
-            "tools (honest degrade; code+meeting access unaffected)",
-            meeting_id,
-            exc_info=True,
-        )
-
-    # The meeting-scoped draft-staging server (Law 3 — the ONE write-to-the-world,
-    # staged behind the human accept route). Built over the durable substrate facade
-    # and bound to THIS meeting at build time, so a staged draft can never land in
-    # another meeting. ``build_drafts_server`` returns None when the handed substrate
-    # cannot stage (a stand-in db in an offline assembly) — the same caller-guard
-    # honesty as code/sandbox: no server, no advertised draft tools, and a fault
-    # never kills the join (§3.8 / Rule 6).
-    drafts_server: Any = None
-    try:
-        from in_meeting import drafts_access
-
-        drafts_server = drafts_access.build_drafts_server(db=db, meeting_id=meeting_id)
-        if drafts_server is None:
-            _log.warning(
-                "draft staging unavailable for meeting %s — the substrate cannot stage; "
-                "Proxy cannot stage a draft this meeting (honest degrade)",
-                meeting_id,
-            )
-    except Exception:  # noqa: BLE001 - a mount fault degrades honestly, never kills the join
-        _log.warning(
-            "draft-staging mount failed for meeting %s — Proxy cannot stage a draft "
-            "this meeting (honest degrade; other access unaffected)",
-            meeting_id,
-            exc_info=True,
-        )
-
-    # ``clone_repo`` must never collapse to the shared repos/ dir: a meeting with no
-    # bound repo gets a definitively-nonexistent tenant-rooted path (no code server).
-    clone_repo = repo_name if repo_name else "__no-repo__"
-    async with db.acquire() as conn:
-        engine = await im_runtime.assemble_engine(
-            model=seat,
-            tenant_id=tenant_id,
-            repo=repo_name,
-            pinned_sha=pinned_sha,
-            bot_id=bot_id,
-            transport=live_transport,
-            conn=conn,
-            clone_path=_engine_clone_path(tenant_id, clone_repo),
-            speak=speak_pipe,
-            disambiguate=confirm,
-            provider=provider,
-            sandbox=sandbox,
-            drafts=drafts_server,
-        )
-    return engine, speak_pipe, sandbox
+    return ProvisionOutcome(claimed=True, run_id=run_id)
 
 
 async def _assemble_workroom(
@@ -528,109 +320,124 @@ async def _assemble_workroom(
     db: Database,
     bot_id: str,
     transport: Any = None,
+    speak: Any = None,
     oauth_token: str | None = None,
     map_text: str | None = None,
-) -> tuple[Any, Any, Any]:
-    """The WORKROOM assembly — the new brain (native Claude Code inside a per-meeting E2B
-    sandbox with the repo cloned in), fronted by the thin MEETING BRIDGE. Drop-in alternative
-    to :func:`_assemble_engine`, selected by the ``PROXY_USE_WORKROOM`` flag; returns the SAME
-    ``(bridge, speak_pipe, sandbox)`` shape so the caller stashes + tears it down identically
-    (``runtime.bridge`` instead of ``runtime.engine``; the webhook feed calls
-    ``bridge.on_line`` instead of ``engine.feed_transcript``).
+    meeting_info: str = "",
+) -> tuple[MeetingSession | None, Any, Any, Any]:
+    """Provision the workroom + build the meeting connection + wire the reactive session.
 
-    Honest-degrade throughout (§3.8): a missing subscription token / repo / provision fault
-    surfaces in the log and yields ``(None, speak_pipe, None)`` — the meeting still boots, it
-    just can't wake a workroom this meeting. World-touching is impossible from the sandbox by
-    construction (no push/send creds; egress denied).
-    """
+    Returns ``(session, workroom, connection, speak_pipe)``. Honest-degrade throughout
+    (§3.8): a missing subscription token or an unbound repo surfaces in the log and yields
+    ``(None, None, None, speak_pipe)`` — the meeting still boots (it has a voice channel),
+    it just can't wake a workroom this meeting. World-touching is impossible from the
+    sandbox by construction (no push/send creds; egress denied — Law 3). ``meeting_info`` is
+    the rendered ``MEETING_INFO.md`` (who's in the room) seeded into the sandbox so the agent
+    can address/read the room (SPEC §2/§8)."""
     from in_meeting import speak as im_speak
-    from in_meeting.bridge import CartesiaSpeaker, MeetingBridge, RecallActions
+    from in_meeting.meeting_connection import MeetingConnection
     from in_meeting.workroom import provision_workroom
-    from premeeting.paths import repo_name_from_url  # noqa: F401 — parity import w/ _assemble_engine
 
     from libs.http.src.http.external import call_external
 
     meeting_id = str(resolved["id"])
     pinned_sha = str(resolved.get("pinned_sha") or "") or None
     live_transport = transport if transport is not None else _default_meeting_transport()
-    speak_pipe = im_speak.real_speak_sink(meeting_id)
+    speak_pipe = speak if speak is not None else im_speak.real_speak_sink(meeting_id)
 
     # The subscription token that lets native ``claude`` authenticate INSIDE the sandbox
     # (Secret Manager in prod; env locally). The ONLY credential the sandbox receives.
-    token = oauth_token or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    token = (oauth_token or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")).strip()
     if not token:
         _log.warning(
-            "no CLAUDE_CODE_OAUTH_TOKEN for meeting %s — workroom cannot start; meeting boots "
-            "without a workroom (honest degrade)", meeting_id,
+            "no CLAUDE_CODE_OAUTH_TOKEN for meeting %s — workroom cannot start; meeting "
+            "boots without a workroom (honest degrade)",
+            meeting_id,
         )
-        return None, speak_pipe, None
+        return None, None, None, speak_pipe
 
-    # The repo to clone INTO the sandbox (public URL from the bound repo's full_name; a
-    # read-only clone token for private repos is a follow-up via premeeting.github_auth).
-    repo_url = ""
-    repo_id = resolved.get("repo_id")
-    if repo_id is not None:
-        async with db.acquire() as conn:
-            repo_row = await repos.meetings.get_repo_by_id(conn, repo_id)
-        if repo_row is not None and repo_row.get("full_name"):
-            repo_url = f"https://github.com/{str(repo_row['full_name']).strip('/')}"
+    repo_url = await _repo_clone_url(resolved, db=db)
     if not repo_url:
         _log.warning(
             "no bound repo for meeting %s — workroom cannot clone; meeting boots without a "
-            "workroom (honest degrade)", meeting_id,
+            "workroom (honest degrade)",
+            meeting_id,
         )
-        return None, speak_pipe, None
+        return None, None, None, speak_pipe
 
     try:
         workroom = await provision_workroom(
-            call=call_external, token=token, repo_url=repo_url, sha=pinned_sha,
+            call=call_external,
+            token=token,
+            repo_url=repo_url,
+            sha=pinned_sha,
             map_text=map_text or "",
         )
     except Exception:  # noqa: BLE001 — a provision fault degrades honestly, never kills the join
         _log.warning(
             "workroom provision failed for meeting %s — meeting boots without a workroom "
-            "(honest degrade; %s)", meeting_id, repo_url, exc_info=True,
+            "(honest degrade; %s)",
+            meeting_id,
+            repo_url,
+            exc_info=True,
         )
-        return None, speak_pipe, None
+        return None, None, None, speak_pipe
 
-    bridge = MeetingBridge(
-        workroom=workroom,
-        speaker=CartesiaSpeaker(pipe=speak_pipe),
-        actions=RecallActions(transport=live_transport, bot_id=bot_id),
+    # Seed MEETING_INFO.md (who's in the room) into the sandbox alongside the prime/map/notes
+    # provision_workroom already seeded, so the agent can address/read the room (SPEC §2/§8).
+    # Best-effort: a seed fault leaves the workroom running without the info file (honest
+    # degrade — the transcript still carries who's speaking), never kills the join.
+    if meeting_info:
+        with contextlib.suppress(Exception):
+            from in_meeting.prime import MEETING_INFO_FILE
+            from in_meeting.workroom import REPO_DIR
+
+            info_path = f"{REPO_DIR}/{MEETING_INFO_FILE}"
+            await call_external(
+                lambda: workroom.sandbox.files.write(info_path, meeting_info),
+                service="e2b",
+            )
+
+    # The one meeting connection: the agent's result is carried out over the Cartesia speak
+    # pipe (say/cut) + the Recall room verbs (chat/dm/mute/unmute — creds host-side). This
+    # is a driver, not a decision (Law 4): the agent chooses what/how, this maps to physics.
+    connection = MeetingConnection(
+        speak=_SpeakSink(pipe=speak_pipe),
+        room=live_transport,
+        bot_id=bot_id,
     )
-    _log.info("workroom assembled for meeting %s (sandbox=%s repo=%s)",
-              meeting_id, workroom.sandbox_id, repo_url)
-    return bridge, speak_pipe, workroom.sandbox
+    session = MeetingSession(workroom=workroom, connection=connection)
+    _log.info(
+        "workroom assembled for meeting %s (sandbox=%s repo=%s)",
+        meeting_id,
+        workroom.sandbox_id,
+        repo_url,
+    )
+    return session, workroom, connection, speak_pipe
 
 
 async def _sandbox_keepwarm(
-    sandbox: Any, meeting_id: str, *, interval_s: float | None = None
+    workroom: Any, meeting_id: str, *, interval_s: float | None = None
 ) -> None:
-    """Keep the meeting's warm E2B sandbox alive past its 1h self-timeout (IMP-3).
+    """Keep the meeting's warm E2B sandbox alive past its self-timeout.
 
-    A meeting has no time cap, but the sandbox is provisioned with
-    ``SANDBOX_TIMEOUT_S`` (1h) and would silently die under a longer meeting, losing
-    code execution mid-conversation. This heartbeat extends the sandbox lifetime by
-    the full ``SANDBOX_TIMEOUT_S`` on every beat (the confirmed e2b
-    ``AsyncSandbox.set_timeout(seconds)`` — it RESETS the lifetime from now) every
-    ``SANDBOX_KEEPWARM_INTERVAL_S`` (30min — two chances per lifetime) while the
-    meeting is live. The extension rides the ONE ``call_external`` seam (§14) like
-    every E2B round-trip. NEVER-THROW: a failed beat logs for a human and the loop
-    keeps beating (a keep-warm fault must never crash a live meeting); cancellation
-    (the teardown path — cancelled in :func:`_teardown_engine` before the kill)
-    propagates. ``interval_s`` is injectable for tests; the default is resolved per
-    beat off the module constant so it stays patchable.
-    """
+    A meeting has no time cap, but the sandbox is provisioned with a bounded lifetime and
+    would silently die under a longer meeting. This heartbeat extends the sandbox lifetime
+    by ``SANDBOX_TIMEOUT_S`` on every beat (the confirmed e2b ``AsyncSandbox.set_timeout``
+    RESETS the lifetime from now) every ``SANDBOX_KEEPWARM_INTERVAL_S`` while the meeting is
+    live. The extension rides the ONE ``call_external`` seam like every E2B round-trip.
+    NEVER-THROW: a failed beat logs and the loop keeps beating; cancellation (the teardown
+    path) propagates. ``interval_s`` is injectable for tests; the default is resolved per
+    beat off the module constant so it stays patchable."""
     while True:
         delay = interval_s if interval_s is not None else SANDBOX_KEEPWARM_INTERVAL_S
         await asyncio.sleep(delay)
         try:
-            from in_meeting.sandbox import SANDBOX_TIMEOUT_S
-
             from libs.http.src.http import external as _http
 
+            sandbox = workroom.sandbox
             await _http.call_external(
-                lambda: sandbox.set_timeout(SANDBOX_TIMEOUT_S),
+                lambda: sandbox.set_timeout(int(SANDBOX_TIMEOUT_S)),
                 service="e2b",
                 max_retries=1,
             )
@@ -638,39 +445,11 @@ async def _sandbox_keepwarm(
             raise
         except Exception:  # noqa: BLE001 - never-throw: a failed beat must not kill the meeting
             _log.warning(
-                "sandbox keep-warm extension failed for meeting %s — retrying on the "
-                "next beat; if the sandbox lapses the meeting continues without "
-                "sandbox tools (honest degrade)",
+                "sandbox keep-warm extension failed for meeting %s — retrying on the next "
+                "beat; if the sandbox lapses the meeting continues (honest degrade)",
                 meeting_id,
                 exc_info=True,
             )
-
-
-async def _resume_session(
-    db: Database, meeting_id: str, *, history_fn: Any = None
-) -> bool:
-    """Confirm the transcript plane is reachable for the first-wake replay (§3.5).
-
-    The replacement instance's SDK session is empty; the durable meeting history lives in
-    Doc 03's Postgres transcript plane. This does NOT itself replay — the first wake
-    after the swap rebuilds from the transcript-plane ``history_fn``. Here we only
-    confirm that durable history plane is reachable at re-claim time, so the re-claim can
-    honestly report a resumable meeting. Returns True iff the transcript plane was read.
-    """
-    async def _default_history() -> Any:
-        # Doc 03's transcript plane (the single durable meeting-history source, §3.5):
-        # the folded ``note_deltas`` are the durable meeting history a resumed session
-        # rebuilds from — there is no separate SDK-session mirror.
-        async with db.acquire() as conn:
-            return await repos.notes.load_deltas(conn, meeting_id)
-
-    reader = history_fn or _default_history
-    with contextlib.suppress(Exception):
-        # A missing/empty transcript plane must never block the re-claim: the resume is
-        # best-effort (an honest "catching up" line), the claim already succeeded.
-        await reader()
-        return True
-    return False
 
 
 async def run_meeting_until_end(
@@ -679,43 +458,27 @@ async def run_meeting_until_end(
     db: Database,
     registry: Any,
     timeout_s: float | None = None,
-    resume: bool = False,
-    provider: Any = None,
     transport: Any = None,
     speak: Any = None,
-    disambiguate: Any = None,
-    sandbox_backend: Any = None,
-    model: str | None = None,
+    oauth_token: str | None = None,
 ) -> ProvisionOutcome:
-    """The ``asyncio.run``-style meeting entry: claim, launch the loop, run to close.
+    """The ``asyncio.run``-style meeting entry: claim, provision, run to meeting end.
 
-    This is what the harness process runs per meeting. It provisions (claim + assemble —
-    including the NEW in-meeting engine), then LAUNCHES the meeting-end listener as the
-    end-signal spine and runs until the explicit ``MeetingEnd`` signal closes the carrier.
-    A meeting has NO time cap (SPEC §9): ``timeout_s=None`` (production) resolves the
-    generous env-configurable safety ceiling (:func:`_meeting_max_s`, default 12h) — a
-    leak backstop for a loop whose end signal never arrives, never a meeting kill; an
-    explicit ``timeout_s`` is honored for tests/shutdown paths. The engine is fed by the
-    webhook dispatch (push), not by an async-iterator source, so
-    ``in_meeting.runtime.run_meeting`` (the pull driver) is NOT launched here. A loss (no
-    claim) returns immediately without launching. On meeting end the ENGINE lifecycle
-    closes first — cancel the sandbox keep-warm, drain the in-flight turns, flush+close
-    the speak pipe, kill the warm sandbox, drop the Output-Media channel — then the
-    runtime is torn down and the ``operation_runs`` row completes (fencing untouched).
-    The engine seam kwargs thread to :func:`provision_meeting` (``None`` = the real
-    vendor edges).
+    This is what the harness process runs per meeting. It provisions (claim + assemble the
+    workroom runtime), then waits until the meeting-end webhook has torn the runtime down
+    (the drain calls ``registry.end_meeting`` on a terminal webhook, which drops the runtime
+    from the table). A meeting has NO time cap (SPEC §9): ``timeout_s=None`` (production)
+    resolves the generous env-configurable safety ceiling — a leak backstop, never a
+    meeting kill; an explicit ``timeout_s`` is honored for tests/shutdown paths. On timeout
+    the runtime is torn down here. Either way the ``operation_runs`` row completes.
     """
     outcome = await provision_meeting(
         payload,
         db=db,
         registry=registry,
-        resume=resume,
-        provider=provider,
         transport=transport,
         speak=speak,
-        disambiguate=disambiguate,
-        sandbox_backend=sandbox_backend,
-        model=model,
+        oauth_token=oauth_token,
     )
     if not outcome.claimed:
         return outcome
@@ -724,94 +487,39 @@ async def run_meeting_until_end(
     async with db.acquire() as conn:
         resolved = await repos.meetings.get_by_bot_id(conn, bot_id or "")
     if resolved is None:
-        # A claim won but the bot no longer resolves (raced deletion) — nothing to run.
-        return outcome
+        return outcome  # a claim won but the bot no longer resolves — nothing to run
     meeting_id = str(resolved["id"])
-    runtime = registry.get(meeting_id)
-    if runtime is None:
-        return outcome
 
-    # Launch the end-signal spine: the meeting-end listener (wired ONCE at join) consumes
-    # carrier signals until the explicit MeetingEnd signal lands (§3.1). No meeting time
-    # cap (SPEC §9) — the resolved bound is only the generous leak-backstop ceiling
-    # (env-configurable, default 12h), resolved at launch time so a deploy can raise it
-    # without a code change.
+    # Wait for the meeting-end webhook to drop the runtime (the drain runs end_meeting on a
+    # terminal webhook). No meeting time cap (SPEC §9) — the resolved bound is only the
+    # generous leak-backstop ceiling, resolved at launch time so a deploy can raise it.
     bound_s = timeout_s if timeout_s is not None else _meeting_max_s()
     ran_to_end = False
     try:
-        await asyncio.wait_for(runtime.run_until_meeting_end(), timeout=bound_s)
+        await asyncio.wait_for(_wait_until_ended(registry, meeting_id), timeout=bound_s)
         ran_to_end = True
     except asyncio.TimeoutError:
         ran_to_end = False
+        # The end webhook never arrived (a leak): tear the workroom down ourselves.
+        await registry.end_meeting(meeting_id, reason="safety_ceiling")
     finally:
-        # meeting_end (or timeout) → close the ENGINE lifecycle first (drain turns →
-        # flush+close the speak pipe → kill the sandbox → drop the Output-Media channel),
-        # then run the ordered close + tear the runtime down, then complete the operation
-        # row. end_meeting drains the Scribe consumer first.
-        await _teardown_engine(runtime, meeting_id)
-        await registry.end_meeting(meeting_id)
         await _complete_run(db, outcome.run_id)
 
     outcome.ran_to_end = ran_to_end
     return outcome
 
 
-async def _teardown_engine(
-    runtime: Any, meeting_id: str, *, timeout_s: float | None = None
+async def _wait_until_ended(
+    registry: Any, meeting_id: str, *, poll_s: float = 0.5
 ) -> None:
-    """Meeting-end lifecycle for the NEW engine — ordered, bounded, never-deadlock.
+    """Return once the meeting's runtime has been dropped from the registry (meeting end).
 
-    Order: cancel the sandbox keep-warm heartbeat (so no beat re-extends a sandbox
-    mid-destruction) → ``engine.drain()`` (every in-flight wake turn finishes or the bound trips) →
-    ``speak_pipe.aclose()`` (the trailing partial is flushed into the room, then quiet) →
-    ``sandbox.kill()`` (the provisioner owns the warm handle's lifetime; the kill rides
-    the ONE ``call_external`` seam like every E2B round-trip) → drop the meeting's
-    Output-Media channel. Every step is best-effort + WALL-CLOCK bounded (§3.8): each
-    await — the kill included — rides ``asyncio.wait_for`` on the same teardown bound
-    (``call_external`` retries raised transport errors but has no clock of its own, so
-    a HANGING vendor edge is abandoned by the bound, not waited on). A hung turn, a
-    stuck synth, or a wedged E2B kill must never block the operation-row completion
-    behind it. ``timeout_s`` overrides the module bound (``ENGINE_TEARDOWN_TIMEOUT_S``)
-    for callers/tests that need a tighter clock; resolved at call time.
-    """
-    bound = timeout_s if timeout_s is not None else ENGINE_TEARDOWN_TIMEOUT_S
-    # The sandbox keep-warm heartbeat stops FIRST (before the kill): a beat racing the
-    # kill could re-extend a sandbox the teardown is destroying. Cancellation is awaited
-    # (suppressed) so no orphan task outlives the meeting it served.
-    keepwarm = getattr(runtime, "sandbox_keepwarm", None)
-    if keepwarm is not None:
-        keepwarm.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await keepwarm
-    engine = getattr(runtime, "engine", None)
-    if engine is not None:
-        with contextlib.suppress(Exception):
-            await asyncio.wait_for(engine.drain(), timeout=bound)
-    # WORKROOM path: drain the bridge's in-flight wakes (the sandbox kill below owns the
-    # sandbox lifetime — bridge.drain awaits work, it does NOT kill, so no double-kill).
-    bridge = getattr(runtime, "bridge", None)
-    if bridge is not None:
-        with contextlib.suppress(Exception):
-            await asyncio.wait_for(bridge.drain(), timeout=bound)
-    pipe = getattr(runtime, "speak_pipe", None)
-    aclose = getattr(pipe, "aclose", None)
-    if aclose is not None:
-        with contextlib.suppress(Exception):
-            await asyncio.wait_for(aclose(), timeout=bound)
-    sandbox = getattr(runtime, "engine_sandbox", None)
-    if sandbox is not None:
-        with contextlib.suppress(Exception):
-            from libs.http.src.http import external as _http
-
-            await asyncio.wait_for(
-                _http.call_external(lambda: sandbox.kill(), service="e2b", max_retries=1),
-                timeout=bound,
-            )
-    if engine is not None or pipe is not None:
-        with contextlib.suppress(Exception):
-            from in_meeting import output_media
-
-            output_media.close_channel(meeting_id)
+    Meeting end is EXPLICIT (SPEC §3.1): the meeting-end webhook routes through the drain's
+    ``registry.end_meeting``, which drops the runtime. This polls the registry for that
+    drop rather than owning a carrier — the run loop and the webhook drain share the one
+    registry table, so the drop IS the end signal."""
+    while registry.get(meeting_id) is not None:
+        await asyncio.sleep(poll_s)
 
 
 async def _complete_run(db: Database, run_id: Any) -> None:
@@ -835,15 +543,14 @@ def make_provision_launcher(
     timeout_s: float | None = None,
     tasks: set[asyncio.Task[Any]] | None = None,
 ) -> Any:
-    """Build the ``launch`` callback the ``meeting_runtime`` webhook drain wires in.
+    """Build the ``launch`` callback the webhook drain wires in.
 
     Returns an async callable ``launch(payload)`` that spawns :func:`run_meeting_until_end`
     as a BACKGROUND task — the webhook drain returns 200 immediately while the meeting runs
-    for hours on its own task (the RUN block survives instance recycle, §3.2). The task set
-    holds a strong reference so the meeting task is never GC'd mid-flight; the done-callback
-    discards it on completion. This is the ONE production caller that turns an ``in_call``
-    webhook into a running, atomically-claimed meeting.
-    """
+    for hours on its own task. The task set holds a strong reference so the meeting task is
+    never GC'd mid-flight; the done-callback discards it on completion. This is the ONE
+    production caller that turns an ``in_call`` webhook into a running, atomically-claimed
+    meeting."""
     live: set[asyncio.Task[Any]] = tasks if tasks is not None else set()
 
     async def _launch(payload: dict[str, Any]) -> None:
