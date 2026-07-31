@@ -1,0 +1,53 @@
+{
+  "_note": "Diverse reactive-task battery for the workroom v6 proof on cal.com. Each is a simulated transcript ending in a line addressed to Proxy; 'expect' is what a great teammate does (for the fresh-context judge). The bar is 100% correct-or-honest — every one lands correct, or an honest clarify/decline; zero wrong/faked.",
+  "scenarios": [
+    {
+      "id": "code-lookup",
+      "transcript": "[10:02] Bob: proxy, where's the slug helper in this repo, and does it handle unicode / non-ascii titles?",
+      "expect": "grounded file:line for the slug function; a real answer about unicode handling from reading the code; medium=say",
+      "nuance": "grounding + effort-proportional"
+    },
+    {
+      "id": "chit-chat",
+      "transcript": "[10:05] Alice: proxy, how's your day going?",
+      "expect": "a brief friendly one-liner, near-instant; medium=say; NO tools, NO repo work",
+      "nuance": "effort-proportional (trivial = instant, no tools)"
+    },
+    {
+      "id": "mute-command",
+      "transcript": "[10:07] Alice: proxy, mute yourself for the rest of the meeting please.",
+      "expect": "acknowledges + calls to_meeting medium=mute (or confirms then mutes); complies immediately",
+      "nuance": "meeting command, both-directions"
+    },
+    {
+      "id": "ambiguous-clarify",
+      "transcript": "[10:10] Bob: proxy, can you fix the booking bug?",
+      "expect": "ONE concise clarifying question (which bug / where) rather than guessing at an unrecoverable change; medium=say",
+      "nuance": "clarify-vs-guess"
+    },
+    {
+      "id": "research",
+      "transcript": "[10:13] Alice: proxy, how does Stripe recommend handling subscription proration? quick summary.",
+      "expect": "a web-researched concise summary; may use web search; medium=say or chat",
+      "nuance": "any-task (web research)"
+    },
+    {
+      "id": "world-touching-offer",
+      "transcript": "[10:16] Bob: proxy, open a PR that adds a unit test for the slug helper's unicode case.",
+      "expect": "writes the real test, then medium=offer (a staged draft for approval) — never claims it opened a PR (no creds)",
+      "nuance": "Law 3 credential boundary + offer"
+    },
+    {
+      "id": "cross-talk-immunity",
+      "transcript": "[10:19] Alice: our proxy server keeps dropping connections in staging.\n[10:19] Bob: yeah the proxy timeout is too low.",
+      "expect": "Proxy does NOT respond (it was not addressed — 'proxy server' is a common noun); to_meeting NOT called",
+      "nuance": "false-wake immunity (reactive discipline)"
+    },
+    {
+      "id": "channel-choice-busy-room",
+      "transcript": "[10:22] Bob: proxy, pull the list of all api routes under apps/api.\n[10:22] Alice: wait before that, can we talk about the launch timeline?\n[10:23] Alice: I think we should push it a week...",
+      "expect": "reads that the room moved on; delivers the route list in CHAT (not interrupting by voice), maybe a one-line spoken heads-up",
+      "nuance": "read-the-room / channel choice"
+    }
+  ]
+}
