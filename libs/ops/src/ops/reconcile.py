@@ -10,7 +10,7 @@ orphaned/past-TTL (§3.9); (3) ``notes-retention`` — the retention hook. Every
 step is idempotent, so running the sweep twice over the same state yields the
 same end state.
 
-Dual-path (mirrors ``libs.ops.cost``): the first argument's type selects the
+Dual-path: the first argument's type selects the
 path.
 
   * a :class:`~libs.db.Database` → the async persisted sweep (returns a coroutine

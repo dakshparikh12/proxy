@@ -4,8 +4,8 @@ from __future__ import annotations
 import os as _os
 
 # Extend the package search path to the src-layout module dir so real submodules
-# (``libs.http.internal`` — the session-less /internal/notes handler) resolve as
-# genuine importable modules. Mirrors the proven ``services.harness`` pattern.
+# (``libs.http.dispatch`` / ``libs.http.gateway`` / ``libs.http.registry`` ...) resolve
+# as genuine importable modules. Mirrors the proven ``services.harness`` pattern.
 __path__ = [*__path__, _os.path.join(_os.path.dirname(__file__), "src", "http")]
 
 from .src.http import (
@@ -32,8 +32,6 @@ from .src.http.gateway import RejectUpgrade as RejectUpgrade
 # The one inbound handler, re-exported off the clean package seam so the live mount binds
 # it without reaching through the ``src`` deep path (the package-boundary seam, §4.4).
 from .src.http.handlers.channel_action import handle_channel_action as handle_channel_action
-from .src.http.internal import get_notes as get_notes
-from .src.http.internal import internal_notes as internal_notes
 from .src.http.registry import PUBLIC_ROUTES as PUBLIC_ROUTES
 
 # The §4.6 contract-registry HTTP wrappers + safeError, re-exported off the clean
@@ -67,10 +65,8 @@ __all__ = [
     "authorize_upgrade",
     "classify_route",
     "dispatch",
-    "get_notes",
     "handle_channel_action",
     "install_safe_error_handler",
-    "internal_notes",
     "mark_internal_scoped",
     "protected",
     "public",

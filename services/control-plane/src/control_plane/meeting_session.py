@@ -98,13 +98,25 @@ class MeetingSession:
     async def _handle(self, ask: str) -> None:
         """One wake: run the reactive turn in the workroom, respond through the connection.
 
-        Keep it simple (the task's mandate): the wake runs :meth:`Workroom.run_ask` and the
-        result text is carried to the room via the connection's ``to_meeting`` (medium
-        ``say`` by default — the agent's own richer channel choice rides the in-sandbox MCP
-        relay when live). A failed wake is an honest no-op the meeting survives."""
+        The agent now reaches the room DURING the turn: native Claude calls its ``to_meeting``
+        MCP tool live, choosing the medium (speak/chat/dm/screen/offer/mute), and the in-sandbox
+        server relays each call to this meeting's connection through the host relay route. So we do
+        NOT force ``medium='say'`` on the result — the agent already spoke/acted for itself.
+
+        FALLBACK ONLY (honest degrade): if the turn produced a final result but the agent made ZERO
+        ``to_meeting`` calls this turn — detectable because the connection recorded nothing while it
+        ran (no relay, or the agent simply never called the tool) — speak the result text so the
+        room is never left hanging. Otherwise stay quiet: the agent already communicated. A failed
+        wake is an honest no-op the meeting survives (§3.8), never a raise."""
         try:
+            # The connection's ordered record of what actually reached the room; a live to_meeting
+            # relay appends to it. Snapshot the count so we can tell if the agent acted this turn.
+            sent_before = len(getattr(self.connection, "sent", ()))
             result = await self.workroom.run_ask(ask)
             self.results.append(result)
+            acted_live = len(getattr(self.connection, "sent", ())) > sent_before
+            if acted_live:
+                return  # the agent reached the room itself (via the relay) — stay quiet.
             text = (getattr(result, "text", "") or "").strip()
             if not text and getattr(result, "error", None):
                 text = "Sorry — I ran into a problem on that and couldn't finish it cleanly."

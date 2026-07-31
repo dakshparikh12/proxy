@@ -190,6 +190,16 @@ def create_app() -> FastAPI:
     from .meetings_route import install_meetings_route
 
     install_meetings_route(app, session_resolver=_resolve_session_from_request)
+    # The in-sandbox meeting MCP relay receiver (SPEC §4/§5): POST /meetings/{id}/relay. Native
+    # Claude in the per-meeting sandbox reaches the live room through its ONE ``to_meeting`` tool;
+    # the in-sandbox MCP server POSTs each call here, authenticated by the per-meeting relay bearer
+    # minted at join (a server-to-server trust plane, NOT a user session — stamped internal-scoped
+    # like /internal/*). The route lands the call on the meeting's live ``MeetingConnection`` (real
+    # Recall/Cartesia creds, host-side). Never-throw: a forged/misdirected relay is an honest error
+    # JSON, never a crash.
+    from .relay import install_relay_route
+
+    install_relay_route(app)
     # The WS upgrade gateway (§4.3/§12.9): /ws authenticates at the connection UPGRADE —
     # an unauthenticated upgrade is rejected (401) BEFORE the 101, never per-message.
     install_gateway_route(app)

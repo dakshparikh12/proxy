@@ -34,6 +34,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import secrets
 from dataclasses import dataclass
 from typing import Any
 
@@ -340,6 +341,8 @@ async def _assemble_workroom(
 
     from libs.http.src.http.external import call_external
 
+    from .relay import relay_url_for
+
     meeting_id = str(resolved["id"])
     pinned_sha = str(resolved.get("pinned_sha") or "") or None
     live_transport = transport if transport is not None else _default_meeting_transport()
@@ -365,6 +368,19 @@ async def _assemble_workroom(
         )
         return None, None, None, speak_pipe
 
+    # Mint the per-meeting relay wiring for the in-sandbox MCP server (SPEC §4/§5): a fresh secret
+    # bearer the relay route authenticates, and the public relay URL the sandbox POSTs to. When
+    # PUBLIC_BASE_URL is unset the URL is "" (honest degrade): no reachable relay ⇒ the agent's
+    # dynamic mediums are recorded locally only and the session speaks the result text.
+    relay_token = secrets.token_urlsafe(32)
+    relay_url = relay_url_for(meeting_id)
+    if not relay_url:
+        _log.warning(
+            "no PUBLIC_BASE_URL for meeting %s — the in-sandbox to_meeting relay is unreachable; "
+            "the agent falls back to result-text speak (honest degrade)",
+            meeting_id,
+        )
+
     try:
         workroom = await provision_workroom(
             call=call_external,
@@ -372,6 +388,8 @@ async def _assemble_workroom(
             repo_url=repo_url,
             sha=pinned_sha,
             map_text=map_text or "",
+            relay_url=relay_url,
+            relay_token=relay_token,
         )
     except Exception:  # noqa: BLE001 — a provision fault degrades honestly, never kills the join
         _log.warning(

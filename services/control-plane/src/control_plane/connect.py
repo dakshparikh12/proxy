@@ -464,8 +464,22 @@ def install_connect_routes(app: "FastAPI") -> None:
         from .github_webhook import get_pipeline_registry
 
         registry = get_pipeline_registry(request.app)
+        # Source the map-build model seam + durable store off ``app.state`` — the SAME seam the
+        # push-freshness ingress uses (``github_webhook._maybe_refresh_map``). A funded deployment
+        # wires ``app.state.map_provider`` (an ``agentkit.Provider``) + ``app.state.map_store`` (a
+        # ``premeeting.map_store.MapStore``); on the live path today the key is unfunded (D-032) so
+        # ``map_provider`` is ``None`` and the trigger records an honest ``not_ready`` — never a
+        # fabricated map (Law 2). Secrets/handles come from env-wired app state, never hard-coded.
+        map_provider = getattr(request.app.state, "map_provider", None)
+        map_store = getattr(request.app.state, "map_store", None)
         _spawn_trigger(
-            store, install_id, tenant_id=tenant_id, repo_url=repo_url, registry=registry
+            store,
+            install_id,
+            tenant_id=tenant_id,
+            repo_url=repo_url,
+            registry=registry,
+            map_provider=map_provider,
+            map_store=map_store,
         )
         return JSONResponse(
             {"install_id": install_id, "install_url": github_app_install_url(repo_url)},
@@ -493,20 +507,32 @@ def _spawn_trigger(
     tenant_id: str,
     repo_url: str,
     registry: Any = None,
+    map_provider: Any = None,
+    map_store: Any = None,
 ) -> None:
     """Fire the connect→index trigger in a background thread (never blocks the response).
 
     The install/start route returns immediately with a pollable handle; the trigger runs
     off-thread and streams readiness into the durable store the GET /connect/status poll
     reads, and registers the built pipeline in the live push-ingress ``registry`` so a real
-    GitHub push reaches it. A trigger failure is captured as an honest ``not_ready`` inside
-    the trigger — it never surfaces as an unhandled crash on the request path.
+    GitHub push reaches it. ``map_provider`` (the ``agentkit.Provider`` model seam) + ``map_store``
+    (the durable ``MapStore``) are threaded straight into the trigger so a real map build runs
+    when a funded provider is wired; when ``map_provider`` is ``None`` (the live default today,
+    D-032) the trigger records an honest ``not_ready`` naming the gap rather than fabricating a
+    map (Law 2). A trigger failure is captured as an honest ``not_ready`` inside the trigger —
+    it never surfaces as an unhandled crash on the request path.
     """
 
     def _run() -> None:
         try:
             trigger_connect_index(
-                store, install_id, tenant_id=tenant_id, repo_url=repo_url, registry=registry
+                store,
+                install_id,
+                tenant_id=tenant_id,
+                repo_url=repo_url,
+                registry=registry,
+                map_provider=map_provider,
+                map_store=map_store,
             )
         except Exception:  # noqa: BLE001 - already recorded as not_ready inside the trigger
             pass

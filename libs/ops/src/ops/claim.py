@@ -7,7 +7,7 @@ backs off. ``with_meeting_lock`` serialises a per-meeting critical section on a
 transaction-scoped advisory lock. There is no in-memory lock and no message
 broker anywhere in this path.
 
-``claim_meeting`` is dual-path (mirrors ``libs.ops.cost``): a
+``claim_meeting`` is dual-path: a
 :class:`~libs.db.Database` first arg drives the async persisted claim (returns a
 coroutine to await); a raw psycopg connection drives the synchronous claim used
 by the duplicate-join / reap-and-reclaim workflow. ``sweep_stale_on_read`` is the

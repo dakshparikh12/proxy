@@ -145,7 +145,7 @@ dev = [
 # honestly when absent (see notes_artifact.py / the llm gateway). This opt-in group
 # provisions them for running the `reality`/`integration` tiers against real vendors:
 #   uv sync --group reality
-# - anthropic: the real Claude SDK the scribe/qgate reality cassettes record against.
+# - anthropic: the real Claude SDK the reality cassettes record against.
 # - google-cloud-storage: the finalized-notes Plane 2 GCS writer (§3.3).
 reality = [
     "anthropic>=0.39",
