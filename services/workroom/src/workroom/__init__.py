@@ -1,8 +1,8 @@
-"""services.workroom — sandboxed Workroom (E2B mutable work).
+"""services.workroom — durable staged drafts + recovery for the sandboxed work.
 
-Proposes changes as durable staged drafts, accepts them from durable storage
-after teardown, and recovers interrupted tasks (operation_type='workroom:<id>')
-by restarting the coarse unit unless the deliverable already exists.
+Proposes changes as durable staged drafts (behind a human click), accepts them from durable storage
+after teardown, and recovers interrupted tasks. (The old SessionDriver/agent_config/big_build
+machinery was deleted in the workroom pivot — native Claude drives the session now.)
 """
 from __future__ import annotations
 
@@ -15,12 +15,8 @@ from .envelope import failure_envelope as failure_envelope
 from .envelope import map_status_verification as map_status_verification
 from .envelope import progress_event_for_chunk as progress_event_for_chunk
 from .recovery import recover_task as recover_task
-from .session import SessionDriver as SessionDriver
-from .session import stable_prefix_cache_ttl_seconds as stable_prefix_cache_ttl_seconds
-from .session import workroom_op_type as workroom_op_type
 
 __all__ = [
-    "SessionDriver",
     "accept_code_change_draft",
     "accept_draft",
     "build_envelope",
@@ -30,6 +26,4 @@ __all__ = [
     "progress_event_for_chunk",
     "propose_change",
     "recover_task",
-    "stable_prefix_cache_ttl_seconds",
-    "workroom_op_type",
 ]

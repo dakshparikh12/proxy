@@ -1,11 +1,10 @@
-"""services.transport — the in-process voice/transport package inside ``meeting_runtime``
-(spec Doc 02). Provider-independent seams (Recall / AssemblyAI-via-Recall / Cartesia),
-the §3.10 signal surface, and the in-process asyncio carrier. No voice-agent framework,
-no bus/broker/wire, no ``libs/transport``: Recall owns transport, this is the thin glue.
+"""transport — the thin vendor edges to the live meeting (Recall / AssemblyAI-via-Recall /
+Cartesia) + the §3.10 signal surface + the in-process carrier. Recall owns transport; this is the
+glue. The old voice-agent M-suite (boundary/projector/resolution/turn/etc.) was deleted in the
+workroom pivot — Proxy's turn-taking + presentation are the agent's judgment now, not a pipeline.
 """
 from __future__ import annotations
 
-from .boundary import BoundaryDecision, BoundarySource, SmartTurnBoundary, resolve_boundary_source
 from .carrier import SignalCarrier, drive_projector
 from .consent import consent_notice, notice_is_valid
 from .events import (
@@ -17,12 +16,9 @@ from .events import (
     registry_excludes_signal_surface,
 )
 from .external import CallExternal
-from .fakes import FakeOutputMediaSink, FakeTTS
 from .join import Action, ConsentGate, JoinResult, JoinSession, JoinSource, JoinState
 from .media import AudioChunk, CanvasFrame
-from .projector import ChannelProjector, carry_turn
 from .recall import RecallTransport
-from .resolution import MeetingRef, MeetingResolver, UnknownBotError, resolve_meeting
 from .seams import OutputMediaSink, STTProvider, TransportProvider, TTSProvider
 from .signals import (
     EMITTED_SIGNAL_NAMES,
@@ -56,28 +52,19 @@ __all__ = [
     "registry_excludes_signal_surface",
     "BotStatus",
     "Boundary",
-    "BoundaryDecision",
-    "BoundarySource",
-    "SmartTurnBoundary",
     "CallExternal",
     "CanvasFrame",
     "CartesiaTTS",
-    "ChannelProjector",
     "ChannelReportSignal",
     "ConsentGate",
-    "carry_turn",
     "drive_projector",
     "ChatMessage",
     "EMITTED_SIGNAL_NAMES",
-    "FakeOutputMediaSink",
-    "FakeTTS",
     "JoinResult",
     "JoinSession",
     "JoinSource",
     "JoinState",
     "MeetingEnd",
-    "MeetingRef",
-    "MeetingResolver",
     "OutputMediaSink",
     "RecallPassthroughSTT",
     "RecallTransport",
@@ -89,12 +76,9 @@ __all__ = [
     "TTSProvider",
     "Transcript",
     "TransportProvider",
-    "UnknownBotError",
     "WireDriftError",
     "consent_notice",
     "notice_is_valid",
     "parse_transcript",
-    "resolve_boundary_source",
-    "resolve_meeting",
     "signal_name",
 ]

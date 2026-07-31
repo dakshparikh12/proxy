@@ -1,4 +1,8 @@
-"""libs.agentkit — provider seam: behavior runner, delta-izer, abort/resume."""
+"""libs.agentkit — provider seam: config, delta-izer, guardrails, provider, abort/resume.
+
+(The old behavior-runner/execution machinery — BehaviorRunner/render_prompt/render_role — was
+deleted in the workroom pivot; native Claude runs the loop now, no host-side behavior runner.)
+"""
 from __future__ import annotations
 
 from .abort import AbortController as AbortController
@@ -8,10 +12,6 @@ from .config import BehaviorConfig as BehaviorConfig
 from .config import get_behavior as get_behavior
 from .config import register as register
 from .deltas import stream_deltas as stream_deltas
-from .execution import BehaviorRunner as BehaviorRunner
-from .execution import delta_stream as delta_stream
-from .execution import render_prompt as render_prompt
-from .execution import render_role as render_role
 from .guardrails import INJECTION_GUARDRAIL_MARK as INJECTION_GUARDRAIL_MARK
 from .guardrails import injection_guardrail_suffix as injection_guardrail_suffix
 from .guardrails import with_injection_guardrail as with_injection_guardrail
@@ -31,19 +31,15 @@ __all__ = [
     "AbortRegistry",
     "Behavior",
     "BehaviorConfig",
-    "BehaviorRunner",
     "Provider",
     "ProviderError",
     "ProviderQuery",
     "compute_builtin_tools",
-    "delta_stream",
     "get_behavior",
     "injection_guardrail_suffix",
     "pick_provider",
     "register",
     "register_provider",
-    "render_prompt",
-    "render_role",
     "resume_with_fallback",
     "stream_deltas",
     "thinking_policy",
