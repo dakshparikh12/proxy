@@ -1,7 +1,7 @@
 """staged_drafts.status — enforce CANONICAL §4's enum in the database
 
-Revision ID: 0011_staged_drafts_status_check
-Revises: 0010_clarify_items
+Revision ID: 0012_staged_drafts_status_check
+Revises: 0011_clarify_items
 Create Date: 2026-07-27
 
 ``staged_drafts.status`` has always been documented as a four-value enum —
@@ -36,8 +36,8 @@ coercion into the nearest enum member.
 
 from alembic import op
 
-revision = "0011_staged_drafts_status_check"
-down_revision = "0010_clarify_items"
+revision = "0012_staged_drafts_status_check"
+down_revision = "0011_clarify_items"
 branch_labels = None
 depends_on = None
 

@@ -194,8 +194,13 @@ async def test_ac_pme_15_neg_a_push_in_the_operations_list_blocks_acceptance():
 @pytest.mark.negative
 async def test_ac_pme_15_neg_migration_enforces_the_enum_in_the_database():
     """The application check is the fast path; the CHECK constraint is the guarantee."""
-    src = pathlib.Path(
-        "migrations/versions/0011_staged_drafts_status_check.py"
-    ).read_text(encoding="utf-8")
+    # Located by SUFFIX, not by number. The numeric prefix is not stable — this file was
+    # 0011 until Daksh's 0009_repo_maps forced a renumber, and pinning the digits meant a
+    # pure re-parenting broke a test that has nothing to do with ordering.
+    matches = sorted(
+        pathlib.Path("migrations/versions").glob("*_staged_drafts_status_check.py")
+    )
+    assert len(matches) == 1, f"expected exactly one status-check migration, got {matches}"
+    src = matches[0].read_text(encoding="utf-8")
     assert "staged_drafts_status_enum" in src
     assert "'proposed', 'accepted', 'rejected', 'applied'" in src

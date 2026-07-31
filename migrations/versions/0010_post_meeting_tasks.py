@@ -1,7 +1,7 @@
 """post_meeting_tasks — Doc 07 §4 product lifecycle state (NOT a second run table)
 
-Revision ID: 0009_post_meeting_tasks
-Revises: 0008_substrate_schema_gaps
+Revision ID: 0010_post_meeting_tasks
+Revises: 0009_repo_maps
 Create Date: 2026-07-27
 
 Doc 07 §4's one new durable store. Columns are Doc 07 §4's list, plus ``tenant_id``
@@ -52,8 +52,12 @@ deliberate deviation from the spec's column list.
 
 from alembic import op
 
-revision = "0009_post_meeting_tasks"
-down_revision = "0008_substrate_schema_gaps"
+revision = "0010_post_meeting_tasks"
+# Re-parented onto 0009_repo_maps. Both branches independently added a 0009 whose
+# down_revision was 0008_substrate_schema_gaps, which gave 0008 two children and alembic
+# two heads — and because the filenames differed, git merged them cleanly and said nothing.
+# A double head is not a merge conflict; it is a silent `alembic upgrade head` failure.
+down_revision = "0009_repo_maps"
 branch_labels = None
 depends_on = None
 

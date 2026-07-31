@@ -1,7 +1,7 @@
 """post_meeting_tasks.planned_at — the expiry clock B4 reads but could not get
 
-Revision ID: 0012_post_meeting_planned_at
-Revises: 0011_staged_drafts_status_check
+Revision ID: 0013_post_meeting_planned_at
+Revises: 0012_staged_drafts_status_check
 Create Date: 2026-07-29
 
 ``plan.expire_stale_plans`` decides expiry from ``row["planned_at"]`` and
@@ -34,8 +34,8 @@ same fail-safe direction as an unreadable state.
 
 from alembic import op
 
-revision = "0012_post_meeting_planned_at"
-down_revision = "0011_staged_drafts_status_check"
+revision = "0013_post_meeting_planned_at"
+down_revision = "0012_staged_drafts_status_check"
 branch_labels = None
 depends_on = None
 

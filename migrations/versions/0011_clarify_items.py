@@ -1,7 +1,7 @@
 """clarify_items — the clarifying-question record, CO-OWNED by Docs 06 and 07
 
-Revision ID: 0010_clarify_items
-Revises: 0009_post_meeting_tasks
+Revision ID: 0011_clarify_items
+Revises: 0010_post_meeting_tasks
 Create Date: 2026-07-27
 
 **OWNERSHIP (founder ruling on contradiction C-C, 2026-07-27) — read this before editing.**
@@ -38,8 +38,8 @@ it lands.
 
 from alembic import op
 
-revision = "0010_clarify_items"
-down_revision = "0009_post_meeting_tasks"
+revision = "0011_clarify_items"
+down_revision = "0010_post_meeting_tasks"
 branch_labels = None
 depends_on = None
 
