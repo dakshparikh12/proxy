@@ -105,6 +105,56 @@ def test_transcript_data_feeds_a_final_line_into_the_loop(monkeypatch) -> None:
     asyncio.run(_run())
 
 
+def test_transcript_words_as_word_object_array_is_joined_and_fed(monkeypatch) -> None:
+    """Recall's AssemblyAI streaming can deliver ``words`` as a LIST of word objects (not a
+    plain string). The adapter joins them (rather than dropping the line → Proxy never wakes)
+    and pulls the talker from the nested ``participant`` when there is no flat ``speaker``."""
+    from control_plane.webhooks import _dispatch_meeting_event
+
+    _patch_resolve(monkeypatch, "m-1")
+    rt = _FakeRuntime()
+
+    async def _run() -> None:
+        payload = {
+            "event": "transcript.data",
+            "data": {
+                "bot_id": "b1",
+                "words": [
+                    {"text": "proxy,"}, {"text": "where"}, {"text": "is"},
+                    {"text": "the"}, {"text": "helper?"},
+                ],
+                "participant": {"id": "p9", "name": "Bob"},
+                "timestamp": 3.0,
+            },
+        }
+        await _dispatch_meeting_event(
+            payload, db=_FakeDB(), registry=_FakeRegistry({"m-1": rt})
+        )
+        assert rt.lines == [("Bob", "proxy, where is the helper?", 3.0, False)]
+
+    asyncio.run(_run())
+
+
+def test_transcript_text_key_fallback_when_words_absent(monkeypatch) -> None:
+    """When ``words`` is absent, a ``text``/``transcript`` string still feeds the loop."""
+    from control_plane.webhooks import _dispatch_meeting_event
+
+    _patch_resolve(monkeypatch, "m-1")
+    rt = _FakeRuntime()
+
+    async def _run() -> None:
+        payload = {
+            "event": "transcript.data",
+            "data": {"bot_id": "b1", "text": "proxy status?", "speaker": "Ann", "timestamp": 1.0},
+        }
+        await _dispatch_meeting_event(
+            payload, db=_FakeDB(), registry=_FakeRegistry({"m-1": rt})
+        )
+        assert rt.lines == [("Ann", "proxy status?", 1.0, False)]
+
+    asyncio.run(_run())
+
+
 def test_chat_message_feeds_as_a_chat_line(monkeypatch) -> None:
     """A participant_events.chat_message is adapted from the documented nested envelope and fed
     with is_chat=True (so the reactive loop's chat gate scans it for @proxy)."""

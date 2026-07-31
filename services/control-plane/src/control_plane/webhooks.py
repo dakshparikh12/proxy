@@ -95,20 +95,60 @@ def _transcript_body(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _transcript_text(body: dict[str, Any]) -> str:
+    """The utterance text from a transcript body, tolerant of BOTH real Recall shapes.
+
+    Recall's AssemblyAI passthrough is NOT settled to one shape and we have no live cassette
+    to pin it (``WIRE_SCHEMA_PROVENANCE = "@build-confirm"``), so we accept both documented
+    forms rather than assume one and silently drop every voice line (the "Proxy never wakes"
+    failure mode):
+
+    * ``words`` as a plain string — the whole utterance (the shape the unit stubs use).
+    * ``words`` as a LIST of word objects — ``[{"text"/"word": "hi", ...}, ...]`` (AssemblyAI
+      Universal-Streaming's real shape) — joined into the utterance.
+    * a fallback ``text``/``transcript`` string key when ``words`` is absent.
+
+    Returns "" when there is nothing intelligible to feed (a safe no-op upstream)."""
+    words = body.get("words")
+    if isinstance(words, str):
+        return words
+    if isinstance(words, list):
+        parts = [
+            str(w.get("text") or w.get("word") or "")
+            for w in words
+            if isinstance(w, dict)
+        ]
+        joined = " ".join(p for p in parts if p).strip()
+        if joined:
+            return joined
+    for key in ("text", "transcript"):
+        val = body.get(key)
+        if isinstance(val, str) and val.strip():
+            return val
+    return ""
+
+
 def _transcript_line(body: dict[str, Any]) -> tuple[str, str, float] | None:
     """Adapt one transcript body to ``(speaker, text, ts)``, or ``None`` if it has no words.
 
-    Mechanical field mapping: ``{words, speaker, timestamp}`` → ``(speaker, text, ts)``.
-    Empty/absent words → ``None`` (nothing to feed — a safe no-op). Never raises."""
-    words = body.get("words")
-    if not isinstance(words, str) or not words.strip():
+    Field mapping: ``{words|text|transcript, speaker|participant.name, timestamp}`` →
+    ``(speaker, text, ts)``. Empty/absent text → ``None`` (nothing to feed — a safe no-op).
+    Never raises."""
+    text = _transcript_text(body)
+    if not text.strip():
         return None
     ts = body.get("timestamp")
     try:
         timestamp = float(ts or 0.0)
     except (TypeError, ValueError):
         timestamp = 0.0
-    return str(body.get("speaker") or ""), words, timestamp
+    speaker = body.get("speaker")
+    if not speaker:
+        # AssemblyAI/Recall nests the talker under ``participant`` on some shapes.
+        participant = body.get("participant")
+        if isinstance(participant, dict):
+            speaker = participant.get("name") or participant.get("id")
+    return str(speaker or ""), text, timestamp
 
 
 def _chat_line(payload: dict[str, Any]) -> tuple[str, str] | None:
