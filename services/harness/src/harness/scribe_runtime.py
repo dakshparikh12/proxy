@@ -574,11 +574,17 @@ class CloseConfig:
     close_caller: Any | None = None
     call_external: Any | None = None
     #: SEAM 1 (Doc 07 §2) — invoked with the finalized ``FinalNotes`` AFTER the ordered
-    #: close has completed. Optional: ``None`` means post-meeting execution is not wired,
-    #: and the close behaves exactly as it did before Doc 07 existed. Whatever this is, it
-    #: is called through :func:`_run_post_meeting_intake`, which cannot let it raise into
-    #: the close — Doc 07 §2 requires that if the component fails entirely the close
-    #: sequence and the meeting record are unaffected.
+    #: close has completed. Production supplies
+    #: ``post_meeting.wire.make_intake_hook(db)``; ``server._build_close_config`` is the
+    #: only place that construction happens.
+    #:
+    #: ``None`` is still permitted, because Doc 07 §2 requires the close to be identical
+    #: whether or not post-meeting execution exists — but it is now an ERROR-logged
+    #: condition, not a quiet default. It was a quiet default until this commit, and the
+    #: result was a seam that ran on every close and did nothing.
+    #:
+    #: Whatever this is, it is called through :func:`_run_post_meeting_intake`, which
+    #: cannot let it raise into the close.
     post_meeting_intake: Any | None = None
 
 
@@ -759,6 +765,23 @@ async def _run_post_meeting_intake(
     """
     hook = getattr(close_config, "post_meeting_intake", None)
     if hook is None:
+        # LOUD. This used to `return` silently, and that silence is why the seam shipped
+        # dead: _build_close_config never set the hook, every production close took this
+        # branch, and nothing anywhere said so. A seam that looks connected, proves itself
+        # against an injected stand-in, and no-ops in production is the same false-green
+        # shape as a store-backed test skipping when the DSN is absent.
+        #
+        # Still not raised: Doc 07 §2 requires the close and the meeting record to be
+        # identical whether or not post-meeting execution exists, so the close continues.
+        # The cost of being wrong here is one ERROR line; the cost of being quiet was every
+        # action item in every meeting silently never becoming a task.
+        log.error(
+            "post-meeting intake NOT wired for meeting %s: CloseConfig.post_meeting_intake "
+            "is None, so no action item from this meeting will become a task. The close "
+            "itself is unaffected. Fix: pass post_meeting_intake=make_intake_hook(db) "
+            "where CloseConfig is constructed (server._build_close_config).",
+            meeting_id,
+        )
         return
     try:
         await hook(final_notes, meeting_id=meeting_id)

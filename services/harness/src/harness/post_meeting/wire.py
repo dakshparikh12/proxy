@@ -48,6 +48,80 @@ log = logging.getLogger(__name__)
 _SCHEDULED: set[Any] = set()
 
 
+def make_intake_hook(
+    db: Any,
+    *,
+    caller: Any = None,
+    call_external: Any = None,
+    channels: Any = (),
+    config: Any = None,
+) -> Callable[..., Any]:
+    """Build SEAM 1's supplier — the callable ``CloseConfig.post_meeting_intake`` wants.
+
+    The seam site has existed since B1 landed: ``scribe_runtime`` calls
+    ``_run_post_meeting_intake`` immediately after ``run_close_pass`` returns. What never
+    existed was anything to put in the field, so the hook was ``None`` on every production
+    close, the seam returned early, and ``run_extract`` / ``run_triage`` had **no production
+    caller at all**. The tests passed because they injected a hook. That is the same
+    false-green shape as a store-backed test skipping without a DSN: a wire that looks
+    connected, proves itself against its own stand-in, and is dead in production.
+
+    Returns ``hook(final_notes, *, meeting_id)`` — the exact shape the seam invokes. The
+    tenant is resolved SERVER-SIDE from the meeting row; nothing about intake trusts a
+    caller-supplied tenant. ``caller``/``call_external`` default to the real Anthropic
+    structured caller and the one ``libs.http`` funnel, so production needs to pass only
+    ``db``; tests pass fakes.
+
+    This function does not guard against failure and does not need to: the seam calls it
+    through ``_run_post_meeting_intake``, which catches ``BaseException``, and intake itself
+    runs under ``run_intake_guarded``. Doc 07 §2's promise — a total intake failure leaves
+    the close and the meeting record identical — is held in those two places, not here.
+    """
+
+    async def _hook(final_notes: Any, *, meeting_id: Any) -> Any:
+        from libs.llm.src.llm.structured import anthropic_structured_caller
+
+        from .intake import run_intake_guarded
+        from .store import ClarifyItemStore, PostMeetingTaskStore
+
+        async with db.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT tenant_id FROM meetings WHERE id = $1", meeting_id
+            )
+        if row is None:
+            # A close ran for a meeting that is not in the table. Loud: every task intake
+            # would write is tenant-scoped, and there is no safe default tenant to invent.
+            log.error(
+                "post-meeting intake skipped: meeting %s has no row, so its tenant cannot "
+                "be resolved and no task may be written",
+                meeting_id,
+            )
+            return None
+
+        resolved_caller = caller
+        if resolved_caller is None:
+            resolved_caller = anthropic_structured_caller()
+        resolved_call_external = call_external
+        if resolved_call_external is None:
+            from libs.http.src.http.external import call_external as real_call_external
+
+            resolved_call_external = real_call_external
+
+        return await run_intake_guarded(
+            final_notes,
+            meeting_id=meeting_id,
+            tenant_id=row["tenant_id"],
+            task_store=PostMeetingTaskStore(db),
+            clarify_store=ClarifyItemStore(db),
+            caller=resolved_caller,
+            call_external=resolved_call_external,
+            channels=channels,
+            config=config,
+        )
+
+    return _hook
+
+
 def make_plan_dispatcher(
     *,
     db: Any,
