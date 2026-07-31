@@ -48,7 +48,7 @@ MCP_SERVER_FILE = f"{REPO_DIR}/sandbox_meeting_mcp.py"
 MCP_CONFIG_FILE = f"{REPO_DIR}/.mcp.json"
 #: Where the in-sandbox MCP server appends the agent's ``to_meeting`` intents when NOT relaying
 #: live (proof/simulation) — kept as a stable local record even in live mode (on a relay fault).
-TO_MEETING_OUT = "/tmp/to_meeting.jsonl"
+TO_MEETING_OUT = "/tmp/to_meeting.jsonl"  # nosec B108 — path INSIDE the isolated per-tenant E2B microVM, not the host
 #: The pinned MCP SDK the in-sandbox server needs (matches the proof battery + the bake target).
 MCP_PIN = "mcp==1.28.1"
 
@@ -157,7 +157,7 @@ class Workroom:
         }
         try:
             await self._run(cmd, timeout=ASK_TIMEOUT_S, envs=envs)
-            raw = getattr(await self.call(lambda: self.sandbox.files.read("/tmp/ask.jsonl"),
+            raw = getattr(await self.call(lambda: self.sandbox.files.read("/tmp/ask.jsonl"),  # nosec B108 — path INSIDE the isolated per-tenant E2B microVM, not the host
                                           service="e2b"), "value", "")
             return _parse_stream(ask, raw or "")
         except Exception as exc:  # noqa: BLE001 — never crash the loop

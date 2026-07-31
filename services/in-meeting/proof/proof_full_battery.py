@@ -17,6 +17,7 @@ import re
 import shlex
 import sys
 import time
+from typing import Any
 
 HERE = pathlib.Path(__file__).resolve()
 ROOT = HERE.parents[3]
@@ -37,7 +38,7 @@ def load_env(path: pathlib.Path) -> dict[str, str]:
     return env
 
 
-def parse_stream(stream: str) -> dict:
+def parse_stream(stream: str) -> dict[str, Any]:
     tools: list[str] = []
     result, cost, turns = "", 0.0, 0
     for line in stream.splitlines():
@@ -68,10 +69,10 @@ async def main() -> None:
 
     Sbx = e2b_sandbox_class()
     print("provisioning ...", flush=True)
-    sbx = getattr(await call_external(lambda: Sbx.create(timeout=3000), service="e2b", unit_cost_usd=0.0), "value", None)
+    sbx: Any = getattr(await call_external(lambda: Sbx.create(timeout=3000), service="e2b", unit_cost_usd=0.0), "value", None)
     print("sandbox=", getattr(sbx, "sandbox_id", "?"), flush=True)
 
-    async def run(cmd: str, timeout: int = 600, envs: dict | None = None):
+    async def run(cmd: str, timeout: int = 600, envs: dict[str, str] | None = None) -> Any:
         return getattr(await call_external(lambda: sbx.commands.run(cmd, timeout=timeout, envs=envs or {}), service="e2b"), "value", None)
 
     async def write(path: str, content: str) -> None:
@@ -83,7 +84,7 @@ async def main() -> None:
         except Exception as exc:  # noqa: BLE001
             return f"(read failed: {exc})"
 
-    async def ask(name: str, transcript: str, model: str = "") -> dict:
+    async def ask(name: str, transcript: str, model: str = "") -> dict[str, Any]:
         await write(f"{REPO}/MEETING_NOTES.md", f"# Meeting transcript\n[10:00] Alice: morning all.\n{transcript}\n")
         await run("rm -f /tmp/to_meeting.jsonl", timeout=30)
         wake = ("The room just addressed you — read ./MEETING_NOTES.md for the latest. If it is addressed "
@@ -93,10 +94,10 @@ async def main() -> None:
         cmd = (f"cd {REPO} && claude -p {shlex.quote(wake)} {mflag}--mcp-config .mcp.json --dangerously-skip-permissions "
                f"--output-format stream-json --verbose > /tmp/run.jsonl 2>/tmp/run.err; echo DONE")
         t0 = time.time()
-        await run(cmd, timeout=900, envs={"CLAUDE_CODE_OAUTH_TOKEN": oauth, "PROXY_MEETING_OUT": "/tmp/to_meeting.jsonl"})
+        await run(cmd, timeout=900, envs={"CLAUDE_CODE_OAUTH_TOKEN": oauth, "PROXY_MEETING_OUT": "/tmp/to_meeting.jsonl"})  # nosec B108 — path INSIDE the isolated per-tenant E2B microVM, not the host
         dt = time.time() - t0
-        intents = [json.loads(x) for x in (await read("/tmp/to_meeting.jsonl")).splitlines() if x.strip().startswith("{")]
-        info = parse_stream(await read("/tmp/run.jsonl"))
+        intents = [json.loads(x) for x in (await read("/tmp/to_meeting.jsonl")).splitlines() if x.strip().startswith("{")]  # nosec B108 — in-sandbox microVM path, not the host
+        info = parse_stream(await read("/tmp/run.jsonl"))  # nosec B108 — in-sandbox microVM path, not the host
         return {"scenario": name + (f"[{model}]" if model else ""), "elapsed_s": round(dt, 1),
                 "responded": len(intents) > 0, "mediums": [i.get("medium") for i in intents],
                 "turns": info["turns"], "cost_usd": round(info["cost"], 3),

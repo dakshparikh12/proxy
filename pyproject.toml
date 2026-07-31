@@ -47,7 +47,10 @@ mypy_path = "."
 # directly makes every ``from libs.<pkg> import X`` importer see an empty namespace. Exclude the
 # shims from the check TARGETS (the real source under ``libs/<pkg>/src/<pkg>`` stays fully
 # ``--strict``-checked); the ``libs.*`` override below then treats the facade as opaque on import.
-exclude = ['^libs/[^/]+/__init__\.py$']
+# The service-local ``tests/`` dirs (incl. nested ``services/*/tests``) are NOT product code —
+# they legitimately use fakes/dynamic fixtures; the ``--strict`` static gate covers the product
+# surface only (matching the ruff + bandit ``tests`` excludes above).
+exclude = ['^libs/[^/]+/__init__\.py$', '(^|/)tests/']
 
 # Third-party packages that ship no type information.
 [[tool.mypy.overrides]]

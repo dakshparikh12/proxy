@@ -1,0 +1,22 @@
+# Copy to terraform.tfvars and fill in. This file carries NO secrets — secret
+# VALUES only ever go into Secret Manager via scripts/set-secrets.sh (CLAUDE.md
+# hard rule). Safe values only here.
+
+# --- required ---
+project_id = "proxy-meeting-dev"
+
+# --- optional (defaults shown) ---
+# region        = "us-central1"
+# service_name  = "proxy-control-plane"
+# db_tier       = "db-g1-small"
+# recall_region = "us-east-1"
+# min_instances = 1
+# max_instances = 10
+
+# The control-plane image ref. Left as the placeholder for the FIRST apply; set it
+# to the real pushed image on the deploy re-apply (see deploy/README.md):
+#   image = "us-central1-docker.pkg.dev/proxy-meeting-dev/proxy/proxy-control-plane:v0"
+
+# The service's own public origin — leave "" for the FIRST apply, then set it on the
+# SECOND apply to wire the sandbox→host relay + the Recall webhook/output-media URLs:
+#   public_base_url = "https://proxy-control-plane-xxxxx-uc.a.run.app"

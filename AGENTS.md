@@ -1,35 +1,89 @@
-# AGENTS.md — Proxy Constitution (read FIRST, every build session)
-Shared method, laws, stack, and contract homes. **Canonical specs: `product/v0-spec/` — `CANONICAL-DECISIONS.md` overrides any doc it conflicts with.** Acceptance criteria live in sealed bundles under `acceptance/<doc>/` — never in spec docs. Everything under `/specs/` and `/components/` is SUPERSEDED (kept for history only; do not build from it).
+# AGENTS.md — Proxy shared method + laws (read FIRST, every session)
 
-## What Proxy is (V0)
-An AI participant that joins a company's meetings already knowing their codebase. A team connects a repo once (read-only GitHub App); Proxy holds a fresh clone + structural index + dependency/call graph, current on every push. Invited to a meeting, it announces itself, listens, answers questions grounded in the actual code with `file:line` citations in ~1–2s — or abstains — and does real asked work in a sandboxed Workroom, returning artifacts as staged drafts a named human approves. When the meeting ends it leaves clean notes with receipts. V0 is reactive only; proactive speaking, the agentic knowledge map, and cross-meeting memory are Expansion (designed, deferred — see SPINE-REGISTER).
+The shared build method, the five laws, and where the contracts live. Read alongside
+`CLAUDE.md` (the constitution) and **`SPEC.md` — the product source of truth**
+(`SPEC.md` supersedes the archived `product/v0-spec/*`).
+
+## What Proxy is
+An AI teammate that joins a company's meeting already knowing their codebase and does the
+work live. A team connects a repo once (read-only GitHub App); Proxy holds a fresh clone +
+a repo map, current on every push. Invited to a meeting, it waits in a warm per-meeting E2B
+sandbox with the repo, the map, and the live transcript. When it is **addressed** ("proxy…",
+a reply to its own question, or a follow-up right after it just engaged) it reasons, does the
+real work in the sandbox, verifies, and responds through its one live meeting connection —
+choosing itself whether to speak, chat, DM, show a screen, or offer a staged draft. Reactive
+only: Proxy speaks when prompted, never unprompted.
+
+## The whole system, in one loop (see SPEC.md)
+Everything goes into the workroom — there is no router, no capability catalog, no per-ask
+subsystem. A transcript line arrives → is Proxy addressed? → if no, idle (costs nothing); if
+yes, the agent reasons/plans/does the work in the sandbox (only as much as the ask needs),
+verifies, and responds through its meeting access, then goes idle. The transcript keeps
+flowing into the sandbox while a task runs, so mid-task replies and follow-ups are seen live.
+
+Two phases: **pre-meeting** (`services/premeeting`: connect → clone → build map → store) and
+**meeting** (`services/{in-meeting,control-plane,workroom}`: warm sandbox → transcript feed →
+wake → native Claude → respond via the `to_meeting` connection through the host relay).
 
 ## The five standing laws (every service obeys; every visible behavior traces to one)
-1. **Grounded or silent** — cite `file:line` from the current clone or say "not found by this method"; a confident wrong answer is the one unforgivable failure.
-2. **Never overstate** — exact results tagged `resolved`; search-derived tagged `lower-bound`; failures spoken plainly; a build is "verified" only past the separate critic + deterministic evidence gate.
-3. **Human control is absolute** — barge-in stops speech <200ms; "quiet" silences; every world-touching action is a staged draft behind a human click; a human ask preempts everything.
-4. **Dynamic, never hard-coded** — situation→action mappings live in model judgment; config configures the capability surface; code owns only physics, pipes, floors, and the durable substrate.
-5. **Talk-and-glance** — operable entirely by speaking and glancing; nothing to install mid-meeting.
+1. **Grounded or silent** — cite real `file:line` from the current clone, or say "not found
+   by this method"; a confident wrong answer is the one unforgivable failure.
+2. **Never overstate** — plain results; failures spoken honestly, never faked; a build is
+   "verified" only after it ran on real data past a fresh-context check.
+3. **Human control is absolute** — barge-in stops speech; "quiet" silences; every
+   world-touching action is a staged draft behind a human click. Guaranteed by the credential
+   boundary: the sandbox holds no push/send creds.
+4. **Dynamic, never hard-coded** — no code maps situation→action; the agent composes
+   everything live. Code owns only physics, pipes, and the durable substrate.
+5. **Talk-and-glance** — operable entirely by speaking and glancing; nothing to install
+   mid-meeting.
 
-## Product invariants (a violation is a build failure)
-1 Cited-or-abstain (=Law 1) · 2 Lossless-or-honest (=Law 2) · **3 Tenant-held code, hard-deleted** *(AMENDED 2026-07-17 per D-INV-03: the former "zero-copy" invariant is superseded for `code_intel` by v0-spec Doc 01 — the clone lives on a per-tenant encrypted volume, one tenant never sharing volume/process/index with another; hard-deleted ≤15 min on App uninstall; no raw source in logs or artifacts)* · 4 Permission-at-read *(applies where per-user visibility exists; dispositioned N/A for Doc 01's single-App-scope surface — D-INV-04)* · 5 Truth-is-live (answer from the pinned current clone, never a stale cache) · 6 Staged-drafts (world-changes need a named human's approval) · 7 Freshness-gated caching (never cache verify/operate results) · 8 Accelerate-never-gate (uncovered → labeled fallback, never a hard fail) · 9 Tenant isolation (tenant_id in every schema; cross-tenant read = P0 breach) · 10 Self-host credentials (Nango holds OAuth; tokens minted per-operation, never cached or logged) · 11 Vertical/size-agnostic (zero industry code).
+## The build method (TDD on real data)
+- Work one atomic task at a time; write the failing acceptance test that runs the **real
+  path**, code to green, show the evidence, then flip the task done. Never edit tests,
+  cassettes, goldens, or fixtures to pass (a lean PreToolUse guard enforces this).
+- A task is done ONLY after its real path RAN on real / held-out data and the output was
+  shown as evidence — not that unit tests pass. A node is verified only when live-wired on
+  the real product path.
+- Maker ≠ checker: a fresh-context sub-agent judges deep work; the author over-reports its
+  own correctness.
+- A task that fails N identical times flags `BLOCKED:<reason>` and continues — never deadlock,
+  never silently claim done.
+- The verification bar is proven on **real meetings on the cal.com repo, on real infra**
+  (E2B + Anthropic + Recall/Cartesia). The nuance prime (SPEC §6) and latency (SPEC §4) are
+  tuned there, not asserted on paper.
 
-## The build method (loop engineering, Generator v2)
-Each doc is built by ONE loop against a **sealed Acceptance Bundle** (`acceptance/<doc>/` — requirements, criteria, protocols, estates, manifest hashes) generated fresh-context from the spec BEFORE building. The builder has read-only access to the bundle and can never modify tests, thresholds, goldens, or verifier code. Two rungs: **rung 1** = `harness/verify.sh` (ruff/mypy/bandit + milestone pytest, every pass; exit 0 is the only green). **Rung 2** = real-data eval vs golden keys at thresholds on the estates in `fixtures/estates/` (per section; graders per `criteria/GENERATOR.md` — deterministic-first, κ-gated DeepEval judges only where no deterministic oracle exists). Done = both rungs green at pass^k on every estate. Never weaken a criterion to pass; an untestable/contradictory criterion is a spec bug — record it in PROGRESS.md and stop the pass (`SPEC_BLOCKED`). Maker ≠ checker: fresh-context subagents verify; the author over-reports its own correctness.
+## Stack
+Python 3.12 · **uv-workspace monorepo** (root `pyproject.toml`, members `services/*` +
+`libs/*`, one shared `uv.lock`) · **src-layout** packages · `apps/*` = Vite static builds
+(own pnpm workspace, NOT in `uv sync`) · ONE Cloud SQL **Postgres** + **GCS**
+(object-versioned) for all durable state · **E2B** per-meeting sandboxes running native
+Claude (Agent SDK, unmodified) · Recall (transport/bot) + AssemblyAI (STT) + Cartesia (TTS)
+· Alembic migrations (Postgres only) · pytest + Hypothesis · ruff + mypy `--strict` + bandit.
+The clone + repo map are a rebuildable derived cache; truth is Postgres + GCS.
 
-## Stack (V0 — pin exact versions as each service starts)
-Python 3.12 · **uv-workspace monorepo** (one root `pyproject.toml`, members `services/*` + `libs/*`, one shared `uv.lock`) · **`apps/*` = Vite static builds (own pnpm workspace, NOT in uv sync)** — the tile + connect page · **ONE Cloud SQL Postgres + GCS (Object-Versioned)** for all durable state · per-repo **SQLite dependency graph** on the `code_intel` tenant volume (NO graph-in-Postgres, schema code-managed not Alembic — CANONICAL §12.2/§12.12) · Claude Agent SDK unmodified (adopt-don't-build) · **E2B** = Workroom mutable work ONLY · Recall.ai (bot) + AssemblyAI (STT) + Cartesia (TTS) + Silero/SmartTurn (turn) · tree-sitter + PageRank map + ripgrep (the only V0 search backend) + on-demand LSP (Serena/solid-lsp, host-side only) · Alembic migrations (Postgres only) · pytest + Hypothesis · ruff + mypy --strict + bandit · Langfuse (optional tracing). **Explicitly rejected — never rebuild (Doc 01 §"What we rejected"):** embeddings/vector DBs/pgvector · SCIP pipelines · Zoekt (Expansion-only) · CSV graph ingest · LLMs in the structural build · in-sandbox LSP. Model seats (canonical table in `libs/llm/routing.py`; env overrides only): Scribe/gates = `claude-haiku-4-5`, answer/orchestrator/workroom = `claude-sonnet-4-6`, big-build = `claude-opus-4-8`. All models zero-retention.
-
-## Deployables (3, per CANONICAL §12.1 + the A1 amendment 2026-07-17)
-1. **`control_plane`** — Cloud Run, autoscaling: webhooks, connect page, API, WS gateway, auth.
-2. **`meeting_runtime`** — **GCE MIG (A1: moved off Cloud Run)**: one asyncio harness process per meeting hosting orchestrator + transport + Scribe + Workroom-shell as in-process packages (no bus, no broker); holds no volume; durability = the Postgres substrate (`operation_runs` heartbeat/claim/reconcile in `libs/ops`); crash model = survive-recycle.
-3. **`code_intel`** — stateful GCE host, per-tenant encrypted volume: clones, indexes, dependency-graph SQLite, warm LSP, behind a tenant+SHA-scoped internal API.
+## Deployable + services
+**One Cloud Run service** — `control_plane` — is the whole hosted estate (webhooks, connect
+page, auth, meeting provisioning, WS gateway + host relay). Meeting work runs in per-meeting
+E2B sandboxes (no GKE / Pub-Sub / multi-region / custom orchestrator). Source trees:
+`services/{premeeting, in-meeting, control-plane, workroom}` · `libs/{http, db, contracts,
+ops, agentkit, llm}` · `apps/{connect, ...}` · `infra/` (Terraform) · `deploy/` (Cloud Run).
 
 ## Contract homes (imported, NEVER re-defined per service)
-`libs/contracts` = all wire types: the **bundle** (04→05), the **envelope** (05→04, status enum `done|partial|failed|needs_clarification|needs_review`), the **AgentChunk** union (`INIT|TEXT|TOOL_USE|TOOL_RESULT|RESULT|ERROR`, discriminator `.type`), notes deltas, the Readiness enum (`connecting|cloning|indexing|ready|not_ready`), the `ProxyMessage` registry + `assert_registry_closed()` (a produced-but-unconsumed message type fails the build). `libs/agentkit` = provider seam, `stream_deltas` (**applied exactly once inside `BehaviorRunner.run()`; downstream MUST NOT re-wrap** — C2 amendment), abort/resume. `libs/http` = the one `dispatch()` funnel. `libs/llm` = the metered model gateway (every model call goes through it; no direct clients). `libs/db` = asyncpg pool + repos + Alembic. `libs/ops` = `with_operation_run`, atomic-claim, sandbox TTL reconcile. **Delivery (C2 amendment): wake-turn tools `speak`/`send_chat`/`show_screen` are the SOLE delivery authority; the projector is pure rendering and never auto-speaks.** Tunables live in `config/defaults.toml` — one value + unit + range; code reads that file; env overrides secrets/seats only.
+- `libs/contracts` — all wire types + the `ProxyMessage` registry + `assert_registry_closed()`
+  (a produced-but-unregistered message type fails the build), the Readiness enum
+  (`connecting|cloning|indexing|ready|not_ready`), note deltas.
+- `libs/http` — the ONE external-call seam: `call_external` / `dispatch` (retry + cost
+  telemetry); no raw vendor client lives anywhere else.
+- `libs/llm` — the metered model gateway; every model call goes through it (env overrides
+  seats/secrets only).
+- `libs/agentkit` — the provider seam, the abort/resume registry (reused for barge-in), and
+  the ONE shared injection guardrail (`guardrails.py`).
+- `libs/db` — asyncpg pool + repos + Alembic. `libs/ops` — `with_operation_run`, atomic
+  claim, sandbox-TTL reconcile, and the naming/copy lints.
 
-## Definition of Done (every doc)
-All bundle criteria green (rung 1 every pass, rung 2 per section, pass^k) on every estate incl. the messy one · adversarial clean · ruff/mypy/bandit clean · no law/invariant-violating path (test-proven) · evidence folder committed · both founders signed off. **Done means the product is proven on real data — not that the code compiles.**
-
-## Build order (SPINE-REGISTER; design order differs)
-00 Foundation → 01 Code Intelligence → 02 Voice/Transport → 03 Meeting Understanding → 04 Orchestrator → 05 Workroom → 08 Experience → 09 End-to-End Verification. (06 Proactive = V1; 07 cut — close lives in 03/04.) Repo layout per Doc 00 §3: `services/{harness,code_intel,transport,scribe,workroom}` · `libs/{contracts,db,llm,agentkit,http,ops}` · `apps/{connect,tile}` · `infra/` · `deploy/`.
+## Definition of Done
+The reactive workroom system proven on real meetings on real infra — every task correct, or
+an honest clarify, or an honest decline (zero wrong/faked answers) · ruff + mypy `--strict` +
+bandit + naming + contracts-closed green · no law-violating path · evidence committed.
+**Done means the product is proven on real data — not that the code compiles.**

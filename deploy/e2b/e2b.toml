@@ -1,0 +1,32 @@
+# E2B template config for the per-meeting Proxy workroom (SPEC §2/§8/§9).
+#
+# This is a BAKE artifact, NOT a Cloud Run resource. E2B is an external SaaS
+# (Firecracker microVMs); the template is built once with the E2B CLI and the
+# baked template id is then set as the workroom's DEFAULT_TEMPLATE so every
+# per-meeting sandbox comes up warm (native claude + the mcp SDK + git already
+# installed) instead of pip/npm-installing at join time.
+#
+# Bake it (see deploy/README.md §4):
+#   cd deploy/e2b && e2b template build       # needs E2B_API_KEY in the env
+# then wire the printed template id into the workroom (services/in-meeting/src/
+# in_meeting/workroom.py: DEFAULT_TEMPLATE) or pass it through the provisioner.
+
+# Human-readable template name. `e2b template build` prints the concrete template
+# id (used at AsyncSandbox.create(template=...)).
+template_name = "proxy-workroom"
+
+# The image the sandbox boots from.
+dockerfile = "e2b.Dockerfile"
+
+# --- machine size: the OOM fix (SPEC §12 founder gate #2) ---
+# The base template OOM'd native claude on real code tasks. Suggested 4 vCPU / 8 GB.
+# These are the founder-gated knobs; raise them if a real-meeting battery still OOMs.
+cpu_count   = 4
+memory_mb   = 8192
+
+# The sandbox self-expires after this many seconds if the host never extends it.
+# The provisioner's keep-warm heartbeat re-extends a live meeting past this
+# (services/control-plane/src/control_plane/provisioner.py: SANDBOX_TIMEOUT_S), so
+# a meeting with no time cap (SPEC §9) is never cut off by the template default.
+# Kept modest so an ABANDONED/leaked sandbox self-reaps.
+team_id = ""  # set to your E2B team id, or leave blank to use the CLI default

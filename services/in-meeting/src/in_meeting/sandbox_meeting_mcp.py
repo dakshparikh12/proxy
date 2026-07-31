@@ -22,25 +22,26 @@ import json
 import os
 import time
 import urllib.request
+from typing import Any
 
-_OUT_PATH = os.environ.get("PROXY_MEETING_OUT", "/tmp/to_meeting.jsonl")
+_OUT_PATH = os.environ.get("PROXY_MEETING_OUT", "/tmp/to_meeting.jsonl")  # nosec B108 — path INSIDE the isolated per-tenant E2B microVM, not the host
 _RELAY_URL = os.environ.get("PROXY_MEETING_RELAY", "").strip()
 _RELAY_TOKEN = os.environ.get("PROXY_MEETING_TOKEN", "").strip()
 
 
-def _record(rec: dict) -> None:
+def _record(rec: dict[str, Any]) -> None:
     with open(_OUT_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
 
 
-def _relay(rec: dict) -> str:
+def _relay(rec: dict[str, Any]) -> str:
     data = json.dumps(rec).encode("utf-8")
     req = urllib.request.Request(_RELAY_URL, data=data, method="POST")
     req.add_header("Content-Type", "application/json")
     if _RELAY_TOKEN:
         req.add_header("Authorization", f"Bearer {_RELAY_TOKEN}")
-    with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310 — fixed host URL, host-side creds
-        return resp.read().decode("utf-8", "replace")
+    with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310  # nosec B310 — fixed host relay URL (https), not attacker-controlled; runs in-sandbox
+        return resp.read().decode("utf-8", "replace")  # type: ignore[no-any-return]
 
 
 def _deliver(content: str, medium: str, to: str) -> str:

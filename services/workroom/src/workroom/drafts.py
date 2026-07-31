@@ -281,12 +281,12 @@ async def accept_draft(
 # worker disposition (§3.5) — never quick / plan / critic / verifier.
 
 # The one MCP server name the tool policy advertises as
-# ``mcp__propose_change__propose_change`` (agent_config.PROPOSE_CHANGE_TOOL).
+# ``mcp__propose_change__propose_change`` (the fully-qualified SDK MCP tool name).
 PROPOSE_CHANGE_SERVER_NAME = "propose_change"
 
 # The single disposition that carries the host propose_change server (§3.8): the worker is
 # the only disposition that may write to the world (through the staged-draft gate). Named
-# here so the mount decision has ONE source of truth alongside agent_config's tool policy.
+# here so the mount decision has ONE source of truth alongside the disposition's tool policy.
 _WRITE_DISPOSITION = "worker"
 
 _TOOL_DESCRIPTION = (
@@ -349,7 +349,7 @@ def make_propose_change_server(*, conn: Any, meeting_id: Any) -> McpSdkServerCon
     ``create_sdk_mcp_server`` config (``{type:'sdk', name, instance}``) carrying the one
     ``propose_change`` tool bound to this query's host conn + meeting. Mounted ONLY for the
     worker disposition — the read-only dispositions never get this server (§3.5), and the
-    raw-write block for them rides ``disallowed_tools`` in ``agent_config`` (``allowed_tools``
+    raw-write block for them rides the behavior's ``disallowed_tools`` (``allowed_tools``
     does not filter MCP tools, §3.8).
     """
     tool_fn = make_propose_change_tool(conn=conn, meeting_id=meeting_id)
@@ -367,7 +367,7 @@ def mcp_servers_for_disposition(
     read-only disposition (quick / plan / critic / verifier) gets an empty mapping — the one
     write-to-the-world is mounted for the worker alone (§3.8). This is the MOUNT decision (the
     server presence); the ADVERTISE/BLOCK decision (per-disposition allowed/disallowed tool
-    lists) lives in ``agent_config.disposition_tool_policy`` — the two agree by construction.
+    lists) rides the behavior's tool policy (§3.8) — the two agree by construction.
     """
     if disposition == _WRITE_DISPOSITION:
         return {PROPOSE_CHANGE_SERVER_NAME: make_propose_change_server(conn=conn, meeting_id=meeting_id)}

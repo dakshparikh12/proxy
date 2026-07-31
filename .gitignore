@@ -72,3 +72,7 @@ build/observability.env
 
 # deepeval judge telemetry cache (created at eval time)
 .deepeval/
+
+# Terraform local var files (the .example is the committed template)
+terraform.tfvars
+*.auto.tfvars

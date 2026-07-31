@@ -198,12 +198,14 @@ async def _resolve_map_text(resolved: dict[str, Any], *, db: Database) -> str | 
         pinned_sha = str(resolved.get("pinned_sha") or "")
         async with db.acquire() as conn:
             if pinned_sha:
-                exact = await load_map(
+                exact: str | None = await load_map(
                     conn, tenant_id=tenant_id, repo=repo_name, sha=pinned_sha
                 )
                 if exact is not None:
                     return exact
-            latest = await load_latest_map(conn, tenant_id=tenant_id, repo=repo_name)
+            latest: tuple[str, str] | None = await load_latest_map(
+                conn, tenant_id=tenant_id, repo=repo_name
+            )
         return None if latest is None else latest[1]
     except Exception:  # noqa: BLE001 - Rule 6: a resolution fault degrades to no map, never a crash
         return None
@@ -335,7 +337,7 @@ async def _assemble_workroom(
     sandbox by construction (no push/send creds; egress denied — Law 3). ``meeting_info`` is
     the rendered ``MEETING_INFO.md`` (who's in the room) seeded into the sandbox so the agent
     can address/read the room (SPEC §2/§8)."""
-    from in_meeting import speak as im_speak
+    import in_meeting.speak as im_speak
     from in_meeting.meeting_connection import MeetingConnection
     from in_meeting.workroom import provision_workroom
 
