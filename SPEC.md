@@ -81,8 +81,11 @@ mid-task answer to Proxy's own question, or a follow-up, is visible to it in rea
 as the ask needs**, so speed is proportional *by itself* — we never route "fast" vs "slow" (that would
 be the hard-coding you don't want). Five levers keep it quick:
 
-1. **Warm, cached session** — the workroom is already up and the stable prefix (prime + map + tools) is
-   prompt-cached, so there's no cold start and low time-to-first-token.
+1. **Warm, PERSISTENT session** — the workroom keeps ONE Claude session alive for the whole meeting
+   (not a fresh process per wake), and its stable prefix (prime + map + tools) is prompt-cached.
+   *Proven necessary:* the cal.com battery (services/in-meeting/proof) showed a ~11s floor even on an
+   ask that did almost no work — that is cold-start (process + MCP spawn + session init), paid once at
+   join by a persistent session, not per ask. This is the single biggest latency lever.
 2. **A trivial ask uses no tools** — "how's your day, proxy?" is one direct turn; no grep/read/build.
 3. **Fast model for quick turns**, escalating only for real work.
 4. **Stream the reply to TTS** — Proxy starts talking as the first words form (begins in ~1s, natural
