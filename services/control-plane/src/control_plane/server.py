@@ -450,10 +450,16 @@ def _build_close_config(db: Any) -> Any | None:
         await transport.post_chat(str(bot_id), f"Meeting notes: {url}", pinned=True)
         _ = repos  # repos import kept for parity with the sibling resolve paths
 
+    # SEAM 1 (Doc 07 §2). This is the ONLY production construction of CloseConfig, so it is
+    # the only place the post-meeting intake hook can be supplied. It was omitted until now,
+    # which meant the seam ran on every close and did nothing.
+    from .post_meeting.wire import make_intake_hook
+
     return CloseConfig(
         bucket=_LazyBucket(),
         bucket_name=bucket_name,
         post_chat_link=_post_chat_link,
+        post_meeting_intake=make_intake_hook(db),
     )
 
 

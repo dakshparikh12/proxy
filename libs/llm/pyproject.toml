@@ -3,10 +3,11 @@ name = "llm"
 version = "0.0.0"
 description = "libs.llm — metered model gateway."
 requires-python = ">=3.12"
-dependencies = ["contracts", "pydantic>=2"]
+dependencies = ["contracts", "http", "pydantic>=2"]
 
 [tool.uv.sources]
 contracts = { workspace = true }
+http = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

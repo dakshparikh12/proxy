@@ -1,0 +1,128 @@
+# dependency_manifest.yaml — Doc 07 (Post-Meeting Execution)
+# Emitted per GENERATOR.md §8.4.3. One entry per real external dependency the spec requires.
+# Bidirectionally consistent with criteria/criteria.yaml: every non-null class a criterion
+# carries appears here, and each entry lists exactly the criteria that carry it.
+#
+# NOTE ON FILE ORDER: the narrative sections below come BEFORE `dependencies:` deliberately.
+# The seal gate's manifest parser is a forgiving line parser that attributes any `criteria:`
+# list to the most recent `dependency_class:` it has seen. Keeping all prose ahead of the
+# first `dependency_class:` key makes that mis-attribution impossible.
+doc: doc07
+
+# ── Golden-path criteria (§8.4.2) — the only ones carrying the e2e tier ───────
+golden_path:
+  rationale: >-
+    Four criteria, one per irreversible or trust-defining promise Doc 07 makes. These are
+    the ones a founder would point at to say "this is the product working safely".
+    Deliberately small: every criterion being e2e defeats the point and the cost model.
+  members:
+    - id: AC-PME-02
+      promise: "Post-meeting execution can never damage the meeting record or the close."
+    - id: AC-PME-07
+      promise: "Nothing runs before a named human approves — Law 3 applied to the run."
+    - id: AC-PME-10
+      promise: "One operation_runs row is the whole truth of a run, and it survives a crash."
+    - id: AC-PME-15
+      promise: "What lands in the world is a proposed draft behind a human click, never a push."
+
+# ── Dependencies the audit found ABSENT (build blockers, not verification deps) ──
+blocked_dependencies:
+  - missing: meeting_runtime worker runnable with no media session
+    state: ABSENT
+    owner: services/harness
+    evidence: >-
+      services/harness/src/harness/meeting_runtime.py:54 — MeetingRuntime is media-coupled
+      by construction (carrier, HearingStage, Scribe consumer, consent_gate, STT refresh
+      loop). No no-media entrypoint; no worker main() in services/harness/src/harness.
+    blocks: [AC-PME-09, AC-PME-09-NEG, AC-PME-10, AC-PME-10-NEG]
+    note: >-
+      Doc 07 §3.5 requires this worker and simultaneously asserts "No new deployable".
+      Either MeetingRuntime gains a no-media mode or §3.5 is amended. This is the only
+      remaining external blocker on the bundle.
+
+# ── Blockers resolved by founder ruling, 2026-07-27 ──────────────────────────
+resolved_blockers:
+  - was: clarify_items table ABSENT
+    resolution: >-
+      Ruling C-C — Doc 07 creates and owns clarify_items until Doc 06 lands; co-ownership
+      recorded in the migration. Created by migration 0010 on this branch.
+    unblocked: [AC-PME-03, AC-PME-03-NEG, AC-PME-04, AC-PME-04-NEG]
+  - was: libs/llm structured-output entrypoint ABSENT
+    resolution: >-
+      Not a real blocker. The repo's structured-output path is the Agent SDK provider seam
+      driven through call_external (services/scribe/src/scribe/close.py:38). Doc 07's
+      triage call rides that same seam, which is why its class is vendor:anthropic and its
+      mock_boundary forbids replacing call_external.
+    unblocked: [AC-PME-01, AC-PME-01-NEG, AC-PME-06, AC-PME-06-NEG]
+
+# ── Criteria resting on nothing outside the process ──────────────────────────
+# dependency_class: null, so they appear in no entry below and correctly take no NEG pair:
+#   AC-PME-13, AC-PME-14 — both pure envelope-to-report mappings.
+
+dependencies:
+  - dependency_class: db:postgres
+    kind: local
+    seam: libs/db
+    real_object: >-
+      libs/ops/claim.py (atomic claim), libs/ops/reconcile.py (reconcile sweep),
+      libs/db/repos/* (row access). Doc 07 adds post_meeting_tasks and clarify_items; the
+      run itself stays the operation_runs row created by services/harness/dispatch.py,
+      keyed scope_id=meeting_id and operation_type='workroom:{task_id}' per amendment P10.
+    mock_boundary: >-
+      real Postgres only; no in-memory substitute for the integration tier. Where a
+      criterion observes the sandbox provider or a git remote for zero calls, that observer
+      MUST NOT be a permissive stub — a stub that silently allows the call would invert the
+      criterion it is meant to prove. Negative criteria drive REAL faults (Postgres refuses
+      the connection, a constraint rejects the row), never a simulated failure flag.
+    cassette_glob: null
+    criteria:
+      - AC-PME-02
+      - AC-PME-02-NEG
+      - AC-PME-03
+      - AC-PME-03-NEG
+      - AC-PME-04
+      - AC-PME-04-NEG
+      - AC-PME-05
+      - AC-PME-05-NEG
+      - AC-PME-07
+      - AC-PME-07-NEG
+      - AC-PME-08
+      - AC-PME-08-NEG
+      - AC-PME-09
+      - AC-PME-09-NEG
+      - AC-PME-10
+      - AC-PME-10-NEG
+      - AC-PME-11
+      - AC-PME-11-NEG
+      - AC-PME-12
+      - AC-PME-12-NEG
+      - AC-PME-15
+      - AC-PME-15-NEG
+      - AC-PME-16
+      - AC-PME-16-NEG
+    golden_path_criteria:
+      - AC-PME-02
+      - AC-PME-07
+      - AC-PME-10
+      - AC-PME-15
+
+  - dependency_class: vendor:anthropic
+    kind: vendor
+    seam: libs/http call_external
+    real_object: >-
+      The structured triage/plan call on the claude-sonnet-4-6 seat named in
+      libs/llm/src/llm/routing.py:17-19, driven through the Agent SDK provider seam over
+      call_external — the same path services/scribe/src/scribe/close.py:38 already uses.
+    mock_boundary: >-
+      may mock the Anthropic HTTP response body via a vcrpy cassette at the
+      call_external/transport layer; MUST NOT replace the call_external seam, the request
+      construction, or the client object with Mock() — the real structured request must be
+      built and driven through the real seam at least once. Negative criteria use negative
+      cassettes only (recorded 5xx, timeout, truncated body, schema-violating JSON).
+    cassette_glob: tests/cassettes/doc07_triage_*.yaml
+    criteria:
+      - AC-PME-01
+      - AC-PME-01-NEG
+      - AC-PME-06
+      - AC-PME-06-NEG
+    golden_path_criteria: []

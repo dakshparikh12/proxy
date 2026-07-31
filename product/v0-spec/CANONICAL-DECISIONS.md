@@ -221,7 +221,7 @@ CREATE TABLE sessions (id uuid PK, user_id uuid REFERENCES users, tenant_id uuid
 - **The binding flow (connect → tenant → repo → meeting):** (1) user signs in → `users`/`tenants` row; (2) installs the GitHub App (Nango) on the connect page → a `repos` row for the tenant; (3) a **meeting is created** when the user invites Proxy (paste a meeting link on the connect page, or a calendar hook) → a `meetings` row bound to `(tenant_id, repo_id, pinned_sha=HEAD)`; the Recall bot is launched and its `recall_bot_id` written back. (4) Recall webhooks carry the `bot_id` → look up the `meetings` row → tenant + repo. V0: if a tenant has one repo, it binds automatically; multi-repo tenants pick at invite time.
 - The dispatch funnel's `meeting_id`-isolation, the WS gateway's `resolve_session`, and Tier-1 durability all read these tables.
 
-### 11.2 · `meeting_id` type pinned = **UUID** everywhere in app tables (`meetings.id`, `meeting_cost.meeting_id`, `staged_drafts.meeting_id`, `transcript_segments.meeting_id`, `note_deltas.meeting_id`). **Only `operation_runs.scope_id` stays `text`** (it also holds workroom `task_id`s) — the atomic claim casts `meeting_id::text` at the call site. Update the §2/§3/§4 tables' `meeting_id` columns to `uuid`; document the one cast.
+### 11.2 · `meeting_id` type pinned = **UUID** everywhere in app tables (`meetings.id`, `meeting_cost.meeting_id`, `staged_drafts.meeting_id`, `transcript_segments.meeting_id`, `note_deltas.meeting_id`). **Only `operation_runs.scope_id` stays `text`** — the atomic claim casts `meeting_id::text` at the call site. **(Amendment P10, 2026-07-27, ruling on C-A: `scope_id` holds the `meeting_id`, NOT the workroom `task_id`. The task id lives in `operation_type` as `workroom:{task_id}` and nowhere else. The parenthetical that used to read "it also holds workroom `task_id`s" was wrong and disagreed with the built path — `services/harness/src/harness/dispatch.py:129-145`, `libs/ops/src/ops/cost.py:323`. Doc 07 §3.5 is conformed to the same shape.)** Update the §2/§3/§4 tables' `meeting_id` columns to `uuid`; document the one cast.
 
 ### 11.3 · `stream_deltas` signature (fixes the contradiction that blocks the projector)
 ```python
@@ -379,6 +379,23 @@ Ingest = `INSERT ... ON CONFLICT (delivery_guid) DO NOTHING` → return 200 imme
 - **Step-0.5 gate kept** (founder-present, pre-loop) with a deterministic fallback per branch (latency-fail→shallow-only+ACK; ORM-fail→restrict matrix+label; SDK-differs→adapter or fail-build).
 
 *Net: the end goal is untouched; the mechanism is smaller (Cloud Run not GCE, 3 deployables not 5, SQLite not Postgres-graph, typed not YAML, sequential Workroom, one honest cost contract, ripgrep not Zoekt, no Smart-Turn) with the real seams closed (webhook durability, fencing, delivery model, auth surface, notes idempotency, honest numbers).*
+
+---
+
+## §13 · Scope decisions — Docs 06 & 07 (landed 2026-07-27, amendment pack P4)
+
+*Scope records. They are true whether or not the doc is built, and they exist so a later reader does not rediscover the boundary by guessing. Doc 06 is **SPEC'D, not built**; its four records are on the file because they are cheap to keep and expensive to re-derive.*
+
+### §13.1 · Doc 06 — Proactive (V1; spec'd, not a current build target)
+- **D06.1** — Proactive is **V1 and a pure consumer of Docs 01–05**: no transport, no ASR, no model seat, no sandbox, no delivery path, and no re-pathing of any sealed bundle.
+- **D06.2** — The proactive gate **clears** contributions; Doc 04's wake-turn tools (`speak` / `send_chat` / `show_screen`) remain the **sole delivery authority**. The gate delivers nothing itself.
+- **D06.3** — The **judge is the only situation→action mapping** in the proactive path and it is model judgment. The gate is physics and floors — a clock, a similarity lookup, a boundary signal, an enum comparison. This is the Law 4 basis for the split.
+- **D06.4** — **Voice enablement per verdict class is a config value** reviewed against the decision record, **not a code branch**. `voice_enabled_classes` ships empty.
+
+### §13.2 · Doc 07 — Post-Meeting Execution (V1; build target)
+- **D07.1** — Post-meeting execution runs Doc 05's Workroom in a `meeting_runtime` worker **with no media session**, and its run durability is the ordinary `operation_runs` row Doc 05 §3.1 already defines — **no new deployable, no new operation shape, no second run table**. `post_meeting_tasks` is product lifecycle state (tier, owner, plan, approval, outcome), never a run record; this is the §12.11 `workroom_tasks` prohibition applied here.
+- **D07.2** — **No post-meeting work executes before a named human approves the plan.** Invariant 6 covers the artifact at the end; this covers the *run* at the start. `APPROVED` is written only by a named human's action, and `RUNNING` is entered only from `APPROVED`.
+- **D07.3** — **V1 stages code-change drafts and never pushes.** PR creation requires `contents:write` plus tenant re-consent — a separate founder decision (F4), **declined for V1**. Doc 04 §3.16.1 and Doc 05 §3.8 already encode never-push; V1 changes nothing.
 
 ---
 

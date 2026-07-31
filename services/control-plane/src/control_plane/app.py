@@ -186,6 +186,25 @@ def create_app() -> FastAPI:
     # nothing, never pushes). A separate protected() instance per route keeps each
     # route's dependant tree independently stamped for the enumeration test.
     install_reject_route(app, dependencies=[protected(_resolve_session_from_request)])
+    # Doc 07 §3.4 PLAN approval (SEAM 2) is STILL NOT MOUNTED — but the reason changed.
+    #
+    # It used to be blocked: the route wrote APPROVED to post_meeting_tasks and then had
+    # nothing to dispatch into, so every approval taken was a permanently orphaned task.
+    # That is fixed. §112's wrapper exists, post_meeting.wire.make_plan_dispatcher supplies
+    # a real dispatch=, and the claim is paired with Doc 05's SessionDriver so no run row is
+    # left at 'running' with nothing to finish it.
+    #
+    # What is still missing is PROOF, not machinery: the end-to-end tests through the route
+    # against real Postgres (double-approve idempotency; a dispatch that fails after the
+    # APPROVED write; §5 scenario 1 item→approve→dispatch→staged draft) were never written.
+    # Mounting a world-touching route on the strength of unit tests is the shape of defect
+    # this branch has already produced three times.
+    #
+    # No feature flag guards it, deliberately: doc00 §7 pins V0 at ZERO active runtime
+    # flags. The mount is one line — `install_approve_route(app, dependencies=[...],
+    # dispatch=make_plan_dispatcher(db=...))` — and it goes in beside the accept/reject
+    # pair once those tests are green.
+    #
     # The hosted invite route (the front door): POST /meetings — "give Proxy a
     # meeting URL" over HTTP. BEHIND the SAME §4.6 protected() wall (the handler
     # receives a credentials-only AuthzCtx; the tenant NEVER rides the body), it

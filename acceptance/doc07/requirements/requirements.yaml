@@ -1,0 +1,252 @@
+# requirements.yaml — Doc 07 (Post-Meeting Execution)
+# Atomic EARS requirements distilled from Doc 07 Appendix C's 16 criteria seeds.
+# ID scheme: R-doc07-PME-NN   (PME = Post-Meeting Execution)
+# Authority document: DOC-07  (product/v0-spec/07-POST-MEETING-EXECUTION.md)
+#
+# Appendix C states it is "generator input, not spec body". Each requirement therefore
+# carries BOTH: source_quote = the verbatim Appendix C seed (the generator input the
+# founder specified), and body_ref = the normative section of Doc 07 that is the actual
+# authority for the obligation. Where the two differ, body_ref governs.
+#
+# Generated 2026-07-27 against product/v0-spec/07-POST-MEETING-EXECUTION.md as landed
+# in commit 720d5aa. One requirement per seed: none merged, none invented.
+
+- requirement_id: R-doc07-PME-01
+  authority_type: specification
+  authority_document: DOC-07
+  source_location: "Appendix C, seed 1"
+  body_ref: "§3.1 Intake and triage"
+  source_quote: "WHEN the close pass completes THEN every action item SHALL receive exactly one tier AND the close record SHALL be unmodified"
+  normalized_statement: >
+    WHEN Doc 03's close pass completes THE SYSTEM SHALL assign exactly one tier
+    (informational | question | ticket | ticket+plan | ticket+plan+draft) to every
+    action item in the close output, AND SHALL leave the close record byte-identical.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc07-PME-02
+  authority_type: specification
+  authority_document: DOC-07
+  source_location: "Appendix C, seed 2"
+  body_ref: "§2 The boundary with the close"
+  source_quote: "WHEN this component fails entirely THEN the close sequence and the meeting record SHALL be unaffected"
+  normalized_statement: >
+    WHEN post-meeting execution fails entirely (raises, times out, or is absent)
+    THE SYSTEM SHALL leave Doc 04's ordered close sequence and Doc 03's meeting
+    record identical to a run in which the component had never executed.
+  requirement_type: resilience
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc07-PME-03
+  authority_type: specification
+  authority_document: DOC-07
+  source_location: "Appendix C, seed 3"
+  body_ref: "§3.3 Ambiguity stops the line"
+  source_quote: "WHEN an item lacks owner, scope, or a done-condition THEN it SHALL NOT be planned and SHALL become a clarifying question"
+  normalized_statement: >
+    WHEN an action item lacks an owner, a scope, or a way to know it is done
+    THE SYSTEM SHALL NOT produce a plan for it and SHALL write a clarifying
+    question to the clarify_items record.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc07-PME-04
+  authority_type: specification
+  authority_document: DOC-07
+  source_location: "Appendix C, seed 4"
+  body_ref: "§3.3 Ambiguity stops the line"
+  source_quote: "WHEN a clarifying question has no attributed person or no out-of-meeting channel THEN it SHALL remain pending on the task record"
+  normalized_statement: >
+    WHEN a clarifying question has no person the notes attribute the item to, or no
+    configured out-of-meeting channel exists, THE SYSTEM SHALL leave the question
+    pending on the task record and SHALL hold the item rather than proceeding.
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc07-PME-05
+  authority_type: specification
+  authority_document: DOC-07
+  source_location: "Appendix C, seed 5"
+  body_ref: "§3.2 Ownership"
+  source_quote: "WHEN ownership is ambiguous THEN owner SHALL be UNRESOLVED and never inferred"
+  normalized_statement: >
+    WHEN an action item's owner is not stated in the room THE SYSTEM SHALL record the
+    owner as the literal value UNRESOLVED, distinct from empty, and SHALL NOT infer an
+    owner from seniority, speaking volume, or file authorship.
+  requirement_type: data_integrity
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc07-PME-06
+  authority_type: specification
+  authority_document: DOC-07
+  source_location: "Appendix C, seed 6"
+  body_ref: "§3.1 Intake and triage — 'When in doubt, drop a tier'"
+  source_quote: "WHEN an item fails any draft-tier condition THEN it SHALL drop at least one tier"
+  normalized_statement: >
+    WHEN an action item fails any draft-tier condition (concrete scope, clear area of
+    the codebase, reviewable in one sitting, no material ambiguity, a stated way to
+    tell it worked) THE SYSTEM SHALL assign a tier at least one level below
+    ticket+plan+draft.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc07-PME-07
+  authority_type: specification
+  authority_document: DOC-07
+  source_location: "Appendix C, seed 7"
+  body_ref: "§3.4 The plan and the approval gate — the safety boundary of this doc"
+  source_quote: "WHEN a plan has not been approved by a named human THEN no sandbox SHALL start, no model work beyond triage and the plan SHALL run, and no durable write SHALL occur outside the task's own record"
+  normalized_statement: >
+    WHILE a task's plan has not been approved by a named human THE SYSTEM SHALL start
+    no sandbox, SHALL run no model work beyond triage and the plan itself, and SHALL
+    perform no durable write outside that task's own record.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc07-PME-08
+  authority_type: specification
+  authority_document: DOC-07
+  source_location: "Appendix C, seed 8"
+  body_ref: "§3.4 — 'A plan nobody answers expires quietly after plan_expiry'"
+  source_quote: "WHEN a plan expires unanswered THEN the task SHALL close quietly without proceeding"
+  normalized_statement: >
+    WHEN a plan remains unanswered for longer than plan_expiry THE SYSTEM SHALL close
+    the task quietly, SHALL NOT proceed to execution, and SHALL NOT re-notify the owner.
+  requirement_type: functional
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc07-PME-09
+  authority_type: specification
+  authority_document: DOC-07
+  source_location: "Appendix C, seed 9"
+  body_ref: "§3.5 Execution"
+  source_quote: "WHEN a task is dispatched THEN it SHALL use Doc 04's existing bundle and Doc 05's Workroom, and no second execution path SHALL exist"
+  normalized_statement: >
+    WHEN an approved task is dispatched THE SYSTEM SHALL dispatch it through Doc 04's
+    existing bundle into Doc 05's Workroom unchanged, and no second execution engine,
+    sandbox provider, agent framework, or task queue SHALL exist in the codebase.
+  requirement_type: contract
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc07-PME-10
+  authority_type: specification
+  authority_document: DOC-07
+  source_location: "Appendix C, seed 10"
+  body_ref: "§3.5 Execution — run durability"
+  source_quote: "WHEN a task runs THEN its durability SHALL be one `operation_runs` row per Doc 05 §3.1 and it SHALL survive worker recycle"
+  normalized_statement: >
+    WHEN a task runs THE SYSTEM SHALL represent that run as exactly one operation_runs
+    row with the same atomic claim, heartbeat and reconcile as Doc 05 §3.1 defines, and
+    the run SHALL be reclaimable after the worker process is killed.
+  requirement_type: state_consistency
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc07-PME-11
+  authority_type: specification
+  authority_document: DOC-07
+  source_location: "Appendix C, seed 11"
+  body_ref: "§3.5 Execution — limits"
+  source_quote: "WHEN concurrency or per-meeting caps are reached THEN further dispatch SHALL wait"
+  normalized_statement: >
+    WHEN max_concurrent_tasks for the tenant or max_tasks_per_meeting is reached
+    THE SYSTEM SHALL hold further dispatch rather than exceeding the cap or dropping
+    the task.
+  requirement_type: resilience
+  criticality: P2
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc07-PME-12
+  authority_type: specification
+  authority_document: DOC-07
+  source_location: "Appendix C, seed 12"
+  body_ref: "§3.5 Execution — per-task cost ceiling"
+  source_quote: "WHEN estimated cost exceeds the ceiling THEN the owner SHALL be asked before the sandbox spins"
+  normalized_statement: >
+    WHEN the pre-dispatch cost estimate for a task exceeds task_cost_ceiling
+    THE SYSTEM SHALL ask the owner before any sandbox is provisioned, and SHALL NOT
+    spend on the task until the owner answers.
+  requirement_type: cost
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc07-PME-13
+  authority_type: specification
+  authority_document: DOC-07
+  source_location: "Appendix C, seed 13"
+  body_ref: "§3.6 Reporting"
+  source_quote: "WHEN the Workroom returns `needs_clarification` THEN it SHALL be reported as a question, not a failure"
+  normalized_statement: >
+    WHEN the Workroom returns an envelope with status needs_clarification THE SYSTEM
+    SHALL report it as a question (blocked-on-you) and SHALL NOT present it as a failure.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc07-PME-14
+  authority_type: specification
+  authority_document: DOC-07
+  source_location: "Appendix C, seed 14"
+  body_ref: "§3.6 Reporting — 'The signal never rounds up'; §3.10 Law 2"
+  source_quote: "WHEN the Workroom returns `partial` or `failed` THEN the report SHALL say so plainly and the confidence signal SHALL NOT round up"
+  normalized_statement: >
+    WHEN the Workroom returns an envelope with status partial or failed THE SYSTEM
+    SHALL report that status plainly with its reason, and the emitted confidence signal
+    SHALL NOT be more favourable than the envelope status.
+  requirement_type: functional
+  criticality: P1
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc07-PME-15
+  authority_type: specification
+  authority_document: DOC-07
+  source_location: "Appendix C, seed 15"
+  body_ref: "§3.7 What lands in the world"
+  source_quote: "WHEN a task produces an artifact THEN it SHALL be a `staged_drafts` row at `status='proposed'` with receipts and a `draft_id`, and it SHALL NOT be pushed"
+  normalized_statement: >
+    WHEN a task produces an artifact THE SYSTEM SHALL persist it as a staged_drafts row
+    at status 'proposed' carrying receipts and a draft_id, and SHALL NOT push, open a
+    pull request, or otherwise write to the customer's repository.
+  requirement_type: security
+  criticality: P0
+  testability: executable
+  status: qualified
+
+- requirement_id: R-doc07-PME-16
+  authority_type: specification
+  authority_document: DOC-07
+  source_location: "Appendix C, seed 16"
+  body_ref: "§3.6 Reporting — channel selection and cadence"
+  source_quote: "WHEN a report is sent THEN it SHALL use a channel present in `channel-report` and SHALL go to the owner and any explicitly named recipients, on completion, question, failure, or cost ask only"
+  normalized_statement: >
+    WHEN a report is sent THE SYSTEM SHALL use only a channel present in Doc 02's
+    channel-report for that meeting, SHALL address it to the task owner and any
+    recipients the room explicitly named, and SHALL send only on completion, question,
+    failure, or cost ask.
+  requirement_type: contract
+  criticality: P2
+  testability: executable
+  status: qualified

@@ -1,6 +1,6 @@
 """Doc 02 · M1 — the invite path launches a REAL Recall bot (AC-JOIN-01/10/15).
 
-Regression for DOC02-RECALL-BOT-NEVER-LAUNCHED: ``harness.invite_proxy`` must NOT
+Regression for DOC02-RECALL-BOT-NEVER-LAUNCHED: ``control_plane.invite_proxy`` must NOT
 fabricate a ``recall-bot-<uuid>`` id. It must drive the real ``TransportProvider``
 (``RecallTransport`` bound to the funded ``call_external`` seam), write back the id
 Recall actually returns, and post the consent notice pinned as the first observable
