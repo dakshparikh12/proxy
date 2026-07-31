@@ -9,10 +9,12 @@ one meeting connection. No wake ⇒ nothing happens (idle costs nothing).
 This is a **driver, not a decision** (Law 4): the only judgement in *our* code is the
 cheap "is Proxy addressed?" gate (word-bounded ``proxy`` / ``@proxy`` — physics, not a
 situation→action mapping). WHAT Proxy does and HOW it responds is entirely the agent's,
-made live inside the workroom and carried out over the connection. Keep it simple: a wake
-calls :meth:`Workroom.run_ask`, and the result text is handed to the connection's
-``to_meeting`` (medium ``say`` by default; the agent's own richer channel choice rides the
-in-sandbox MCP relay when live).
+made live inside the workroom and carried out over the connection. A wake calls
+:meth:`Workroom.run_ask`; the response is ALWAYS the agent's own ``to_meeting`` choices —
+either relayed live during the turn, or replayed afterward from the agent's recorded intents
+(honoring its chosen mediums). We never speak our own prose: a clean turn with zero intents is
+the agent choosing silence (cross-talk), and an errored turn that delivered nothing gets ONE
+honest degrade line so a needed response is never met with total silence.
 
 A wake runs as a BACKGROUND task so the room keeps flowing while Proxy works (monitor-
 while-working, §3/§6). Nothing here ever raises into the drain: a failed wake is an honest
@@ -98,30 +100,45 @@ class MeetingSession:
     async def _handle(self, ask: str) -> None:
         """One wake: run the reactive turn in the workroom, respond through the connection.
 
-        The agent now reaches the room DURING the turn: native Claude calls its ``to_meeting``
-        MCP tool live, choosing the medium (speak/chat/dm/screen/offer/mute), and the in-sandbox
-        server relays each call to this meeting's connection through the host relay route. So we do
-        NOT force ``medium='say'`` on the result — the agent already spoke/acted for itself.
+        The agent chooses WHETHER and HOW to reach the room — always its own ``to_meeting`` calls,
+        never our prose. There are two delivery paths and we honor whichever one carried the turn,
+        in priority order (Law 4 — the mediums are the agent's, not ours):
 
-        FALLBACK ONLY (honest degrade): if the turn produced a final result but the agent made ZERO
-        ``to_meeting`` calls this turn — detectable because the connection recorded nothing while it
-        ran (no relay, or the agent simply never called the tool) — speak the result text so the
-        room is never left hanging. Otherwise stay quiet: the agent already communicated. A failed
-        wake is an honest no-op the meeting survives (§3.8), never a raise."""
+        * ``acted_live`` — the in-sandbox MCP server relayed ≥1 ``to_meeting`` call to THIS
+          connection during the turn (the connection's ``sent`` grew). The agent already reached the
+          room live → stay quiet (never double-send).
+        * else ``result.sent`` (the no-relay/file path) — the agent recorded ≥1 intent locally.
+          REPLAY each over the connection with the agent's OWN chosen medium.
+        * else ``result.error`` — the turn crashed/incompleted with nothing delivered. Speak ONE
+          honest degrade so a task that needed a response is never met with silence.
+        * else (a clean turn, zero intents) — the agent chose not to respond (e.g. it was not really
+          addressed / cross-talk). STAY SILENT. We never invent a response from ``result.text``.
+
+        A failed wake is an honest no-op the meeting survives (§3.8), never a raise."""
         try:
             # The connection's ordered record of what actually reached the room; a live to_meeting
             # relay appends to it. Snapshot the count so we can tell if the agent acted this turn.
             sent_before = len(getattr(self.connection, "sent", ()))
             result = await self.workroom.run_ask(ask)
             self.results.append(result)
-            acted_live = len(getattr(self.connection, "sent", ())) > sent_before
-            if acted_live:
+            if len(getattr(self.connection, "sent", ())) > sent_before:
                 return  # the agent reached the room itself (via the relay) — stay quiet.
-            text = (getattr(result, "text", "") or "").strip()
-            if not text and getattr(result, "error", None):
-                text = "Sorry — I ran into a problem on that and couldn't finish it cleanly."
-            if text:
-                await self.connection.to_meeting(text, medium="say")
+            recorded = list(getattr(result, "sent", None) or [])
+            if recorded:
+                # The no-relay/file path: replay the agent's OWN channel choices verbatim.
+                for intent in recorded:
+                    await self.connection.to_meeting(
+                        str(intent.get("content", "") or ""),
+                        medium=str(intent.get("medium", "say") or "say"),
+                        to=str(intent.get("to", "") or "") or None,
+                    )
+                return
+            if getattr(result, "error", None):
+                await self.connection.to_meeting(
+                    "Sorry — I hit a problem finishing that one and couldn't wrap it up cleanly.",
+                    medium="say",
+                )
+            # else: a clean turn with zero intents — the agent chose silence (cross-talk). Stay quiet.
         except Exception:  # noqa: BLE001 — a wake failure never crashes the meeting (§3.8)
             logger.exception("meeting wake failed (meeting continues)")
 

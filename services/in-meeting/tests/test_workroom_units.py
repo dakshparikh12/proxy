@@ -39,9 +39,10 @@ def test_parse_stream_extracts_tools_text_and_cost_in_order() -> None:
     assert res.ask == "where is it?"
 
 
-def test_parse_stream_skips_malformed_lines_and_tolerates_no_result() -> None:
-    """Non-JSON lines are skipped (not fatal); a stream with no result event yields empty text +
-    zero cost rather than raising — an honest empty result the session can fall back on."""
+def test_parse_stream_skips_malformed_lines_and_flags_abnormal_termination() -> None:
+    """Non-JSON lines are skipped (not fatal). ABNORMAL TERMINATION: assistant turns ran but NO
+    ``result`` event arrived (crash/OOM) and NO intents were recorded -> an honest ``error`` is set
+    so the session degrades instead of going silent on a task that needed a response."""
     from in_meeting.workroom import _parse_stream
 
     raw = "\n".join(
@@ -56,10 +57,47 @@ def test_parse_stream_skips_malformed_lines_and_tolerates_no_result() -> None:
     assert res.tools == ["Bash"]
     assert res.text == ""
     assert res.cost_usd == 0.0
+    assert res.error == "turn did not complete"   # crashed mid-turn with nothing delivered
+    assert res.sent == []
 
-    # a wholly empty stream is a clean empty result:
+    # a wholly empty stream (no assistant turns at all) is a clean empty result, NOT an error:
     empty = _parse_stream("q", "")
     assert empty.tools == [] and empty.text == "" and empty.cost_usd == 0.0
+    assert empty.error is None
+
+
+def test_parse_stream_no_result_but_recorded_intents_is_not_an_error() -> None:
+    """An abnormal-looking stream (assistant turns, no ``result``) is NOT flagged an error when the
+    agent DID record ``to_meeting`` intents — those intents carry the turn, so the session replays
+    them rather than degrading."""
+    from in_meeting.workroom import _parse_stream
+
+    raw = json.dumps({"type": "assistant",
+                      "message": {"content": [{"type": "tool_use", "name": "to_meeting"}]}})
+    intents = json.dumps({"ts": 1.0, "content": "here you go", "medium": "chat", "to": ""})
+    res = _parse_stream("q", raw, intents)
+    assert res.error is None
+    assert res.sent == [{"content": "here you go", "medium": "chat", "to": ""}]
+
+
+def test_parse_stream_folds_in_recorded_intents_and_skips_relay_errors() -> None:
+    """A clean turn's recorded intents are parsed onto ``result.sent`` (the agent's OWN channel
+    choices in the no-relay path); malformed / relay-error lines are skipped (best-effort record)."""
+    from in_meeting.workroom import _parse_stream
+
+    raw = json.dumps({"type": "result", "result": "done", "total_cost_usd": 0.0})
+    intents = "\n".join([
+        json.dumps({"ts": 1.0, "content": "first", "medium": "say", "to": ""}),
+        "not json",
+        json.dumps({"ts": 2.0, "content": "dropped", "medium": "chat", "relay_error": "boom"}),
+        json.dumps({"ts": 3.0, "content": "dm hi", "medium": "dm", "to": "u1"}),
+    ])
+    res = _parse_stream("q", raw, intents)
+    assert res.text == "done"
+    assert res.sent == [
+        {"content": "first", "medium": "say", "to": ""},
+        {"content": "dm hi", "medium": "dm", "to": "u1"},
+    ]
 
 
 # ── render_meeting_info: who's-in-the-room, honest when empty ──────────────────────
@@ -159,8 +197,11 @@ def test_run_ask_hands_the_relay_wiring_as_envs(monkeypatch) -> None:
                 self._store[path] = content
 
             async def read(self, path: str) -> str:
-                # produce the redirect target so the parser has something to read
-                return json.dumps({"type": "result", "result": "ok", "total_cost_usd": 0.0})
+                # the ask stream has a result event; the to_meeting record is empty (no relay
+                # intents recorded in this env-wiring check) — so only the stream feeds the parser.
+                if path.endswith("ask.jsonl"):
+                    return json.dumps({"type": "result", "result": "ok", "total_cost_usd": 0.0})
+                return ""
 
         def __init__(self) -> None:
             self._store: dict[str, str] = {}

@@ -34,20 +34,25 @@ import json
 from types import SimpleNamespace
 
 # The canonical grounded answer a real native-Claude turn would stream back as stream-json:
-# two tool_use events (Bash, then Read) then a final result carrying a file:line citation + cost.
+# two tool_use events (Bash, then Read), a to_meeting tool_use (the agent reaching the room), then a
+# final result carrying a file:line citation + cost. A clean turn always emits the ``result`` event.
+_ANSWER = ("The slugify helper lives at packages/lib/slugify.ts:4 — it lowercases then strips "
+           "non-alphanumerics. I read the actual file to confirm.")
 _CANNED_STREAM = "\n".join(
     [
         json.dumps({"type": "assistant",
                     "message": {"content": [{"type": "tool_use", "name": "Bash"}]}}),
         json.dumps({"type": "assistant",
                     "message": {"content": [{"type": "tool_use", "name": "Read"}]}}),
-        json.dumps({"type": "result",
-                    "result": "The slugify helper lives at packages/lib/slugify.ts:4 — it "
-                              "lowercases then strips non-alphanumerics. I read the actual file "
-                              "to confirm.",
-                    "total_cost_usd": 0.0123}),
+        json.dumps({"type": "assistant",
+                    "message": {"content": [{"type": "tool_use", "name": "to_meeting"}]}}),
+        json.dumps({"type": "result", "result": _ANSWER, "total_cost_usd": 0.0123}),
     ]
 )
+# In the no-relay/file path the in-sandbox MCP server appends each ``to_meeting`` call as one JSON
+# line to $PROXY_MEETING_OUT. This is the agent's OWN recorded channel choice for the turn (medium
+# 'say' here), which the session replays over the connection honoring that medium.
+_CANNED_INTENTS = json.dumps({"ts": 1.0, "content": _ANSWER, "medium": "say", "to": ""})
 
 
 class _FakeFiles:
@@ -73,9 +78,12 @@ class _FakeCommands:
         self._log.append(cmd)
         self._env_log.append(dict(envs or {}))
         # A woken turn shells out to native ``claude`` and redirects its stream-json to
-        # /tmp/ask.jsonl; the fake "produces" that file so the real reader+parser run for real.
+        # /tmp/ask.jsonl; the fake "produces" that file so the real reader+parser run for real. In
+        # the no-relay/file path it ALSO records the agent's ``to_meeting`` intent to the local JSONL
+        # (what the in-sandbox MCP server would write), so the real replay path runs for real too.
         if "claude -p" in cmd:
             self._store["/tmp/ask.jsonl"] = _CANNED_STREAM
+            self._store["/tmp/to_meeting.jsonl"] = _CANNED_INTENTS
         return SimpleNamespace(exit_code=0, stdout="DONE", stderr="")
 
 
@@ -246,7 +254,8 @@ def test_workroom_serves_a_meeting_on_the_real_bootpath(monkeypatch) -> None:
         assert len(session.results) == 1, "exactly one wake, on the addressed line"
         res = session.results[0]
         assert "slugify.ts:4" in res.text          # grounded file:line, from the REAL parse
-        assert res.tools == ["Bash", "Read"]        # native tools, ordered, from the REAL parse
+        # native tools, ordered, from the REAL parse — including the agent's own ``to_meeting`` call:
+        assert res.tools == ["Bash", "Read", "to_meeting"]
         assert res.cost_usd > 0.0                    # cost surfaced from the stream
 
         # (3b) run_ask launched native ``claude`` WITH the meeting MCP server and handed it the
@@ -259,9 +268,12 @@ def test_workroom_serves_a_meeting_on_the_real_bootpath(monkeypatch) -> None:
         assert ask_envs["PROXY_MEETING_OUT"] == "/tmp/to_meeting.jsonl"
         assert ask_envs["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-oauth-test"   # subscription auth
 
-        # (3c) FALLBACK path: the FAKE claude only emits the canned stream (it does not actually
-        # invoke the in-sandbox MCP server), so the agent made ZERO live to_meeting calls this turn.
-        # The session honest-degrades by speaking the result text through the REAL connection:
+        # (3c) FILE-MODE REPLAY path: the FAKE claude does not actually POST to the host relay, but
+        # it DID record the agent's own ``to_meeting`` intent to the local JSONL (as the in-sandbox
+        # MCP server would in the no-relay path). run_ask captured it onto result.sent, and the
+        # session REPLAYED the agent's OWN channel choice (medium 'say') over the REAL connection —
+        # never our own prose, never result.text:
+        assert res.sent == [{"content": _ANSWER, "medium": "say", "to": ""}]
         assert any("slugify.ts:4" in s for s in pipe.said)
         assert pipe.flushed >= 1
         assert connection.sent and connection.sent[-1].medium == "say"
@@ -465,16 +477,144 @@ def test_session_stays_quiet_when_the_agent_acted_live_via_relay() -> None:
             return None
 
         async def run_ask(self, ask: str) -> Any:
-            # The agent chose chat live during the turn (what the relay would have landed):
+            # The agent chose chat live during the turn (what the relay would have landed). Its
+            # recorded intents ALSO carry the same choice (the MCP server records even in relay
+            # mode) — but because the connection already grew, the session must NOT replay them.
             await self._conn.to_meeting("here's the answer", medium="chat")
-            return SimpleNamespace(text="here's the answer", error=None)
+            return SimpleNamespace(
+                text="here's the answer", error=None,
+                sent=[{"content": "here's the answer", "medium": "chat", "to": ""}],
+            )
 
     async def _run() -> None:
         session = MeetingSession(workroom=_LiveWorkroom(connection), connection=connection)
         await session.on_line("Bob", "proxy, what's the answer?", ts=1.0)
         await session.drain()
-        # the agent acted live (one chat send); the session added NO second 'say' fallback:
+        # the agent acted live (one chat send); the session added NO second send (no double-send)
+        # even though result.sent also held the intent:
         assert [s.medium for s in connection.sent] == ["chat"]
-        assert pipe.said == []  # stayed quiet — did not re-speak the result text
+        assert pipe.said == []  # stayed quiet — did not re-speak / re-replay the result
+
+    asyncio.run(_run())
+
+
+class _StubWorkroom:
+    """A workroom stand-in whose ``run_ask`` returns a preset :class:`WorkroomResult` — used to
+    drive the session's post-turn delivery logic directly (no sandbox), on the REAL session."""
+
+    def __init__(self, result: Any) -> None:
+        self._result = result
+
+    async def feed_transcript(self, md: str) -> None:
+        return None
+
+    async def run_ask(self, ask: str) -> Any:
+        return self._result
+
+
+def _session_with(result: Any) -> tuple[Any, Any, list[str]]:
+    """Build a REAL MeetingSession + REAL MeetingConnection over a stub workroom returning
+    ``result``. Returns (session, connection, said)."""
+    from control_plane.meeting_session import MeetingSession
+    from in_meeting.meeting_connection import MeetingConnection
+
+    said: list[str] = []
+
+    class _SpeakSink:
+        async def say(self, text: str) -> None:
+            said.append(text)
+
+        async def cut(self) -> None:
+            return None
+
+    connection = MeetingConnection(speak=_SpeakSink(), room=FakeRoom(), bot_id="bot-x")
+    session = MeetingSession(workroom=_StubWorkroom(result), connection=connection)
+    return session, connection, said
+
+
+def test_session_stays_silent_on_clean_turn_with_zero_intents_crosstalk() -> None:
+    """BUG (a) — CROSS-TALK: a clean turn (a ``result`` event) where the agent chose NOT to respond
+    records ZERO ``to_meeting`` intents. The session must STAY SILENT — it must NOT invent a
+    response from ``result.text``. Zero sends on the connection."""
+    from in_meeting.workroom import WorkroomResult
+
+    # A clean turn: text present (an internal thought), no error, no intents — agent chose silence.
+    result = WorkroomResult(ask="proxy?", text="not addressed to me, staying quiet",
+                            error=None, sent=[])
+    session, connection, said = _session_with(result)
+
+    async def _run() -> None:
+        await session.on_line("Bob", "proxy servers are down again", ts=1.0)
+        await session.drain()
+        assert connection.sent == []   # zero sends — the agent's silence is honored (no cross-talk)
+        assert said == []
+
+    asyncio.run(_run())
+
+
+def test_session_honest_degrades_once_on_an_errored_incomplete_turn() -> None:
+    """BUG (b) — SILENCE-ON-CRASH: an incomplete/crashed turn (error set, nothing delivered) must
+    produce EXACTLY ONE honest-degrade send so a task that needed a response is never met with total
+    silence."""
+    from in_meeting.workroom import WorkroomResult
+
+    result = WorkroomResult(ask="proxy, refactor the whole repo", text="",
+                            error="turn did not complete", sent=[])
+    session, connection, said = _session_with(result)
+
+    async def _run() -> None:
+        await session.on_line("Bob", "proxy, refactor the whole repo", ts=1.0)
+        await session.drain()
+        assert len(connection.sent) == 1
+        assert connection.sent[0].medium == "say"
+        assert len(said) == 1
+        assert "problem finishing" in said[0].lower()
+
+    asyncio.run(_run())
+
+
+def test_session_replays_recorded_intents_honoring_the_agents_medium() -> None:
+    """BUG (a/b) FIX — FILE-MODE REPLAY: in the no-relay path the agent's OWN recorded intents are
+    replayed over the connection HONORING each chosen medium (an 'offer' intent → an offer send, NOT
+    a spoken result.text). Multiple intents replay in order."""
+    from in_meeting.workroom import WorkroomResult
+
+    async def _offer(content: str, to: str) -> str:
+        return "https://approve.example/xyz"
+
+    from in_meeting.meeting_connection import MeetingConnection
+
+    said: list[str] = []
+
+    class _SpeakSink:
+        async def say(self, text: str) -> None:
+            said.append(text)
+
+        async def cut(self) -> None:
+            return None
+
+    connection = MeetingConnection(speak=_SpeakSink(), room=FakeRoom(), bot_id="bot-x",
+                                   offer=_offer)
+    from control_plane.meeting_session import MeetingSession
+
+    # The agent chose two mediums this turn: a chat line, then an offer (a staged world-touching
+    # change) — NOT a spoken result. result.text is present but must be IGNORED.
+    result = WorkroomResult(
+        ask="proxy, propose the fix", text="ignore me — I am not the channel choice",
+        error=None,
+        sent=[
+            {"content": "here's what I found", "medium": "chat", "to": ""},
+            {"content": "the tz.ts:88 patch", "medium": "offer", "to": ""},
+        ],
+    )
+    session = MeetingSession(workroom=_StubWorkroom(result), connection=connection)
+
+    async def _run() -> None:
+        await session.on_line("Bob", "proxy, propose the fix", ts=1.0)
+        await session.drain()
+        assert [s.medium for s in connection.sent] == ["chat", "offer"]
+        assert connection.room.chats[0] == "here's what I found"        # the chat intent
+        assert "approve: https://approve.example/xyz" in connection.room.chats[-1]  # the offer link
+        assert said == []   # result.text was NEVER spoken — mediums came from the agent's intents
 
     asyncio.run(_run())

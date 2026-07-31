@@ -76,6 +76,10 @@ class WorkroomResult:
     turns: int = 0                       # sdk turns / duration proxy
     cost_usd: float = 0.0
     error: str | None = None             # honest fault, never re-thrown into the loop
+    #: The agent's OWN recorded ``to_meeting`` intents (content/medium/to), read from the sandbox's
+    #: local JSONL in the no-relay/file path. Each is a channel choice the agent made this turn; the
+    #: session replays them over the connection honoring the chosen medium (NOT ``text``).
+    sent: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -159,7 +163,11 @@ class Workroom:
             await self._run(cmd, timeout=ASK_TIMEOUT_S, envs=envs)
             raw = getattr(await self.call(lambda: self.sandbox.files.read("/tmp/ask.jsonl"),  # nosec B108 — path INSIDE the isolated per-tenant E2B microVM, not the host
                                           service="e2b"), "value", "")
-            return _parse_stream(ask, raw or "")
+            # The agent's OWN channel choices this turn, as the in-sandbox MCP server recorded them
+            # to $PROXY_MEETING_OUT (the no-relay/file path). Empty/absent ⇒ no recorded intents.
+            intents_raw = getattr(await self.call(lambda: self.sandbox.files.read(TO_MEETING_OUT),
+                                                  service="e2b"), "value", "")
+            return _parse_stream(ask, raw or "", intents_raw or "")
         except Exception as exc:  # noqa: BLE001 — never crash the loop
             logger.exception("workroom run_ask failed")
             return WorkroomResult(ask=ask, error=str(exc) or exc.__class__.__name__)
@@ -172,12 +180,36 @@ class Workroom:
             logger.exception("workroom teardown kill failed")
 
 
-def _parse_stream(ask: str, raw: str) -> WorkroomResult:
-    """Parse ``claude`` stream-json output → the ordered tool names + the final result text."""
+def _parse_intents(raw: str) -> list[dict[str, Any]]:
+    """Parse the in-sandbox MCP server's recorded ``to_meeting`` intents (one JSON object per line)
+    into ``[{content, medium, to}]`` — the agent's OWN channel choices in the no-relay/file path.
+    Skips relay-error/malformed lines silently (the local record is best-effort)."""
+    intents: list[dict[str, Any]] = []
+    for line in raw.splitlines():
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(rec, dict) or "relay_error" in rec:
+            continue
+        intents.append({
+            "content": str(rec.get("content", "") or ""),
+            "medium": str(rec.get("medium", "say") or "say"),
+            "to": str(rec.get("to", "") or ""),
+        })
+    return intents
+
+
+def _parse_stream(ask: str, raw: str, intents_raw: str = "") -> WorkroomResult:
+    """Parse ``claude`` stream-json output → the ordered tool names + the final result text, and
+    fold in the agent's recorded ``to_meeting`` intents. Detects ABNORMAL TERMINATION: a clean turn
+    always emits a ``result`` event; if there were assistant turns but no ``result`` (crash/OOM) and
+    no recorded intents, mark it an honest ``error`` so the session can degrade without silence."""
     tools: list[str] = []
     text = ""
     cost = 0.0
     turns = 0
+    saw_result = False
     for line in raw.splitlines():
         try:
             ev = json.loads(line)
@@ -189,9 +221,15 @@ def _parse_stream(ask: str, raw: str) -> WorkroomResult:
                 if b.get("type") == "tool_use":
                     tools.append(str(b.get("name", "")))
         elif ev.get("type") == "result":
+            saw_result = True
             text = str(ev.get("result", "") or "")
             cost = float(ev.get("total_cost_usd", 0.0) or 0.0)
-    return WorkroomResult(ask=ask, text=text, tools=tools, turns=turns, cost_usd=cost)
+    intents = _parse_intents(intents_raw)
+    error = None
+    if turns > 0 and not saw_result and not intents:
+        error = "turn did not complete"
+    return WorkroomResult(ask=ask, text=text, tools=tools, turns=turns, cost_usd=cost,
+                          error=error, sent=intents)
 
 
 def _mcp_server_source() -> str:

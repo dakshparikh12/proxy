@@ -7,12 +7,31 @@ the one connection. These tests exercise the REAL MeetingSession with fakes at i
 (the workroom's run_ask/feed_transcript and the connection's to_meeting/sent record) — no live
 vendor, no sandbox. The existing boot-path test proves the happy path end-to-end; here we prove
 the loop's decision behaviour and its honest-degrade edges directly.
+
+The response ALWAYS comes from the agent's OWN ``to_meeting`` choices, never our prose (Law 4):
+either relayed live during the turn (recorded on the connection) or replayed afterward from
+``result.sent`` (the recorded intents in the no-relay/file path). A clean turn with zero intents
+is the agent choosing silence (cross-talk); an errored turn that delivered nothing gets ONE honest
+degrade line. There is no ``result.text`` fallback.
 """
 from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
 from typing import Any
+
+
+def _result(*, text: str = "", error: str | None = None,
+            sent: list[dict[str, Any]] | None = None) -> SimpleNamespace:
+    """A stand-in WorkroomResult carrying the fields _handle reads: text, error, and the agent's
+    OWN recorded ``to_meeting`` intents (``sent``). ``sent`` defaults to [] (no recorded intents)."""
+    return SimpleNamespace(text=text, error=error, sent=list(sent or []))
+
+
+def _say(content: str) -> list[dict[str, Any]]:
+    """One recorded 'say' intent — the common no-relay channel choice, so a scripted turn's result
+    replays as a spoken line over the connection (the agent's OWN choice, not our prose)."""
+    return [{"content": content, "medium": "say", "to": ""}]
 
 
 class _FakeConnection:
@@ -43,7 +62,7 @@ class _FakeWorkroom:
     ) -> None:
         self.fed: list[str] = []
         self.asks: list[str] = []
-        self._result = result if result is not None else SimpleNamespace(text="ok", error=None)
+        self._result = result if result is not None else _result(text="ok", sent=_say("ok"))
         self._connection = connection
         self._on_run = on_run
         self._raise_on_run = raise_on_run
@@ -86,14 +105,15 @@ def test_wake_gate_fires_on_voice_proxy_and_chat_atproxy_but_not_crosstalk() -> 
     assert is_addressed("Bob", "") is None
 
 
-def test_addressed_line_runs_the_ask_and_speaks_the_result() -> None:
-    """On a wake the session runs run_ask with the verbatim line and, since the agent made ZERO
-    live to_meeting calls this turn, falls back to speaking the result text through the connection."""
+def test_addressed_line_runs_the_ask_and_replays_the_agents_recorded_intent() -> None:
+    """On a wake the session runs run_ask with the verbatim line and, since the agent made no LIVE
+    relay call this turn, REPLAYS the agent's OWN recorded ``to_meeting`` intent (the no-relay/file
+    path) over the connection — honoring the agent's chosen medium (here 'say'), not our prose."""
     from control_plane.meeting_session import MeetingSession
 
     async def _run() -> None:
         conn = _FakeConnection()
-        wr = _FakeWorkroom(result=SimpleNamespace(text="It lives at util.ts:9", error=None))
+        wr = _FakeWorkroom(result=_result(text="internal note", sent=_say("It lives at util.ts:9")))
         session = MeetingSession(workroom=wr, connection=conn)
 
         await session.on_line("Bob", "proxy, where's the helper?", ts=2.0)
@@ -101,10 +121,31 @@ def test_addressed_line_runs_the_ask_and_speaks_the_result() -> None:
 
         assert wr.asks == ["proxy, where's the helper?"]  # verbatim ask, exactly one wake
         assert len(session.results) == 1
-        # zero live sends -> the fallback speak carried the result text as medium='say':
+        # the recorded intent replayed over the connection with the agent's chosen medium:
         assert [s.medium for s in conn.sent] == ["say"]
-        assert conn.sent[-1].content == "It lives at util.ts:9"
+        assert conn.sent[-1].content == "It lives at util.ts:9"  # the intent content, not result.text
 
+    asyncio.run(_run())
+
+
+def test_clean_turn_with_zero_intents_stays_silent_crosstalk() -> None:
+    """CROSS-TALK: a clean turn (no error) where the agent recorded ZERO intents means the agent
+    chose not to respond. The session must STAY SILENT — it must NOT invent a response from
+    ``result.text``. Zero sends reach the room."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+        # text present (an internal thought) but no recorded intents and no error -> chose silence:
+        wr = _FakeWorkroom(result=_result(text="not really about me", sent=[]))
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        await session.on_line("Bob", "proxy servers keep dropping", ts=2.0)
+        await session.drain()
+
+        assert wr.asks == ["proxy servers keep dropping"]  # it DID wake (word-bounded gate)
+        assert len(session.results) == 1
+        assert conn.sent == []   # ...but stayed silent: no cross-talk, no result.text spoken
 
     asyncio.run(_run())
 
@@ -135,9 +176,9 @@ def test_non_addressed_line_updates_notes_but_never_wakes() -> None:
 
 
 def test_stays_quiet_when_the_agent_acted_live_via_the_connection() -> None:
-    """§5: when the agent reached the room DURING the turn (a to_meeting recorded on the
-    connection), the session must NOT add a second fallback 'say'. Only a zero-send turn falls
-    back to speaking the result text."""
+    """§5: when the agent reached the room DURING the turn (a to_meeting relay call recorded on the
+    connection), the session must NOT also replay the recorded intents — no DOUBLE-SEND. The live
+    relay wins even though ``result.sent`` also carries the same intent."""
     from control_plane.meeting_session import MeetingSession
 
     async def _run() -> None:
@@ -146,8 +187,11 @@ def test_stays_quiet_when_the_agent_acted_live_via_the_connection() -> None:
         async def _agent_acts(connection: Any) -> None:
             await connection.to_meeting("here's the answer", medium="chat")
 
+        # The relay recorded the send on the connection AND result.sent carries the same intent
+        # (the MCP server records even in relay mode). The session must NOT replay it a second time.
         wr = _FakeWorkroom(
-            result=SimpleNamespace(text="here's the answer", error=None),
+            result=_result(text="here's the answer",
+                           sent=[{"content": "here's the answer", "medium": "chat", "to": ""}]),
             connection=conn,
             on_run=_agent_acts,
         )
@@ -156,7 +200,7 @@ def test_stays_quiet_when_the_agent_acted_live_via_the_connection() -> None:
         await session.on_line("Bob", "proxy, summarize it", ts=1.0)
         await session.drain()
 
-        # exactly the one live chat send — NO extra 'say' fallback tacked on:
+        # exactly the one live chat send — the recorded intent was NOT replayed on top:
         assert [s.medium for s in conn.sent] == ["chat"]
 
     asyncio.run(_run())
@@ -219,7 +263,7 @@ def test_fallback_speaks_an_honest_message_when_a_wake_errors_with_no_text() -> 
 
     async def _run() -> None:
         conn = _FakeConnection()
-        wr = _FakeWorkroom(result=SimpleNamespace(text="", error="e2b timeout"))
+        wr = _FakeWorkroom(result=_result(text="", error="e2b timeout", sent=[]))
         session = MeetingSession(workroom=wr, connection=conn)
 
         await session.on_line("Bob", "proxy, run the migration", ts=1.0)
@@ -246,8 +290,8 @@ def test_a_wake_that_raises_is_a_no_op_the_meeting_survives() -> None:
 
         assert session.results == []   # nothing recorded from the failed turn
         assert conn.sent == []         # nothing reached the room
-        # and the meeting keeps working — a subsequent good wake still runs:
-        wr2 = _FakeWorkroom(result=SimpleNamespace(text="recovered", error=None))
+        # and the meeting keeps working — a subsequent good wake still replays the agent's intent:
+        wr2 = _FakeWorkroom(result=_result(text="recovered", sent=_say("recovered")))
         session.workroom = wr2
         await session.on_line("Bob", "proxy, try again", ts=2.0)
         await session.drain()
@@ -268,7 +312,7 @@ def test_transcript_sync_failure_does_not_block_the_wake() -> None:
             async def feed_transcript(self, md: str) -> None:
                 raise RuntimeError("sandbox write failed")
 
-        wr = _BadFeedWorkroom(result=SimpleNamespace(text="answered anyway", error=None))
+        wr = _BadFeedWorkroom(result=_result(text="internal", sent=_say("answered anyway")))
         session = MeetingSession(workroom=wr, connection=conn)
 
         await session.on_line("Bob", "proxy, still there?", ts=1.0)
@@ -287,7 +331,7 @@ def test_chat_line_wakes_only_on_atproxy_via_the_is_chat_flag() -> None:
 
     async def _run() -> None:
         conn = _FakeConnection()
-        wr = _FakeWorkroom(result=SimpleNamespace(text="chat handled", error=None))
+        wr = _FakeWorkroom(result=_result(text="internal", sent=_say("chat handled")))
         session = MeetingSession(workroom=wr, connection=conn)
 
         # a plain chat mention of the word proxy — NO wake:
