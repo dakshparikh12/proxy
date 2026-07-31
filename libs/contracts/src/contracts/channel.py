@@ -173,7 +173,7 @@ class DraftCard(ProxyMessage):
 # walking each model's ``model_fields`` — NEVER a hand list — so a new frame field is
 # consumed the moment it exists and can never orphan itself. (The §4.8 field-diff over
 # ``MESSAGE_FIELD_CONSUMERS`` then only surfaces the DELIBERATE-drift cases: a standalone
-# contract — AgentChunk/Envelope/ChannelReport — whose consumer reads a stale name.)
+# contract — AgentChunk — whose consumer reads a stale name.)
 for _frame_model in CHANNEL_REGISTRY.values():
     register_field_consumer(_frame_model.__name__, *_frame_model.model_fields)
 

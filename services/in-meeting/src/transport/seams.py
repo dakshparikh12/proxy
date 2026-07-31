@@ -12,8 +12,6 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Protocol, runtime_checkable
 
-from contracts.channels import ChannelReport
-
 from .media import AudioChunk, CanvasFrame
 from .signals import ChatMessage, RosterEvent, Transcript
 
@@ -54,10 +52,6 @@ class TransportProvider(Protocol):
     def chat_events(self, bot_id: str) -> AsyncIterator[ChatMessage]: ...
 
     def output_media(self, bot_id: str) -> OutputMediaSink: ...
-
-    def channel_report(self, bot_id: str) -> ChannelReport:
-        """Which channels this meeting supports (dm_available) — reported, not judged (§3.4)."""
-        ...
 
 
 @runtime_checkable

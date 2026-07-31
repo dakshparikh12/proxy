@@ -16,8 +16,6 @@ import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
-from contracts.channels import ChannelReport
-
 from .external import CallExternal
 from .media import AudioChunk, CanvasFrame
 from .seams import OutputMediaSink
@@ -139,7 +137,6 @@ class RecallTransport:
         call_external: CallExternal,
         *,
         api_key: str,
-        dm_available: bool = False,
         webhook_url: str = "",
         output_media_url: str = "",
     ) -> None:
@@ -153,7 +150,6 @@ class RecallTransport:
         # (env/settings), never baked in here (Law 4).
         self._call_external = call_external
         self._api_key = api_key
-        self._dm_available = dm_available
         self._webhook_url = webhook_url
         self._output_media_url = output_media_url
         # The region-resolved API base (``RECALL_REGION``): captured at construction —
@@ -301,9 +297,6 @@ class RecallTransport:
             api=self._api,
             is_muted=lambda: bot_id in self._muted,
         )
-
-    def channel_report(self, bot_id: str) -> ChannelReport:
-        return ChannelReport(dm_available=self._dm_available)
 
     # ── harness webhook layer feeds live events onto the in-process queues (M2) ──
     def _ingest_roster(self, bot_id: str, event: RosterEvent) -> None:

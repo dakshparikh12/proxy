@@ -22,11 +22,11 @@ convention, no guessing):
 
 1. an **annotated parameter or assignment** whose annotation names a contract type,
    including a type unwrapped from a generic/optional wrapper
-   (``AsyncIterator[AgentChunk]`` / ``Iterable[AgentChunk]`` / ``list[Envelope]`` /
-   ``Envelope | None``) — the loop/target variable of an ``async for``/``for`` over such
+   (``AsyncIterator[AgentChunk]`` / ``Iterable[AgentChunk]`` / ``list[AgentChunk]`` /
+   ``AgentChunk | None``) — the loop/target variable of an ``async for``/``for`` over such
    an annotated iterable binds to the element type;
-2. **``isinstance`` narrowing** — inside an ``if isinstance(x, ChannelReport):`` block,
-   ``x`` binds to ``ChannelReport`` for the attribute reads in that block;
+2. **``isinstance`` narrowing** — inside an ``if isinstance(x, AgentChunk):`` block,
+   ``x`` binds to ``AgentChunk`` for the attribute reads in that block;
 3. a **direct construction** — ``x = AgentChunk(...)`` binds ``x`` to ``AgentChunk``.
 
 Every ``<bound-name>.<attr>`` READ (an ``ast.Attribute`` in ``Load`` context) records
@@ -51,7 +51,7 @@ _BASEMODEL_API: frozenset[str] = frozenset(n for n in dir(BaseModel) if not n.st
 # name a consumer would import/annotate with; the AST sees only the name, and every one of
 # these is a single-declaration-site type (libs/contracts) proven by the co-located
 # no-redeclaration sweep — so a name match is an unambiguous binding.
-_SWEPT_CONTRACTS: frozenset[str] = frozenset({"AgentChunk", "Envelope", "ChannelReport"})
+_SWEPT_CONTRACTS: frozenset[str] = frozenset({"AgentChunk"})
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _CONTRACTS_SRC = (_REPO_ROOT / "libs" / "contracts" / "src").resolve()
@@ -190,7 +190,7 @@ class _ConsumerReadVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_If(self, node: ast.If) -> None:  # noqa: N802
-        # isinstance narrowing: ``if isinstance(x, ChannelReport):`` binds x inside the body.
+        # isinstance narrowing: ``if isinstance(x, AgentChunk):`` binds x inside the body.
         narrowed: tuple[str, str] | None = None
         test = node.test
         if (

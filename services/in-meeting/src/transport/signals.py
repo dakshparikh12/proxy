@@ -2,22 +2,22 @@
 
     transcript(words, speaker, t) · chat(message, sender, dm?) · roster(join/leave, name)
     · speaking(on/off) · boundary(now) · barge-in(now) · bot-status(connected/dropped/rejoined)
-    · meeting-end · channel-report(dm_available)
+    · meeting-end   (``channel-report`` remains a sealed wire NAME but no longer a signal
+    VALUE — DM availability is decided by the agent's ``to_meeting`` tool, not emitted here)
 
 These are **transport-internal frozen dataclasses**, deliberately NOT registered as
 client ``ProxyMessage`` types (AC-EVENTS-11 / AC-CHAT-14 / AC-SEAM-11 / AC-XCUT-08):
 the client registry closure (``assert_registry_closed``) must stay disjoint from this
-surface. Eight of the nine names are the doc00-sealed ``SIGNAL_SURFACE_EVENTS``
-frozenset; ``chat`` is the ninth, emitted internally (never a client ``MessageType``).
-``ChannelReport`` is imported from ``libs/contracts`` — reused, never re-defined
-(AC-CHAT-12 / AC-SEAM-12).
+surface. The wire-name surface itself (``EMITTED_SIGNAL_NAMES``) is the doc00-sealed
+``SIGNAL_SURFACE_EVENTS`` frozenset — which still names ``channel-report`` — plus the
+internally-emitted ``chat``; the new system decides DM delivery in the agent (the
+``to_meeting`` tool), so no ``channel-report`` VALUE is emitted as a dataclass signal.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal, Union
 
-from contracts.channels import ChannelReport
 from contracts.registry import SIGNAL_SURFACE_EVENTS
 
 
@@ -112,9 +112,6 @@ class MeetingEnd:
     reason: str
 
 
-# ``channel-report`` reuses the libs/contracts model verbatim (dm_available: bool).
-ChannelReportSignal = ChannelReport
-
 # The complete emitted surface. Any behavior upstream needing a signal not on this
 # list has a gap that belongs *here* (§3.10).
 Signal = Union[
@@ -126,12 +123,13 @@ Signal = Union[
     BargeIn,
     BotStatus,
     MeetingEnd,
-    ChannelReport,
 ]
 
-# Nine names: the eight sealed ``SIGNAL_SURFACE_EVENTS`` + the internally-emitted
-# ``chat``. Kept in one place so a static oracle can prove disjointness from the
-# client registry and that no tenth (e.g. a screen-ingestion) signal crept in.
+# The sealed ``SIGNAL_SURFACE_EVENTS`` wire names + the internally-emitted ``chat``.
+# Kept in one place so a static oracle can prove disjointness from the client registry
+# and that no extra (e.g. a screen-ingestion) signal crept in. ``channel-report`` remains
+# a sealed wire name even though no dataclass carries it — DM availability is the agent's
+# judgment now, not a transport-emitted signal value.
 EMITTED_SIGNAL_NAMES: frozenset[str] = SIGNAL_SURFACE_EVENTS | {"chat"}
 
 
@@ -151,6 +149,4 @@ def signal_name(sig: Signal) -> str:
         return "barge-in"
     if isinstance(sig, BotStatus):
         return "bot-status"
-    if isinstance(sig, MeetingEnd):
-        return "meeting-end"
-    return "channel-report"
+    return "meeting-end"

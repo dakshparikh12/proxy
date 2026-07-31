@@ -180,7 +180,7 @@ def register_field_consumer(model_name: str, *fields: str) -> None:
     and additive — re-registering the same field is a no-op.
 
     **This is NO LONGER the source of truth for the standalone-contract diff.** The real
-    consumer field-reads for ``AgentChunk`` / ``Envelope`` / ``ChannelReport`` are DERIVED
+    consumer field-reads for the standalone contract(s) (``AgentChunk``) are DERIVED
     by AST-sweeping the live service source (:func:`collect_consumed_fields` →
     ``contracts.contract_reads.sweep_consumer_reads``), because a hand-list co-located with
     the model is a tautology (``model_fields == model_fields``): it cannot fail when a real
@@ -199,15 +199,10 @@ def register_field_consumer(model_name: str, *fields: str) -> None:
 # the AST sweep (which records attribute READS) will never see it and would otherwise flag
 # it as a produced-but-unconsumed orphan. Each entry names the field AND why it is exempt;
 # the gate still flags every OTHER orphan, so this is a narrow, audited carve-out, not a rug.
-_FIELD_DIFF_ALLOWLIST: frozenset[str] = frozenset(
-    {
-        # The 05→04 result Envelope's task_id is a CORRELATION key: it is set at construction
-        # from ``bundle.task_id`` (workroom/envelope.py) and matched against the operation-runs
-        # row / abort-controller key (``meeting_id|task_id``, session.py) — never read as
-        # ``envelope.task_id`` off the model. It is consumed by identity, not by field-read.
-        "Envelope.task_id",
-    }
-)
+# Currently EMPTY: the only entry was the deleted result-Envelope's construction-threaded
+# ``task_id`` (the Workroom result envelope was removed with the old system) — the DoD's
+# "empty ... or explicitly allow-listed" is satisfied by the empty set.
+_FIELD_DIFF_ALLOWLIST: frozenset[str] = frozenset()
 
 
 def _default_channel_action_handler(message: ProxyMessage) -> ProxyMessage:
@@ -341,15 +336,15 @@ def assert_fields_consumed(
 
 # ── the field-diff CONTRACT MODELS the graph walks ─────────────────────────────
 # The shared wire/behavior contracts whose FIELDS the produce/consume diff covers.
-# These are the models that already proved field-level drift (§4.8): the AgentChunk
-# streaming union, the Workroom result Envelope, and the channel-report signal — plus
-# every registered client ``ProxyMessage`` render frame. Listed by dotted path so the
+# The AgentChunk streaming union is the surviving standalone contract that proved
+# field-level drift (§4.8) — plus every registered client ``ProxyMessage`` render frame.
+# (The Workroom result ``Envelope`` and the ``ChannelReport`` channel-report signal were
+# removed with the old system; the new agent decides DM delivery via its ``to_meeting``
+# tool, so neither is produced or consumed anywhere.) Listed by dotted path so the
 # collector walks the REAL Pydantic ``model_fields`` and never a hand-maintained field
 # list (which would itself drift — the very failure this gate exists to prevent).
 _FIELD_DIFF_CONTRACT_MODELS: tuple[tuple[str, str], ...] = (
     ("contracts.chunks", "AgentChunk"),
-    ("contracts.envelopes", "Envelope"),
-    ("contracts.channels", "ChannelReport"),
 )
 
 
@@ -357,7 +352,7 @@ def collect_produced_fields() -> dict[str, set[str]]:
     """Populate the produced-field graph by walking the REAL contract models (§4.8).
 
     Returns ``{model_name: {field, ...}}`` read straight off each live Pydantic model's
-    ``model_fields`` — for the standalone contracts (AgentChunk / Envelope / ChannelReport)
+    ``model_fields`` — for the standalone contract(s) (AgentChunk)
     AND for every registered client ``ProxyMessage`` render frame in ``CHANNEL_REGISTRY``.
     A field a model no longer carries (the migrated ``.kind``, ``dm``, bare ``verified``)
     is absent BY CONSTRUCTION, so a consumer still reading it shows up as an orphan.
@@ -388,8 +383,8 @@ def collect_consumed_fields() -> dict[str, set[str]]:
 
     Two grounded sources, unioned into ``MESSAGE_FIELD_CONSUMERS``:
 
-    1. **AST sweep of the live services** — for the standalone contracts
-       (``AgentChunk`` / ``Envelope`` / ``ChannelReport``) this walks every
+    1. **AST sweep of the live services** — for the standalone contract(s)
+       (``AgentChunk``) this walks every
        ``services/*/src`` + ``libs/*/src`` module and records which fields the product code
        actually READS off a contract-typed value (``contracts.contract_reads``). A consumer
        renaming ``chunk.type``→``chunk.kind`` now surfaces ``AgentChunk.kind`` as

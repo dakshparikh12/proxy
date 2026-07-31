@@ -39,7 +39,6 @@ from .channel import (
 from .channel import (
     VoiceSpeak as VoiceSpeak,
 )
-from .channels import ChannelReport as ChannelReport
 from .chunks import (
     AGENT_CHUNK_METADATA_KEYS as AGENT_CHUNK_METADATA_KEYS,
 )
@@ -48,15 +47,6 @@ from .chunks import (
 )
 from .chunks import (
     ChunkType as ChunkType,
-)
-from .envelopes import (
-    Envelope as Envelope,
-)
-from .envelopes import (
-    EnvelopeStatus as EnvelopeStatus,
-)
-from .envelopes import (
-    ProgressEvent as ProgressEvent,
 )
 from .material_change import MaterialChangeKind as MaterialChangeKind
 from .notes import NoteDelta as NoteDelta
@@ -154,14 +144,10 @@ __all__ = [
     "MessageType",
     "OUTBOUND",
     "validate_inbound_message",
-    "ChannelReport",
     "ChunkType",
-    "Envelope",
-    "EnvelopeStatus",
     "MaterialChangeKind",
     "NoteDelta",
     "NoteOp",
-    "ProgressEvent",
     "ProxyMessage",
     "Readiness",
     "ReadinessReport",
