@@ -17,7 +17,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from harness.post_meeting.models import TaskRecord, TaskState, Tier
+from control_plane.post_meeting.models import TaskRecord, TaskState, Tier
 
 
 class FakeTaskStore:
@@ -134,7 +134,7 @@ class FakeTaskStore:
         self, meeting_id: Any, *, exclude_task_id: Any = None
     ) -> int:
         """Mirrors the real SQL: dispatchable tier, non-terminal state, candidate excluded."""
-        from harness.post_meeting.models import DISPATCHABLE_TIERS, TERMINAL_STATES
+        from control_plane.post_meeting.models import DISPATCHABLE_TIERS, TERMINAL_STATES
 
         tiers = {t.value for t in DISPATCHABLE_TIERS}
         terminal = {s.value for s in TERMINAL_STATES}

@@ -20,14 +20,14 @@ Oracle sources per PROTO-DETERMINISTIC-01:
 Spec §9 literal (source_quotes encoded below):
     FROM python:3.12-slim AS builder
     COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
-    RUN uv sync --frozen --no-dev --package harness   # per-service, self-contained
+    RUN uv sync --frozen --no-dev --package control-plane   # per-service, self-contained
     FROM python:3.12-slim
     ARG SANDBOX_IMAGE_HASH
     LABEL proxy.sandbox-image-hash=$SANDBOX_IMAGE_HASH
     RUN useradd -m -u 1001 appuser   # HOME REQUIRED -- Claude Agent SDK writes to $HOME
     USER appuser
     ENV PORT=8080 HOME=/home/appuser
-    CMD ["sh","-c","n=0; until alembic upgrade head; do n=$((n+1)); [ $n -ge 30 ] && exit 1; sleep 5; done && exec python -m harness.server"]
+    CMD ["sh","-c","n=0; until alembic upgrade head; do n=$((n+1)); [ $n -ge 30 ] && exit 1; sleep 5; done && exec python -m control_plane.server"]
 """
 
 import re
@@ -92,7 +92,7 @@ def test_dock_001_multistage_uv_per_service_frozen_sync():
     )
 
     # The builder runs a per-service, self-contained, frozen, no-dev uv sync.
-    # source_quote: "RUN uv sync --frozen --no-dev --package harness"
+    # source_quote: "RUN uv sync --frozen --no-dev --package control-plane"
     sync = re.search(r"uv\s+sync\b[^\n]*", dock)
     assert sync, "builder must `RUN uv sync ...` (dependency install step absent)"
     sync_line = sync.group(0)
@@ -158,8 +158,8 @@ def test_dock_003_parallel_boot_migrate_advisory_lock_retry_then_exec():
         "migrate retry must sleep 5s between attempts (30x5s)"
     )
     # After the migration wins, all boots `exec` the server (no lingering shell).
-    assert re.search(r"exec\s+python\s+-m\s+harness\.server", dock), (
-        "after migrate, the CMD must `exec python -m harness.server` (retry-then-serve)"
+    assert re.search(r"exec\s+python\s+-m\s+control_plane\.server", dock), (
+        "after migrate, the CMD must `exec python -m control_plane.server` (retry-then-serve)"
     )
 
     # env.py serializes the race: the upgrade is wrapped in a Postgres advisory lock,

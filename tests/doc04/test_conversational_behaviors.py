@@ -4,7 +4,7 @@
 The five conversational features are realized as first-class **typed wake-behaviors**
 on the run loop — the SAME machinery as the other wake-behaviors (§3.4; D-015 curated
 tool subsets, D-023 no per-behavior branch), declared in
-``services/harness/src/harness/behaviors/conversational.py`` and registered by one
+``services/control-plane/src/control_plane/behaviors/conversational.py`` and registered by one
 ``register()`` line each:
 
   * ``catch-me-up`` — a ~20s spoken recap folded from the live notes object;
@@ -18,7 +18,7 @@ tool subsets, D-023 no per-behavior branch), declared in
     (Proxy's actual mounted toolbelt), never invented.
 
 Each test asserts a node clause against the *real* behaviors package
-(``harness.behaviors``), never a rebuilt fixture. These grow the sealed
+(``control_plane.behaviors``), never a rebuilt fixture. These grow the sealed
 ``behaviors-dir`` oracle rather than replacing it — the four original wake-behaviors
 stay green while the five conversational ones are added.
 """
@@ -37,11 +37,11 @@ from libs.agentkit import BehaviorRunner, ProviderQuery, with_proxy_guardrails
 from libs.contracts import AgentChunk
 from llm.routing import model_for
 
-from harness import behaviors as bdir
-from harness.behaviors import conversational as conv
+from control_plane import behaviors as bdir
+from control_plane.behaviors import conversational as conv
 
 _CONVERSATIONAL = ("catch-me-up", "where-are-we", "dry-run", "show-your-work", "capability-answer")
-_CONV_FILE = Path("services/harness/src/harness/behaviors/conversational.py")
+_CONV_FILE = Path("services/control-plane/src/control_plane/behaviors/conversational.py")
 
 # The delivery verbs a conversational behavior may use to speak + post its answer.
 _DELIVERY = {"speak", "send_chat"}

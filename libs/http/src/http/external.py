@@ -126,6 +126,6 @@ def e2b_sandbox_class() -> Any:
     # dependency (the template bake) and is deliberately absent from the offline
     # dev/test env — mypy cannot see its stub, so the import is scoped-ignored here
     # (the sole raw-client home; no product module outside libs/http imports e2b).
-    from e2b import AsyncSandbox  # type: ignore[import-not-found]
+    from e2b import AsyncSandbox
 
     return AsyncSandbox

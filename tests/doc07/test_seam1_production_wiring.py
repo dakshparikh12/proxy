@@ -28,8 +28,8 @@ import uuid
 
 import pytest
 import pytest_asyncio
-from harness.post_meeting.models import Tier
-from harness.post_meeting.wire import make_intake_hook
+from control_plane.post_meeting.models import Tier
+from control_plane.post_meeting.wire import make_intake_hook
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
@@ -150,8 +150,7 @@ async def _pass_through_external(op, *, service=None, **kwargs):
 #: Asks the REAL production builder one question, in a process of its own.
 _PROBE = """
 import json, os, sys
-sys.path.insert(0, os.getcwd())
-from harness import server
+from control_plane import server
 cfg = server._build_close_config(db=object())
 print(json.dumps({
     "built": cfg is not None,
@@ -189,6 +188,11 @@ async def test_production_close_config_actually_sets_the_intake_hook():
     )
     env["GCS_BUCKET"] = "test-bucket"
     env["PYTHONUTF8"] = "1"
+    # Inherit the PARENT's resolved import path. The control-plane member moved to
+    # services/control-plane/src when origin/main dissolved services/harness, so cwd alone
+    # no longer locates it — and hard-coding the new path here would just be another thing
+    # to forget at the next restructure.
+    env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
 
     proc = subprocess.run(
         [sys.executable, "-c", _PROBE],
@@ -208,7 +212,7 @@ async def test_production_close_config_actually_sets_the_intake_hook():
 @pytest.mark.negative
 async def test_a_missing_hook_is_logged_at_error_not_swallowed(caplog):
     """The silence that hid this for the whole build is now an ERROR line."""
-    from harness.scribe_runtime import CloseConfig, _run_post_meeting_intake
+    from control_plane.scribe_runtime import CloseConfig, _run_post_meeting_intake
 
     cfg = CloseConfig(bucket=object(), bucket_name="b", post_chat_link=None)
     assert cfg.post_meeting_intake is None, "the premise: an unwired config"
@@ -285,7 +289,7 @@ async def test_an_unknown_meeting_writes_nothing_and_says_why(db, caplog):
 @pytest.mark.negative
 async def test_a_failing_hook_still_cannot_break_the_close(caplog):
     """Doc 07 §2 holds regardless of what the now-wired hook does."""
-    from harness.scribe_runtime import CloseConfig, _run_post_meeting_intake
+    from control_plane.scribe_runtime import CloseConfig, _run_post_meeting_intake
 
     async def exploding(final_notes, *, meeting_id):
         raise RuntimeError("intake exploded")

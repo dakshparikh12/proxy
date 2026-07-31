@@ -1,6 +1,6 @@
 """Doc 08 · §2.5 — the three V0 screen content modes + §2.4 #12/#13 human activation.
 
-The node ``experience.screen-content-modes`` (``services/harness/src/control_plane/
+The node ``experience.screen-content-modes`` (``services/control-plane/src/control_plane/
 screen_modes.py``) realizes §2.5: the three V0 screen render modes, each a render of
 something that ALREADY EXISTS in the workroom envelope —
 
@@ -61,7 +61,7 @@ def _real_progress_events() -> list[ProgressEvent]:
 
 def _real_answer_envelope() -> Envelope:
     """A REAL grounded direct-answer ``Envelope`` carrying a ``file:line`` citation
-    receipt — the exact shape ``harness.orchestrator._direct_answer_envelope`` builds."""
+    receipt — the exact shape ``control_plane.orchestrator._direct_answer_envelope`` builds."""
     return Envelope(
         headline="max attempts is 5",
         detail="the retry cap lives in the config loader",

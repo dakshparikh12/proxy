@@ -93,7 +93,7 @@ def test_no_smart_turn_v3_in_core():
     """
     import subprocess
     result = subprocess.run(
-        ["grep", "-r", "SmartTurn", "/Users/daksh/Desktop/proxy/services/transport/src/transport/turn.py"],
+        ["grep", "-r", "SmartTurn", "/Users/daksh/Desktop/proxy/services/in-meeting/src/transport/turn.py"],
         capture_output=True, text=True
     )
     assert "SmartTurn" not in result.stdout, "SmartTurn v3 must be absent from turn core"

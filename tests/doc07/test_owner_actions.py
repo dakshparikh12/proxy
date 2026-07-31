@@ -5,14 +5,14 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-from harness.post_meeting.models import UNRESOLVED, Source, TaskRecord, TaskState, Tier
-from harness.post_meeting.owner_actions import (
+from control_plane.post_meeting.models import UNRESOLVED, Source, TaskRecord, TaskState, Tier
+from control_plane.post_meeting.owner_actions import (
     OwnerActionRefused,
     downgrade_to_ticket,
     edit_plan,
     reject,
 )
-from harness.post_meeting.plan import expire_stale_plans
+from control_plane.post_meeting.plan import expire_stale_plans
 
 from ._support import FakeTaskStore
 
@@ -151,7 +151,7 @@ async def test_edit_restarts_the_expiry_clock():
     res = await expire_stale_plans(
         rows, store=store, now=second + timedelta(hours=1),
         config=__import__(
-            "harness.post_meeting.config", fromlist=["PostMeetingConfig"]
+            "control_plane.post_meeting.config", fromlist=["PostMeetingConfig"]
         ).PostMeetingConfig(plan_expiry_hours=48),
     )
     assert res.expired == []
@@ -226,7 +226,7 @@ async def test_split_is_deferred_and_recorded_as_such():
     import pathlib
 
     src = pathlib.Path(
-        "services/harness/src/harness/post_meeting/owner_actions.py"
+        "services/control-plane/src/control_plane/post_meeting/owner_actions.py"
     ).read_text(encoding="utf-8")
     assert "split: DEFERRED" in src
     for reason in ("parent/child", "max_tasks_per_meeting", "1–1.5 days"):

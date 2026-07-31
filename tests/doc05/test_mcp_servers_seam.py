@@ -41,7 +41,7 @@ def test_build_sdk_options_mounts_mcp_servers_onto_claude_agent_options() -> Non
     """``build_sdk_options`` sets ``options.mcp_servers`` from ``query.mcp_servers`` — the hop
     that was missing. The isolation triad stays intact (strict_mcp_config=True)."""
     from agentkit import ProviderQuery
-    from harness.provider import build_sdk_options
+    from control_plane.provider import build_sdk_options
 
     code_server = {"type": "http", "url": "https://8081-sbx.e2b.app/mcp"}
     q = ProviderQuery(
@@ -63,7 +63,7 @@ def test_build_sdk_options_mounts_mcp_servers_onto_claude_agent_options() -> Non
 def test_build_sdk_options_no_mcp_servers_is_backward_compatible() -> None:
     """A query WITHOUT mcp_servers leaves the SDK default (no crash, no bogus mount)."""
     from agentkit import ProviderQuery
-    from harness.provider import build_sdk_options
+    from control_plane.provider import build_sdk_options
 
     q = ProviderQuery(model="claude-opus-4-8", allowed_tools=("speak",))
     options = build_sdk_options("prompt", q)

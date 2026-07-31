@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 from . import langs
 from .cloner import Cloner
 from .config import get_int
-from .coverage import CoverageRecord
+from .coverage import CoverageRecord, compute_capability_tiers, compute_coverage
 from .exclusions import ExclusionManager
 from .gitio import list_tracked_files, run_git
 from .graph import Graph
@@ -73,6 +73,9 @@ class Pipeline:
         self._cloner: Any = None
         self._loc_provider: Any = None
         self._lsp_lifecycle: Any = None
+        # The readiness listener the first build used — retained so a push can re-emit
+        # ready/not_ready through the SAME sink (§3.7 "re-run per push").
+        self._readiness_listener: Any = None
 
     # -- graph versioning ------------------------------------------------- #
     def graph_for(self, sha: str) -> Graph:
@@ -109,9 +112,27 @@ class Pipeline:
         result = builder.build(self.clone_path, is_excluded=self._is_excluded, built_at_sha=sha)
         graph = result.graph
         self._table_map = result.table_map
+        # Refresh the coverage record from the rebuilt walk so the readiness gate re-runs
+        # against the NEW graph on a push (§3.7 "All checks … re-run per push against the
+        # newly-rebuilt graph"), never a stale first-build coverage.
+        self.coverage_record = CoverageRecord(result.coverage_rows)
         if self._store is not None:
             self._store.write_graph(graph, drop_first=True)
         return graph
+
+    def rerun_readiness_gate(self, pinned_sha: str, readiness_listener: Any = None) -> None:
+        """Re-run the §3.7 readiness gate + graph smoke against the CURRENT (rebuilt) graph
+        and re-stamp ``readiness_record``. Called on first build and on every push so a repo
+        that regressed (a push broke parsing / emptied the graph) drops out of ``ready``, and
+        a repo that stayed healthy re-stamps ``ready`` tied to the NEW SHA — never a stale
+        readiness claim over a superseded build. Deterministic + never-throw."""
+        _run_readiness_gate(
+            self,
+            self.coverage_record,
+            self.clone_path or Path(),
+            pinned_sha,
+            readiness_listener=readiness_listener,
+        )
 
     def apply_push(self, new_sha: str, num_commits: int = 1, pull: bool = True) -> None:
         # ``pull=False`` when the caller (the webhook handler) already pulled the
@@ -126,6 +147,10 @@ class Pipeline:
             # answers 'resolved' for symbols the push added/moved — a stale warm
             # index would silently down-grade them to a grep lower-bound.
             self._rewarm_resolver()
+            # Re-run the §3.7 readiness gate + smoke against the NEWLY-rebuilt graph so a
+            # push that regressed drops out of ``ready`` and a healthy push re-stamps ready
+            # tied to the new SHA (never a stale readiness claim over a superseded build).
+            self.rerun_readiness_gate(new_sha, readiness_listener=self._readiness_listener)
         self.current_sha = new_sha
         self.graph_retention_index[new_sha] = GraphVersion(new_sha, self.graph)
         self._num_commits_last = num_commits
@@ -249,37 +274,18 @@ def run_full_pipeline(
     # Serena/solid-lsp pool (type-aware, cross-file exact) layers on top later.
     pipeline.lsp = _build_warm_resolver(clone_path)
 
-    indexed = coverage.count_by_status("indexed")
-    flagged = coverage.count_by_status("flagged")
-    # The §3.7 gate is a conjunction of THREE arms (spec/intent: "100% files
-    # classified AND 100% parse on exact-supported files (excluding generated/
-    # vendor) AND the graph smoke check"):
-    #   1. classification is complete (indexed + flagged == git ls-files), AND
-    #   2. every exact-supported file (.py / a tree-sitter grammar) actually
-    #      parsed — a ``parse-error`` flag on such a file is a hole in the graph
-    #      the tools query, so the repo is NOT joinable even though the file is
-    #      accounted for. A grammarless / generated / vendor flag
-    #      (``unsupported-language`` / ``excluded``) is a legitimate, expected
-    #      classification and does NOT withhold (AC-M6-008), AND
-    #   3. the graph smoke check passes (known symbols resolve to a real
-    #      file:line — never a silent join over a broken/empty graph).
-    # ``simulate_coverage_gap`` forces arm 1 false.
-    gate_ok = (
-        _coverage_gate_ok(clone_path, indexed, flagged)
-        and _exact_supported_parse_ok(coverage)
-        and not simulate_coverage_gap
-        and _graph_smoke_ok(pipeline.graph, indexed)
+    # Retain the listener so a push re-emits ready/not_ready through the SAME sink (§3.7).
+    pipeline._readiness_listener = readiness_listener
+    # Run the §3.7 readiness gate + §3.7.1 coverage read + capability tiers, stamping
+    # ``pipeline.readiness_record`` — the SAME path a push re-runs (``rerun_readiness_gate``).
+    _run_readiness_gate(
+        pipeline,
+        coverage,
+        clone_path,
+        pinned_sha,
+        readiness_listener=readiness_listener,
+        simulate_coverage_gap=simulate_coverage_gap,
     )
-    if gate_ok:
-        pipeline.readiness_record = ReadinessRecord(
-            indexed_at=now_indexed_at(),
-            pinned_sha=pinned_sha,
-            coverage_pct=(indexed / (indexed + flagged)) if (indexed + flagged) else 1.0,
-        )
-        _emit(readiness_listener, "ready")
-    else:
-        pipeline.readiness_record = ReadinessRecord(pinned_sha=pinned_sha)
-        _emit(readiness_listener, "not_ready")
 
     # a server bound to the pipeline so meeting/webhook lifecycles share state
     from .mcp_server import CodeIntelMCPServer, MCPServerFactory
@@ -309,6 +315,66 @@ def run_full_pipeline(
 def _emit(listener: Any, state: str) -> None:
     if listener is not None:
         listener.emit(state)
+
+
+def _run_readiness_gate(
+    pipeline: Pipeline,
+    coverage: CoverageRecord,
+    clone_path: Path,
+    pinned_sha: str,
+    readiness_listener: Any = None,
+    simulate_coverage_gap: bool = False,
+) -> None:
+    """The ONE §3.7 readiness gate — run on first build AND re-run per push against the
+    newly-rebuilt graph. Stamps ``pipeline.readiness_record`` (coverage_pct + gaps +
+    capability tiers, tied to ``pinned_sha``) and emits ``ready`` / ``not_ready``.
+
+    The gate is a conjunction of THREE arms (spec/intent: "100% files classified AND 100%
+    parse on exact-supported files (excluding generated/vendor) AND the graph smoke check"):
+      1. classification is complete (``indexed + flagged == git ls-files``), AND
+      2. every exact-supported file (.py / a tree-sitter grammar) actually parsed — a
+         ``parse-error`` flag on such a file is a hole in the graph the tools query, so the
+         repo is NOT joinable even though the file is accounted for. A grammarless / generated
+         / vendor flag is a legitimate, expected classification and does NOT withhold
+         (AC-M6-008), AND
+      3. the graph smoke check passes: known symbols resolve to a real file:line AND
+         get_dependents / who_writes return the expected callers/writers through the live path
+         (never a silent join over a broken/empty graph).
+    ``simulate_coverage_gap`` forces arm 1 false (first-build test hook only).
+    """
+    indexed = coverage.count_by_status("indexed")
+    flagged = coverage.count_by_status("flagged")
+    gate_ok = (
+        _coverage_gate_ok(clone_path, indexed, flagged)
+        and _exact_supported_parse_ok(coverage)
+        and not simulate_coverage_gap
+        and _graph_smoke_ok(pipeline.graph, indexed, clone_path)
+    )
+    # The deterministic §3.7.1 coverage read over the REAL rows + graph — coverage_pct AND the
+    # honest ``gaps`` list (flagged-by-reason + orphan-exported nodes), model-free (Law 4).
+    coverage_result = compute_coverage(coverage_rows=coverage.all_rows(), graph=pipeline.graph)
+    # Per-area who_writes capability tier, pre-computed at index time (§3.7) so the honesty
+    # labels are not guessed at query time.
+    from . import orm as _orm
+
+    tier1 = bool(clone_path.exists() and _orm.is_tier1(clone_path))
+    capability_tiers = compute_capability_tiers(tier1, pipeline.graph)
+    if gate_ok:
+        pipeline.readiness_record = ReadinessRecord(
+            indexed_at=now_indexed_at(),
+            pinned_sha=pinned_sha,
+            coverage_pct=coverage_result.coverage_pct,
+            gaps=coverage_result.gaps,
+            capability_tiers=capability_tiers,
+        )
+        _emit(readiness_listener, "ready")
+    else:
+        pipeline.readiness_record = ReadinessRecord(
+            pinned_sha=pinned_sha,
+            gaps=coverage_result.gaps,
+            capability_tiers=capability_tiers,
+        )
+        _emit(readiness_listener, "not_ready")
 
 
 def _resolve_head(clone_path: Path) -> str | None:
@@ -364,17 +430,30 @@ def _exact_supported_parse_ok(coverage: CoverageRecord) -> bool:
     return True
 
 
-def _graph_smoke_ok(graph: Graph, indexed: int) -> bool:
+def _graph_smoke_ok(graph: Graph, indexed: int, clone_path: Path | None = None) -> bool:
     """The §3.7 graph smoke check as a real gate (not a no-op, per the node risk).
 
-    A repo with indexed (parsed) files MUST yield a queryable graph: known symbols
-    resolve to a real ``file:line`` through the live resolution path. If ``indexed``
-    is zero the build parsed nothing (a fully-flagged repo — e.g. only grammarless
-    or generated files); that is a legitimately joinable classified repo with no
-    symbols to smoke, so the smoke arm is vacuously satisfied. Otherwise the graph
-    must be non-empty AND a deterministic sample of its nodes must each resolve to a
-    node carrying a truthy ``path`` and a positive ``line`` through ``resolve_symbol``
-    (the same live path the tools query). Deterministic and never-throw: a broken
+    A repo with indexed (parsed) files MUST yield a queryable graph, exercised through
+    the SAME live query methods the mounted tools call — not merely ``resolve_symbol``:
+
+    1. **resolve_symbol** — a deterministic sample of nodes each resolve to a node
+       carrying a truthy ``path`` and a positive ``line`` (the id→location seam).
+    2. **get_dependents** — for the sampled nodes that HAVE a reverse-dependent in the
+       graph, the live ``server.get_dependents`` returns those callers with real
+       ``file:line`` citations (never an empty or malformed result for a node with a
+       known caller). §3.7: "get_dependents … return the expected callers … for a
+       sample of known symbols".
+    3. **who_writes** — for a sampled table node that HAS a writer edge, the live
+       ``server.who_writes`` returns those writers with real ``file:line`` citations.
+       §3.7: "… who_writes return the expected … writers for a sample of known …
+       tables".
+
+    If ``indexed`` is zero the build parsed nothing (a fully-flagged repo — e.g. only
+    grammarless or generated files); that is a legitimately joinable classified repo
+    with no symbols to smoke, so the smoke arm is vacuously satisfied. A sample element
+    that has no reverse-dependent / no writer is legitimately empty (a leaf symbol / an
+    unwritten table) and does NOT fail the smoke — only a node with a KNOWN edge that
+    the live query fails to surface fails it. Deterministic and never-throw: a broken
     graph fails closed to ``not_ready`` (Law 1), never crashes the pipeline.
     """
     if indexed <= 0:
@@ -393,6 +472,72 @@ def _graph_smoke_ok(graph: Graph, indexed: int) -> bool:
         if not resolved:
             return False
         if not all(getattr(r, "path", "") and getattr(r, "line", 0) for r in resolved):
+            return False
+
+    # Arm 2/3: exercise get_dependents / who_writes through the LIVE server path (the
+    # exact methods the mounted SDK tools wrap), not just resolve_symbol. Build a
+    # read-only server bound to THIS graph + clone (no pipeline mutation).
+    from .mcp_server import CodeIntelMCPServer
+
+    try:
+        server = CodeIntelMCPServer(graph=graph, clone_path=clone_path)
+    except Exception:  # noqa: BLE001 - a server that will not construct is a failed smoke
+        return False
+
+    if not _smoke_get_dependents_ok(graph, server, sample):
+        return False
+    if not _smoke_who_writes_ok(graph, server):
+        return False
+    return True
+
+
+def _smoke_get_dependents_ok(graph: Graph, server: Any, sample: list[Any]) -> bool:
+    """A sampled node that HAS a reverse-dependent must surface those callers through
+    the live ``get_dependents`` with a real ``file:line`` (Law 1). A leaf (no reverse
+    edge) is legitimately empty and passes."""
+    for node in sample:
+        try:
+            expected = set(graph.reverse_dependents(node.id))
+        except Exception:  # noqa: BLE001
+            return False
+        if not expected:
+            continue  # a leaf symbol legitimately has no dependents — not a failure
+        try:
+            res = server.get_dependents(node.id)
+        except Exception:  # noqa: BLE001 - a raising live query is a failed smoke
+            return False
+        got = {r.id for r in getattr(res, "results", [])}
+        # every returned citation must be grounded (real file + positive line)
+        if not all(getattr(r, "file", "") and getattr(r, "line", 0) for r in res.results):
+            return False
+        # the live query must surface at least one of the graph's known dependents
+        # (never an empty answer for a node the graph proves has a caller).
+        if not (got & expected):
+            return False
+    return True
+
+
+def _smoke_who_writes_ok(graph: Graph, server: Any) -> bool:
+    """A table node that HAS a writer edge must surface those writers through the live
+    ``who_writes`` with a real ``file:line``. A repo with no ORM table nodes has no
+    tables to smoke (vacuously satisfied)."""
+    table_nodes = [n for n in graph.nodes if getattr(n, "kind", "") == "table"]
+    if not table_nodes:
+        return True
+    write_kinds = {"writes", "read_write"}
+    for node in sorted(table_nodes, key=lambda n: n.id)[:_SMOKE_SAMPLE_SIZE]:
+        has_writer = any(e.target == node.id and e.kind in write_kinds for e in graph.edges)
+        if not has_writer:
+            continue  # a table nobody writes is legitimately empty — not a failure
+        table_name = node.id.rsplit("::", 1)[-1]
+        try:
+            res = server.who_writes(table_name)
+        except Exception:  # noqa: BLE001 - a raising live query is a failed smoke
+            return False
+        writers = getattr(res, "writers", [])
+        if not writers:
+            return False
+        if not all(getattr(w, "file", "") and getattr(w, "line", 0) for w in writers):
             return False
     return True
 

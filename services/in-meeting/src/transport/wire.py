@@ -1,0 +1,74 @@
+"""Confirmed Recall/AssemblyAI wire shapes + the fail-loud transcript parser
+(AC-HEAR-12, CANONICAL §11.10).
+
+The wire schema is pinned/confirmed against live vendor docs at build time. A message
+matching the confirmed schema parses to a complete ``transcript(words, speaker, t)``
+record; a message that **drifts** from it is rejected **loudly** (raises) rather than
+parsed on a silent assumption — zero silent wire assumptions. Provenance of the pin is
+recorded alongside the schema so the confirmation is evidence, not folklore.
+"""
+from __future__ import annotations
+
+from typing import Any
+
+from .signals import Transcript
+
+# Pinned against Recall real-time transcript passthrough + AssemblyAI Universal-Streaming
+# turn payloads, confirmed at build (see §3.2 / §3.9-3, CANONICAL §11.10). The parser
+# below is the single point that trusts this shape; any drift raises.
+WIRE_SCHEMA_PROVENANCE = "recall.real_time_transcript + assemblyai.universal_streaming @ build-confirm"
+
+_REQUIRED_TRANSCRIPT_FIELDS = ("words", "speaker", "timestamp")
+
+
+class WireDriftError(RuntimeError):
+    """A passthrough message did not match the confirmed wire shape — never parsed silently."""
+
+
+def parse_transcript(message: dict[str, Any]) -> Transcript:
+    """Parse one confirmed-schema passthrough message into a ``Transcript``.
+
+    Raises :class:`WireDriftError` on any drift (missing/renamed/mistyped field), so a
+    vendor wire change surfaces loudly instead of yielding a wrong transcript (Law 2).
+    """
+    missing = [f for f in _REQUIRED_TRANSCRIPT_FIELDS if f not in message]
+    if missing:
+        raise WireDriftError(
+            f"transcript wire drift: missing {missing} (confirmed schema {_REQUIRED_TRANSCRIPT_FIELDS}); "
+            f"provenance {WIRE_SCHEMA_PROVENANCE}"
+        )
+
+    words = message["words"]
+    speaker = message["speaker"]
+    timestamp = message["timestamp"]
+    if not isinstance(words, str) or not isinstance(speaker, str) or not isinstance(timestamp, (int, float)):
+        raise WireDriftError(
+            f"transcript wire drift: field types diverged from the confirmed schema; "
+            f"provenance {WIRE_SCHEMA_PROVENANCE}"
+        )
+
+    # Every emitted record must carry non-empty words AND a speaker label (AC-HEAR-03:
+    # records_missing_speaker_allowed=0, silent_shape_drift_allowed=0). An empty/blank
+    # words or speaker is an incomplete-shape drift (F-TRANSCRIPT-SHAPE-INCOMPLETE) —
+    # raise loudly rather than fan a speakerless/wordless record downstream (Law 2).
+    if not words.strip() or not speaker.strip():
+        raise WireDriftError(
+            f"transcript wire drift: empty words/speaker (words={words!r}, speaker={speaker!r}); "
+            f"a complete record needs non-empty words + a speaker label; "
+            f"provenance {WIRE_SCHEMA_PROVENANCE}"
+        )
+
+    # ONE end_of_turn source of truth (§3.6, AC-TURN-02/06): a turn is FINAL only on a
+    # present-and-truthy ``end_of_turn`` — exactly the predicate ``turn.boundary_opened`` /
+    # ``boundary.py`` enforce. An ABSENT ``end_of_turn`` is an interim hypothesis (a
+    # mid-thought breath), NOT a completed turn, so it defaults to NOT-final — matching the
+    # boundary path rather than treating a missing field as a turn end (the C-ENDOFTURN
+    # divergence: the wire parser must not call a breath a turn end when the boundary path
+    # would not open voice on it). A final record cuts a notes window; a partial does not.
+    is_final = bool(message.get("end_of_turn", False))
+    return Transcript(words=words, speaker=speaker, t=float(timestamp), is_final=is_final)
+
+
+def has_end_of_turn(message: dict[str, Any]) -> bool:
+    """Whether the passthrough message carries AAI's ``end_of_turn`` boundary field."""
+    return "end_of_turn" in message

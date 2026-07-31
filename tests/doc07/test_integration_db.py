@@ -26,9 +26,9 @@ from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
-from harness.post_meeting.approval import approve
-from harness.post_meeting.models import Source, TaskRecord, TaskState, Tier
-from harness.post_meeting.store import ClarifyItemStore, PostMeetingTaskStore
+from control_plane.post_meeting.approval import approve
+from control_plane.post_meeting.models import Source, TaskRecord, TaskState, Tier
+from control_plane.post_meeting.store import ClarifyItemStore, PostMeetingTaskStore
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
@@ -362,8 +362,8 @@ async def test_ac_pme_08_expiry_runs_end_to_end_on_real_rows(db, seed):
     """expire_stale_plans over rows read from Postgres — the path that never worked."""
     from datetime import timedelta
 
-    from harness.post_meeting.config import PostMeetingConfig
-    from harness.post_meeting.plan import expire_stale_plans
+    from control_plane.post_meeting.config import PostMeetingConfig
+    from control_plane.post_meeting.plan import expire_stale_plans
 
     tenant_id, meeting_id = seed
     store = PostMeetingTaskStore(db)

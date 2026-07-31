@@ -370,7 +370,7 @@ def test_sub_008_fencing_rowcount_zero_loses_ownership_and_self_terminates():
 @pytest.mark.security_adversarial
 def test_sub_009_reclaimed_zombie_emits_nothing():
     """AC-SUB-009: a reclaimed zombie (is_owner False) refuses speak/send_chat/show_screen/apply/dispatch."""
-    from services.harness import build_emitter  # spec-derived emit surface
+    from services.control_plane import build_emitter  # spec-derived emit surface
 
     emitted = []
 
@@ -747,7 +747,7 @@ def test_sub_020_workroom_task_restarts_unless_deliverable_exists():
 def test_sub_021_meeting_harness_crash_restart_not_resume():
     """AC-SUB-021: a meeting-harness crash is restart-not-resume (re-join Recall, replay from progress)."""
     import asyncio
-    from services.harness import recover_meeting_harness
+    from services.control_plane import recover_meeting_harness
     from libs.db import Database
 
     with S.pg_conn() as conn:
@@ -812,7 +812,7 @@ def test_sub_022_webhook_events_dedupe_by_delivery_guid():
 @pytest.mark.integration
 def test_sub_023_webhook_returns_200_after_insert_then_drains():
     """AC-SUB-023: webhook ingest returns 200 immediately after INSERT, then drains pending on boot + periodically."""
-    from services.harness import ingest_webhook, drain_pending_webhooks
+    from services.control_plane import ingest_webhook, drain_pending_webhooks
 
     order = []
 
@@ -902,7 +902,7 @@ def test_sub_025_meeting_cost_canonical_columns_and_meetings_fk():
 def test_sub_026_recycled_orchestrator_reloads_spent_cost():
     """AC-SUB-026: a recycled orchestrator reloads spent cost from meeting_cost, never resets to 0."""
     import asyncio
-    from services.harness import check_meeting_budget
+    from services.control_plane import check_meeting_budget
     from libs.db import Database
 
     with S.pg_conn() as conn:
@@ -1075,7 +1075,7 @@ def test_sub_030_identity_schema_five_tables_with_tenant_fks():
 def test_sub_031_signin_creates_user_and_signed_session_resolves():
     """AC-SUB-031: sign-in creates/loads a users row + signed session cookie; resolve_session→{user_id, tenant_id}."""
     import asyncio
-    from services.harness import complete_signin, resolve_session
+    from services.control_plane import complete_signin, resolve_session
     from libs.db import Database
 
     with S.pg_conn() as conn:
@@ -1122,7 +1122,7 @@ def test_sub_031_signin_creates_user_and_signed_session_resolves():
 def test_sub_032_invite_creates_meeting_and_bot_id_round_trips():
     """AC-SUB-032: invite creates a meetings row bound to (tenant, repo, pinned_sha=HEAD) and binds Recall bot_id."""
     import asyncio
-    from services.harness import invite_proxy, resolve_bot_id
+    from control_plane.meetings import invite_proxy, resolve_bot_id
     from libs.db import Database
 
     with S.pg_conn() as conn:
@@ -1175,7 +1175,7 @@ def test_sub_033_model_spend_written_by_scribe_and_seam_meter():
     """AC-SUB-033: model spend writes meeting_cost.model_usd from both the Scribe and the seam meter (cache split)."""
     import asyncio
     from services.scribe import record_scribe_cost
-    from services.harness import record_seam_cost
+    from services.control_plane import record_seam_cost
     from libs.db import Database
 
     with S.pg_conn() as conn:

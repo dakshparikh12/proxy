@@ -4,8 +4,8 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from harness.post_meeting.clarify import assess, route_question, run_clarify
-from harness.post_meeting.models import UNRESOLVED, Source, TaskRecord, TaskState
+from control_plane.post_meeting.clarify import assess, route_question, run_clarify
+from control_plane.post_meeting.models import UNRESOLVED, Source, TaskRecord, TaskState
 
 from ._support import FakeClarifyStore, FakeTaskStore
 

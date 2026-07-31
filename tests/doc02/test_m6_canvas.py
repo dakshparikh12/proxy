@@ -243,7 +243,7 @@ def test_tile_is_outbound_only_no_inbound_path():
     """
     import subprocess
     result = subprocess.run(
-        ["grep", "-r", "TILE_ADDRESS", "/Users/daksh/Desktop/proxy/services/transport/"],
+        ["grep", "-r", "TILE_ADDRESS", "/Users/daksh/Desktop/proxy/services/in-meeting/src/transport/"],
         capture_output=True, text=True
     )
     assert not result.stdout.strip(), f"TILE_ADDRESS found: {result.stdout}"

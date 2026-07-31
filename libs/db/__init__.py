@@ -5,6 +5,9 @@ from .src.db import (
     Database as Database,
 )
 from .src.db import (
+    assert_reaper_ratio as assert_reaper_ratio,
+)
+from .src.db import (
     heartbeat_s as heartbeat_s,
 )
 from .src.db import (
@@ -38,6 +41,7 @@ from .src.db import (
 
 __all__ = [
     "Database",
+    "assert_reaper_ratio",
     "heartbeat_s",
     "load_defaults",
     "repos",

@@ -1,6 +1,6 @@
 """Doc 08 · §4.5 — the pure-rendering ChannelProjector + in-process carry_turn.
 
-The projector (``services/transport/projector.py``) maps a **delta-stream**
+The projector (``services/in-meeting/src/transport/projector.py``) maps a **delta-stream**
 ``AgentChunk`` — the OUTPUT of ``stream_deltas`` applied exactly once in
 ``BehaviorRunner.run`` (CANONICAL §11.3) — to **registered** ``ProxyMessage``
 render frames. Per AMENDMENT C2 it is narrowed to two event types:
@@ -354,7 +354,7 @@ async def test_carry_turn_does_not_rewrap_deltas() -> None:
 async def test_carrier_drives_projector_over_delta_stream() -> None:
     """The REAL carrier (``carrier.drive_projector``) drives the projector end-to-end.
 
-    Proves the integration point: ``services/transport/carrier.py`` drives the
+    Proves the integration point: ``services/in-meeting/src/transport/carrier.py`` drives the
     projector over the delta stream — ResponseStart → frames → ResponseEnd — without
     re-wrapping ``stream_deltas``.
     """

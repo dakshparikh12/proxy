@@ -3,18 +3,6 @@ from __future__ import annotations
 
 from . import channel as channel  # noqa: F401 — import fires §4.2/§4.5 model registration
 from .bundle import Bundle as Bundle
-from .capabilities import (
-    CAPABILITIES as CAPABILITIES,
-)
-from .capabilities import (
-    Action as Action,
-)
-from .capabilities import (
-    Capability as Capability,
-)
-from .capabilities import (
-    OutputKind as OutputKind,
-)
 from .channel import (
     ActionSurface as ActionSurface,
 )
@@ -141,12 +129,8 @@ from .registry import (
 
 __all__ = [
     "AGENT_CHUNK_METADATA_KEYS",
-    "CAPABILITIES",
-    "Action",
     "AgentChunk",
     "Bundle",
-    "Capability",
-    "OutputKind",
     "ActionSurface",
     "CanvasPatch",
     "ChannelAction",

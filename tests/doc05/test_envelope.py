@@ -13,7 +13,7 @@ critic/gate-failed build → failed; ``verified``/``draft`` are NEVER status val
 the proof state rides the optional ``verification`` field).
 
 This is the value the ORCHESTRATOR receives back from a dispatch (the doc04 lesson):
-Doc 04's ``harness.dispatch`` creates a REAL ``contracts.Bundle`` + a ``workroom:<id>``
+Doc 04's ``control_plane.dispatch`` creates a REAL ``contracts.Bundle`` + a ``workroom:<id>``
 operation_runs row and dispatches it; the ``SessionDriver`` the dispatch invokes
 consumes that REAL Bundle and returns a REAL ``contracts.Envelope`` assembled HERE.
 
@@ -39,7 +39,7 @@ from typing import Any
 import pytest
 
 # Import the contract types from the top-level ``contracts`` module (matches the product:
-# harness.dispatch + session return objects from ``contracts``; ``libs.contracts`` is a
+# control_plane.dispatch + session return objects from ``contracts``; ``libs.contracts`` is a
 # DISTINCT module identity under the test src-wiring → isinstance would fail).
 from contracts import AgentChunk, Bundle, Envelope, ProgressEvent
 

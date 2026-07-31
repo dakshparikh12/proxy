@@ -54,8 +54,8 @@ def _import_settings_module():
     that absence-of-product surfaces as a red failure (not a skip).
     """
     candidates = (
-        "services.harness.settings",
-        "services.harness.config",
+        "services.control_plane.settings",
+        "services.control_plane.config",
         "libs.ops.settings",
         "libs.config.settings",
         "libs.config",
@@ -92,11 +92,11 @@ def _sys_modules():
 def _find_lifespan_trace_recorder():
     """Best-effort locate a product-provided instrumented lifespan.
 
-    Contract pinned by this suite: ``services.harness.server`` exposes an
+    Contract pinned by this suite: ``services.control_plane.server`` exposes an
     async ctx-manager ``lifespan(app)`` and a way to record the ordered boot
     steps. Preferred hooks (any one suffices), in priority order:
 
-      * ``services.harness.server.boot_trace()`` -> list[str] populated after
+      * ``services.control_plane.server.boot_trace()`` -> list[str] populated after
         the lifespan startup phase runs, OR
       * ``lifespan`` accepting/using an injectable recorder list.
 
@@ -116,7 +116,7 @@ def test_boot_001_missing_required_key_crashes_at_import(monkeypatch):
     from importlib.util import find_spec
 
     settings_home = None
-    for name in ("services.harness.settings", "services.harness.config",
+    for name in ("services.control_plane.settings", "services.control_plane.config",
                  "libs.ops.settings", "libs.config.settings", "libs.config"):
         try:
             if find_spec(name) is not None:
@@ -182,7 +182,7 @@ def test_boot_001_missing_required_key_crashes_at_import(monkeypatch):
     src = ""
     for name in (settings_home,):
         parts = name.split(".")
-        # services.harness.settings -> services/harness/src/harness/settings.py etc.
+        # services.control_plane.settings -> services/harness/src/harness/settings.py etc.
         src += (S.read_all_text("*.py", root_parts=("services",)) or "")
         src += (S.read_all_text("*.py", root_parts=("libs",)) or "")
         break
@@ -232,7 +232,7 @@ def test_boot_002_lifespan_startup_exact_order():
 @pytest.mark.integration
 def test_boot_003_handler_awaits_provisioner_ready_before_use():
     """AC-BOOT-003: a request handler awaits provisioner_ready before touching the bot/sandbox (join-before-wired race defused)."""
-    from services.harness import server  # noqa: F401  (in-body import; red before product)
+    from services.control_plane import server  # noqa: F401  (in-body import; red before product)
 
     # The provisioner_ready gate must be a real async-readiness primitive the
     # handlers block on -- an asyncio.Event / awaitable stored at startup.
@@ -288,7 +288,7 @@ def test_boot_004_reaper_interrupts_orphans_before_routers_mount():
     # The reaper must actually transition orphaned running/in_meeting rows to
     # 'interrupted'. Drive the product reaper against seeded orphan rows and
     # assert the state transition (model-stateful, over a local test Postgres).
-    from services.harness import server  # noqa: F401  (red before product)
+    from services.control_plane import server  # noqa: F401  (red before product)
 
     reaper = _resolve_reaper_callable(server)
     orphan_states = ("running", "in_meeting")
@@ -324,7 +324,7 @@ def test_boot_004_reaper_interrupts_orphans_before_routers_mount():
 @pytest.mark.fault_injection
 def test_boot_005_epipe_swallowed_recovered_unknown_crashes():
     """AC-BOOT-005: BrokenPipeError from a crashed SDK subprocess is swallowed (retry recovers); a genuinely-unknown exception crashes after a flush delay."""
-    from services.harness import server  # noqa: F401  (red before product)
+    from services.control_plane import server  # noqa: F401  (red before product)
 
     handler = _resolve_asyncio_exception_handler(server)
 
@@ -359,7 +359,7 @@ def test_boot_005_epipe_swallowed_recovered_unknown_crashes():
 @pytest.mark.integration
 def test_boot_006_graceful_shutdown_gathers_in_parallel_with_backstop():
     """AC-BOOT-006: graceful shutdown runs flush_tracing/db.close/bot.leave_all/server.shutdown concurrently via asyncio.gather with a hard-exit backstop timer."""
-    from services.harness import server  # noqa: F401  (red before product)
+    from services.control_plane import server  # noqa: F401  (red before product)
 
     shutdown = _resolve_shutdown_callable(server)
 
@@ -406,7 +406,7 @@ def test_boot_006_graceful_shutdown_gathers_in_parallel_with_backstop():
     assert len(exited) == 4, f"trace spans lost: not all shutdown tasks completed cleanly: {events}"
 
     # A hard-exit backstop timer must exist in the shutdown source (bounds the grace window).
-    shutdown_src = S.read_all_text("*.py", root_parts=("services", "harness")) or ""
+    shutdown_src = S.read_all_text("*.py", root_parts=("services", "control-plane")) or ""
     assert shutdown_src, "no services/harness source found (product not built)"
     has_backstop = _has_shutdown_backstop(shutdown_src)
     assert has_backstop, (
@@ -484,13 +484,13 @@ def test_boot_007_three_claude_auth_modes_supported():
 def _run_lifespan_startup_trace() -> list[str]:
     """Drive the product lifespan startup and return the ordered step trace.
 
-    Pins a natural interface: ``services.harness.server`` provides one of --
+    Pins a natural interface: ``services.control_plane.server`` provides one of --
       * ``boot_trace()`` / ``BOOT_TRACE`` -> a list populated during startup, or
       * ``instrumented_lifespan()`` -> (async ctx-manager, trace list), or
       * ``lifespan(app, *, trace=<list>)`` accepting a recorder list.
     Whichever exists, we run the startup phase and return the recorded tags.
     """
-    from services.harness import server  # in-body import; red before product
+    from services.control_plane import server  # in-body import; red before product
 
     # Preference 1: an explicit instrumented-lifespan factory returning (cm, trace).
     factory = getattr(server, "instrumented_lifespan", None)
@@ -501,7 +501,7 @@ def _run_lifespan_startup_trace() -> list[str]:
     trace = _module_recorder(server)
     lifespan = getattr(server, "lifespan", None)
     assert callable(lifespan), (
-        "services.harness.server must expose a FastAPI `lifespan` (async ctx-manager) "
+        "services.control_plane.server must expose a FastAPI `lifespan` (async ctx-manager) "
         "for the boot-ordering oracle"
     )
 
@@ -685,7 +685,7 @@ def _resolve_reaper_callable(server):
         fn = getattr(server, name, None)
         if callable(fn):
             return fn
-    pytest.fail("services.harness.server must expose a boot-time stale-row reaper callable")
+    pytest.fail("services.control_plane.server must expose a boot-time stale-row reaper callable")
 
 
 def _conn_dsn(conn) -> str:
@@ -766,7 +766,7 @@ def _resolve_asyncio_exception_handler(server):
         fn = getattr(server, name, None)
         if callable(fn):
             return fn
-    pytest.fail("services.harness.server must expose the asyncio exception handler (EPIPE tolerance)")
+    pytest.fail("services.control_plane.server must expose the asyncio exception handler (EPIPE tolerance)")
 
 
 def _run_exception_handler(handler, exc) -> bool:
@@ -859,7 +859,7 @@ def _resolve_shutdown_callable(server):
         fn = getattr(server, name, None)
         if callable(fn):
             return fn
-    pytest.fail("services.harness.server must expose a graceful-shutdown callable")
+    pytest.fail("services.control_plane.server must expose a graceful-shutdown callable")
 
 
 def _make_shutdown_deps(server, task_map):

@@ -329,6 +329,11 @@ class CodeIntelMCPServer:
         clone = self.clone_path
         if not clone or not clone.exists():
             return None
+        # Never reveal ownership of an excluded/secret path (§3.3 — an excluded path never
+        # appears in ANY tool result). Every sibling (get_dependents/who_writes/shares_table/
+        # find_references) applies this same ``_excluded`` filter; owner() was the one gap.
+        if self._excluded(path):
+            return None
         return orm.owner(clone, path)
 
     # -- read / navigation ------------------------------------------------ #

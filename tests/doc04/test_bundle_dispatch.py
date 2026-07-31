@@ -21,7 +21,7 @@ Invariants under test:
 
 Product imports live INSIDE the test bodies (or at module top for the pure
 contract path), so this module COLLECTS clean and FAILS red before
-``services/harness/src/harness/dispatch.py`` exists. The operation_runs bodies
+``services/control-plane/src/control_plane/dispatch.py`` exists. The operation_runs bodies
 open the real local Postgres and SKIP cleanly when none is reachable.
 """
 from __future__ import annotations
@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 import pytest
 
 # Import the contract types from the SAME top-level ``contracts`` module the
-# harness product code returns objects from (harness.dispatch / harness.orchestrator
+# harness product code returns objects from (control_plane.dispatch / control_plane.orchestrator
 # use ``from contracts import ...``). ``libs.contracts`` resolves to a DISTINCT
 # module object under the test's src-wiring, so importing the types from there
 # would make ``isinstance`` fail across the two identities. Match the product.
@@ -76,7 +76,7 @@ def _meeting_id() -> uuid.UUID:
 def test_assemble_bundle_carries_notes_ref_meeting_id_not_the_notes_object() -> None:
     """AC (§1.3/§11.5): the Bundle carries notes_ref = the meeting_id UUID, a
     transcript_tail STR (D-026), and a task_id — never an embedded notes object."""
-    from harness.dispatch import assemble_bundle
+    from control_plane.dispatch import assemble_bundle
 
     meeting_id = _meeting_id()
     task_id = uuid.uuid4()
@@ -103,7 +103,7 @@ def test_assemble_bundle_carries_notes_ref_meeting_id_not_the_notes_object() -> 
 def test_bundle_never_embeds_the_growing_notes_object() -> None:
     """NEGATIVE (§1.3): assemble_bundle exposes no notes-object field — only a
     ref. A notes object handed in must not be re-serialized into the bundle."""
-    from harness.dispatch import assemble_bundle
+    from control_plane.dispatch import assemble_bundle
 
     sig = inspect.signature(assemble_bundle)
     # There is no way to pass an embedded notes object; the handle is the ref.
@@ -125,7 +125,7 @@ def test_dispatch_workroom_persists_operation_runs_row_with_bundle_in_progress()
     import asyncio
     import json
 
-    from harness.dispatch import assemble_bundle, dispatch_workroom
+    from control_plane.dispatch import assemble_bundle, dispatch_workroom
 
     async def _run():
         db = await _open_db()
@@ -191,7 +191,7 @@ def test_dispatch_returns_envelope_handle_referencing_the_task() -> None:
     _require_db()
     import asyncio
 
-    from harness.dispatch import assemble_bundle, dispatch_workroom
+    from control_plane.dispatch import assemble_bundle, dispatch_workroom
 
     async def _run():
         db = await _open_db()
@@ -235,7 +235,7 @@ def test_estimate_gate_over_budget_asks_approval_and_creates_no_row() -> None:
 
     from libs.ops.cost import MeetingCost
 
-    from harness.dispatch import assemble_bundle, dispatch_workroom
+    from control_plane.dispatch import assemble_bundle, dispatch_workroom
 
     async def _run():
         db = await _open_db()
@@ -284,7 +284,7 @@ def test_estimate_gate_within_budget_dispatches_and_persists_row() -> None:
 
     from libs.ops.cost import MeetingCost
 
-    from harness.dispatch import assemble_bundle, dispatch_workroom
+    from control_plane.dispatch import assemble_bundle, dispatch_workroom
 
     async def _run():
         db = await _open_db()
@@ -331,7 +331,7 @@ def test_dispatch_never_polls_for_completion() -> None:
     """INVARIANT (§3.2): the runtime delivers the done-moment via a callback —
     nothing polls. The dispatch module names no poll loop (no sleep-poll,
     no while-status)."""
-    import harness.dispatch as mod
+    import control_plane.dispatch as mod
 
     src = inspect.getsource(mod)
     lowered = src.lower()
@@ -344,7 +344,7 @@ def test_dispatch_never_polls_for_completion() -> None:
 def test_dispatch_handle_exposes_a_completion_callback_seam() -> None:
     """The in-flight handle exposes a completion seam (on_complete / callback) so
     the run loop re-wakes Proxy on the Envelope — a push, not a poll."""
-    from harness.dispatch import WorkroomHandle
+    from control_plane.dispatch import WorkroomHandle
 
     names = set(dir(WorkroomHandle))
     assert names & {"on_complete", "complete", "set_result", "as_envelope"}, (

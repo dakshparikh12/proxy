@@ -125,6 +125,15 @@ class Database:
 
         Idempotent — a second run over the same state is a no-op. Fresh rows
         (heartbeat within STALE_AFTER_S) are never touched.
+
+        INVARIANT (D-033 / Doc00 §5.2, cross-instance safety): a BOOTING instance
+        NEVER reaps a row whose heartbeat is fresh. The sweep is heartbeat-gated —
+        the ``last_heartbeat_at < now() - STALE_AFTER_S`` predicate below is the ONLY
+        rows it touches — precisely so a Cloud Run instance coming up in parallel
+        cannot interrupt a live sibling's fresh claim (an unconditional
+        ``reap_orphans`` would double-free a live meeting). ``config.assert_reaper_ratio``
+        guards the STALE_AFTER_S/HEARTBEAT_S ratio (≥3×) so a mis-config can never
+        make "fresh" narrow enough to reap a live owner after one slow beat.
         """
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(

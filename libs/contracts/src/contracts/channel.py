@@ -134,10 +134,9 @@ class TileState(ProxyMessage):
     The ``state`` set is EXACTLY the eight §2.2 tile states — the full presence range the
     tile can be in — and no ninth/ad-hoc state exists (the renderer is handed only this
     closed set, so it can never draw a state it decided on its own, §3 build rule). Each
-    state is entered ONLY by its named driving system event (``transport.tile_state``'s
-    ``TileStateMachine`` maps event→state); a state that cannot name its driving event
-    does not exist. The two states that carry a caption (``listening-to``, ``working``)
-    still carry their substance in chat/voice too — the accessibility law (§2.2).
+    state is entered ONLY by its named driving system event; a state that cannot name its
+    driving event does not exist. The two states that carry a caption (``listening-to``,
+    ``working``) still carry their substance in chat/voice too — the accessibility law (§2.2).
     """
 
     type: Literal["tile.state"] = "tile.state"

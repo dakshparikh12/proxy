@@ -8,9 +8,9 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from harness.post_meeting.approval import approve
-from harness.post_meeting.models import Source, TaskRecord, TaskState, Tier
-from harness.post_meeting.outcome import record_accept, record_changes_requested
+from control_plane.post_meeting.approval import approve
+from control_plane.post_meeting.models import Source, TaskRecord, TaskState, Tier
+from control_plane.post_meeting.outcome import record_accept, record_changes_requested
 
 from ._support import FakeTaskStore
 
@@ -124,7 +124,7 @@ async def test_seam3_never_writes_staged_drafts():
     import pathlib
 
     src = pathlib.Path(
-        "services/harness/src/harness/post_meeting/outcome.py"
+        "services/control-plane/src/control_plane/post_meeting/outcome.py"
     ).read_text(encoding="utf-8").lower()
     assert "insert into staged_drafts" not in src
     assert "update staged_drafts" not in src

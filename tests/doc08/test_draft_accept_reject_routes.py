@@ -47,7 +47,7 @@ _REJECT = "POST /m/{meeting_id}/drafts/{draft_id}/reject"
 # log line = the durable audit trail in prod / Cloud Logging). The live-path audit
 # test asserts a record lands HERE on a real green POST — the property the DoD names
 # as a hard requirement ("a world-touching action is recorded").
-_AUDIT_LOGGER = "services.harness.control_plane.audit"
+_AUDIT_LOGGER = "services.control_plane.audit"
 
 
 def _app():

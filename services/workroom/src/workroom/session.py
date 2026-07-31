@@ -2,7 +2,7 @@
 
 This is the **session/bundle wiring** that turns a ``contracts.Bundle`` into a running
 ``query()`` — the site the ``harness`` bundle-dispatch invokes (the live-assembly seam,
-the doc04 lesson). Doc 04's dispatch (``harness.dispatch``) creates a ``contracts.Bundle``
+the doc04 lesson). Doc 04's dispatch (``control_plane.dispatch``) creates a ``contracts.Bundle``
 + claims a ``workroom:<id>`` ``operation_runs`` row (Bundle in ``progress``) and hands a
 ``WorkroomHandle``; **this driver is what that dispatch runs** — it consumes that REAL
 ``contracts.Bundle`` and produces a REAL ``contracts.Envelope`` on the reachable host
@@ -133,14 +133,14 @@ disallowed_tools: tuple[str, ...] = SDK_LOCAL_TOOLS
 permission_mode: str = "bypassPermissions"
 
 # A Workroom task is keyed operation_type='workroom:<task-id>' (§12.10) — the SAME key the
-# dispatch (harness.dispatch.workroom_op_type) claims the row under; the driver fills THAT row.
+# dispatch (control_plane.dispatch.workroom_op_type) claims the row under; the driver fills THAT row.
 WORKROOM_OP_PREFIX = "workroom:"
 
 
 def workroom_op_type(task_id: UUID | str) -> str:
     """The ``operation_runs.operation_type`` for a Workroom task (§12.10).
 
-    Identical to ``harness.dispatch.workroom_op_type`` — the driver persists into the SAME
+    Identical to ``control_plane.dispatch.workroom_op_type`` — the driver persists into the SAME
     row the dispatch claimed, so the two must agree on the key (no bespoke per-task table).
     """
     return f"{WORKROOM_OP_PREFIX}{task_id}"
@@ -330,7 +330,11 @@ class SessionDriver:
                 return envelope
             handle = self._resolve_warm_sandbox(meeting_id)
             reader = self._reader_for(handle)
-            prompt = self._render_bundle_prompt(bundle)
+            # C-NOTESREAD (§3.5): read the LIVE notes off the durable /internal/notes fold and
+            # embed them in the volatile prompt (the bundle carries only the meeting_id ref).
+            notes_text = await self._read_live_notes(meeting_id)
+            map_text = await self._resolve_map_text(meeting_id)
+            prompt = self._render_bundle_prompt(bundle, notes_text=notes_text, map_text=map_text)
             # Resolve THIS meeting's code_intel SDK server (the tenant graph.db + clone) so a
             # Workroom task can query the codebase graph — its ``mcp__code_intel__*`` MAP tools
             # currently resolve to nothing (the seam gap this closes). Async because the repo
@@ -480,7 +484,12 @@ class SessionDriver:
                 code_intel_server=code_intel_server,
             )
             runner = _ProviderRunner(self._provider_for(options), options, task_id, self._on_progress)
-            inputs: dict[str, Any] = {"prompt": self._render_bundle_prompt(bundle)}
+            # C-NOTESREAD (§3.5): the resumed task also orients on the LIVE notes fold, not the bare ref.
+            notes_text = await self._read_live_notes(meeting_id)
+            map_text = await self._resolve_map_text(meeting_id)
+            inputs: dict[str, Any] = {
+                "prompt": self._render_bundle_prompt(bundle, notes_text=notes_text, map_text=map_text)
+            }
             result_meta: dict[str, Any] = {}
             wrote_paths: list[str] = []
             # The IMPORTED replay seam (never redefined here, §11.9): resume the persisted
@@ -520,7 +529,7 @@ class SessionDriver:
         The stale-session replay establishes a NEW session on the retry; its ``INIT``/
         ``RESULT`` ``session_id`` overwrites the stale pointer in ``result_meta``, so the
         persisted id always names the live session after a recovery (mirrors
-        ``harness.wake_turn._observe``). The ``RESULT``/write folding rides
+        ``control_plane.wake_turn._observe``). The ``RESULT``/write folding rides
         :meth:`_observe_chunk` so the cost/cache split + write paths land identically."""
         meta = chunk.metadata or {}
         if chunk.type == "INIT":
@@ -603,26 +612,100 @@ class SessionDriver:
         except Exception:  # noqa: BLE001 - Rule 6: a resolution/build fault degrades to no server
             return None
 
+    async def _resolve_map_text(self, meeting_id: str) -> str | None:
+        """Resolve the pre-meeting MAP (``index.md``) for THIS meeting's repo, or ``None``.
+
+        The Workroom code-task agent gets the SAME durable map as orientation as the wake turn
+        (PM-DOWN-02 — "help the Workroom"): it skips re-exploration before it starts coding.
+        Loads the latest stored map for the meeting's ``(tenant, repo)`` from Postgres
+        ``repo_maps`` — ALWAYS tenant-scoped (no cross-tenant read). Fail-closed to ``None`` (no
+        db, no repo, an unmapped repo, or any fault) so a task never crashes for lack of a map."""
+        if self._db is None or not meeting_id:
+            return None
+        try:
+            from code_intel.paths import repo_name_from_url
+            from db import repos
+            from premeeting.map_store import load_latest_map
+
+            async with self._db.acquire() as conn:
+                meeting = await repos.meetings.get_by_id(conn, meeting_id)
+            if meeting is None or meeting.get("repo_id") is None:
+                return None
+            async with self._db.acquire() as conn:
+                repo = await repos.meetings.get_repo_by_id(conn, meeting["repo_id"])
+            if repo is None or not repo.get("full_name"):
+                return None
+            repo_name = repo_name_from_url(str(repo["full_name"]))
+            async with self._db.acquire() as conn:
+                latest = await load_latest_map(
+                    conn, tenant_id=str(repo["tenant_id"]), repo=repo_name
+                )
+            return None if latest is None else latest[1]
+        except Exception:  # noqa: BLE001 - Rule 6: a resolution fault degrades to no map, never a crash
+            return None
+
     # -- (2) the volatile bundle rides the prompt; the prefix is cached -------
 
-    def _render_bundle_prompt(self, bundle: Bundle) -> str:
+    def _render_bundle_prompt(
+        self, bundle: Bundle, *, notes_text: str | None = None, map_text: str | None = None
+    ) -> str:
         """Render ONLY the volatile bundle into the per-task ``prompt`` (§3.9 cache split).
 
         The stable prefix (the disposition + tool defs) is the cached SYSTEM prompt, placed
         BEFORE the cache breakpoint; everything volatile — the ask, the speaker, the
-        transcript tail, the notes ref — rides HERE, after the breakpoint, so it is the only
+        transcript tail, the LIVE notes — rides HERE, after the breakpoint, so it is the only
         fresh input a new task pays for. Transcript-derived content is DATA, never
         instructions (§3.10): the untrusted tail is embedded through the SHARED
         :func:`fence_transcript_tail` — a NON-ESCAPABLE per-call-nonce spotlight fence — so a
         malicious participant cannot spell a fixed, guessable delimiter to break out of the
         data block and inject an instruction (a fixed public close marker would be escapable).
+
+        C-NOTESREAD (05 §3.5): the bundle carries ``notes_ref = meeting_id`` (a UUID), NOT the
+        notes object. When the caller has already read the LIVE notes off ``GET /internal/notes/
+        {meeting_id}`` (the server-side durable fold, :meth:`_read_live_notes`), it passes the
+        rendered text as ``notes_text`` and it is embedded HERE so the Workroom orients on the
+        real current notes — never just the bare ref. When ``notes_text`` is None (no db wired /
+        a bare render), the ``notes_ref`` line is the honest fallback (the ref the room can read).
         """
+        notes_block = (
+            f"Live notes (read via GET /internal/notes/{bundle.notes_ref}):\n{notes_text}\n"
+            if notes_text is not None
+            else f"Notes ref (meeting): {bundle.notes_ref}\n"
+        )
+        # The pre-meeting MAP rides FIRST as trusted orientation (PM-DOWN-02): the code-task
+        # agent skips re-exploration. It is first-party, verified context — placed ahead of the
+        # untrusted, spotlight-fenced transcript tail (which stays DATA, never instructions).
+        map_block = (
+            f"Repo map (orientation — trusted):\n{map_text}\n\n" if map_text and map_text.strip() else ""
+        )
         return (
+            f"{map_block}"
             f"Ask (from {bundle.speaker}): {bundle.ask}\n"
             f"Task id: {bundle.task_id}\n"
-            f"Notes ref (meeting): {bundle.notes_ref}\n"
+            f"{notes_block}"
             f"{fence_transcript_tail(bundle.transcript_tail)}"
         )
+
+    async def _read_live_notes(self, meeting_id: str) -> str | None:
+        """Read the meeting's LIVE notes via the durable server-side fold (05 §3.5 / CANONICAL §11.4).
+
+        The Workroom does NOT read the Scribe's in-process ``NOTES_CACHE`` (a scribe-hot-path
+        optimization unreachable on another host). It reads the live notes object the internal
+        API ``GET /internal/notes/{meeting_id}`` exposes — the SAME durable fold, folding the
+        Postgres ``note_deltas`` into the notes object server-side (:func:`scribe.notes_reader.
+        read_notes`), rendered stable-ordered (:meth:`Notes.render_for_summary`). Fail-closed to
+        None (no db wired, an empty meeting, or a read fault) → the prompt falls back to the bare
+        ``notes_ref`` line (Rule 6 — a task never crashes because notes couldn't be read)."""
+        if self._db is None or not meeting_id:
+            return None
+        try:
+            from scribe.notes_reader import read_notes
+
+            notes = await read_notes(meeting_id, db=self._db)
+            rendered: str = notes.render_for_summary()
+            return rendered
+        except Exception:  # noqa: BLE001 - Rule 6: a notes-read fault degrades to the bare ref
+            return None
 
     def _build_query_options(
         self,

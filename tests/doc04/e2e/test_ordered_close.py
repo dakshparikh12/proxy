@@ -7,7 +7,7 @@ These tests drive the REAL production join→close path against the live test
 Postgres: a Recall ``in_call`` webhook body handed to the meeting-runtime entry
 (``run_meeting_until_end``) which claims the meeting-harness ``operation_runs``
 row, assembles the runtime, runs the loop, and — on the explicit ``MeetingEnd``
-signal — runs the ordered close through ``harness.close.run_ordered_close``. The
+signal — runs the ordered close through ``control_plane.close.run_ordered_close``. The
 DoD asserted here:
 
   * the close runs as its OWN ``operation_runs`` row (``operation_type=
@@ -40,8 +40,8 @@ import pytest
 from libs.db import Database, open_pool, repos
 from libs.ops import sandbox_provider
 
-from harness.meeting_runtime import MeetingRuntimeRegistry
-from harness.provisioner import run_meeting_until_end
+from control_plane.meeting_runtime import MeetingRuntimeRegistry
+from control_plane.provisioner import run_meeting_until_end
 
 _DSN = os.environ.get("TEST_DATABASE_URL", "").strip()
 requires_pg = pytest.mark.skipif(
@@ -232,7 +232,7 @@ async def test_full_join_to_close_runs_the_ordered_close() -> None:
     poster = _RecPoster(order)
     caller = _StubCloseCaller()
 
-    from harness.scribe_runtime import CloseConfig
+    from control_plane.scribe_runtime import CloseConfig
 
     close_config = CloseConfig(
         bucket=bucket,
@@ -260,8 +260,8 @@ async def test_full_join_to_close_runs_the_ordered_close() -> None:
     # Record the ORDER of the tail steps by wrapping only observation points (the
     # product logic underneath is unchanged): destroy-sandbox → complete-harness-row
     # → teardown-pipes. run_ordered_close destroys via sandbox_provider.destroy and
-    # completes the harness row via harness.close._complete_harness_row.
-    import harness.close as close_mod
+    # completes the harness row via control_plane.close._complete_harness_row.
+    import control_plane.close as close_mod
 
     real_destroy = sandbox_provider.destroy
     real_complete = close_mod._complete_harness_row
@@ -358,7 +358,7 @@ async def test_ordered_close_is_idempotent() -> None:
     poster = _RecPoster([])
     caller = _StubCloseCaller()
 
-    from harness.scribe_runtime import CloseConfig
+    from control_plane.scribe_runtime import CloseConfig
 
     close_config = CloseConfig(
         bucket=bucket,
@@ -380,7 +380,7 @@ async def test_ordered_close_is_idempotent() -> None:
     # the notes object: create-only (if_generation_match=0) rejects the second write,
     # the existing URL is reused, and no second notes object is produced. Drive the
     # close pass directly against the same durable ledger + already-created bucket.
-    from harness.scribe_runtime import run_meeting_close
+    from control_plane.scribe_runtime import run_meeting_close
     from scribe.prefix import MeetingHeader
 
     header = MeetingHeader(meeting_id=meeting_id, agenda="", participants=())
@@ -418,7 +418,7 @@ async def test_empty_ledger_close_still_runs_the_ordered_tail() -> None:
     poster = _RecPoster([])
     caller = _StubCloseCaller()
 
-    from harness.scribe_runtime import CloseConfig
+    from control_plane.scribe_runtime import CloseConfig
 
     close_config = CloseConfig(
         bucket=bucket,

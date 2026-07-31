@@ -5,9 +5,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from harness.post_meeting.config import PostMeetingConfig
-from harness.post_meeting.models import Source, TaskRecord, TaskState
-from harness.post_meeting.plan import (
+from control_plane.post_meeting.config import PostMeetingConfig
+from control_plane.post_meeting.models import Source, TaskRecord, TaskState
+from control_plane.post_meeting.plan import (
     PLAN_SCHEMA,
     expire_stale_plans,
     is_expired,
@@ -118,7 +118,7 @@ async def test_planning_starts_no_sandbox():
     from ._support import assert_no_code_reference
 
     assert_no_code_reference(
-        "services/harness/src/harness/post_meeting/plan.py",
+        "services/control-plane/src/control_plane/post_meeting/plan.py",
         ("sandbox", "e2b", "propose_change", "staged_drafts"),
     )
 

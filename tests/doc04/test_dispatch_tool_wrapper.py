@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 import pytest
 from contracts import Envelope
-from harness.dispatch import (
+from control_plane.dispatch import (
     DISPATCH_SERVER_NAME,
     make_dispatch_workroom_server,
     make_dispatch_workroom_tool,
@@ -114,7 +114,7 @@ async def test_the_description_names_every_optional_parameter_it_reads():
     import inspect
     import re
 
-    from harness import dispatch as mod
+    from control_plane import dispatch as mod
 
     src = inspect.getsource(mod.make_dispatch_workroom_tool)
     read = set(re.findall(r"args\.get\(\s*[\"'](\w+)[\"']", src))
@@ -139,7 +139,7 @@ async def test_the_server_mounts_under_the_advertised_tool_name():
     )
     assert srv["type"] == "sdk"
     assert srv["name"] == DISPATCH_SERVER_NAME
-    from harness.behaviors.propose_action import PROPOSE_ACTION
+    from control_plane.behaviors.propose_action import PROPOSE_ACTION
 
     advertised = tuple(getattr(PROPOSE_ACTION.config, "tools", ()) or ())
     assert "dispatch_workroom" in advertised, (
@@ -263,7 +263,7 @@ async def test_the_cost_gate_declining_is_not_an_error_but_is_not_accepted():
         raise AssertionError("the run started despite the cost gate declining")
 
     # dispatch_workroom returns a DispatchDecision (no run_id) when the gate declines.
-    import harness.dispatch as mod
+    import control_plane.dispatch as mod
 
     original = mod.dispatch_workroom
 
@@ -292,7 +292,7 @@ async def test_the_completion_callback_only_hands_off_synchronously():
     """It runs inside the done-callback on the event loop; awaiting there would block it."""
     import inspect
 
-    from harness import dispatch as mod
+    from control_plane import dispatch as mod
 
     src = inspect.getsource(mod.run_and_notify)
     inner = src[src.index("def _done("):]
@@ -339,7 +339,7 @@ async def test_a_dispatched_task_survives_losing_every_local_reference():
 
 
 async def test_the_inflight_set_releases_after_completion():
-    from harness import dispatch as mod
+    from control_plane import dispatch as mod
 
     before = len(mod._INFLIGHT)
     task = run_and_notify(

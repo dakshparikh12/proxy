@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -86,12 +87,41 @@ _VERIFIER_DISPOSITION = "verifier"
 # rides the Opus-class ``BIG_BUILD`` seat; the verifier must resolve a model AT LEAST as strong.
 # ``BIG_BUILD`` is the strongest seat in the ONE canonical table, so the verifier rides it too —
 # resolved through the IMPORTED ``llm.routing`` table (env-overridable per seat), NEVER a literal.
+#
+# D-040 (FROZEN founder ruling, F8): the verifier riding the SAME Opus (``BIG_BUILD``) seat as the
+# worker is INTENTIONAL, not a shortfall. §3.7① names anti-anchoring (the FRESH context) — not a
+# strictly-stronger model — as "THE thing to copy"; the fresh context is the load-bearing property,
+# and Opus is genuinely the ceiling in the ONE canonical seat table (there is no stronger seat to
+# point at). So "stronger than the worker" is satisfied by same-tier + fresh context, deliberately.
+# INVARIANT: the verifier seat is the strongest seat AND the critic query always runs in a NEW
+# ``query()`` with the builder's success log WITHHELD (see ``run_critic`` / ``_CRITIC_PROMPT``).
 _VERIFIER_SEAT = "BIG_BUILD"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # ② The deterministic evidence gate (~30 lines, non-LLM) — reads receipts, NEVER model prose
 # ═══════════════════════════════════════════════════════════════════════════
+# D-035 (F3): the plan's ``verify`` line is matched to a receipt by a PINNED canonicalization,
+# NOT a byte-identical joined-argv compare. The E2B backend runs ``cd <sandbox_root> &&
+# <command>`` while the plan's verify line is the bare command, so an exact compare force-fails
+# EVERY real build to ``needs_review`` even when tests genuinely passed. The rule is deterministic
+# (so a normalization bug can't silently accept a WRONG command): strip ONE leading
+# ``cd <path> &&`` prefix, then collapse all runs of whitespace to a single space and trim.
+_CD_PREFIX_RE = re.compile(r"^\s*cd\s+(?:\"[^\"]*\"|'[^']*'|\S+)\s*&&\s*")
+
+
+def _canonicalize_argv(cmd: str) -> str:
+    """Canonicalize a command string for the D-035 evidence match (deterministic).
+
+    (1) strip a SINGLE leading ``cd <sandbox_root> &&`` wrapper (the E2B backend prefixes the
+    bare plan command with a cwd change); (2) collapse every run of whitespace to one space and
+    trim. Nothing else is normalized — the command tokens after the cwd change must match exactly
+    (a normalization that dropped/reordered tokens could accept a similar-but-different command).
+    """
+    stripped = _CD_PREFIX_RE.sub("", cmd or "", count=1)
+    return re.sub(r"\s+", " ", stripped).strip()
+
+
 def evidence_backed(
     verify_cmds: list[str],
     receipts: list[dict[str, Any]],
@@ -100,8 +130,10 @@ def evidence_backed(
     """A 'pass' is real ONLY if a HOST-OBSERVED receipt shows the named verify command ran exit 0
     (and any required artifact hashes match). Reads receipts, NEVER the model's prose (§3.7②).
 
-    ``verify_cmds`` — the plan's ``verify`` lines (the exact commands the deterministic gate
-    requires; each is joined-argv-keyed against a host-observed receipt). NO verify command →
+    ``verify_cmds`` — the plan's ``verify`` lines (the commands the deterministic gate requires;
+    each is matched against a host-observed receipt by the D-035 CANONICALIZED argv — a leading
+    ``cd <sandbox_root> &&`` stripped + whitespace collapsed — NOT a byte-identical compare, so a
+    real E2B receipt that runs the command under a cwd change still matches). NO verify command →
     nothing to prove → NOT backed (fail-closed: a build with no machine-checkable verify line
     cannot be 'verified').
 
@@ -118,10 +150,12 @@ def evidence_backed(
     """
     if not verify_cmds:
         return False
-    by_argv = {" ".join(r["argv"]): r for r in receipts}
+    # D-035: key receipts by the CANONICALIZED joined argv (cd-prefix stripped, whitespace
+    # collapsed) so a real ``cd <root> && <command>`` receipt matches the bare plan verify line.
+    by_argv = {_canonicalize_argv(" ".join(r["argv"])): r for r in receipts}
     for cmd in verify_cmds:  # named-command PRESENCE + real exit_code (never claimed)
-        r = by_argv.get(cmd)
-        if r is None or r["exit_code"] != 0:
+        r = by_argv.get(_canonicalize_argv(cmd))
+        if r is None or r["exit_code"] != 0:  # require exit 0 (D-035)
             return False
     if required_hashes:  # file hashes from the transport, not claimed
         produced = {
@@ -298,8 +332,21 @@ class VerifyGate:
     when the critic AND the evidence gate both pass. It NEVER edits the artifact it grades and NEVER
     throws across the host boundary (Rule 6)."""
 
-    def __init__(self, *, verifier_provider: Any = None) -> None:
+    def __init__(
+        self,
+        *,
+        verifier_provider: Any = None,
+        mcp_servers: dict[str, Any] | None = None,
+    ) -> None:
         self._verifier_provider = verifier_provider
+        # C-VERIFYMCP: the curated read-only sandbox servers the critic mounts so it can ACTUALLY
+        # re-run pytest/typecheck via ``mcp__code__run_command`` — its stated premise (§3.7①: the
+        # critic "re-runs the verify commands yourself via run_command, EVIDENCE not claim"). The
+        # live driver passes the warm sandbox's ``code`` server (read tools + run_command); a bare
+        # gate (no sandbox wired, unit tests) keeps None → no servers → backward-compatible. The
+        # critic is READ-ONLY (verifier disposition), so ``propose_change``/write servers are NEVER
+        # mounted here — a verifier never edits what it grades (§3.7).
+        self._mcp_servers = dict(mcp_servers) if mcp_servers else None
 
     # -- ③ the hard gate: the ONE public entry point --------------------------
 
@@ -314,6 +361,7 @@ class VerifyGate:
         ac_tags: list[str] | None = None,
         required_hashes: dict[str, str] | None = None,
         verifier_provider: Any = None,
+        mcp_servers: dict[str, Any] | None = None,
         has_draft: bool = True,
     ) -> VerifyGateResult:
         """Grade a build in FRESH context + the deterministic receipt gate, then STAMP (§3.7 ①-③).
@@ -361,6 +409,7 @@ class VerifyGate:
             verify_cmds=verify_cmds,
             ac_tags=ac_tags,
             verifier_provider=verifier_provider,
+            mcp_servers=mcp_servers,
         )
         critic_all_met = verdict.all_met
         if not verdict.parsed:
@@ -407,6 +456,7 @@ class VerifyGate:
         verify_cmds: list[str],
         ac_tags: list[str] | None = None,
         verifier_provider: Any = None,
+        mcp_servers: dict[str, Any] | None = None,
     ) -> Verdict:
         """Run the ONE fresh-context critic (a NEW ``query()``) and re-validate its verdict (§3.7①).
 
@@ -416,7 +466,7 @@ class VerifyGate:
         own success log is NOT in the prompt (anti-anchoring). A provider fault (terminal ERROR) or a
         non-parsing emission fails CLOSED — a fail-closed :class:`Verdict` (``parsed=False``, every
         criterion FAILED), NEVER an uncaught exception (Rule 6) and NEVER a silent 'verified'."""
-        options = self._build_verifier_options()
+        options = self._build_verifier_options(mcp_servers=mcp_servers)
         provider = verifier_provider or self._verifier_provider
         if provider is None:
             provider = pick_provider(options.model)
@@ -447,26 +497,37 @@ class VerifyGate:
 
     # -- the read-only verifier options: triad + curated tools + at-least-as-strong model --
 
-    def _build_verifier_options(self) -> ProviderQuery:
+    def _build_verifier_options(
+        self, *, mcp_servers: dict[str, Any] | None = None
+    ) -> ProviderQuery:
         """The read-only ``verifier`` query options — triad + curated read/map/run_command tools,
         NO write/propose_change (a verifier never edits what it grades, §3.7), on a model at least
         as strong as the worker (§3.2). The tool policy + triad come from the ONE owner
         (``disposition_tool_policy``); the model from the IMPORTED seat table; the thinking decision
-        from the shared ``thinking_policy`` (OFF on the verify path, D-022)."""
+        from the shared ``thinking_policy`` (OFF on the verify path, D-022).
+
+        C-VERIFYMCP: the curated read-only sandbox ``code`` server (its ``mcp__code__run_command``
+        / read tools) is MOUNTED here so the critic can ACTUALLY re-run pytest/typecheck — its
+        stated premise (§3.7①). The per-call ``mcp_servers`` (the live sandbox's ``code`` server)
+        overrides the gate's default; the triad still holds (``strict_mcp_config=True`` mounts ONLY
+        these explicitly-passed servers). No write/``propose_change`` server is ever mounted — the
+        verifier is read-only (a verifier never edits what it grades)."""
         policy = disposition_tool_policy(_VERIFIER_DISPOSITION)
         model = self._verifier_model()
         # The verify path runs thinking OFF (D-022); passed through as the shared policy returns it.
         enabled, budget = thinking_policy(model, disposition_role(_VERIFIER_DISPOSITION))
+        servers = mcp_servers if mcp_servers is not None else self._mcp_servers
         return ProviderQuery(
             model=model,
             allowed_tools=tuple(policy.allowed_tools),
             system_prompt=guardrailed_system_prefix(),  # injection guardrail appended LAST (§3.10)
             max_turns=6,  # the critic RE-RUNS the evidence itself (a few run_command turns)
             tools=(),  # computed built-in allow-list: [] in sandbox mode (§3.4)
-            strict_mcp_config=True,  # triad
+            strict_mcp_config=True,  # triad — mounts ONLY the explicitly-passed servers
             setting_sources=(),  # triad
             thinking_enabled=enabled,  # OFF on the verify path (D-022)
             thinking_budget_tokens=budget,
+            mcp_servers=servers,  # C-VERIFYMCP: the read-only sandbox `code` server (run_command)
         )
 
     @staticmethod

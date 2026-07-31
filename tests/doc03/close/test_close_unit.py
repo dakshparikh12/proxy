@@ -672,7 +672,7 @@ async def test_ac_close_02_close_initiated_exactly_once():
     # being the SOLE cause of exactly one initiation — is NOT wired in close's scope.
     # scribe.close is imported by nothing and the transport MeetingEnd signal never
     # calls it; that meeting-end -> close wiring is Doc04 orchestration (see
-    # services/transport/.../events.py: "re-run the Doc 04 close sequence"). Within
+    # services/in-meeting/src/transport/.../events.py: "re-run the Doc 04 close sequence"). Within
     # close's scope we can only assert the initiation is idempotent-per-meeting and
     # count-exactly-once, which is what this test does.
     sink = InMemoryOperationRunSink()

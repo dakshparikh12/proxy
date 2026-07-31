@@ -209,7 +209,7 @@ async def test_the_production_dispatcher_matches_the_route_signature():
     """
     import inspect
 
-    from harness.post_meeting.wire import make_plan_dispatcher
+    from control_plane.post_meeting.wire import make_plan_dispatcher
 
     dispatcher = make_plan_dispatcher(db=object(), store=object())
     assert not inspect.iscoroutinefunction(dispatcher), (
@@ -225,7 +225,7 @@ async def test_no_poller_scheduler_or_queue_exists_in_this_route():
     import pathlib
 
     src = pathlib.Path(
-        "services/harness/src/control_plane/plan_approval_route.py"
+        "services/control-plane/src/control_plane/plan_approval_route.py"
     ).read_text(encoding="utf-8")
     tree = ast.parse(src)
     imported: list[str] = []

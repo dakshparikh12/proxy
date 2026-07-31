@@ -84,8 +84,12 @@ async def update_bot_id(
 
 
 async def get_by_bot_id(conn: Any, recall_bot_id: str) -> dict[str, Any] | None:
+    # ``pinned_sha``/``recall_bot_id``/``meeting_url`` ride along (additively) so the
+    # meeting-boot path can assemble the in-meeting engine off THIS one resolve —
+    # the engine's map load is keyed on the meeting's exact pinned sha, never "latest".
     row = await conn.fetchrow(
-        "SELECT id, tenant_id, repo_id FROM meetings WHERE recall_bot_id = $1",
+        "SELECT id, tenant_id, repo_id, pinned_sha, recall_bot_id, meeting_url "
+        "FROM meetings WHERE recall_bot_id = $1",
         recall_bot_id,
     )
     return dict(row) if row is not None else None
@@ -101,6 +105,26 @@ async def get_by_id(conn: Any, meeting_id: Any) -> dict[str, Any] | None:
     row = await conn.fetchrow(
         "SELECT id, tenant_id, repo_id FROM meetings WHERE id = $1",
         meeting_id,
+    )
+    return dict(row) if row is not None else None
+
+
+async def get_repo_for_tenant(
+    conn: Any, *, tenant_id: Any, full_name: str
+) -> dict[str, Any] | None:
+    """Resolve a repo row by its ``full_name`` WITHIN one tenant (fail closed).
+
+    The invite route (``POST /meetings``) names the repo by ``full_name`` and must
+    prove it belongs to the CALLER's tenant before any meeting binds to it. The
+    query is tenant-filtered by construction (isolation triad, R-INV-09): a repo
+    owned by another tenant resolves to ``None`` exactly like a repo that does not
+    exist — the read itself cannot distinguish the two, so no existence leaks.
+    """
+    row = await conn.fetchrow(
+        "SELECT id, tenant_id, full_name, default_branch FROM repos "
+        " WHERE tenant_id = $1 AND full_name = $2",
+        tenant_id,
+        full_name,
     )
     return dict(row) if row is not None else None
 

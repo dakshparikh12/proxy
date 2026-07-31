@@ -18,8 +18,8 @@ from typing import Any, Protocol
 
 # The shared internal token gating this path. Read from the environment; the
 # default is the MVP/test token. A constant-time compare avoids a timing oracle.
-_INTERNAL_TOKEN_ENV = "PROXY_INTERNAL_TOKEN"
-_DEFAULT_INTERNAL_TOKEN = "internal-token-good"
+_INTERNAL_TOKEN_ENV = "PROXY_INTERNAL_TOKEN"  # nosec B105 - an env-var NAME, not a secret
+_DEFAULT_INTERNAL_TOKEN = "internal-token-good"  # nosec B105 - the documented MVP/dev default; prod reads PROXY_INTERNAL_TOKEN from env
 
 
 def _expected_token() -> str:

@@ -1,7 +1,7 @@
 """AC-SCRIBE-HEADER-WIRED — the in_call webhook builds the meeting's Scribe header.
 
 Gap DOC03-MEETING-HEADER-EMPTY-IN-PRODUCTION: on the SOLE production meeting-join path
-(``harness.webhooks._dispatch_meeting_event`` ``is_start`` branch) the Scribe was started
+(``control_plane.webhooks._dispatch_meeting_event`` ``is_start`` branch) the Scribe was started
 with ``MeetingHeader(meeting_id=meeting_id)`` — empty ``agenda``/``participants``/
 ``glossary``. §3.2 specifies the cached Scribe prefix carries "meeting header +
 participants + glossary — set once at join", and ``render_header`` renders participants in
@@ -30,8 +30,8 @@ import pytest
 from db import Database, open_pool, repos
 from scribe.prefix import build_scribe_prefix
 
-from harness.meeting_runtime import MeetingRuntimeRegistry
-from harness.webhooks import drain_pending_webhooks
+from control_plane.meeting_runtime import MeetingRuntimeRegistry
+from control_plane.webhooks import drain_pending_webhooks
 
 _DSN = os.environ.get("TEST_DATABASE_URL", "").strip()
 requires_pg = pytest.mark.skipif(

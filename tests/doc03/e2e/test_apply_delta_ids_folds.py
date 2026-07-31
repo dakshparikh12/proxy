@@ -1,6 +1,6 @@
 """AC-COAL-APPLY-IDS — the PRODUCTION applier writes deltas the reader can fold.
 
-Gap DOC03-APPLY-IDS-BROKEN: ``harness.scribe_runtime.build_real_seams.apply_delta``
+Gap DOC03-APPLY-IDS-BROKEN: ``control_plane.scribe_runtime.build_real_seams.apply_delta``
 was the SOLE production notes applier, yet it wrote every op under a fabricated
 per-op ``entry_id`` (``f"w{window.start_s}-{j}"``) and dumped the WHOLE op as the
 payload — dropping ``PatchOp.target_id`` / ``CloseOp.target_id`` entirely. The
@@ -39,7 +39,7 @@ from scribe.schema import (
     Reversibility,
 )
 
-from harness.scribe_runtime import build_real_seams
+from control_plane.scribe_runtime import build_real_seams
 
 pytestmark = pytest.mark.asyncio
 

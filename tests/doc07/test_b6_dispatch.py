@@ -7,10 +7,10 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-from harness.post_meeting.approval import approve
-from harness.post_meeting.config import PostMeetingConfig
-from harness.post_meeting.dispatch import DispatchDecision, check_caps, run_dispatch
-from harness.post_meeting.models import Source, TaskRecord, TaskState, Tier
+from control_plane.post_meeting.approval import approve
+from control_plane.post_meeting.config import PostMeetingConfig
+from control_plane.post_meeting.dispatch import DispatchDecision, check_caps, run_dispatch
+from control_plane.post_meeting.models import Source, TaskRecord, TaskState, Tier
 
 from ._support import FakeTaskStore, ForbiddenSandbox
 
@@ -33,7 +33,7 @@ def fake_assemble(**kw):
 
 
 class FakeHandle:
-    """Shaped like ``harness.dispatch.WorkroomHandle``: task_id, run_id, bundle.
+    """Shaped like ``control_plane.dispatch.WorkroomHandle``: task_id, run_id, bundle.
 
     ``run_id`` is the ``operation_runs.id`` the claim returned — a DIFFERENT uuid from
     ``task_id``. Keeping them distinct here is what makes the FK semantics testable: a
@@ -112,7 +112,7 @@ async def test_ac_pme_09_dispatch_uses_the_canonical_bundle_and_workroom():
 async def test_ac_pme_09_no_second_execution_path_exists_in_the_module():
     """Static: B6 imports no provider, queue, scheduler or broker of its own."""
     src = pathlib.Path(
-        "services/harness/src/harness/post_meeting/dispatch.py"
+        "services/control-plane/src/control_plane/post_meeting/dispatch.py"
     ).read_text(encoding="utf-8")
     tree = ast.parse(src)
     imported: list[str] = []
@@ -130,7 +130,7 @@ async def test_ac_pme_09_no_second_execution_path_exists_in_the_module():
 
 
 async def test_ac_pme_09_whole_package_introduces_no_sandbox_provider():
-    pkg = pathlib.Path("services/harness/src/harness/post_meeting")
+    pkg = pathlib.Path("services/control-plane/src/control_plane/post_meeting")
     for path in pkg.glob("*.py"):
         text = path.read_text(encoding="utf-8").lower()
         assert "e2b" not in text or "sandbox" not in text.split("e2b")[0][-40:], path
@@ -224,7 +224,7 @@ async def test_ac_pme_10_neg_a_failed_pointer_write_is_a_real_failure():
 async def test_ac_pme_10_migration_keys_the_run_by_meeting_and_task():
     """Amendment P10: scope_id = meeting_id, operation_type = 'workroom:{task_id}'."""
     src = pathlib.Path(
-        "services/harness/src/harness/dispatch.py"
+        "services/control-plane/src/control_plane/dispatch.py"
     ).read_text(encoding="utf-8")
     assert 'WORKROOM_OP_PREFIX = "workroom:"' in src
     assert "scope_id is the sole text column" in src

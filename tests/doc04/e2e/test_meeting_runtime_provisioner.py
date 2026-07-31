@@ -36,14 +36,14 @@ import pytest
 # async persisted claim, and the ``db``-package alias is a DIFFERENT class object.
 from libs.db import Database, open_pool, repos
 
-from harness.meeting_runtime import MeetingRuntimeRegistry
-from harness.provisioner import (
+from control_plane.meeting_runtime import MeetingRuntimeRegistry
+from control_plane.provisioner import (
     ProvisionOutcome,
     make_provision_launcher,
     provision_meeting,
     run_meeting_until_end,
 )
-from harness.webhooks import drain_pending_webhooks
+from control_plane.webhooks import drain_pending_webhooks
 
 _DSN = os.environ.get("TEST_DATABASE_URL", "").strip()
 requires_pg = pytest.mark.skipif(
@@ -124,6 +124,14 @@ async def test_in_call_webhook_atomically_claims_and_assembles_once() -> None:
     runtime = registry.get(meeting_id)
     assert runtime is not None, "the provisioner did not assemble a MeetingRuntime"
     assert runtime.run_loop is not None, "the run loop was not assembled at provision"
+    # THE CUTOVER: the NEW in-meeting engine is the brain on the boot path — assembled
+    # at provision, reachable by meeting id off the registry entry, with its speak pipe
+    # + warm sandbox handle stashed for the meeting-end lifecycle. The OLD live brain is
+    # no longer wired here.
+    assert runtime.engine is not None, "the in-meeting engine was not assembled at provision"
+    assert runtime.speak_pipe is not None, "the speak pipe was not stashed at provision"
+    assert runtime.engine_sandbox is not None, "the warm sandbox handle was not stashed"
+    assert runtime.live_brain is None, "the OLD live brain must no longer own the boot path"
     # The operation handle is bound so is_owner fencing gates every emit.
     assert runtime.operation_handle is not None, "the claimed row's handle was not bound"
     assert runtime.operation_handle.is_owner is True
@@ -274,7 +282,7 @@ async def test_recycle_replacement_reclaims_and_resumes() -> None:
     assert blocked.claimed is False, "a replacement must not steal a LIVE meeting"
 
     # The owning instance dies: the reaper flips its stale running row to interrupted
-    # (exactly what harness.server.reap_orphans / sweep_stale_operation_runs does).
+    # (exactly what control_plane.server.reap_orphans / sweep_stale_operation_runs does).
     async with db1.acquire() as conn:
         await conn.execute(
             "UPDATE operation_runs SET status = 'interrupted', completed_at = now() "

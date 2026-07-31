@@ -279,7 +279,7 @@ SIDECAR_WIRE_CONTRACT: dict[str, Any] = {
     "jwt_alg": "HS256",
     # Each sandbox gets its OWN random secret minted at provision; the fleet-shared
     # secret is DELETED (untrusted in-sandbox repo code could exfiltrate it) (§12.9).
-    "secret_scope": "per-sandbox",
+    "secret_scope": "per-sandbox",  # nosec B105 - a security-model label, not a secret
     # Defense-in-depth: the decoded session_id MUST equal env.SESSION_ID else 403.
     "claim_check": "session_id == env.SESSION_ID",
     "boot_fail_closed": "JWT_SECRET missing -> exit(1)",

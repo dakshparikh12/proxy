@@ -1,4 +1,4 @@
-"""Acceptance: the CONCRETE Claude AgentProvider (services/harness/provider.py)
+"""Acceptance: the CONCRETE Claude AgentProvider (services/control-plane/src/control_plane/provider.py)
 maps REAL ``claude_agent_sdk`` messages → the six ``AgentChunk`` variants
 (04 §3.3, CANONICAL §1.1 / §11.10 / §12.3, D-022).
 
@@ -31,7 +31,7 @@ from claude_agent_sdk import (
 from libs.agentkit import Provider, ProviderError, ProviderQuery
 from libs.contracts import AGENT_CHUNK_METADATA_KEYS, AgentChunk
 
-from harness.provider import (
+from control_plane.provider import (
     SDK_LOCAL_TOOLS,
     ClaudeAgentProvider,
     build_sdk_options,

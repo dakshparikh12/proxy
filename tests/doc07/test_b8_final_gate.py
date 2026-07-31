@@ -6,8 +6,8 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-from harness.post_meeting.approval import approve
-from harness.post_meeting.final_gate import (
+from control_plane.post_meeting.approval import approve
+from control_plane.post_meeting.final_gate import (
     FORBIDDEN_REPO_WRITES,
     FORBIDDEN_SCOPE,
     PROPOSED,
@@ -17,7 +17,7 @@ from harness.post_meeting.final_gate import (
     run_final_gate,
     validate_draft,
 )
-from harness.post_meeting.models import Source, TaskRecord, TaskState
+from control_plane.post_meeting.models import Source, TaskRecord, TaskState
 
 from ._support import FakeTaskStore, ForbiddenGitRemote
 
@@ -85,14 +85,14 @@ async def test_ac_pme_15_no_push_happens_on_the_clean_path():
 async def test_ac_pme_15_this_module_never_writes_staged_drafts_directly():
     """Doc 07 §3.8: staging is propose_change through the Workroom, never a direct write."""
     src = pathlib.Path(
-        "services/harness/src/harness/post_meeting/final_gate.py"
+        "services/control-plane/src/control_plane/post_meeting/final_gate.py"
     ).read_text(encoding="utf-8").lower()
     assert "insert into staged_drafts" not in src
     assert "update staged_drafts" not in src
 
 
 async def test_ac_pme_15_package_never_writes_staged_drafts_anywhere():
-    for path in pathlib.Path("services/harness/src/harness/post_meeting").glob("*.py"):
+    for path in pathlib.Path("services/control-plane/src/control_plane/post_meeting").glob("*.py"):
         text = path.read_text(encoding="utf-8").lower()
         assert "insert into staged_drafts" not in text, path
         assert "update staged_drafts" not in text, path

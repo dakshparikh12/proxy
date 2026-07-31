@@ -7,7 +7,7 @@ The sibling e2e (``test_meeting_runtime_provisioner``) proves the provisioner wo
 called directly. This test closes the REACHABILITY gap the fresh verifier flagged: that
 no BOOTED deployable wired the provisioner into a webhook drain, so the in_call→running-
 meeting chain was a test-only island. Here we drive the ACTUAL production boot step
-``harness.server._real_provisioner_ready`` (the step the FastAPI lifespan runs) against
+``control_plane.server._real_provisioner_ready`` (the step the FastAPI lifespan runs) against
 the live test Postgres and prove:
 
   * the boot step wires the provisioner launcher onto ``app.state.provision_launch`` and
@@ -29,7 +29,7 @@ import pytest
 
 from libs.db import Database, open_pool, repos
 
-from harness import server as server_mod
+from control_plane import server as server_mod
 
 _DSN = os.environ.get("TEST_DATABASE_URL", "").strip()
 requires_pg = pytest.mark.skipif(
@@ -135,13 +135,19 @@ async def test_boot_step_wires_provisioner_and_drain_routes_in_call() -> None:
         # The runtime was assembled + launched by the provisioner (not a Scribe-only start).
         for _ in range(300):
             rt = registry.get(meeting_id)
-            if rt is not None and rt.run_loop is not None:
+            if rt is not None and rt.run_loop is not None and rt.engine is not None:
                 break
             await asyncio.sleep(0.01)
         runtime = registry.get(meeting_id)
         assert runtime is not None and runtime.run_loop is not None, (
             "the provisioner did not assemble + launch the runtime on the booted drain path"
         )
+        # THE CUTOVER: the booted drain path assembles the NEW in-meeting engine (the
+        # brain seat) — reachable by meeting id off the registry entry, old brain absent.
+        assert runtime.engine is not None, (
+            "the booted drain path did not assemble the in-meeting engine (cutover seam dead)"
+        )
+        assert runtime.live_brain is None, "the OLD live brain must no longer own the boot path"
         # is_owner fencing is bound off the claimed row's handle.
         assert runtime.operation_handle is not None
         assert runtime.operation_handle.is_owner is True

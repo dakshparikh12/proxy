@@ -3,7 +3,7 @@
 Gap DOC03-LIVE-CHAT-DROPPED-IN-PUMP: ``transport.chat.ChatChannel.dispatch_inbound``
 emits every inbound chat line as a ``ChatMessage`` signal onto the SAME
 ``SignalCarrier`` the Scribe pump subscribes to (chat.py: ``await self._carrier.emit(msg)``).
-But ``harness.scribe_runtime._pump_transcripts`` only handled ``Transcript`` and
+But ``control_plane.scribe_runtime._pump_transcripts`` only handled ``Transcript`` and
 ``MeetingEnd`` signals — a live ``ChatMessage`` fell through and was DISCARDED. It was
 never handed to ``coalescer.push_chat``, so it never folded into any window and never
 reached the Scribe or the notes. The coalescer's chat-folding machinery only functioned
@@ -33,7 +33,7 @@ from transport.carrier import SignalCarrier
 from transport.chat import ChatChannel
 from transport.signals import ChatMessage, MeetingEnd, Transcript
 
-from harness.scribe_runtime import launch_scribe_runtime
+from control_plane.scribe_runtime import launch_scribe_runtime
 
 
 class _StubTransport:

@@ -7,7 +7,7 @@ gate, AC-M6-002). The ``ready`` record carries ``indexed_at`` + the 40-hex
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -19,6 +19,13 @@ class ReadinessRecord:
     indexed_at: datetime | None = None
     pinned_sha: str | None = None
     coverage_pct: float = 0.0
+    # The honest blind-spot list (§3.7.1) — reported alongside coverage_pct, computed by the
+    # deterministic ``coverage.compute_coverage(coverage_rows=…, graph=…)`` read (no LLM).
+    gaps: list[str] = field(default_factory=list)
+    # Per-area/stack ``who_writes`` capability tier (§3.7) — pre-computed at index time so the
+    # honesty labels are not guessed at query time. Maps an area/stack key to one of
+    # "exact-supported" | "symbol-exact" | "search-only".
+    capability_tiers: dict[str, str] = field(default_factory=dict)
 
 
 class ReadinessCollector:

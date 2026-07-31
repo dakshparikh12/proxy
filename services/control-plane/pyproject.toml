@@ -1,0 +1,26 @@
+[project]
+name = "control-plane"
+version = "0.0.0"
+description = "services.control-plane — the control_plane deployable (webhooks, connect, accept/reject, sessions) + the per-meeting runtime boot (server, provisioner, meeting_runtime)."
+requires-python = ">=3.12"
+dependencies = ["contracts", "agentkit", "http", "db", "llm", "ops", "premeeting", "in-meeting", "scribe", "workroom", "code_intel", "claude-agent-sdk>=0.2.128", "pydantic>=2", "pydantic-settings>=2", "fastapi", "authlib", "itsdangerous", "uvicorn>=0.30", "psycopg[binary]>=3.2"]
+
+[tool.uv.sources]
+contracts = { workspace = true }
+agentkit = { workspace = true }
+http = { workspace = true }
+db = { workspace = true }
+llm = { workspace = true }
+ops = { workspace = true }
+premeeting = { workspace = true }
+in-meeting = { workspace = true }
+scribe = { workspace = true }
+workroom = { workspace = true }
+code_intel = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/control_plane"]

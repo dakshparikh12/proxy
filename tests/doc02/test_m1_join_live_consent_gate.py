@@ -46,7 +46,7 @@ def _live_runtime(monkeypatch):
     constructs the LIVE ``HearingStage``). We stub only the Scribe consumer so no DB/notes
     engine is needed; the transport ``HearingStage`` + its consent gate are the REAL ones.
     """
-    from harness import meeting_runtime as mr
+    from control_plane import meeting_runtime as mr
     from scribe.prefix import MeetingHeader
     from transport.carrier import SignalCarrier
 
@@ -152,25 +152,20 @@ def test_provisioner_grants_consent_on_in_call(monkeypatch):
     Without this the whole live path would deadlock closed; without the gate it would leak
     pre-consent records. This proves the provisioner opens the gate on the confirmed-join event.
     """
-    from harness import meeting_runtime as mr
-    from harness import provisioner as prov
+    from control_plane import meeting_runtime as mr
+    from control_plane import provisioner as prov
     from scribe.prefix import MeetingHeader
     from transport.carrier import SignalCarrier
 
     monkeypatch.setattr(mr, "start_meeting_scribe", lambda *a, **k: _NullScribe())
 
-    # A fake live_brain assembly so _assemble_runtime does not need the real model seam.
-    monkeypatch.setattr(prov, "_assemble_runtime", prov._assemble_runtime)
-
     registry = mr.MeetingRuntimeRegistry(db=None)
 
     # Drive just the assembly step the way provision_meeting does on a WON claim.
+    # (The OLD live-brain assembly is deleted — _assemble_runtime wires no model seam,
+    # so no stub is needed: the engine is assembled separately on the async chokepoint.)
     payload = {"event": "bot.in_call", "data": {"bot_id": "bot-xyz"}}
     resolved = {"id": "m-live-2", "tenant_id": "t", "repo_id": None}
-
-    # Stub the live-brain assembly to a no-op so we isolate the consent-grant wiring.
-    import harness.live_brain as lb
-    monkeypatch.setattr(lb, "assemble_live_brain", lambda runtime, provider=None: None)
 
     runtime = prov._assemble_runtime(
         payload, resolved, db=None, registry=registry, handle=None, provider=None

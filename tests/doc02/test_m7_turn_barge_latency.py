@@ -154,13 +154,23 @@ def test_vad_onset_cuts_tts_midword_within_budget():
         await ctrl.on_boundary()
         assert ctrl.speaking, "utterance must be in-flight before the barge-in"
 
-        # Let a few chunks stream so we are genuinely MID-WORD, then record the onset instant.
+        # Let a few chunks stream so we are genuinely MID-WORD.
         for _ in range(3):
             await asyncio.sleep(0)
         chunks_before = len(sink.written)
-        onset_ms = clock.now() * 1000.0
 
-        # A HUMAN speech onset arrives on the VAD path (not the transcript path).
+        # D-037/D-043 — barge-in fires only on SUSTAINED non-Proxy speech, not a single blip.
+        # First VAD frame merely OPENS the speech run; it must NOT cut yet.
+        await ctrl.on_vad_frame(VadFrame(speaker_id="alice", is_speech=True, t=clock.now()))
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert ctrl.speaking, "a single onset frame must not cut Proxy before the debounce (D-037)"
+
+        # The speech SUSTAINS past the debounce floor (≥250ms > barge_in_onset_min_ms=200).
+        clock.advance(250.0)
+        # The confirmed-onset instant is measured from the SECOND (sustaining) frame — the
+        # <200ms budget is asserted from a CONFIRMED onset, per the ruling.
+        onset_ms = clock.now() * 1000.0
         await ctrl.on_vad_frame(VadFrame(speaker_id="alice", is_speech=True, t=clock.now()))
 
         # Drain any remaining scheduling so a (hypothetically) un-cut stream could finish.
@@ -212,6 +222,12 @@ def test_large_buffer_cannot_defeat_the_cut_chunk_bound():
             for _ in range(3):
                 await asyncio.sleep(0)
             before = len(sink.written)
+            # SUSTAINED onset (D-037): first frame opens the run, then it holds past the
+            # debounce floor, then the confirming frame cuts. A single frame would not cut.
+            await ctrl.on_vad_frame(VadFrame(speaker_id="bob", is_speech=True, t=clock.now()))
+            for _ in range(3):
+                await asyncio.sleep(0)
+            clock.advance(250.0)
             await ctrl.on_vad_frame(VadFrame(speaker_id="bob", is_speech=True, t=clock.now()))
             for _ in range(n_chunks + 5):
                 await asyncio.sleep(0)
@@ -267,14 +283,32 @@ def test_barge_in_does_not_fire_on_proxy_or_silence():
             await asyncio.sleep(0)
         assert ctrl.speaking, "a silence frame must not trigger barge-in (AC-TURN-11)"
 
-        # The stream kept flowing across both non-onsets (proof the cut path was not taken).
-        assert len(sink.written) > before, "TTS must keep streaming through Proxy/silence frames"
+        # (c) THE COUGH CASE (D-037/D-043): a brief non-Proxy blip — one speech frame then a
+        # silence frame BELOW the debounce floor — is not someone taking the floor and must
+        # NOT cut Proxy. This is the whole point of the sustained-speech ruling.
+        await ctrl.on_vad_frame(VadFrame(speaker_id="carol", is_speech=True, t=clock.now()))
+        for _ in range(3):
+            await asyncio.sleep(0)
+        clock.advance(80.0)  # well under barge_in_onset_min_ms (200) — a mere blip
+        await ctrl.on_vad_frame(VadFrame(speaker_id="carol", is_speech=False, t=clock.now()))
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert ctrl.speaking, "a brief blip/cough below the debounce floor must NOT cut Proxy (D-037)"
 
-        # Sanity: a genuine HUMAN onset DOES cut — the negatives above weren't a broken path.
+        # The stream kept flowing across every non-onset (proof the cut path was not taken).
+        assert len(sink.written) > before, "TTS must keep streaming through Proxy/silence/cough frames"
+
+        # Sanity: a genuine SUSTAINED HUMAN onset DOES cut — the negatives above weren't a broken
+        # path. First frame opens the run; after it holds past the debounce, the confirming frame cuts.
+        await ctrl.on_vad_frame(VadFrame(speaker_id="alice", is_speech=True, t=clock.now()))
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert ctrl.speaking, "a single onset frame alone must not cut (debounce not yet met)"
+        clock.advance(250.0)
         await ctrl.on_vad_frame(VadFrame(speaker_id="alice", is_speech=True, t=clock.now()))
         for _ in range(210):
             await asyncio.sleep(0)
-        assert not ctrl.speaking, "a real human onset must cut (proves the negatives were real)"
+        assert not ctrl.speaking, "a real sustained human onset must cut (proves the negatives were real)"
 
     _run(run())
 
@@ -282,18 +316,26 @@ def test_barge_in_does_not_fire_on_proxy_or_silence():
 def test_barge_in_source_is_vad_not_transcript():
     """AC-TURN-01: the human-onset decision folds a VadFrame, with no transcript dependency.
 
+    Under D-037/D-043 the onset is sustained-gated: a single frame OPENS the run (room
+    speaking-on, but NO onset yet); onset fires purely from VAD once the run outlasts the
+    debounce floor — still once per run, still with no transcript dependency.
+
     criterion_id: AC-TURN-01
     """
     from transport.signals import Speaking
     from transport.turn import SpeakingDetector, VadFrame
 
-    det = SpeakingDetector()
-    # First human speech edge → room speaking-on signal AND a human onset, purely from VAD.
+    det = SpeakingDetector()  # default barge_in_onset_min_ms=200ms (0.2s) debounce floor
+    # First human speech edge → room speaking-on signal, but NOT yet a human onset: a single
+    # frame could be a cough. The signal is derived purely from VAD (no transcript).
     signal, human_onset = det.observe(VadFrame(speaker_id="alice", is_speech=True, t=1.0))
-    assert human_onset is True
+    assert human_onset is False, "a single first frame must not fire onset (D-037 debounce)"
     assert isinstance(signal, Speaking) and signal.on is True
-    # A second frame from the SAME speaker is not a new onset (edge-triggered, not level).
-    _, onset_again = det.observe(VadFrame(speaker_id="alice", is_speech=True, t=1.02))
+    # SUSTAINED speech past the debounce floor → the onset fires, purely from VAD.
+    _, onset = det.observe(VadFrame(speaker_id="alice", is_speech=True, t=1.25))
+    assert onset is True, "sustained speech past the debounce must fire the VAD-sourced onset"
+    # A further frame in the SAME run is not a NEW onset (fires at most once per run).
+    _, onset_again = det.observe(VadFrame(speaker_id="alice", is_speech=True, t=1.50))
     assert onset_again is False
 
 

@@ -10,7 +10,7 @@ This proves the bridge on the REAL product path WITHOUT the vendor LLM (the seri
 consumer's micro-call needs a funded Anthropic key — an env boundary, not the bridge). A
 subscriber attaches to the runtime's carrier BESIDE the Scribe and asserts that real Recall
 real-time ``transcript`` passthrough webhooks, drained through
-``harness.webhooks.drain_pending_webhooks``, arrive as the exact ``Transcript`` signals on
+``control_plane.webhooks.drain_pending_webhooks``, arrive as the exact ``Transcript`` signals on
 that carrier — with NO manual ``carrier.emit`` anywhere. If the transport->carrier bridge is
 unwired, no signal arrives and this fails.
 
@@ -28,8 +28,8 @@ import pytest
 from db import Database, open_pool, repos
 from transport.signals import Transcript
 
-from harness.meeting_runtime import MeetingRuntimeRegistry
-from harness.webhooks import drain_pending_webhooks
+from control_plane.meeting_runtime import MeetingRuntimeRegistry
+from control_plane.webhooks import drain_pending_webhooks
 
 _DSN = os.environ.get("TEST_DATABASE_URL", "").strip()
 requires_pg = pytest.mark.skipif(

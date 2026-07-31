@@ -5,8 +5,8 @@ import copy
 import uuid
 
 import pytest
-from harness.post_meeting.extract import extract_items, resolve_owner, run_extract
-from harness.post_meeting.models import UNRESOLVED, Source, TaskState
+from control_plane.post_meeting.extract import extract_items, resolve_owner, run_extract
+from control_plane.post_meeting.models import UNRESOLVED, Source, TaskState
 
 from ._support import FakeActionItem, FakeFinalNotes, FakeTaskStore
 

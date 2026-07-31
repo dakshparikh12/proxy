@@ -1,6 +1,6 @@
 """AC-SCRIBE-ROLLING-WIRED — the rolling summary (Segment B) is LIVE in the real path.
 
-Gap DOC03-ROLLING-SUMMARY-UNWIRED: ``harness.scribe_runtime.build_real_seams`` passed a
+Gap DOC03-ROLLING-SUMMARY-UNWIRED: ``control_plane.scribe_runtime.build_real_seams`` passed a
 HARDCODED empty rolling summary into every ``scribe_call`` (``_real_scribe_call(header,
 "", window, ...)``) and NO cadence task ever refreshed it. Per §3.2/§4 the rolling
 summary IS cached Segment B — it carries the meeting's history into every micro-call.
@@ -41,7 +41,7 @@ from scribe.schema import (
     Reversibility,
 )
 
-from harness.scribe_runtime import build_real_seams
+from control_plane.scribe_runtime import build_real_seams
 
 pytestmark = pytest.mark.asyncio
 

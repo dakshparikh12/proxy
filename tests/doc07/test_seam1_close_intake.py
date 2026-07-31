@@ -9,10 +9,10 @@ import copy
 import uuid
 
 import pytest
-from harness.post_meeting.intake import run_intake, run_intake_guarded
-from harness.post_meeting.models import TaskState, Tier
-from harness.post_meeting.triage import TRIAGE_SCHEMA
-from harness.scribe_runtime import CloseConfig, _run_post_meeting_intake
+from control_plane.post_meeting.intake import run_intake, run_intake_guarded
+from control_plane.post_meeting.models import TaskState, Tier
+from control_plane.post_meeting.triage import TRIAGE_SCHEMA
+from control_plane.scribe_runtime import CloseConfig, _run_post_meeting_intake
 
 from libs.llm.src.llm.structured import StructuredOutputError, StructuredResult
 

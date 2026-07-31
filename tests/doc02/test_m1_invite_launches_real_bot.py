@@ -1,6 +1,6 @@
 """Doc 02 · M1 — the invite path launches a REAL Recall bot (AC-JOIN-01/10/15).
 
-Regression for DOC02-RECALL-BOT-NEVER-LAUNCHED: ``harness.invite_proxy`` must NOT
+Regression for DOC02-RECALL-BOT-NEVER-LAUNCHED: ``control_plane.invite_proxy`` must NOT
 fabricate a ``recall-bot-<uuid>`` id. It must drive the real ``TransportProvider``
 (``RecallTransport`` bound to the funded ``call_external`` seam), write back the id
 Recall actually returns, and post the consent notice pinned as the first observable
@@ -52,7 +52,7 @@ def test_invite_launches_real_bot_and_writes_back_recall_id():
 
     criterion_id: AC-JOIN-10
     """
-    from services.harness import invite_proxy, resolve_bot_id
+    from control_plane.meetings import invite_proxy, resolve_bot_id
     from libs.db import Database
     from transport.recall import RecallTransport
 
@@ -118,7 +118,7 @@ def test_invite_posts_pinned_consent_before_observation():
 
     criterion_id: AC-JOIN-15
     """
-    from services.harness import invite_proxy
+    from control_plane.meetings import invite_proxy
     from libs.db import Database
     from transport.recall import RecallTransport
     from transport.consent import consent_notice
@@ -152,12 +152,12 @@ def test_invite_posts_pinned_consent_before_observation():
     chat_calls = [
         c for c in seam.calls
         if isinstance(c["op_result"], dict)
-        and c["op_result"].get("url", "").endswith("/chat")
+        and c["op_result"].get("url", "").endswith("/send_chat_message/")
     ]
-    assert chat_calls, "consent notice must be posted via a real /chat round-trip"
+    assert chat_calls, "consent notice must be posted via a real send_chat_message round-trip"
     body = chat_calls[0]["op_result"]["body"]
     assert body.get("message") == consent_notice()
-    assert body.get("pinned") is True, "consent line must be PINNED where the platform allows"
+    assert body.get("pin") is True, "consent line must be PINNED where the platform allows"
 
     # The join result reports notice_posted honestly and observation is gated on it.
     assert meeting.notice_posted is True

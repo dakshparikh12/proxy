@@ -5,9 +5,9 @@ import copy
 import uuid
 
 import pytest
-from harness.post_meeting.config import PostMeetingConfig
-from harness.post_meeting.models import Tier
-from harness.post_meeting.triage import (
+from control_plane.post_meeting.config import PostMeetingConfig
+from control_plane.post_meeting.models import Tier
+from control_plane.post_meeting.triage import (
     DRAFT_TIER_CONDITIONS,
     TRIAGE_SCHEMA,
     apply_tier_floor,
@@ -264,7 +264,7 @@ async def test_ac_pme_06_neg_no_sandbox_is_started_during_triage():
     from ._support import assert_no_code_reference
 
     assert_no_code_reference(
-        "services/harness/src/harness/post_meeting/triage.py",
+        "services/control-plane/src/control_plane/post_meeting/triage.py",
         ("sandbox", "e2b", "propose_change", "staged_drafts"),
     )
 

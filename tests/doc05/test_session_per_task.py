@@ -8,10 +8,10 @@ row keyed operation_type='workroom:<id>', NO workroom_tasks table), §3.9 (the
 1-hour-TTL prompt cache on the stable Workroom prefix), CANONICAL §10.1 / §12.10.
 
 This is the LIVE-ASSEMBLY seam (the doc04 lesson): Doc 04's bundle-dispatch
-(``harness.dispatch``) creates a ``contracts.Bundle`` + a ``workroom:<id>``
+(``control_plane.dispatch``) creates a ``contracts.Bundle`` + a ``workroom:<id>``
 operation_runs row and dispatches it; THIS driver is what the dispatch invokes —
 it consumes that REAL ``contracts.Bundle`` and produces a REAL ``contracts.Envelope``
-on the reachable host path. The seam is proven end-to-end: ``harness.dispatch``
+on the reachable host path. The seam is proven end-to-end: ``control_plane.dispatch``
 persists the row + hands the ``WorkroomHandle``, and ``SessionDriver.run_task``
 consumes the same Bundle and fills the SAME row's ``result_ref`` with the Envelope.
 
@@ -46,7 +46,7 @@ from typing import Any
 
 import pytest
 
-# Match the product: harness.dispatch / harness.orchestrator return objects from the
+# Match the product: control_plane.dispatch / control_plane.orchestrator return objects from the
 # top-level ``contracts`` module, so import the contract types from there (``libs.contracts``
 # resolves to a DISTINCT module identity under the test src-wiring → isinstance would fail).
 from contracts import AgentChunk, Bundle, Envelope
@@ -167,7 +167,7 @@ class FakeSharedSandboxFS:
 class FakeStore:
     """An in-process stand-in for the ``operation_runs`` row store (§12.10).
 
-    The dispatch (``harness.dispatch``) already claimed the ``workroom:<id>`` row with
+    The dispatch (``control_plane.dispatch``) already claimed the ``workroom:<id>`` row with
     the Bundle in ``progress``; this store models THAT one row keyed by run_id so the
     driver can persist the terminal Envelope into the SAME row's ``result_ref`` — never
     a bespoke workroom_tasks table. ``set_result`` records the write; ``rows`` exposes
@@ -359,15 +359,15 @@ def test_session_module_never_names_a_workroom_tasks_table() -> None:
 
 def test_driver_consumes_real_bundle_returns_real_envelope() -> None:
     """DoD #4 (the seam / the doc04 lesson): the driver consumes a REAL contracts.Bundle
-    (the shape harness.dispatch persists) and returns a REAL contracts.Envelope carrying
+    (the shape control_plane.dispatch persists) and returns a REAL contracts.Envelope carrying
     the same task_id — reachable from the dispatch, not an isolation-only module."""
-    from harness.dispatch import assemble_bundle
+    from control_plane.dispatch import assemble_bundle
 
     from workroom.session import SessionDriver
 
     meeting_id = uuid.uuid4()
     task_id = uuid.uuid4()
-    # The EXACT bundle harness.dispatch assembles (04→05), consumed by THIS driver.
+    # The EXACT bundle control_plane.dispatch assembles (04→05), consumed by THIS driver.
     bundle = assemble_bundle(
         ask="build the checkout-retry refactor",
         speaker="Priya",
@@ -474,10 +474,10 @@ def test_two_meetings_get_two_isolated_sandboxes() -> None:
 
 
 def store_dispatch(store: FakeStore, bundle: Bundle) -> str:
-    """Model ``harness.dispatch``: claim the ``workroom:<id>`` row with the Bundle in
+    """Model ``control_plane.dispatch``: claim the ``workroom:<id>`` row with the Bundle in
     progress and return the run_id — the row the driver then fills with the Envelope.
 
-    This mirrors ``harness.dispatch._claim_workroom_row`` so the driver is exercised
+    This mirrors ``control_plane.dispatch._claim_workroom_row`` so the driver is exercised
     on exactly the row-shape the real dispatch persists (progress = bundle jsonb).
     """
     from workroom.session import workroom_op_type
@@ -506,7 +506,7 @@ def _local_dsn() -> str | None:
 
 @pytest.mark.integration
 def test_driver_fills_the_real_operation_runs_row_dispatch_created() -> None:
-    """The FULL seam on the REAL DB: harness.dispatch persists the workroom:<id> row,
+    """The FULL seam on the REAL DB: control_plane.dispatch persists the workroom:<id> row,
     the driver runs the task and writes the terminal Envelope into the SAME row's
     result_ref — one row, keyed workroom:<id>, no new table (§12.10)."""
     dsn = _local_dsn()
@@ -514,7 +514,7 @@ def test_driver_fills_the_real_operation_runs_row_dispatch_created() -> None:
         pytest.skip("no local Postgres (set TEST_DATABASE_URL)")
     import json
 
-    from harness.dispatch import assemble_bundle, dispatch_workroom
+    from control_plane.dispatch import assemble_bundle, dispatch_workroom
 
     from workroom.session import SessionDriver
 

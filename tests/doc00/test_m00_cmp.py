@@ -21,9 +21,19 @@ import _support as S
 def test_cmp_001_six_packages_three_deployables():
     """AC-CMP-001: six mechanism pieces are code packages under services/*, deploying as exactly three deployables."""
     services = S.list_subdirs("services")
-    expected_pkgs = {"harness", "code_intel", "transport", "scribe", "workroom"}
-    # The six *pieces* (incl. Experience/08 which is apps/* + libs/contracts) collapse to five service packages.
+    # The six *pieces* (incl. Experience/08 which is apps/* + libs/contracts) collapse
+    # to service packages. Since the SPEC §10 restructure: connections (the
+    # ``transport`` package) belong to the in-meeting service, and the per-meeting
+    # runtime + control_plane assembly live in services/control-plane — the mechanism
+    # PACKAGES all still exist, homed per the target tree.
+    expected_pkgs = {"code_intel", "scribe", "workroom"}
     assert expected_pkgs <= services, f"services/ missing mechanism packages: {expected_pkgs - services}"
+    assert (S.ROOT / "services" / "in-meeting" / "src" / "transport" / "__init__.py").is_file(), (
+        "the transport (connections) mechanism package must exist inside the in-meeting service"
+    )
+    assert (S.ROOT / "services" / "control-plane" / "src" / "control_plane" / "__init__.py").is_file(), (
+        "the control_plane assembly + per-meeting runtime package must exist under services/control-plane"
+    )
 
     # Deploy target set == exactly three deployables, discovered from the infra/deploy text.
     infra = S.read_all_text("*", root_parts=("infra",)) + S.read_all_text("*", root_parts=("deploy",))

@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-from harness.post_meeting.approval import (
+from control_plane.post_meeting.approval import (
     PRE_APPROVAL_MODEL_CALLS,
     PRE_APPROVAL_WRITABLE_TABLES,
     Approval,
@@ -22,8 +22,8 @@ from harness.post_meeting.approval import (
     load_and_check,
     may_dispatch,
 )
-from harness.post_meeting.clarify import run_clarify
-from harness.post_meeting.models import UNRESOLVED, Source, TaskRecord, TaskState
+from control_plane.post_meeting.clarify import run_clarify
+from control_plane.post_meeting.models import UNRESOLVED, Source, TaskRecord, TaskState
 
 from ._support import FakeClarifyStore, FakeTaskStore, ForbiddenSandbox
 

@@ -3,7 +3,7 @@
 This is the single canonical home for ``answer_direct`` (G4-DUPLICATE-ANSWER-DIRECT-
 ENTRYPOINTS). It lives in the ``code_intel`` layer because it composes THIS
 service's own structural tools and imports nothing from any upper layer — the
-harness (Doc 03) re-exports it *downward* (``harness.direct_answer``), never the
+harness (Doc 03) re-exports it *downward* (``control_plane.direct_answer``), never the
 reverse. There is no parallel stub and no second copy of the resolver logic.
 
 A reactive transcript ask ("who writes the users table?", "what depends on

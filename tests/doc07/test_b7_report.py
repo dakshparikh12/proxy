@@ -5,7 +5,7 @@ import uuid
 
 import pytest
 from contracts.channels import ChannelReport
-from harness.post_meeting.report import (
+from control_plane.post_meeting.report import (
     CONFIDENCE_BY_STATUS,
     DRAFT_CARD,
     KIND_BY_STATUS,
@@ -231,7 +231,7 @@ async def test_ac_pme_16_neg_slack_is_not_special_cased_anywhere():
     import pathlib
 
     src = pathlib.Path(
-        "services/harness/src/harness/post_meeting/report.py"
+        "services/control-plane/src/control_plane/post_meeting/report.py"
     ).read_text(encoding="utf-8").lower()
     assert "slack_dm" not in src
     assert 'channel == "slack"' not in src
@@ -245,7 +245,7 @@ async def test_ac_pme_16_the_draft_card_is_built_by_doc08s_formatter():
     (CANONICAL §11.5), which only holds if there is one formatter.
     """
     from contracts import DraftCard
-    from harness.post_meeting.report import build_draft_card
+    from control_plane.post_meeting.report import build_draft_card
 
     meeting = uuid.uuid4()
     draft = uuid.uuid4()
@@ -262,7 +262,7 @@ async def test_ac_pme_16_the_draft_card_is_built_by_doc08s_formatter():
 
 async def test_ac_pme_16_a_card_without_a_draft_id_is_a_wiring_error():
     """format_draft_card raises rather than render a click that points at nothing."""
-    from harness.post_meeting.report import build_draft_card
+    from control_plane.post_meeting.report import build_draft_card
 
     r = build_report(env("done"), task_id=TASK, owner="Sam")  # no draft_id
     with pytest.raises(ValueError, match="draft_id"):
