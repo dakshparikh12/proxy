@@ -1,0 +1,77 @@
+"""The in-sandbox MCP server that gives native Claude its ONE connection to the meeting.
+
+This standalone script runs INSIDE the workroom sandbox and is registered with native ``claude``
+via ``.mcp.json`` (stdio transport). It exposes exactly one tool, ``to_meeting`` — the agent's whole
+interface to the room (it decides content + medium; see ``meeting_connection.TO_MEETING_TOOL``).
+
+Two modes, one tool signature (so the agent's behavior is identical either way):
+
+* **proof / simulation** (default): every ``to_meeting`` call is appended as one JSON line to
+  ``$PROXY_MEETING_OUT`` (default ``/tmp/to_meeting.jsonl``). The host reads that file to see exactly
+  what Proxy chose to communicate, when, and how — proving the agent's dynamic behavior on real
+  cal.com data with a simulated meeting, before any live vendor round-trip.
+* **live** (``$PROXY_MEETING_RELAY`` set to the host URL): the call is POSTed to the host, which
+  lands it on ``MeetingConnection`` (the real Recall/Cartesia send, creds host-side).
+
+The script is intentionally dependency-light (only the ``mcp`` SDK, ``pip install``-ed into the
+sandbox at setup) and imports nothing from the workspace, since it runs where the workspace is not.
+"""
+from __future__ import annotations
+
+import json
+import os
+import time
+import urllib.request
+
+_OUT_PATH = os.environ.get("PROXY_MEETING_OUT", "/tmp/to_meeting.jsonl")
+_RELAY_URL = os.environ.get("PROXY_MEETING_RELAY", "").strip()
+_RELAY_TOKEN = os.environ.get("PROXY_MEETING_TOKEN", "").strip()
+
+
+def _record(rec: dict) -> None:
+    with open(_OUT_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec) + "\n")
+
+
+def _relay(rec: dict) -> str:
+    data = json.dumps(rec).encode("utf-8")
+    req = urllib.request.Request(_RELAY_URL, data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    if _RELAY_TOKEN:
+        req.add_header("Authorization", f"Bearer {_RELAY_TOKEN}")
+    with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310 — fixed host URL, host-side creds
+        return resp.read().decode("utf-8", "replace")
+
+
+def _deliver(content: str, medium: str, to: str) -> str:
+    rec = {"ts": time.time(), "content": content, "medium": medium, "to": to}
+    if _RELAY_URL:
+        try:
+            return _relay(rec) or f"delivered via {medium}"
+        except Exception as exc:  # noqa: BLE001 — never crash the agent's turn on a send fault
+            _record({**rec, "relay_error": str(exc)})
+            return f"send via {medium} failed: {exc}"
+    _record(rec)
+    return f"delivered via {medium}"
+
+
+def main() -> None:
+    from mcp.server.fastmcp import FastMCP
+
+    server = FastMCP("meeting")
+
+    @server.tool()
+    def to_meeting(content: str, medium: str = "say", to: str = "") -> str:
+        """Send something to the live meeting. You decide what to convey and how.
+
+        medium: 'say' (out loud, default) | 'chat' | 'dm' (needs `to`) | 'screen' (show a URL/view) |
+        'offer' (stage a world-touching change/message for a human's one-click approval) | 'mute' |
+        'unmute'. Use your judgment like a great teammate; stay silent by simply not calling this.
+        """
+        return _deliver(content, (medium or "say").strip().lower(), to)
+
+    server.run()
+
+
+if __name__ == "__main__":
+    main()
