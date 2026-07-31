@@ -150,11 +150,12 @@ class Workroom:
             "ACTUAL code, run code to verify, draft real files). Reach the room through your "
             "`mcp__meeting__to_meeting` tool (call it by that exact name — it is already loaded, don't "
             "search for it): you choose what to convey and how (say/chat/dm/screen/offer/mute), live, "
-            "like a great teammate. Deliver your result to the room as SOON as you have it — for a "
-            "longer task give a brief spoken ack first and run heavy verification AFTER you've conveyed "
-            "the result, so a long turn never leaves the room with nothing. For anything world-touching, "
-            "produce the real artifact and offer it (medium='offer') — you have no push/send "
-            "credentials by design."
+            "like a great teammate. This is ONE turn: for a longer task, give a brief spoken ack "
+            "first (\"on it…\") so the room isn't left waiting, do the work, and then — before you "
+            "stop — ALWAYS deliver your actual result or offer. Never end on just the ack: the last "
+            "thing you do must be the real answer/artifact conveyed to the room. Put heavy verification "
+            "before that final delivery, not after. For anything world-touching, produce the real "
+            "artifact and offer it (medium='offer') — you have no push/send credentials by design."
         )
         cmd = (
             f"cd {shlex.quote(self.repo_dir)} && "
@@ -176,9 +177,15 @@ class Workroom:
             raw = getattr(await self.call(lambda: self.sandbox.files.read("/tmp/ask.jsonl"),  # nosec B108 — path INSIDE the isolated per-tenant E2B microVM, not the host
                                           service="e2b"), "value", "")
             # The agent's OWN channel choices this turn, as the in-sandbox MCP server recorded them
-            # to $PROXY_MEETING_OUT (the no-relay/file path). Empty/absent ⇒ no recorded intents.
-            intents_raw = getattr(await self.call(lambda: self.sandbox.files.read(TO_MEETING_OUT),
-                                                  service="e2b"), "value", "")
+            # to $PROXY_MEETING_OUT (the no-relay/file path). A MISSING file is the NORMAL silence
+            # case — the agent chose not to call to_meeting (e.g. declined a false wake), so the MCP
+            # server never created it. Treat that as "no intents", NEVER an error: otherwise a correct
+            # silence would surface a spurious "I hit a problem" degrade into a room Proxy stayed out of.
+            try:
+                intents_raw = getattr(await self.call(lambda: self.sandbox.files.read(TO_MEETING_OUT),
+                                                      service="e2b"), "value", "")
+            except Exception:  # noqa: BLE001 — absent intent file = clean silence, not a fault
+                intents_raw = ""
             return _parse_stream(ask, raw or "", intents_raw or "")
         except Exception as exc:  # noqa: BLE001 — never crash the loop
             logger.exception("workroom run_ask failed")

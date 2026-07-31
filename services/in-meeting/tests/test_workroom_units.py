@@ -207,6 +207,48 @@ def test_run_ask_returns_an_honest_error_result_when_the_command_faults() -> Non
     asyncio.run(_run())
 
 
+def test_run_ask_missing_intent_file_is_clean_silence_not_an_error() -> None:
+    """When the agent chooses SILENCE (declines a false wake / says nothing) it never calls
+    to_meeting, so $PROXY_MEETING_OUT is never created and its read RAISES. That must be treated as
+    'no intents' (clean silence), NOT a run_ask error — otherwise a correct silence surfaces a
+    spurious 'I hit a problem' degrade into a room Proxy stayed out of."""
+    from in_meeting.workroom import Workroom
+
+    class _SilentSandbox:
+        class _Cmds:
+            async def run(self, *a: Any, **k: Any) -> Any:
+                return SimpleNamespace(exit_code=0, stdout="DONE", stderr="")
+
+        class _Files:
+            async def write(self, *a: Any, **k: Any) -> None:
+                return None
+
+            async def read(self, path: str) -> str:
+                if path.endswith("ask.jsonl"):
+                    # a clean turn: assistant declined in prose, then a normal result event
+                    return "\n".join([
+                        json.dumps({"type": "assistant",
+                                    "message": {"content": [{"type": "text",
+                                                             "text": "Not addressed — staying silent."}]}}),
+                        json.dumps({"type": "result", "result": "", "total_cost_usd": 0.01}),
+                    ])
+                raise FileNotFoundError("path '/tmp/to_meeting.jsonl' does not exist")
+
+        def __init__(self) -> None:
+            self.commands = self._Cmds()
+            self.files = self._Files()
+            self.sandbox_id = "s"
+
+    async def _run() -> None:
+        wr = Workroom(sandbox=_SilentSandbox(), call=_passthru_call, token="t")
+        res = await wr.run_ask("our proxy server keeps timing out")
+        assert res.error is None      # a missing intent file is silence, NOT an error
+        assert res.sent == []         # no channel choices → the session stays quiet
+        assert res.text == ""
+
+    asyncio.run(_run())
+
+
 def test_run_ask_hands_the_relay_wiring_as_envs(monkeypatch) -> None:
     """run_ask launches native claude with the meeting MCP config and the relay envs
     (RELAY/TOKEN/OUT + the subscription auth) so a live turn's to_meeting reaches the host."""
