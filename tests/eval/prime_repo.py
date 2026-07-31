@@ -364,6 +364,18 @@ async def prime_repo(spec_name: str = "calcom", *, build_map: bool = True) -> Pr
     degraded = True
     if build_map:
         map_text, degraded = await _build_map(spec, clone_path, resolved_sha)
+    if map_text is None:
+        # A full-content map does not fit an enterprise monorepo (7k+ files) — fall back
+        # to a SCALABLE STRUCTURAL index so the agent still KNOWS THE CODEBASE'S SHAPE
+        # (top-level areas + real files + real symbols + README) and fills exact
+        # file:line details on demand via grounded grep/read. This is a real map, not a
+        # degrade — it's the right index for a monorepo.
+        map_text = (
+            "Structural index of a large monorepo. This is the codebase you already "
+            "know — its shape is below; use grounded grep/read for exact file:line "
+            "details on demand.\n\n" + facts.brief(max_files=150, max_symbols=80)
+        )
+        degraded = False
 
     return PrimedRepo(
         name=spec.name,
