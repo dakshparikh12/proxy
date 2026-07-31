@@ -120,6 +120,10 @@ class _PushWebhook:
     num_commits: int = 1
     signature_valid: bool = True
     forced: bool = False
+    # The AUTHENTICATED GitHub installation account id the push arrived under (B5). The
+    # tenant is derived from THIS (not the shareable repo URL) so a push refreshes the
+    # right customer's map even when two customers connected the same repo URL.
+    installation_account: str = ""
 
 
 def _changed_files_from_commits(payload: dict[str, Any]) -> list[str]:
@@ -159,6 +163,39 @@ def _repo_url_from_payload(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _installation_account_from_payload(payload: dict[str, Any]) -> str:
+    """The AUTHENTICATED installation account id the push arrived under (B5).
+
+    GitHub's webhook payload carries ``installation.id`` — the id of the GitHub-App
+    installation the delivery is authenticated against. This is the tenant-isolating
+    identity (two customers of the same repo are two installations); it is read from
+    the SIGNED payload (verified upstream), never a request field the caller forges.
+    Returns "" when absent so the tenant resolution fails CLOSED (no repo-only tenant).
+    """
+    install = payload.get("installation")
+    if not isinstance(install, dict):
+        return ""
+    account = install.get("id")
+    return str(account) if account not in (None, "") else ""
+
+
+def _tenant_from_push(payload: dict[str, Any], repo_url: str) -> str:
+    """Resolve the push's tenant SERVER-SIDE from its installation account + repo (B5).
+
+    Mirrors ``connect._tenant_for_install`` so a push refreshes the SAME tenant the
+    connect flow bound for that installation+repo. Keyed on the installation account
+    (not the shareable repo URL), so a push for customer A's install of a shared repo
+    never touches customer B's map. Fails CLOSED to "" when the payload carries no
+    installation id (never a repo-only tenant that could cross the boundary).
+    """
+    account = _installation_account_from_payload(payload)
+    if not account:
+        return ""
+    from control_plane.connect import _tenant_for_install
+
+    return _tenant_for_install(repo_url, installation_account=account)
+
+
 def _push_webhook_from_payload(
     payload: dict[str, Any], delivery_guid: str
 ) -> _PushWebhook | None:
@@ -183,6 +220,7 @@ def _push_webhook_from_payload(
         changed_files=_changed_files_from_commits(payload),
         num_commits=num_commits,
         forced=bool(payload.get("forced")),
+        installation_account=_installation_account_from_payload(payload),
     )
 
 
@@ -204,7 +242,19 @@ def _maybe_refresh_map(app: Any, webhook: Any) -> None:
 
         from premeeting.refresh import refresh_on_push
 
-        tid = tenant_id(webhook.repo_url) if callable(tenant_id) else getattr(webhook, "tenant_id", "")
+        from control_plane.connect import _tenant_for_install
+
+        # B5: derive the tenant from the push's AUTHENTICATED installation account, keyed
+        # exactly like the connect flow (never the shareable repo URL). Prefer an account
+        # carried on the verified webhook; fall back to any explicit resolver/tenant, but
+        # NEVER to a repo-only key that could cross the tenant boundary.
+        account = str(getattr(webhook, "installation_account", "") or "")
+        if account:
+            tid: Any = _tenant_for_install(webhook.repo_url, installation_account=account)
+        elif callable(tenant_id):
+            tid = tenant_id(webhook)
+        else:
+            tid = getattr(webhook, "tenant_id", "")
         if not tid:
             return
 

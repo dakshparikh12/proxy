@@ -150,6 +150,85 @@ class _SpeakSink:
             await cut()
 
 
+def _approve_url_for(meeting_id: str, draft_id: str) -> str:
+    """The human approve URL for a staged draft: ``<PUBLIC_BASE_URL>/m/<mid>/drafts/<did>/accept``.
+
+    Built from the deployment's public origin (``PUBLIC_BASE_URL``) + the EXISTING accept route
+    (``accept_route.ACCEPT_PATH``) so the offer link a human clicks lands on the real, hardened
+    accept handler. Empty origin ⇒ "" (honest degrade: no reachable approve link) — pure string
+    physics (Law 4), the same shape ``relay.relay_url_for`` uses."""
+    base = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
+    if not base:
+        return ""
+    from .accept_route import ACCEPT_PATH
+
+    path = ACCEPT_PATH.format(meeting_id=meeting_id, draft_id=draft_id)
+    return f"{base}{path}"
+
+
+def _build_meeting_sinks(
+    *, db: Database, meeting_id: str, tenant_id: str
+) -> tuple[Any, Any]:
+    """Build the ``(offer, screen)`` sinks the :class:`MeetingConnection` carries (Law-3 safe).
+
+    * **offer** ``(content, to) -> approve_url``: STAGES a durable draft (``workroom.drafts.
+      propose_change`` on the async pool → one GCS bundle + one ``staged_drafts`` row at
+      ``status=proposed``) and returns the approve URL built from ``PUBLIC_BASE_URL`` + the accept
+      route. It NEVER pushes/sends — the actual apply happens only when a human clicks accept (Law 3;
+      the sandbox holds no push/send creds). A staging fault returns "" (honest — no approve link),
+      never a raise (the connection turns a "" into an honest ``MeetingSend(ok=..)``).
+    * **screen** ``(url) -> shown_url``: points the meeting's Output-Media surface at ``url`` via the
+      real ``output_media`` channel and returns the URL it recorded — an honest surface intent, never
+      a fabricated success.
+
+    Both are async callables matching the ``OfferSink`` / ``ScreenSink`` Protocols; ``db`` +
+    ``meeting_id`` are closed over so the staged draft binds to THIS meeting. ``tenant_id`` is
+    accepted for symmetry/audit; the accept route re-derives the owning tenant server-side from the
+    persisted row (a client field never authorizes an entity)."""
+    _ = tenant_id  # the accept route derives the owning tenant server-side from the persisted row
+
+    async def _offer(content: str, to: str) -> str:
+        # World-touching = a STAGED draft behind a human click (Law 3): persist the artifact +
+        # return the approve URL; NEVER push. A staging fault degrades to "" (no approve link).
+        try:
+            from workroom.drafts import propose_change
+
+            summary = (content or "").strip().splitlines()[0][:120] if content else "proposed change"
+            proposed = await propose_change(
+                db,
+                meeting_id=meeting_id,
+                kind="code-change",
+                summary=summary or "proposed change",
+                content=content,
+            )
+            return _approve_url_for(meeting_id, str(proposed.draft_id))
+        except Exception:  # noqa: BLE001 - a staging fault is an honest "" (no link), never a crash
+            _log.warning(
+                "offer staging failed for meeting %s — no approve link (honest degrade)",
+                meeting_id,
+                exc_info=True,
+            )
+            return ""
+
+    async def _screen(url: str) -> str:
+        # Point the bot's Output-Media surface at the URL (a rendered diff/mock/page) and return
+        # the URL recorded — an honest surface intent, never a fabricated success.
+        try:
+            from in_meeting import output_media
+
+            channel = output_media.channel_for(meeting_id)
+            return await channel.set_screen(url)
+        except Exception:  # noqa: BLE001 - a surface fault degrades to the honest URL, never a crash
+            _log.warning(
+                "screen surface update failed for meeting %s (honest degrade)",
+                meeting_id,
+                exc_info=True,
+            )
+            return (url or "").strip()
+
+    return _offer, _screen
+
+
 def _meeting_info_md(payload: dict[str, Any]) -> str:
     """Render ``MEETING_INFO.md`` (who's in the room) from the ``in_call`` webhook payload.
 
@@ -419,12 +498,19 @@ async def _assemble_workroom(
             )
 
     # The one meeting connection: the agent's result is carried out over the Cartesia speak
-    # pipe (say/cut) + the Recall room verbs (chat/dm/mute/unmute — creds host-side). This
-    # is a driver, not a decision (Law 4): the agent chooses what/how, this maps to physics.
+    # pipe (say/cut) + the Recall room verbs (chat/dm/mute/unmute — creds host-side) + the
+    # offer/screen sinks (world-touching-safe, below). This is a driver, not a decision (Law 4):
+    # the agent chooses what/how, this maps to physics.
+    tenant_id = str(resolved.get("tenant_id") or "")
+    offer_sink, screen_sink = _build_meeting_sinks(
+        db=db, meeting_id=meeting_id, tenant_id=tenant_id
+    )
     connection = MeetingConnection(
         speak=_SpeakSink(pipe=speak_pipe),
         room=live_transport,
         bot_id=bot_id,
+        offer=offer_sink,
+        screen=screen_sink,
     )
     session = MeetingSession(workroom=workroom, connection=connection)
     _log.info(

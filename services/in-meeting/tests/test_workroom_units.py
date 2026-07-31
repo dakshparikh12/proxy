@@ -66,6 +66,30 @@ def test_parse_stream_skips_malformed_lines_and_flags_abnormal_termination() -> 
     assert empty.error is None
 
 
+def test_parse_stream_salvages_last_assistant_text_on_abnormal_exit() -> None:
+    """FW-3: an abnormally-terminated turn (assistant prose but NO ``result`` event) recovers its
+    last prose into ``text`` so the session can surface the partial work instead of it vanishing —
+    while STILL flagging ``error`` (the turn is honestly incomplete)."""
+    from in_meeting.workroom import _parse_stream
+
+    raw = "\n".join(
+        [
+            json.dumps({"type": "assistant",
+                        "message": {"content": [{"type": "text", "text": "Drafting the fix..."}]}}),
+            json.dumps({"type": "assistant",
+                        "message": {"content": [{"type": "tool_use", "name": "Edit"}]}}),
+            json.dumps({"type": "assistant",
+                        "message": {"content": [{"type": "text",
+                                                 "text": "Wrote the migration; validating on Postgres"}]}}),
+            # (no result event — killed at the timeout ceiling)
+        ]
+    )
+    res = _parse_stream("implement the fix", raw)
+    assert res.text == "Wrote the migration; validating on Postgres"  # salvaged last prose
+    assert res.error == "turn did not complete"                        # still honestly incomplete
+    assert res.tools == ["Edit"]
+
+
 def test_parse_stream_no_result_but_recorded_intents_is_not_an_error() -> None:
     """An abnormal-looking stream (assistant turns, no ``result``) is NOT flagged an error when the
     agent DID record ``to_meeting`` intents — those intents carry the turn, so the session replays

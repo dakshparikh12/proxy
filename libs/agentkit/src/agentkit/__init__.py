@@ -24,6 +24,9 @@ from .provider import pick_provider as pick_provider
 from .provider import register_provider as register_provider
 from .provider import thinking_policy as thinking_policy
 from .resume import resume_with_fallback as resume_with_fallback
+from .sdk_provider import ClaudeAgentProvider as ClaudeAgentProvider
+from .sdk_provider import build_sdk_options as build_sdk_options
+from .sdk_provider import make_map_provider as make_map_provider
 
 __all__ = [
     "INJECTION_GUARDRAIL_MARK",
@@ -31,11 +34,14 @@ __all__ = [
     "AbortRegistry",
     "Behavior",
     "BehaviorConfig",
+    "ClaudeAgentProvider",
     "Provider",
     "ProviderError",
     "ProviderQuery",
+    "build_sdk_options",
     "compute_builtin_tools",
     "get_behavior",
+    "make_map_provider",
     "injection_guardrail_suffix",
     "pick_provider",
     "register",

@@ -26,6 +26,7 @@ path.
 """
 from __future__ import annotations
 
+import hmac
 import os
 from typing import Any
 
@@ -100,9 +101,17 @@ async def _run_reconcile_sweep_async(db: Any) -> dict[str, Any]:
 
 
 def _valid_internal_token(token: Any) -> bool:
-    """True iff ``token`` matches the bound internal-reconcile token."""
+    """True iff ``token`` matches the bound internal-reconcile token (constant-time).
+
+    The compare is ``hmac.compare_digest`` (B4) — a naked ``==`` leaks the token's
+    length/shared-prefix by timing, letting an attacker recover it byte-by-byte. In
+    prod ``INTERNAL_RECONCILE_TOKEN`` is a boot hard-gate (settings), so the dev
+    literal is a local-only fallback and never reaches a running production process.
+    """
     expected = os.environ.get("INTERNAL_RECONCILE_TOKEN") or _DEV_INTERNAL_TOKEN
-    return bool(token) and token == expected
+    if not token or not isinstance(token, str):
+        return False
+    return hmac.compare_digest(token, expected)
 
 
 def _reconcile_sweep_sync(conn: Any) -> int:

@@ -10,8 +10,12 @@ The required-key manifest mirrors ``.env.example`` (the config contract):
   * unconditional hard gates: ``DATABASE_URL``, ``GCS_BUCKET``, ``RECALL_API_KEY``,
     the three per-domain AES credential keys, and at least one Claude/Anthropic
     auth mode (``ANTHROPIC_API_KEY`` / ``ANTHROPIC_AUTH_TOKEN`` / Vertex).
-  * prod-gated: ``SESSION_SECRET`` and the GCP project id (required only when the
-    process runs in a ``prod``/``production`` environment).
+  * prod-gated: ``SESSION_SECRET``, the GCP project id, and the internal signing
+    secrets ``SESSION_SIGNING_KEY`` / ``INTERNAL_RECONCILE_TOKEN`` /
+    ``PROXY_INTERNAL_TOKEN`` (required only when the process runs in a
+    ``prod``/``production`` environment — off-prod a clearly-dev fallback stands).
+    A missing signing secret in prod would let an insecure literal escape the gate
+    (session forgery / reconcile bypass), so the gate CRASHES at boot naming it.
 
 Numeric tunables live in ``config/defaults.toml`` (never here); env overrides are
 for the secrets/seats above only.
@@ -49,6 +53,15 @@ class Settings(BaseSettings):
     recall_webhook_secret: str = Field(
         default="", validation_alias="RECALL_WEBHOOK_SECRET"
     )
+    # Back-compat only (B8): an earlier deployment used the env key
+    # ``RECALL_WORKSPACE_VERIFICATION_SECRET``. The CANONICAL name is
+    # ``RECALL_WEBHOOK_SECRET`` above; this fallback is resolved by
+    # ``resolved_recall_webhook_secret`` when the canonical is unset so an old .env
+    # doesn't silently disable webhook intake (verify would fail closed → 401 on
+    # every delivery → no provisioning). Prefer the canonical name in every new env.
+    recall_workspace_verification_secret: str = Field(
+        default="", validation_alias="RECALL_WORKSPACE_VERIFICATION_SECRET"
+    )
     # The GitHub-App webhook signing secret — the raw-UTF-8 HMAC key the §3.6
     # freshness push-ingress verifier (X-Hub-Signature-256) proves the caller with.
     # Sourced from Secret Manager as env, never a literal. Not a boot hard-gate; the
@@ -71,6 +84,19 @@ class Settings(BaseSettings):
     # -- prod-gated ----------------------------------------------------------
     session_secret: str = Field(default="", validation_alias="SESSION_SECRET")
     gcp_project_id: str = Field(default="", validation_alias="GCP_PROJECT_ID")
+    # The internal signing secrets (B4). Each has a clearly-dev fallback in its
+    # consumer (session.py / ops.reconcile) so local runs work UNSET; in prod a
+    # missing value would let that insecure literal escape into production (session
+    # forgery / reconcile+offboard bypass), so all three are prod-gated below.
+    session_signing_key: str = Field(
+        default="", validation_alias="SESSION_SIGNING_KEY"
+    )
+    internal_reconcile_token: str = Field(
+        default="", validation_alias="INTERNAL_RECONCILE_TOKEN"
+    )
+    proxy_internal_token: str = Field(
+        default="", validation_alias="PROXY_INTERNAL_TOKEN"
+    )
 
     def anthropic_auth_configured(self) -> bool:
         """At least one of the three Claude SDK auth modes is present."""
@@ -79,6 +105,16 @@ class Settings(BaseSettings):
             or self.anthropic_auth_token
             or self.claude_code_use_vertex
         )
+
+    def resolved_recall_webhook_secret(self) -> str:
+        """The Recall webhook signing secret — canonical name first, then back-compat.
+
+        Prefers ``RECALL_WEBHOOK_SECRET`` (canonical, B8) and falls back to the
+        legacy ``RECALL_WORKSPACE_VERIFICATION_SECRET`` only when the canonical is
+        unset, so an older .env keyed on the legacy name doesn't silently disable
+        webhook intake. Empty when neither is set (the route fails CLOSED at 401).
+        """
+        return self.recall_webhook_secret or self.recall_workspace_verification_secret
 
 
 def _missing_required(cfg: Settings) -> list[str]:
@@ -104,6 +140,16 @@ def _missing_required(cfg: Settings) -> list[str]:
             missing.append("SESSION_SECRET")
         if not cfg.gcp_project_id:
             missing.append("GCP_PROJECT_ID")
+        # B4 — the internal signing secrets must never fall back to their insecure
+        # dev literals in prod (session forgery / reconcile+offboard bypass). A
+        # missing value crashes at boot NAMING the key rather than silently serving
+        # a forgeable session or an open reconcile/offboard endpoint.
+        if not cfg.session_signing_key:
+            missing.append("SESSION_SIGNING_KEY")
+        if not cfg.internal_reconcile_token:
+            missing.append("INTERNAL_RECONCILE_TOKEN")
+        if not cfg.proxy_internal_token:
+            missing.append("PROXY_INTERNAL_TOKEN")
     return missing
 
 

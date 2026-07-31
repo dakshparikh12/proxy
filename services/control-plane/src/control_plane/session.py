@@ -17,9 +17,14 @@ from libs.db import Database, repos
 
 
 def _signing_key() -> bytes:
-    # Env-provided in every real environment; a clearly-dev fallback keeps local
-    # runs working. Never a production credential.
-    return os.environ.get("SESSION_SIGNING_KEY", "dev-insecure-session-key").encode()
+    # Env-provided in every real environment. The clearly-dev fallback keeps LOCAL
+    # runs working but is REFUSED in prod: the §6 boot gate (settings._missing_required)
+    # already crashes at boot when SESSION_SIGNING_KEY is unset in a prod env, so a
+    # forgeable insecure literal can never reach a running production process (B4).
+    key = os.environ.get("SESSION_SIGNING_KEY")
+    if key:
+        return key.encode()
+    return b"dev-insecure-session-key"  # dev-only; prod is gated at boot
 
 
 def _sign(session_id: str) -> str:

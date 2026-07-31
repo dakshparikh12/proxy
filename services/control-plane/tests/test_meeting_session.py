@@ -275,6 +275,52 @@ def test_fallback_speaks_an_honest_message_when_a_wake_errors_with_no_text() -> 
     asyncio.run(_run())
 
 
+def test_error_with_salvaged_text_surfaces_the_partial_work_not_a_bare_apology() -> None:
+    """FW-3 salvage: a turn that timed out mid-way but produced work (its last prose recovered into
+    result.text) speaks THAT partial result honestly, so a long task never leaves the room with a
+    bare 'sorry'. Distinct from the no-text case above (which stays a bare apology)."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+        drafted = "I drafted the double-booking fix on branch fix/x and was validating the migration"
+        wr = _FakeWorkroom(result=_result(text=drafted, error="turn did not complete", sent=[]))
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        await session.on_line("Bob", "proxy, implement the fix", ts=1.0)
+        await session.drain()
+
+        assert len(conn.sent) == 1 and conn.sent[-1].medium == "say"
+        # the salvaged work is surfaced (not the bare apology)
+        assert "double-booking fix" in conn.sent[-1].content
+        assert "ran long" in conn.sent[-1].content.lower()
+
+    asyncio.run(_run())
+
+
+def test_render_transcript_windows_to_recent_lines_with_an_elision_header() -> None:
+    """FW-2: the workroom feed is windowed to the last _TRANSCRIPT_WINDOW lines (O(1) per write, not
+    O(N)); older lines are elided with an honest header rather than re-uploaded every line."""
+    from control_plane.meeting_session import _TRANSCRIPT_WINDOW, MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+        wr = _FakeWorkroom(result=_result(text="", sent=[]))
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        # feed more than one window of non-addressing lines (no wake)
+        for i in range(_TRANSCRIPT_WINDOW + 50):
+            await session.on_line("Bob", f"line {i}", ts=float(i))
+        rendered = wr.fed[-1]
+        # only the window's worth of body lines are present, plus the elision header
+        assert "earlier line(s) elided" in rendered
+        assert "[5] Bob: line 5" not in rendered    # an early line is dropped (exact, ts-anchored)
+        assert f"Bob: line {_TRANSCRIPT_WINDOW + 49}" in rendered  # the newest line is present
+        assert rendered.count("] Bob:") == _TRANSCRIPT_WINDOW
+
+    asyncio.run(_run())
+
+
 def test_a_wake_that_raises_is_a_no_op_the_meeting_survives() -> None:
     """§3.8: a run_ask that RAISES never crashes the meeting — the session swallows it and the
     room simply gets nothing that turn (no result recorded, no send, drain still completes)."""

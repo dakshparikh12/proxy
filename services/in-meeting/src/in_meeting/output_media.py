@@ -89,6 +89,10 @@ class OutputMediaChannel:
         self._consumer_loop: asyncio.AbstractEventLoop | None = None
         self._wake: asyncio.Event | None = None
         self._closed = False
+        #: The URL Proxy last chose to SHOW on its Output-Media surface (the agent's ``screen``
+        #: medium). Recorded honestly (the current shown surface) — never a fabricated success.
+        #: The orb page reads it as a state message and swaps its view to the URL; absent = the orb.
+        self._screen_url: str = ""
 
     # -- the speak-path surface ---------------------------------------------
 
@@ -101,6 +105,24 @@ class OutputMediaChannel:
         """Signal the orb pulse: True while Proxy speaks, False after."""
         self._frames.append(json.dumps({"speaking": speaking}))
         self._notify()
+
+    async def set_screen(self, url: str) -> str:
+        """Point the Output-Media surface at ``url`` (the agent's ``screen`` medium). Returns ``url``.
+
+        Records the chosen URL as the current shown surface and enqueues a ``{"screen": url}`` state
+        message so an attached page can swap its view to it (an empty ``url`` returns to the orb).
+        This is the honest, real surface intent — NOT a fabricated success: it returns the exact URL
+        it recorded, and the state message reaches the live page like the speaking-pulse signal does.
+        """
+        clean = (url or "").strip()
+        self._screen_url = clean
+        self._frames.append(json.dumps({"screen": clean}))
+        self._notify()
+        return clean
+
+    def screen_url(self) -> str:
+        """The URL currently shown on this meeting's Output-Media surface ("" ⇒ the orb)."""
+        return self._screen_url
 
     def connected(self) -> bool:
         """Is a page currently attached to this channel?"""

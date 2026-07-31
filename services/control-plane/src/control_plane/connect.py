@@ -215,6 +215,20 @@ class ConnectStore:
         row = self._read_row(install_id)
         return list(row["states"]) if row is not None else []
 
+    def tenant_for_install(self, install_id: str) -> str | None:
+        """The owning tenant of an install (B7), or ``None`` if the install is unknown.
+
+        The seam GET /connect/status uses to bind the opaque poll handle to the
+        caller's authenticated tenant BEFORE returning any readiness — so the poll is
+        no longer a public bearer-handle read that leaks readiness/repo_url to anyone
+        holding the id. A substrate fault raises :class:`ConnectStoreUnavailable`.
+        """
+        row = self._read_row(install_id)
+        if row is None:
+            return None
+        tenant = row.get("tenant_id")
+        return str(tenant) if tenant is not None else None
+
     def _read_row(self, install_id: str) -> dict[str, Any] | None:
         with self._conn() as conn:
             row: dict[str, Any] | None = connect_repo.read_row(conn, install_id)
@@ -379,6 +393,23 @@ def get_connect_store(app: Any) -> ConnectStore:
     return store
 
 
+async def _resolve_session_for_status(db: Any, cookies: Any) -> dict[str, Any] | None:
+    """Resolve the caller's signed session → {user_id, tenant_id} for the status poll (B7).
+
+    A thin module-level seam over ``control_plane.session.resolve_session`` so the
+    §4.6 route can bind the opaque ``install_id`` to the caller's authenticated tenant
+    (a test overrides this seam). A resolution fault reads as no session — fail-closed.
+    """
+    if db is None:
+        return None
+    try:
+        from control_plane.session import resolve_session
+
+        return await resolve_session(db, cookies)
+    except Exception:  # noqa: BLE001 - a resolution fault is no session (fail-closed)
+        return None
+
+
 def install_connect_routes(app: "FastAPI") -> None:
     """Mount the two PUBLIC connect routes on the live control_plane app (§4.6).
 
@@ -400,16 +431,56 @@ def install_connect_routes(app: "FastAPI") -> None:
 
     @app.get("/connect/status", include_in_schema=True)
     async def connect_status(install_id: str, request: Request) -> JSONResponse:
-        """The public REST readiness poll — renders all five canonical states honestly.
+        """The REST readiness poll — bound to the caller's authenticated tenant (B7).
 
-        Reads the durable ``connect_readiness`` Postgres row (never an in-process dict). An
-        unknown install id reads as ``connecting`` (the store's honest default), so a
-        stale/typo'd handle yields a clean 200. When Postgres is UNREACHABLE the poll
-        degrades HONESTLY — status ``not_ready`` with a named gap, coverage 0, HTTP 503 —
-        NEVER a fabricated ``ready`` result (Law 2 / AC-CONN-010-NEG). The blocking psycopg
-        reads run in a worker thread so the event loop is never stalled.
+        The opaque ``install_id`` is a poll HANDLE, not an authorization: the poll first
+        resolves the caller's signed session and refuses (404) unless the install belongs
+        to the caller's tenant, so it no longer leaks readiness/repo_url to anyone holding
+        the id. A missing/invalid session or a cross-tenant install is a 404 (indistinct
+        from an unknown id — never confirming an install exists to a non-owner).
+
+        For the legitimate owner it reads the durable ``connect_readiness`` Postgres row
+        (never an in-process dict) and renders all five canonical states honestly. When
+        Postgres is UNREACHABLE the poll degrades HONESTLY — status ``not_ready`` with a
+        named gap, coverage 0, HTTP 503 — NEVER a fabricated ``ready`` (Law 2 /
+        AC-CONN-010-NEG). The blocking psycopg reads run in a worker thread.
         """
         store = get_connect_store(request.app)
+
+        # B7 — bind the install handle to the caller's authenticated tenant BEFORE any
+        # readiness leaves the boundary. Resolve the signed session; refuse (404) when
+        # there is none or when the install belongs to another tenant (a cross-tenant
+        # read is a P0 breach, invariant 9). A substrate fault on the ownership read
+        # degrades to the SAME honest 503 as the readiness read below.
+        db = getattr(request.app.state, "db", None)
+        session = await _resolve_session_for_status(db, request.cookies)
+        caller_tenant = session.get("tenant_id") if isinstance(session, dict) else None
+        try:
+            owner_tenant = await anyio.to_thread.run_sync(
+                store.tenant_for_install, install_id
+            )
+        except ConnectStoreUnavailable:
+            return JSONResponse(
+                {
+                    "install_id": install_id,
+                    "status": "not_ready",
+                    "coverage_pct": 0.0,
+                    "gaps": [
+                        "readiness record unavailable: the durable substrate is unreachable"
+                    ],
+                    "flagged_files": [],
+                },
+                status_code=503,
+            )
+        if (
+            caller_tenant is None
+            or owner_tenant is None
+            or str(caller_tenant) != str(owner_tenant)
+        ):
+            # Not the owner (no session / cross-tenant / unknown install) — a uniform 404
+            # that never confirms whether the install exists to a non-owner (§4.6).
+            return JSONResponse({"error": "not found"}, status_code=404)
+
         try:
             report = await anyio.to_thread.run_sync(store.status, install_id)
             flagged = (
@@ -439,7 +510,9 @@ def install_connect_routes(app: "FastAPI") -> None:
 
     @app.post("/connect/install/start", include_in_schema=True)
     async def connect_install_start(
-        request: Request, repo_url: str = Body(..., embed=True)
+        request: Request,
+        repo_url: str = Body(..., embed=True),
+        installation_account: str | None = Body(default=None, embed=True),
     ) -> JSONResponse:
         """Launch the GitHub-App install flow AND fire the connect→index trigger.
 
@@ -449,9 +522,16 @@ def install_connect_routes(app: "FastAPI") -> None:
         (missing ``repo_url``) is a FastAPI validation error (the caller's own bad input),
         never a 500 — the never-throw boundary. A substrate fault registering the install
         degrades HONESTLY to a 503, never a fabricated install handle.
+
+        The tenant is keyed on the AUTHENTICATED GitHub installation account (B5) when the
+        install callback has bound one (``installation_account``); absent that, a fresh
+        per-install random tenant — never the shareable repo URL, so two customers of the
+        SAME repo never collide onto one tenant (invariant 9, the cross-tenant P0).
         """
         store = get_connect_store(request.app)
-        tenant_id = _tenant_for_install(repo_url)
+        tenant_id = _tenant_for_install(
+            repo_url, installation_account=installation_account
+        )
         try:
             install_id = await anyio.to_thread.run_sync(
                 store.new_install, tenant_id, repo_url
@@ -486,19 +566,48 @@ def install_connect_routes(app: "FastAPI") -> None:
             status_code=200,
         )
 
+    # B6 — mount the authenticated tenant-offboard/deletion route on the SAME app. app.py
+    # (owned by another stream) already calls install_connect_routes, so registering the
+    # admin route here is how it reaches the live app without editing app.py. It is gated
+    # by the internal admin token (X-Internal-Token, constant-time), NOT a user session,
+    # and drives ops.run_reconcile_sweep's tenant-offboard sweep (delete every tenant-
+    # scoped Postgres row + the tenant's GCS prefixes).
+    from .admin_routes import install_admin_routes
 
-def _tenant_for_install(repo_url: str) -> str:
-    """The tenant a fresh install binds to — a deterministic per-repo uuid.
+    install_admin_routes(app)
 
-    The install/start caller is anonymous (no session yet — the install IS how a tenant is
-    provisioned), so the tenant is derived server-side from the repo binding, never a
-    client-supplied field. A real deployment resolves the GitHub installation → tenant on the
-    install callback; here the repo url is the stable binding key. It is a real uuid5 (a valid
-    ``tenants.id`` value) because ``connect_readiness.tenant_id`` is a DECLARED FK to
-    ``tenants(id)`` (AC-TEN-001) — the same repo url always maps to the same tenant uuid, so
-    the ``ensure_tenant`` upsert is idempotent across redeliveries.
+
+# The uuid5 namespace for the connect-tenant key. A fixed private namespace keeps the
+# derivation stable across processes/redeliveries while binding the tenant to the
+# INSTALLATION ACCOUNT identity, not the (shareable) repo URL (B5).
+_TENANT_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "proxy.connect.tenant")
+
+
+def _tenant_for_install(repo_url: str, *, installation_account: str | None = None) -> str:
+    """The tenant a fresh install binds to — keyed on the INSTALLATION ACCOUNT (B5).
+
+    The tenant boundary is the AUTHENTICATED GitHub installation account (the owner
+    org / installation id), NOT the repo URL. Two DIFFERENT customers who connect the
+    SAME public repo URL are two DIFFERENT installations, so they MUST get different
+    tenant_ids — deriving from the repo URL collided them onto one tenant and shared
+    their ``repo_maps`` / ``connect_readiness`` (a cross-tenant P0, invariant 9).
+
+    The key mixes the account with the repo so the SAME account's distinct repos are
+    distinct installs (distinct readiness rows) while the ACCOUNT is the isolating
+    factor: same account+repo → stable tenant (idempotent redelivery); different
+    account, same repo → different tenant. It is a real uuid5 (a valid ``tenants.id``
+    value; ``connect_readiness.tenant_id`` is a DECLARED FK to ``tenants(id)``).
+
+    When no installation account is available (an anonymous connect BEFORE the GitHub
+    App install callback has bound one), we fall back to a FRESH RANDOM tenant per
+    install rather than the shareable repo URL — so two anonymous connects of the same
+    repo still never collide (fail SAFE, never fail SHARED). The install callback binds
+    the real account-derived tenant once the installation identity is known.
     """
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, repo_url))
+    account = (installation_account or "").strip()
+    if not account:
+        return str(uuid.uuid4())
+    return str(uuid.uuid5(_TENANT_NAMESPACE, f"{account}\n{repo_url}"))
 
 
 def _spawn_trigger(

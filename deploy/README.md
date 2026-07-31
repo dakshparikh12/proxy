@@ -86,8 +86,30 @@ PROJECT=proxy-meeting-dev bash terraform/set-secrets.sh
 ```
 
 `RECALL_WEBHOOK_SECRET` is the signing secret (`whsec_…`) of the **status webhook**
-you register in the Recall dashboard (§4). `ASSEMBLYAI_API_KEY` is BYOK — the SAME
-key must ALSO be pasted into the Recall **Transcription** dashboard, per region.
+you register in the Recall dashboard (§4) — this is the **canonical** env key the
+receiver reads. (An older deployment used `RECALL_WORKSPACE_VERIFICATION_SECRET` for
+the same value; that legacy name is still honoured as a fallback, but
+`RECALL_WEBHOOK_SECRET` wins when both are set — set the canonical name.) A name
+mismatch here silently disables webhook intake: the receiver resolves `""`, fails
+closed (401) on every delivery, and no meeting is ever provisioned. `ASSEMBLYAI_API_KEY`
+is BYOK — the SAME key must ALSO be pasted into the Recall **Transcription** dashboard,
+per region.
+
+## Tenant offboard / deletion
+
+To honour a customer deletion/offboard request, POST to the authenticated admin route
+(the internal server-to-server trust plane, gated by `X-Internal-Token` =
+`PROXY_INTERNAL_TOKEN`, compared constant-time — never a user session):
+
+```bash
+curl -fsS -X POST \
+  -H "X-Internal-Token: $PROXY_INTERNAL_TOKEN" \
+  "$(terraform -chdir=terraform output -raw service_url)/admin/tenants/<tenant_id>/offboard"
+```
+
+This drives the idempotent offboard sweep (`ops.run_reconcile_sweep`): it deletes every
+tenant-scoped Postgres row (every table carrying a `tenant`/`tenant_id` column) and the
+tenant's GCS prefix namespace (`tenants/<tenant>/`). Running it twice is safe.
 
 ---
 

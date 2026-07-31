@@ -98,15 +98,21 @@ def _recall_webhook_secret() -> str:
     test can set ``RECALL_WEBHOOK_SECRET`` before building the app. An unset secret
     is an empty string, which makes :func:`verify_recall_signature` fail CLOSED
     (401) — an unverifiable delivery is never accepted.
+
+    Resolves the CANONICAL ``RECALL_WEBHOOK_SECRET`` first, falling back to the legacy
+    ``RECALL_WORKSPACE_VERIFICATION_SECRET`` (B8) so an older .env keyed on the legacy
+    name doesn't silently disable webhook intake (the env-key-name mismatch bug).
     """
     try:
         from control_plane.settings import Settings
 
-        return str(Settings().recall_webhook_secret)
+        return str(Settings().resolved_recall_webhook_secret())
     except Exception:  # pragma: no cover - settings unavailable ⇒ fail closed below
         import os
 
-        return os.environ.get("RECALL_WEBHOOK_SECRET", "")
+        return os.environ.get("RECALL_WEBHOOK_SECRET", "") or os.environ.get(
+            "RECALL_WORKSPACE_VERIFICATION_SECRET", ""
+        )
 
 
 def _delivery_guid(headers: Any, payload: dict[str, Any]) -> str:

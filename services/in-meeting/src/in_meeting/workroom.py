@@ -138,11 +138,23 @@ class Workroom:
 
         Never raises — a failed turn is an honest ``WorkroomResult.error`` (§9)."""
         prompt = (
-            "The room just addressed you. Your identity and how to behave are in ./CLAUDE.md; "
-            "the live meeting transcript is in ./MEETING_NOTES.md.\n\n"
-            f"The latest ask addressed to you:\n{ask}\n\n"
-            "Do it for real now, then reach the room through your `to_meeting` tool — you choose "
-            "what to convey and how (say/chat/dm/screen/offer/mute), live, like a great teammate."
+            "Someone in the room may have addressed you (your name was heard). Your identity and how "
+            "to behave are in ./CLAUDE.md; the live meeting transcript is in ./MEETING_NOTES.md.\n\n"
+            f"The line that woke you:\n{ask}\n\n"
+            "FIRST judge whether you were genuinely being addressed. If 'proxy' was used incidentally "
+            "(e.g. \"our proxy server\", \"the proxy pool\") or people are talking among themselves and "
+            "no one is actually asking you for anything, do nothing — simply don't call the tool. Only "
+            "act if you were really addressed.\n\n"
+            "If you were addressed, do exactly as much as the ask needs — a greeting or a quick "
+            "question is one direct reply with no tools; a real task gets the real work (read the "
+            "ACTUAL code, run code to verify, draft real files). Reach the room through your "
+            "`mcp__meeting__to_meeting` tool (call it by that exact name — it is already loaded, don't "
+            "search for it): you choose what to convey and how (say/chat/dm/screen/offer/mute), live, "
+            "like a great teammate. Deliver your result to the room as SOON as you have it — for a "
+            "longer task give a brief spoken ack first and run heavy verification AFTER you've conveyed "
+            "the result, so a long turn never leaves the room with nothing. For anything world-touching, "
+            "produce the real artifact and offer it (medium='offer') — you have no push/send "
+            "credentials by design."
         )
         cmd = (
             f"cd {shlex.quote(self.repo_dir)} && "
@@ -207,6 +219,7 @@ def _parse_stream(ask: str, raw: str, intents_raw: str = "") -> WorkroomResult:
     no recorded intents, mark it an honest ``error`` so the session can degrade without silence."""
     tools: list[str] = []
     text = ""
+    last_text = ""      # the most recent assistant prose — salvaged if the turn never emits a result
     cost = 0.0
     turns = 0
     saw_result = False
@@ -220,11 +233,18 @@ def _parse_stream(ask: str, raw: str, intents_raw: str = "") -> WorkroomResult:
             for b in ev.get("message", {}).get("content", []):
                 if b.get("type") == "tool_use":
                     tools.append(str(b.get("name", "")))
+                elif b.get("type") == "text" and str(b.get("text", "")).strip():
+                    last_text = str(b["text"]).strip()
         elif ev.get("type") == "result":
             saw_result = True
             text = str(ev.get("result", "") or "")
             cost = float(ev.get("total_cost_usd", 0.0) or 0.0)
     intents = _parse_intents(intents_raw)
+    # Salvage: an abnormally-terminated turn (timeout/crash) emits no ``result`` event, so ``text``
+    # is empty and its real work would vanish. Fall back to the last assistant prose so the session
+    # can surface what it got to (honest partial) instead of a bare apology (§9 + FW-3).
+    if not saw_result and not text:
+        text = last_text
     error = None
     if turns > 0 and not saw_result and not intents:
         error = "turn did not complete"

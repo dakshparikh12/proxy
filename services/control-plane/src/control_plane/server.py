@@ -379,8 +379,53 @@ async def _real_provisioner_ready(app: Any) -> None:
     app.state.provision_launch = make_provision_launcher(
         app.state.db, app.state.meeting_runtimes, tasks=app.state.meeting_tasks
     )
+    # Wire the pre-meeting map-build SEAM (D-032, the spine unblocker): construct the real
+    # ``agentkit`` model provider from the resolved Anthropic auth + a durable ``MapStore`` over
+    # ``app.state.db``, and assign BOTH onto ``app.state`` so the connect trigger + push ingress
+    # actually build/store a repo_maps row instead of no-op'ing. When no Anthropic auth is
+    # configured this leaves ``map_provider = None`` (honest no-op) — boot still succeeds and
+    # connect degrades honestly (Law 2), never a crash, never a fabricated map.
+    _wire_map_seam(app)
     _start_webhook_drain(app)
     set_provisioner_ready(gate)
+
+
+def _wire_map_seam(app: Any) -> None:
+    """Construct + assign ``app.state.map_provider`` + ``app.state.map_store`` (D-032 unblocker).
+
+    Reads the ALREADY-resolved Anthropic auth off ``control_plane.settings`` (never re-validates
+    or re-reads config; never logs the key) and builds the ONE concrete ``agentkit`` provider from
+    it (``agentkit.make_map_provider``), plus a durable ``premeeting.map_store.MapStore`` over the
+    live ``app.state.db`` async pool. Both are assigned onto ``app.state`` so ``connect`` and the
+    push-freshness ingress (which RESOLVE them off ``app.state``) drive a real map build/store.
+
+    Honest no-op boundary: when NO auth mode is configured ``make_map_provider`` returns ``None``,
+    so ``map_provider`` stays ``None`` (boot succeeds; connect records an honest ``not_ready``
+    naming the unfunded-key gap — never a crash, never a fabricated map, Law 2). Any construction
+    fault degrades to the same honest no-op rather than failing boot."""
+    provider: Any = None
+    map_store: Any = None
+    try:
+        from agentkit import make_map_provider
+
+        from control_plane import settings as settings_mod
+
+        cfg = settings_mod.settings
+        provider = make_map_provider(
+            api_key=cfg.anthropic_api_key,
+            auth_token=cfg.anthropic_auth_token,
+            use_vertex=cfg.claude_code_use_vertex,
+        )
+        if provider is not None:
+            from premeeting.map_store import MapStore
+
+            map_store = MapStore(db=app.state.db)
+    except Exception:  # noqa: BLE001 - a wiring fault degrades to the honest no-op, never a boot crash
+        _log.warning("map-build seam wiring failed — map_provider left None (honest no-op)", exc_info=True)
+        provider = None
+        map_store = None
+    app.state.map_provider = provider
+    app.state.map_store = map_store
 
 
 # The interval between periodic webhook drains (an in_call that raced boot, or a

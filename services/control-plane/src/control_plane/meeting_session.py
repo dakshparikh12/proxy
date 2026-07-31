@@ -34,6 +34,11 @@ logger = logging.getLogger(__name__)
 #: no self-barge-in). Proxy's own lines must never wake it.
 PROXY_SPEAKER = "Proxy"
 
+#: Rolling window of recent transcript lines materialized into the workroom each line (FW-2).
+#: Bounds the per-line write to O(1) bytes (the full rewrite was O(N) → O(N^2) over a long
+#: meeting); the recent room is what a woken turn needs, the map+repo cover older context.
+_TRANSCRIPT_WINDOW = 400
+
 #: The cheap always-on wake gate: a word-bounded "proxy" (voice) / "@proxy" (chat). This
 #: is physics (a name being called), not a situation→action rule — WHAT to do on a wake is
 #: the agent's live judgement. Word-bounded so "proxy server" said in passing is filtered
@@ -134,19 +139,40 @@ class MeetingSession:
                     )
                 return
             if getattr(result, "error", None):
-                await self.connection.to_meeting(
-                    "Sorry — I hit a problem finishing that one and couldn't wrap it up cleanly.",
-                    medium="say",
-                )
+                # Salvage (FW-3): if the incompleted turn still produced work (its last prose was
+                # recovered into result.text), surface THAT honestly instead of a bare apology — so a
+                # long/timed-out task (e.g. a drafted fix it was still validating) never leaves the
+                # room with nothing. Still honest (Law 2): it's presented as partial.
+                salvage = str(getattr(result, "text", "") or "").strip()
+                if salvage:
+                    await self.connection.to_meeting(
+                        "I ran long and didn't fully wrap that up, but here's where I got to — "
+                        f"{salvage}",
+                        medium="say",
+                    )
+                else:
+                    await self.connection.to_meeting(
+                        "Sorry — I hit a problem finishing that one and couldn't wrap it up cleanly.",
+                        medium="say",
+                    )
             # else: a clean turn with zero intents — the agent chose silence (cross-talk). Stay quiet.
         except Exception:  # noqa: BLE001 — a wake failure never crashes the meeting (§3.8)
             logger.exception("meeting wake failed (meeting continues)")
 
     def _render_transcript(self) -> str:
+        # Window to the most recent lines (FW-2): the full rewrite is O(N) bytes per line over the
+        # E2B seam → O(N^2) over a long meeting. A rolling window bounds each write to O(1) and is
+        # what a person reads anyway — the woken turn always sees the recent room (the addressing
+        # line is fresh), and the map + repo cover anything older. Header notes the elision.
+        recent = self._lines[-_TRANSCRIPT_WINDOW:]
+        elided = len(self._lines) - len(recent)
+        header = "# Meeting transcript"
+        if elided > 0:
+            header += f"\n(… {elided} earlier line(s) elided …)"
         body = "\n".join(
-            f"[{ts:.0f}] {speaker}: {text}" for (ts, speaker, text) in self._lines
+            f"[{ts:.0f}] {speaker}: {text}" for (ts, speaker, text) in recent
         )
-        return f"# Meeting transcript\n{body}\n"
+        return f"{header}\n{body}\n"
 
     async def drain(self) -> None:
         """Await every in-flight wake (meeting end / tests). Best-effort, never raises."""
