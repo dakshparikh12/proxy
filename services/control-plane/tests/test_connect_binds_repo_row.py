@@ -46,7 +46,18 @@ class _FakeReposConn:
                     return dict(r)
             return None
         if s.startswith("INSERT INTO repos"):
+            # BUG 3 — the bind is now a single atomic INSERT ... ON CONFLICT (tenant_id,
+            # full_name) DO UPDATE. The fake honours that: an existing (tenant, full_name)
+            # collapses onto the SAME row (COALESCE-backfilling NULLs) instead of inserting a
+            # duplicate — modelling the real UNIQUE index (repos_tenant_fullname_uniq).
             tenant_id, full_name, default_branch, ghi = args
+            for r in self.rows:
+                if r["tenant_id"] == tenant_id and r["full_name"] == full_name:
+                    if r["default_branch"] is None and default_branch is not None:
+                        r["default_branch"] = default_branch
+                    if r["github_installation_id"] is None and ghi is not None:
+                        r["github_installation_id"] = ghi
+                    return dict(r)
             row = {
                 "id": f"repo-{len(self.rows)}",
                 "tenant_id": tenant_id,

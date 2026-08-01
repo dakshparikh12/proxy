@@ -130,42 +130,23 @@ async def upsert_repo_for_tenant(
     (``repo_maps.repo``), so the invite's HEAD-pin read finds the map. Passing the connect
     ``repo_url`` verbatim satisfies both at once.
 
-    Idempotent: the ``repos`` table has no unique constraint on ``(tenant_id, full_name)``, so a
-    re-run reads the existing row (returning it, optionally backfilling a NULL
-    ``default_branch`` / ``github_installation_id``) rather than inserting a duplicate — a
-    redelivered connect never double-writes the binding. Tenant-scoped by construction (the read
-    and the insert both carry ``tenant_id``), so no cross-tenant row is ever created or returned.
+    Idempotent AND race-free: ``repos`` carries a UNIQUE index on ``(tenant_id, full_name)``
+    (migration ``0010_repos_tenant_fullname_uniq``), so this is a single atomic
+    ``INSERT ... ON CONFLICT (tenant_id, full_name) DO UPDATE`` — a redelivered / concurrent
+    connect can never double-write a duplicate binding (the old SELECT-then-INSERT had a race
+    window that produced duplicate rows). On conflict it BACKFILLS only NULLs we now know
+    (``COALESCE`` keeps a recorded value; a fabricated NULL never overwrites it). Tenant-scoped
+    by construction (both the insert and the conflict key carry ``tenant_id``), so no
+    cross-tenant row is ever created or returned.
     """
-    existing = await conn.fetchrow(
-        "SELECT id, tenant_id, full_name, default_branch, github_installation_id "
-        "FROM repos WHERE tenant_id = $1 AND full_name = $2",
-        tenant_id,
-        full_name,
-    )
-    if existing is not None:
-        # Backfill only NULLs we now know — never overwrite a recorded value with a fabricated one.
-        if (default_branch and existing["default_branch"] is None) or (
-            github_installation_id and existing["github_installation_id"] is None
-        ):
-            updated = await conn.fetchrow(
-                """
-                UPDATE repos
-                   SET default_branch = COALESCE(default_branch, $3),
-                       github_installation_id = COALESCE(github_installation_id, $4)
-                 WHERE tenant_id = $1 AND full_name = $2
-                RETURNING id, tenant_id, full_name, default_branch, github_installation_id
-                """,
-                tenant_id,
-                full_name,
-                default_branch,
-                github_installation_id,
-            )
-            return dict(updated)
-        return dict(existing)
     row = await conn.fetchrow(
         """
         INSERT INTO repos (tenant_id, full_name, default_branch, github_installation_id)
         VALUES ($1, $2, $3, $4)
+        ON CONFLICT (tenant_id, full_name) DO UPDATE
+           SET default_branch = COALESCE(repos.default_branch, EXCLUDED.default_branch),
+               github_installation_id =
+                   COALESCE(repos.github_installation_id, EXCLUDED.github_installation_id)
         RETURNING id, tenant_id, full_name, default_branch, github_installation_id
         """,
         tenant_id,

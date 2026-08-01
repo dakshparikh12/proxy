@@ -66,10 +66,11 @@ def test_parse_stream_skips_malformed_lines_and_flags_abnormal_termination() -> 
     assert empty.error is None
 
 
-def test_parse_stream_salvages_last_assistant_text_on_abnormal_exit() -> None:
-    """FW-3: an abnormally-terminated turn (assistant prose but NO ``result`` event) recovers its
-    last prose into ``text`` so the session can surface the partial work instead of it vanishing —
-    while STILL flagging ``error`` (the turn is honestly incomplete)."""
+def test_parse_stream_does_not_salvage_internal_prose_on_abnormal_exit() -> None:
+    """BUG-7 (soft Law 2): an abnormally-terminated turn (assistant prose but NO ``result`` event)
+    must NOT recover its last assistant prose into ``text`` — that prose is internal scratchpad the
+    agent did NOT choose to say to the room, so surfacing it would put words in Proxy's mouth. ``text``
+    stays empty; ``error`` is still flagged so the session speaks a bare honest apology instead."""
     from in_meeting.workroom import _parse_stream
 
     raw = "\n".join(
@@ -85,8 +86,8 @@ def test_parse_stream_salvages_last_assistant_text_on_abnormal_exit() -> None:
         ]
     )
     res = _parse_stream("implement the fix", raw)
-    assert res.text == "Wrote the migration; validating on Postgres"  # salvaged last prose
-    assert res.error == "turn did not complete"                        # still honestly incomplete
+    assert res.text == ""                              # internal prose is NOT spoken to the room
+    assert res.error == "turn did not complete"        # still honestly incomplete → bare apology
     assert res.tools == ["Edit"]
 
 
@@ -142,6 +143,28 @@ def test_render_meeting_info_shapes() -> None:
     # partial (title only) does not fabricate participants:
     partial = render_meeting_info(title="Standup")
     assert "**Title:** Standup" in partial and "Participants" not in partial
+
+
+def test_render_meeting_info_surfaces_participant_ids_for_dm() -> None:
+    """BUG 6 (DM usable): when a Recall participant id is known it is rendered beside the name
+    (``- Ann (id: p9)``) so the agent can pass it as a DM's ``to`` (``send_dm`` addresses by id, not
+    name), and the prime carries the DM-id instruction. A name-only participant still renders."""
+    from in_meeting.prime import render_meeting_info
+
+    # (name, id) pairs — the shape the provisioner now passes from the Recall callback:
+    info = render_meeting_info(
+        title="Planning", participants=[("Ann", "p9"), ("Bob", ""), {"name": "Cy", "id": "p3"}]
+    )
+    assert "- Ann (id: p9)" in info          # id surfaced for the DM ``to``
+    assert "- Cy (id: p3)" in info           # mapping form works too
+    assert "- Bob" in info and "Bob (id:" not in info   # no id → name-only, never a fabricated id
+    # the prime tells the agent a DM ``to`` must be a participant id (not a name):
+    assert "participant id" in info.lower() and "dm" in info.lower()
+
+    # bare-name participants (no ids at all) still render, with the DM-id note present:
+    names_only = render_meeting_info(participants=("Dana", "Eve"))
+    assert "- Dana" in names_only and "- Eve" in names_only
+    assert "participant id" in names_only.lower()
 
 
 # ── Workroom.feed_transcript / run_ask: never-raise honest degrade ────────────────
@@ -303,6 +326,52 @@ def test_run_ask_hands_the_relay_wiring_as_envs(monkeypatch) -> None:
         assert envs["PROXY_MEETING_RELAY"] == "https://host/meetings/m/relay"
         assert envs["PROXY_MEETING_TOKEN"] == "bearer-xyz"
         assert envs["PROXY_MEETING_OUT"] == TO_MEETING_OUT
+
+    asyncio.run(_run())
+
+
+def test_cold_command_resets_to_meeting_out_before_the_run() -> None:
+    """BUG 5 (cold double-send): the in-sandbox MCP server only APPENDS to TO_MEETING_OUT, so
+    without a per-turn reset cold wake N would re-read wakes 1..N-1's intents and re-deliver them.
+    The cold command must ``rm -f`` the intent log FIRST — so ``sent`` is exactly THIS turn's
+    intents (mirrors the warm host's per-turn reset)."""
+    from in_meeting.workroom import TO_MEETING_OUT, Workroom
+
+    class _RecordSandbox:
+        class _Files:
+            async def write(self, *a: Any, **k: Any) -> None:
+                return None
+
+            async def read(self, path: str) -> str:
+                if path.endswith("ask.jsonl"):
+                    return json.dumps({"type": "result", "result": "ok", "total_cost_usd": 0.0})
+                return ""
+
+        def __init__(self) -> None:
+            self.files = self._Files()
+            self.sandbox_id = "s"
+            self.cmds: list[str] = []
+
+            class _Cmds:
+                def __init__(self, outer: Any) -> None:
+                    self._outer = outer
+
+                async def run(self, cmd: str, timeout: int | None = None,
+                              envs: dict[str, str] | None = None) -> Any:
+                    self._outer.cmds.append(cmd)
+                    return SimpleNamespace(exit_code=0, stdout="DONE", stderr="")
+
+            self.commands = _Cmds(self)
+
+    async def _run() -> None:
+        sandbox = _RecordSandbox()
+        wr = Workroom(sandbox=sandbox, call=_passthru_call, token="t")  # warm=False → cold path
+        await wr.run_ask("the ask")
+        ask_cmd = next(c for c in sandbox.cmds if "claude -p" in c)
+        reset = f"rm -f {TO_MEETING_OUT}"
+        # the reset is present AND lands BEFORE the claude -p run (so this turn starts with a clean log):
+        assert reset in ask_cmd
+        assert ask_cmd.index(reset) < ask_cmd.index("claude -p")
 
     asyncio.run(_run())
 

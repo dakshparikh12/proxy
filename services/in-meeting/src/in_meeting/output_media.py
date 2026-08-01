@@ -89,6 +89,11 @@ class OutputMediaChannel:
         self._consumer_loop: asyncio.AbstractEventLoop | None = None
         self._wake: asyncio.Event | None = None
         self._closed = False
+        #: While muted (C5), every PCM enqueue is suppressed and any in-flight buffered PCM is
+        #: dropped — the conversational audio that rides THIS channel is silenced (Law 3, human
+        #: control is absolute). State-only frames (speaking/screen) still ride so the page stays
+        #: in sync. ``unmute`` lifts it; a human mute wins regardless of the wire.
+        self._muted = False
         #: The URL Proxy last chose to SHOW on its Output-Media surface (the agent's ``screen``
         #: medium). Recorded honestly (the current shown surface) — never a fabricated success.
         #: The orb page reads it as a state message and swaps its view to the URL; absent = the orb.
@@ -97,9 +102,32 @@ class OutputMediaChannel:
     # -- the speak-path surface ---------------------------------------------
 
     async def write_audio(self, pcm: bytes) -> None:
-        """Enqueue one raw PCM chunk (s16le, 16 kHz, mono) for the page."""
+        """Enqueue one raw PCM chunk (s16le, 16 kHz, mono) for the page.
+
+        While muted (C5) the enqueue is DROPPED — no PCM plays into the room until unmute
+        lifts the flag (Law 3, human control is absolute)."""
+        if self._muted:
+            return
         self._frames.append(pcm)
         self._notify()
+
+    def mute(self) -> None:
+        """Silence the conversational audio on this channel (C5): suppress every further
+        ``write_audio`` enqueue AND drop any in-flight buffered PCM so audio stops NOW. State
+        frames (speaking/screen) are kept so the page stays in sync. Idempotent."""
+        self._muted = True
+        # Drop only the buffered PCM (bytes); keep ordered state messages (str) intact.
+        self._frames = deque(
+            (f for f in self._frames if not isinstance(f, bytes)), maxlen=self._frames.maxlen
+        )
+
+    def unmute(self) -> None:
+        """Lift the mute (C5): later ``write_audio`` enqueues ride again. Idempotent."""
+        self._muted = False
+
+    def muted(self) -> bool:
+        """Is this channel's conversational audio currently muted?"""
+        return self._muted
 
     async def set_speaking(self, speaking: bool) -> None:
         """Signal the orb pulse: True while Proxy speaks, False after."""

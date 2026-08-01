@@ -168,8 +168,8 @@ def _approve_url_for(meeting_id: str, draft_id: str) -> str:
 
 def _build_meeting_sinks(
     *, db: Database, meeting_id: str, tenant_id: str
-) -> tuple[Any, Any]:
-    """Build the ``(offer, screen)`` sinks the :class:`MeetingConnection` carries (Law-3 safe).
+) -> tuple[Any, Any, Any]:
+    """Build the ``(offer, screen, audio_mute)`` sinks the :class:`MeetingConnection` carries (Law-3 safe).
 
     * **offer** ``(content, to) -> approve_url``: STAGES a durable draft (``workroom.drafts.
       propose_change`` on the async pool → one GCS bundle + one ``staged_drafts`` row at
@@ -180,11 +180,14 @@ def _build_meeting_sinks(
     * **screen** ``(url) -> shown_url``: points the meeting's Output-Media surface at ``url`` via the
       real ``output_media`` channel and returns the URL it recorded — an honest surface intent, never
       a fabricated success.
+    * **audio_mute** ``(muted) -> None``: mutes/unmutes the meeting's Output-Media WEBPAGE channel —
+      where the spoken PCM actually rides — so 'mute yourself' really silences the bot (Law 3, human
+      control is absolute). A surface fault is swallowed to an honest no-op, never a crash.
 
-    Both are async callables matching the ``OfferSink`` / ``ScreenSink`` Protocols; ``db`` +
-    ``meeting_id`` are closed over so the staged draft binds to THIS meeting. ``tenant_id`` is
-    accepted for symmetry/audit; the accept route re-derives the owning tenant server-side from the
-    persisted row (a client field never authorizes an entity)."""
+    All three are async callables matching the ``OfferSink`` / ``ScreenSink`` / ``AudioMuteSink``
+    Protocols; ``db`` + ``meeting_id`` are closed over so the staged draft binds to THIS meeting.
+    ``tenant_id`` is accepted for symmetry/audit; the accept route re-derives the owning tenant
+    server-side from the persisted row (a client field never authorizes an entity)."""
     _ = tenant_id  # the accept route derives the owning tenant server-side from the persisted row
 
     async def _offer(content: str, to: str) -> str:
@@ -226,7 +229,26 @@ def _build_meeting_sinks(
             )
             return (url or "").strip()
 
-    return _offer, _screen
+    async def _audio_mute(muted: bool) -> None:
+        # Silence/restore the conversational audio at the Output-Media webpage channel (where the
+        # spoken PCM rides) so 'mute yourself' really stops the bot (Law 3). Never crashes the turn.
+        try:
+            from in_meeting import output_media
+
+            channel = output_media.channel_for(meeting_id)
+            if muted:
+                channel.mute()
+            else:
+                channel.unmute()
+        except Exception:  # noqa: BLE001 - a mute fault must never crash the meeting (honest no-op)
+            _log.warning(
+                "audio mute toggle (muted=%s) failed for meeting %s (honest degrade)",
+                muted,
+                meeting_id,
+                exc_info=True,
+            )
+
+    return _offer, _screen, _audio_mute
 
 
 def _meeting_info_md(payload: dict[str, Any]) -> str:
@@ -243,8 +265,15 @@ def _meeting_info_md(payload: dict[str, Any]) -> str:
     data = data if isinstance(data, dict) else {}
     title = str(data.get("title", "") or "")
     raw_parts = data.get("participants")
-    participants = tuple(
-        str(p.get("name", "") or "")
+    # Carry the Recall participant id alongside the name when present, so the agent can pass it as a
+    # DM's ``to`` (``send_dm`` addresses by id, never by name). ``id``/``participant_id`` are the two
+    # shapes Recall uses; an absent id degrades to a name-only line (render handles both). Verbatim
+    # from the same callback the join already reads — never synthesized.
+    participants: tuple[tuple[str, str], ...] = tuple(
+        (
+            str(p.get("name", "") or ""),
+            str(p.get("id", "") or p.get("participant_id", "") or ""),
+        )
         for p in (raw_parts if isinstance(raw_parts, list) else [])
         if isinstance(p, dict) and p.get("name")
     )
@@ -502,7 +531,7 @@ async def _assemble_workroom(
     # offer/screen sinks (world-touching-safe, below). This is a driver, not a decision (Law 4):
     # the agent chooses what/how, this maps to physics.
     tenant_id = str(resolved.get("tenant_id") or "")
-    offer_sink, screen_sink = _build_meeting_sinks(
+    offer_sink, screen_sink, audio_mute_sink = _build_meeting_sinks(
         db=db, meeting_id=meeting_id, tenant_id=tenant_id
     )
     connection = MeetingConnection(
@@ -511,6 +540,7 @@ async def _assemble_workroom(
         bot_id=bot_id,
         offer=offer_sink,
         screen=screen_sink,
+        audio_mute=audio_mute_sink,
     )
     session = MeetingSession(workroom=workroom, connection=connection)
     _log.info(

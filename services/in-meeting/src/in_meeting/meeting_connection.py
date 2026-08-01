@@ -46,6 +46,9 @@ class RoomSink(Protocol):
 OfferSink = Callable[[str, str], Awaitable[str]]
 #: Point the bot's Output-Media surface at a URL (a rendered diff/mock/page). Returns the shown URL.
 ScreenSink = Callable[[str], Awaitable[str]]
+#: Mute/unmute the meeting's conversational audio at the Output-Media webpage channel (where the
+#: spoken PCM actually rides). ``True`` mutes, ``False`` unmutes. Law 3 — human control is absolute.
+AudioMuteSink = Callable[[bool], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +71,11 @@ class MeetingConnection:
     bot_id: str
     offer: OfferSink | None = None
     screen: ScreenSink | None = None
+    #: Mute/unmute the Output-Media webpage channel where the spoken PCM actually rides. When set,
+    #: a 'mute'/'unmute' medium silences/restores the real conversational audio (Law 3); the Recall
+    #: ``room.mute/unmute`` still fires alongside it for the (unused) clip path. ``None`` ⇒ only the
+    #: room verb (the pre-wiring behavior).
+    audio_mute: AudioMuteSink | None = None
     #: every send, in order — the host-observed record (never the model's prose), for tests + audit.
     sent: list[MeetingSend] = field(default_factory=list)
 
@@ -99,9 +107,15 @@ class MeetingConnection:
             await self.room.send_dm(self.bot_id, content, to)
             return MeetingSend("dm", True, f"to={to}")
         if m in ("mute", "silence"):
+            # Silence the real conversational audio at the webpage channel first (that is where the
+            # spoken PCM rides); the Recall room verb fires alongside for the clip path (Law 3).
+            if self.audio_mute is not None:
+                await self.audio_mute(True)
             await self.room.mute(self.bot_id)
             return MeetingSend("mute", True)
         if m in ("unmute", "resume"):
+            if self.audio_mute is not None:
+                await self.audio_mute(False)
             await self.room.unmute(self.bot_id)
             return MeetingSend("unmute", True)
         if m in ("screen", "show", "share"):

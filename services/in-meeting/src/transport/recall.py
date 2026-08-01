@@ -75,8 +75,11 @@ class _RecallOutputMedia:
       allows, the bot must carry ``automatic_audio_output``, and the endpoint is
       rate-limited 300 req/min/workspace — it is Recall's clip path, so the sustained
       conversational leg stays on the Output Media webpage surface (§3.3).
-    * stop  — DELETE ``/bot/{id}/output_audio/`` (204, no body): kills any in-flight
-      audio — Recall's real mechanism behind ``flush`` (barge-in) and ``mute``.
+    * flush — a NO-OP: barge-in / mute silence the conversational audio at the
+      Output-Media webpage channel (``in_meeting.output_media`` — ``cut()`` clears it,
+      ``mute()`` suppresses it), not on this clip sink; there is no ``output_audio``
+      stop to issue here (the once-used ``DELETE`` targets a clip that never rides the
+      conversational path).
     * video — POST ``/bot/{id}/output_video/`` with ``{"kind": "jpeg", "b64_data":
       <base64 of the frame's exact bytes>}``; ``jpeg`` is the only ``kind`` allowed.
 
@@ -107,10 +110,9 @@ class _RecallOutputMedia:
         )
 
     async def flush(self) -> None:
-        await self._call_external(
-            lambda: self._via_api("DELETE", f"/bot/{self._bot_id}/output_audio/", {}),
-            service="recall",
-        )
+        # No-op: barge-in / mute silence the conversational audio at the Output-Media webpage
+        # channel, not on this (unused) clip sink; there is no ``output_audio`` stop to issue.
+        return None
 
     async def write_frame(self, frame: CanvasFrame) -> None:
         body = {"kind": "jpeg", "b64_data": base64.b64encode(frame.data).decode("ascii")}
@@ -178,9 +180,9 @@ class RecallTransport:
           event (``participant_events.chat_message``) — the subscription that makes
           Recall actually deliver chat to the harness drain. Bot status events cannot
           ride here (dashboard-webhook only — see ``_REALTIME_EVENTS``).
-        * ``recording_config.participant_events`` — ``{}``, the enabling block
-          Recall's receiving-chat-messages guide names for participant-event capture;
-          carried so chat rides even when no recording artifact is live.
+        * ``bot_name`` — ``"Proxy"``, so Recall labels the bot's own transcribed
+          speech as "Proxy"; the self-wake guard (``PROXY_SPEAKER == "Proxy"``) then
+          filters Proxy's own lines instead of self-waking on them.
         * ``output_media.camera`` — ``{kind: "webpage", config: {url}}``, Recall's
           Output Media: the bot streams our webpage as its camera, the designated
           low-latency path for an agent to emit audio (the ``output_audio`` clip
@@ -191,11 +193,10 @@ class RecallTransport:
         none (and never ships an empty-string URL, which Recall's schema rejects).
         ``output_media`` likewise appears only when a surface URL is configured.
         """
-        body: dict[str, Any] = {"meeting_url": meeting_link}
+        body: dict[str, Any] = {"meeting_url": meeting_link, "bot_name": "Proxy"}
         if self._webhook_url:
             body["recording_config"] = {
                 "transcript": {"provider": {"assembly_ai_v3_streaming": {}}},
-                "participant_events": {},
                 "realtime_endpoints": [
                     {
                         "type": "webhook",
@@ -262,18 +263,16 @@ class RecallTransport:
     async def mute(self, bot_id: str) -> None:
         """Silence the bot's output audio (C5).
 
-        Recall exposes NO direct bot-mute endpoint (confirmed against the live
-        output-audio docs), so mute is the documented equivalent: the REAL stop call —
-        DELETE ``/bot/{bot_id}/output_audio/`` (204), which kills any in-flight audio
-        now — plus sink-side suppression of every further audio write until
-        :meth:`unmute`. The flag is set FIRST so a human mute wins even if the stop
-        round-trip fails (Law 3 — human control is absolute).
+        The conversational audio rides the Output-Media WEBPAGE channel (``in_meeting.
+        output_media``), silenced there by the host (``MeetingConnection.audio_mute``).
+        This verb only marks the (unused) clip path muted so any ``output_audio`` POST
+        is sink-side suppressed too — NO wire call: Recall exposes no bot-mute endpoint,
+        and the ``DELETE /bot/{id}/output_audio/`` stop it once used targets a clip
+        stream that never rides the conversational path (a 404 for a real meeting). The
+        flag is set so a human mute wins regardless of the wire (Law 3 — human control
+        is absolute).
         """
         self._muted.add(bot_id)
-        await self._call_external(
-            lambda: self._api("DELETE", f"/bot/{bot_id}/output_audio/", {}),
-            service="recall",
-        )
 
     async def unmute(self, bot_id: str) -> None:
         """Lift the bot's output-audio suppression (C5).

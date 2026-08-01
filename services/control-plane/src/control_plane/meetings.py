@@ -23,13 +23,49 @@ from transport.seams import TransportProvider
 from libs.db import Database, repos
 
 
-def _default_transport() -> TransportProvider:
+def _output_media_url_for(meeting_id: str) -> str:
+    """The PER-MEETING Output-Media webpage URL the bot streams as its camera:
+    ``<origin>/output-media/<meeting_id>`` — the exact page ``in_meeting.output_media``
+    serves and the speak path writes PCM into for THIS meeting.
+
+    The origin comes from ``RECALL_OUTPUT_MEDIA_URL`` (treated as an origin — any
+    ``/output-media`` path or trailing slash it carries is stripped), falling back to
+    ``PUBLIC_BASE_URL`` (the same origin the relay URL is built from). Without a
+    meeting_id in the path the served page attaches to an EMPTY channel and every
+    spoken frame is dropped (the bot joins silent) — so the id must ride here. An
+    unset origin ⇒ "" (honest degrade: no Output-Media surface, mirrors the prior
+    empty-URL behavior). Pure string physics (Law 4), never baked in."""
+    import os
+
+    origin = (os.environ.get("RECALL_OUTPUT_MEDIA_URL", "") or "").strip()
+    if origin:
+        # Treat a configured value as an ORIGIN even if it points at the bare page: strip a
+        # trailing ``/output-media`` (with or without a meeting segment) and any trailing slash.
+        origin = origin.rstrip("/")
+        marker = "/output-media"
+        idx = origin.find(marker)
+        if idx != -1:
+            origin = origin[:idx]
+    if not origin:
+        origin = (os.environ.get("PUBLIC_BASE_URL", "") or "").strip()
+    origin = origin.rstrip("/")
+    if not origin:
+        return ""
+    return f"{origin}/output-media/{meeting_id}"
+
+
+def _default_transport(meeting_id: str = "") -> TransportProvider:
     """The product's real ``TransportProvider``: the sole ``RecallTransport`` impl,
     bound to the funded ``libs.http.call_external`` funnel (retry + cost telemetry,
     AC-XCUT-03) and the ``RECALL_API_KEY`` sourced from Secret Manager via settings.
 
     This is the ONE construction site for ``RecallTransport`` in the product — the
-    invite path launches a real bot through it when no transport is injected.
+    invite path launches a real bot through it when no transport is injected. When a
+    ``meeting_id`` is given the Output-Media camera URL is made PER-MEETING
+    (``<origin>/output-media/<meeting_id>``) so the bot loads the page whose channel
+    the speak path writes into — without it the page has no channel and the bot is
+    silent. An empty ``meeting_id`` keeps the room-verb-only construction (the meeting
+    connection's room sink needs no camera URL).
     """
     import os
 
@@ -38,16 +74,17 @@ def _default_transport() -> TransportProvider:
     # RECALL_API_KEY is surfaced from Secret Manager as env (the settings boot gate
     # validates its presence at startup); read it here without re-running that gate.
     # RECALL_WEBHOOK_URL (our public /webhooks/recall receiver) and
-    # RECALL_OUTPUT_MEDIA_URL (the webpage the bot streams as its camera) are
+    # RECALL_OUTPUT_MEDIA_URL (the origin the bot streams as its camera) are
     # deployment facts fed the same way: they drive the full create-bot config
     # (streaming transcription + realtime transcript delivery + Output Media) on
     # the real join path — unset, the bot joins without those capabilities.
     api_key = os.environ.get("RECALL_API_KEY", "")
+    output_media_url = _output_media_url_for(meeting_id) if meeting_id else ""
     return RecallTransport(
         call_external,
         api_key=api_key,
         webhook_url=os.environ.get("RECALL_WEBHOOK_URL", ""),
-        output_media_url=os.environ.get("RECALL_OUTPUT_MEDIA_URL", ""),
+        output_media_url=output_media_url,
     )
 
 
@@ -95,7 +132,10 @@ async def invite_proxy(
     meeting_id = row["id"]
 
     if transport is None:
-        transport = _default_transport()
+        # Per-meeting transport: the Output-Media camera URL carries THIS meeting_id
+        # (``/output-media/<id>``) so the bot loads the page whose channel the speak path
+        # writes into — without the id the page has no channel and the bot joins silent.
+        transport = _default_transport(meeting_id=str(meeting_id))
 
     async def _write_back(bot_id: str) -> None:
         async with db.acquire() as conn:

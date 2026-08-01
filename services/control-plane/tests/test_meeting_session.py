@@ -275,10 +275,11 @@ def test_fallback_speaks_an_honest_message_when_a_wake_errors_with_no_text() -> 
     asyncio.run(_run())
 
 
-def test_error_with_salvaged_text_surfaces_the_partial_work_not_a_bare_apology() -> None:
-    """FW-3 salvage: a turn that timed out mid-way but produced work (its last prose recovered into
-    result.text) speaks THAT partial result honestly, so a long task never leaves the room with a
-    bare 'sorry'. Distinct from the no-text case above (which stays a bare apology)."""
+def test_error_with_no_intent_speaks_bare_apology_never_internal_prose() -> None:
+    """BUG-7 (soft Law 2): an errored turn with NO recorded ``to_meeting`` intent speaks ONE bare,
+    honest apology — NEVER the agent's last assistant prose (``result.text``). That prose is internal
+    scratchpad the agent did NOT choose to say to the room, so surfacing it would put words in Proxy's
+    mouth it never picked. (An intent, which the agent DID choose, is replayed — the next test.)"""
     from control_plane.meeting_session import MeetingSession
 
     async def _run() -> None:
@@ -291,9 +292,35 @@ def test_error_with_salvaged_text_surfaces_the_partial_work_not_a_bare_apology()
         await session.drain()
 
         assert len(conn.sent) == 1 and conn.sent[-1].medium == "say"
-        # the salvaged work is surfaced (not the bare apology)
-        assert "double-booking fix" in conn.sent[-1].content
-        assert "ran long" in conn.sent[-1].content.lower()
+        # the bare apology is spoken; the internal prose is NEVER put in Proxy's mouth
+        assert "problem" in conn.sent[-1].content.lower()
+        assert "double-booking fix" not in conn.sent[-1].content
+
+    asyncio.run(_run())
+
+
+def test_error_with_a_recorded_intent_delivers_that_intent_not_an_apology() -> None:
+    """BUG-7 companion: an errored turn that DID record a ``to_meeting`` intent (the agent's own
+    choice for the room) delivers THAT intent honoring its medium — the error branch (bare apology)
+    is never reached, so the agent's chosen words carry the turn."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+        chosen = {"content": "Here's the migration draft — take a look.", "medium": "chat", "to": ""}
+        wr = _FakeWorkroom(result=_result(text="internal notes", error="turn did not complete",
+                                          sent=[chosen]))
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        await session.on_line("Bob", "proxy, implement the fix", ts=1.0)
+        await session.drain()
+
+        assert len(conn.sent) == 1
+        assert conn.sent[-1].medium == "chat"
+        assert conn.sent[-1].content == "Here's the migration draft — take a look."
+        # neither the bare apology nor the internal prose is spoken
+        assert "problem" not in conn.sent[-1].content.lower()
+        assert "internal notes" not in conn.sent[-1].content
 
     asyncio.run(_run())
 

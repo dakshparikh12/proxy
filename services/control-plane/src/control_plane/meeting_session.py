@@ -139,22 +139,16 @@ class MeetingSession:
                     )
                 return
             if getattr(result, "error", None):
-                # Salvage (FW-3): if the incompleted turn still produced work (its last prose was
-                # recovered into result.text), surface THAT honestly instead of a bare apology — so a
-                # long/timed-out task (e.g. a drafted fix it was still validating) never leaves the
-                # room with nothing. Still honest (Law 2): it's presented as partial.
-                salvage = str(getattr(result, "text", "") or "").strip()
-                if salvage:
-                    await self.connection.to_meeting(
-                        "I ran long and didn't fully wrap that up, but here's where I got to — "
-                        f"{salvage}",
-                        medium="say",
-                    )
-                else:
-                    await self.connection.to_meeting(
-                        "Sorry — I hit a problem finishing that one and couldn't wrap it up cleanly.",
-                        medium="say",
-                    )
+                # The turn errored with NO recorded ``to_meeting`` intent (the ``recorded`` branch
+                # returned above when there was one). We speak ONE bare, honest apology — NEVER the
+                # agent's last assistant prose (``result.text``): that is internal scratchpad the
+                # agent did NOT choose to say to the room (e.g. "on it…"), so surfacing it would
+                # put words in Proxy's mouth it never picked (soft Law 2). A recorded intent is the
+                # only thing the agent chose for the room, and that path is already handled above.
+                await self.connection.to_meeting(
+                    "Sorry — I hit a problem finishing that one and couldn't wrap it up cleanly.",
+                    medium="say",
+                )
             # else: a clean turn with zero intents — the agent chose silence (cross-talk). Stay quiet.
         except Exception:  # noqa: BLE001 — a wake failure never crashes the meeting (§3.8)
             logger.exception("meeting wake failed (meeting continues)")

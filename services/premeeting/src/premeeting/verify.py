@@ -44,6 +44,11 @@ def _looks_like_path(tok: str) -> bool:
     """True iff ``tok`` looks like a repo path claim (has a ``/`` or a file extension)."""
     if tok in _NON_PATH:
         return False
+    # URL-ish tokens are never repo paths: a scheme-relative ``//cal.com/docs`` or an embedded
+    # ``://`` is a URL the map cites in prose (``//cal.com``, ``github.com/calcom/cal.com``),
+    # not a file/dir claim — treating it as one flags every real map that names a link (BUG 2).
+    if "://" in tok or tok.startswith("//"):
+        return False
     if "/" in tok:
         return True
     # a dotted name with a short, alpha extension (``server.py``, ``go.mod``) — but not a version
@@ -83,6 +88,63 @@ def _path_exists_in_clone(clone_path: Path, rel: str) -> bool:
     return candidate.exists()
 
 
+def _top_level_entries(clone_path: Path) -> set[str]:
+    """The names of the top-level files/dirs in the clone (an anchor for a slash-path claim)."""
+    try:
+        return {p.name for p in clone_path.iterdir()}
+    except OSError:
+        return set()
+
+
+# Last-segment values a DOTTED token can carry that mean it is a URL/domain/framework name, not a
+# repo path — a bare-domain TLD (``cal.com`` → ``com``) or a domain-shaped framework (``Next.js`` →
+# ``js`` but the token is a domain-style CamelCase name, handled by the top-level anchor below).
+# The map's prose routinely cites the product/framework/a bare host, so these must never be treated
+# as fabricated file paths (BUG 2). This is a URL-TLD list, NOT a file-extension denylist.
+_DOMAIN_TLDS = frozenset(
+    {"com", "org", "io", "net", "dev", "co", "ai", "app", "gg", "sh", "xyz", "me", "so"}
+)
+
+
+def _is_path_claim(tok: str, top_entries: set[str]) -> bool:
+    """True iff ``tok`` is a genuine repo-path CLAIM the hallucination check should verify (BUG 2).
+
+    Two false-positive families the old ``named ⇒ must-exist`` rule wrongly flagged, now excluded:
+
+    * a bare DOMAIN name — a dotted token whose last segment is a URL TLD (``cal.com`` → ``com``,
+      ``github.com`` → ``com``). Its last segment is a TLD, not a file extension, so it is a host
+      the map cites, never a file that must exist. (URL forms with ``://``/``//`` were already
+      dropped upstream in :func:`_looks_like_path`.)
+    * a SLASH token whose FIRST segment is a bare domain — ``github.com/calcom/cal.com`` (first
+      segment ``github.com`` is a domain, not a real top-level entry in the clone). A cited repo
+      URL is prose, not a fabricated path.
+
+    Genuine-path detection is intact: ``src/server.py`` (first segment ``src`` — a real dir, not a
+    domain), a genuinely-missing ``foo/bar.ts`` (first segment ``foo`` — not a domain, so it IS a
+    claim and still flags), and a real top-level ``server.py`` all remain claims and are checked.
+    """
+    if "/" in tok:
+        first = tok.split("/", 1)[0]
+        # A slash token anchored on a bare domain first-segment is a cited URL, not a path claim —
+        # unless that first segment is actually a real top-level entry in the clone (never a domain).
+        if _is_bare_domain(first) and first not in top_entries:
+            return False
+        return True
+    # A slash-less token names a TOP-LEVEL entry or nothing: it is a path claim ONLY when it is a
+    # real top-level entry in the clone (a real top-level file like ``server.py`` / ``go.mod``).
+    # A cited bare domain (``cal.com``) or framework name (``Next.js``) is not a top-level entry, so
+    # it is prose, never a fabricated file — this is what stops the false hallucination flag (BUG 2)
+    # without weakening nested-path detection (``foo/bar.ts`` above still flags).
+    return tok in top_entries
+
+
+def _is_bare_domain(tok: str) -> bool:
+    """True iff ``tok`` is a dotted host/domain name (last segment is a URL TLD, e.g. ``cal.com``)."""
+    if "." not in tok:
+        return False
+    return tok.rsplit(".", 1)[-1].lower() in _DOMAIN_TLDS
+
+
 def verify_map(
     map_text: str,
     clone_path: Path,
@@ -116,11 +178,19 @@ def verify_map(
                 break
 
     # (2) every named path EXISTS in the clone (no hallucination). Excluded paths are handled by
-    # (4); here we check the rest resolve to real files/dirs.
+    # (4); here we check the rest resolve to real files/dirs. A cited URL / bare domain / framework
+    # name is path-SHAPED but not a path CLAIM (BUG 2) — ``_is_path_claim`` (anchored on the clone's
+    # top-level entries) drops those so a faithful map that names ``cal.com`` / ``Next.js`` / a repo
+    # URL never false-flags, while a genuinely-missing ``foo/bar.ts`` still does.
     if clone_path.exists():
         excluded = exclusions.is_excluded if exclusions is not None else (lambda _p: False)
+        top_entries = _top_level_entries(clone_path)
         hallucinated = sorted(
-            p for p in named if not excluded(p) and not _path_exists_in_clone(clone_path, p)
+            p
+            for p in named
+            if _is_path_claim(p, top_entries)
+            and not excluded(p)
+            and not _path_exists_in_clone(clone_path, p)
         )
         if hallucinated:
             shown = ", ".join(hallucinated[:10])

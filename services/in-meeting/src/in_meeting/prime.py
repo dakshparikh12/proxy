@@ -10,7 +10,13 @@ address/DM people and read the room.
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import Union
+
+#: One participant for ``render_meeting_info``: a bare name (``"Ann"``) or a ``(name, id)`` pair /
+#: ``{"name", "id"}`` mapping. When an id is present it is rendered so the agent can pass it as the
+#: DM ``to`` (``send_dm`` needs Recall's participant id, not the name).
+Participant = Union[str, "tuple[str, str]", "Mapping[str, str]"]
 
 #: Written into the sandbox as CLAUDE.md. Stable + lean → cached prefix, low time-to-first-token.
 WORKROOM_PRIME = (
@@ -75,10 +81,35 @@ MEETING_INFO_FILE = "MEETING_INFO.md"
 PRIME_FILE = "CLAUDE.md"
 
 
+def _participant_line(p: Participant) -> str:
+    """Render ONE participant as ``- Name`` or ``- Name (id: <pid>)`` when an id is known.
+
+    A DM's ``to`` needs Recall's participant id (``send_dm``), not the name — so when the id is
+    available it is surfaced right beside the name for the agent to copy. Accepts a bare name, a
+    ``(name, id)`` pair, or a ``{"name", "id"}`` mapping; an empty/absent id degrades to name-only."""
+    if isinstance(p, Mapping):
+        name = str(p.get("name", "") or "")
+        pid = str(p.get("id", "") or "")
+    elif isinstance(p, str):
+        name, pid = p, ""
+    else:  # a (name, id) sequence
+        parts = tuple(p)
+        name = str(parts[0]) if len(parts) > 0 else ""
+        pid = str(parts[1]) if len(parts) > 1 else ""
+    name = name.strip()
+    pid = pid.strip()
+    return f"- {name} (id: {pid})" if pid else f"- {name}"
+
+
 def render_meeting_info(
-    *, title: str = "", agenda: str = "", participants: Sequence[str] = ()
+    *, title: str = "", agenda: str = "", participants: Sequence[Participant] = ()
 ) -> str:
-    """Render ``MEETING_INFO.md`` — the room's who/what so Proxy can address people + read the room."""
+    """Render ``MEETING_INFO.md`` — the room's who/what so Proxy can address people + read the room.
+
+    Each participant renders as ``- Name`` or, when a Recall participant id is known, ``- Name
+    (id: <pid>)`` — that id is what a DM's ``to`` must carry (``send_dm`` addresses by participant
+    id, never by name). Names alone still render (name-only line), and the DM-id note below tells
+    the agent to use an id from here / the transcript."""
     lines = ["# Meeting", ""]
     if title:
         lines.append(f"**Title:** {title}")
@@ -86,7 +117,14 @@ def render_meeting_info(
         lines.append(f"**Agenda:** {agenda}")
     if participants:
         lines.append("**Participants:**")
-        lines.extend(f"- {p}" for p in participants)
+        lines.extend(_participant_line(p) for p in participants)
+        # A DM needs a participant ID (not a name) — say so once, so the agent passes ``to``
+        # correctly. IDs shown above (or read off the transcript's speaker labels) are valid.
+        lines.append("")
+        lines.append(
+            "> To DM someone (medium='dm'), set `to` to their participant id shown above "
+            "(never their name)."
+        )
     if len(lines) == 2:
         lines.append("(no meeting metadata available)")
     return "\n".join(lines) + "\n"

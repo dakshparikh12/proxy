@@ -328,6 +328,11 @@ class Workroom:
         meeting MCP server (``--mcp-config``). Slower (~11-13s) but self-contained — the honest degrade
         when the warm session is unavailable. Never raises — a fault becomes ``WorkroomResult.error``."""
         cmd = (
+            # Reset the per-turn intent log FIRST: the in-sandbox MCP server only APPENDS to
+            # TO_MEETING_OUT, so without this each cold wake would re-read wakes 1..N-1's intents
+            # and double-send them. ``sent`` must be exactly THIS turn's ``to_meeting`` calls
+            # (mirrors the warm host's per-turn reset).
+            f"rm -f {shlex.quote(TO_MEETING_OUT)} && "
             f"cd {shlex.quote(self.repo_dir)} && "
             f"claude -p {shlex.quote(prompt)} "
             f"--mcp-config {shlex.quote(MCP_CONFIG_FILE)} --dangerously-skip-permissions "
@@ -400,10 +405,14 @@ def _parse_stream(ask: str, raw: str, intents_raw: str = "") -> WorkroomResult:
     """Parse ``claude`` stream-json output → the ordered tool names + the final result text, and
     fold in the agent's recorded ``to_meeting`` intents. Detects ABNORMAL TERMINATION: a clean turn
     always emits a ``result`` event; if there were assistant turns but no ``result`` (crash/OOM) and
-    no recorded intents, mark it an honest ``error`` so the session can degrade without silence."""
+    no recorded intents, mark it an honest ``error`` so the session can degrade without silence.
+
+    ``text`` carries ONLY the model's own ``result`` event (never salvaged from mid-turn assistant
+    prose): that prose is internal scratchpad the agent did NOT choose to say to the room, so the
+    session must not speak it — an errored turn with no recorded intent gets a bare honest apology,
+    not the agent's private notes (soft Law 2)."""
     tools: list[str] = []
     text = ""
-    last_text = ""      # the most recent assistant prose — salvaged if the turn never emits a result
     cost = 0.0
     turns = 0
     saw_result = False
@@ -417,18 +426,11 @@ def _parse_stream(ask: str, raw: str, intents_raw: str = "") -> WorkroomResult:
             for b in ev.get("message", {}).get("content", []):
                 if b.get("type") == "tool_use":
                     tools.append(str(b.get("name", "")))
-                elif b.get("type") == "text" and str(b.get("text", "")).strip():
-                    last_text = str(b["text"]).strip()
         elif ev.get("type") == "result":
             saw_result = True
             text = str(ev.get("result", "") or "")
             cost = float(ev.get("total_cost_usd", 0.0) or 0.0)
     intents = _parse_intents(intents_raw)
-    # Salvage: an abnormally-terminated turn (timeout/crash) emits no ``result`` event, so ``text``
-    # is empty and its real work would vanish. Fall back to the last assistant prose so the session
-    # can surface what it got to (honest partial) instead of a bare apology (§9 + FW-3).
-    if not saw_result and not text:
-        text = last_text
     error = None
     if turns > 0 and not saw_result and not intents:
         error = "turn did not complete"

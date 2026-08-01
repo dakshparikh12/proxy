@@ -561,15 +561,30 @@ def install_connect_routes(app: "FastAPI") -> None:
         never a 500 — the never-throw boundary. A substrate fault registering the install
         degrades HONESTLY to a 503, never a fabricated install handle.
 
-        The tenant is keyed on the AUTHENTICATED GitHub installation account (B5) when the
-        install callback has bound one (``installation_account``); absent that, a fresh
-        per-install random tenant — never the shareable repo URL, so two customers of the
-        SAME repo never collide onto one tenant (invariant 9, the cross-tenant P0).
+        The tenant binds the connect flow to the SAME tenant the invite reads (BUG 1): the
+        map + the ``repos`` row must land under the tenant ``POST /meetings`` resolves off the
+        caller's SIGNED SESSION (``ctx.tenant_id``), or the invite 404s even after a clean
+        index. So the default tenant is the caller's session tenant. An explicit
+        ``installation_account`` (the future GitHub-App install callback, which has no user
+        session) still overrides it via ``_tenant_for_install`` — that path keeps two
+        customers of the SAME repo on different tenants (invariant 9, the cross-tenant P0).
+        When neither is available (an anonymous connect with no session), a fresh per-install
+        random tenant stands (never the shareable repo URL, so two anonymous connects of the
+        same repo never collide).
         """
         store = get_connect_store(request.app)
-        tenant_id = _tenant_for_install(
-            repo_url, installation_account=installation_account
-        )
+        # Resolve the caller's signed session so connect binds under the SAME tenant the
+        # invite reads (connect-tenant == session-tenant == invite-read tenant). An explicit
+        # ``installation_account`` override still wins (the sessionless install callback);
+        # absent both, a fresh random tenant (fail SAFE, never fail SHARED).
+        account = (installation_account or "").strip()
+        if account:
+            tenant_id = _tenant_for_install(repo_url, installation_account=account)
+        else:
+            db = getattr(request.app.state, "db", None)
+            session = await _resolve_session_for_status(db, request.cookies)
+            session_tenant = session.get("tenant_id") if isinstance(session, dict) else None
+            tenant_id = str(session_tenant) if session_tenant is not None else _tenant_for_install(repo_url)
         try:
             install_id = await anyio.to_thread.run_sync(
                 store.new_install, tenant_id, repo_url

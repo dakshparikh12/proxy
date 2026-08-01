@@ -99,12 +99,15 @@ class _Room:
 
 
 def _wired_connection(db: Any, meeting_id: str = "m-sink-1") -> Any:
-    """A REAL MeetingConnection with the REAL provisioner-built offer + screen sinks."""
+    """A REAL MeetingConnection with the REAL provisioner-built offer + screen + audio_mute sinks."""
     from control_plane.provisioner import _build_meeting_sinks
     from in_meeting.meeting_connection import MeetingConnection
 
-    offer, screen = _build_meeting_sinks(db=db, meeting_id=meeting_id, tenant_id="t-1")
-    return MeetingConnection(speak=_Speak(), room=_Room(), bot_id="bot-1", offer=offer, screen=screen)
+    offer, screen, audio_mute = _build_meeting_sinks(db=db, meeting_id=meeting_id, tenant_id="t-1")
+    return MeetingConnection(
+        speak=_Speak(), room=_Room(), bot_id="bot-1",
+        offer=offer, screen=screen, audio_mute=audio_mute,
+    )
 
 
 def test_offer_stages_a_draft_returns_approve_url_and_posts_to_chat(monkeypatch: Any) -> None:
