@@ -135,6 +135,43 @@ def test_transcript_words_as_word_object_array_is_joined_and_fed(monkeypatch) ->
     asyncio.run(_run())
 
 
+def test_real_recall_double_nested_words_array_payload_feeds(monkeypatch) -> None:
+    """The REAL Recall assembly_ai_v3_streaming payload double-nests under data.data, with words as
+    an array of {text, start_timestamp:{relative}} and the talker under participant.name — and NO
+    top-level timestamp/end_of_turn. The drain must descend to that level, join the words, derive
+    the ts from the first word, and resolve the speaker — else every live transcript is dropped and
+    Proxy never wakes. (bot resolved from data.bot.id.)"""
+    from control_plane.webhooks import _dispatch_meeting_event
+
+    _patch_resolve(monkeypatch, "m-1")
+    rt = _FakeRuntime()
+
+    async def _run() -> None:
+        payload = {
+            "event": "transcript.data",
+            "data": {
+                "bot": {"id": "b1"},
+                "data": {
+                    "words": [
+                        {"text": "proxy,", "start_timestamp": {"relative": 0.5}},
+                        {"text": "where", "start_timestamp": {"relative": 0.7}},
+                        {"text": "is", "start_timestamp": {"relative": 0.9}},
+                        {"text": "the", "start_timestamp": {"relative": 1.0}},
+                        {"text": "helper?", "start_timestamp": {"relative": 1.2}},
+                    ],
+                    "participant": {"id": 1, "name": "Daksh", "is_host": True},
+                    "language_code": "en",
+                },
+            },
+        }
+        await _dispatch_meeting_event(
+            payload, db=_FakeDB(), registry=_FakeRegistry({"m-1": rt})
+        )
+        assert rt.lines == [("Daksh", "proxy, where is the helper?", 0.5, False)]
+
+    asyncio.run(_run())
+
+
 def test_transcript_text_key_fallback_when_words_absent(monkeypatch) -> None:
     """When ``words`` is absent, a ``text``/``transcript`` string still feeds the loop."""
     from control_plane.webhooks import _dispatch_meeting_event

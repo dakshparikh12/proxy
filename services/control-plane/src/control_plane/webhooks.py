@@ -85,14 +85,45 @@ def _bot_id(payload: dict[str, Any]) -> str | None:
 
 
 def _transcript_body(payload: dict[str, Any]) -> dict[str, Any]:
-    """The Recall real-time transcript passthrough body (``data`` if nested, else top).
+    """Descend to the dict that actually carries the transcript fields.
 
-    The confirmed wire shape (``words``/``speaker``/``timestamp``/``end_of_turn``) lives
-    under ``data`` on Recall's callback envelope; a flat body is passed through as-is."""
-    data = payload.get("data")
-    if isinstance(data, dict):
-        return data
-    return payload
+    Recall nests the real-time transcript under ``data`` — and for the ``assembly_ai_v3_streaming``
+    provider, under ``data.data`` (the ``words`` array + ``participant`` sit there, NOT at the first
+    ``data`` level). Unwrap nested ``data`` envelopes (bounded) until we reach the level that has
+    ``words``/``text``/``transcript`` (or ``participant``); a flat body is returned as-is. This is
+    what lets the REAL Recall payload parse, not only the flat unit-stub shape — without it every
+    live transcript is dropped and Proxy never wakes (verified against Recall's documented payload)."""
+    body: Any = payload
+    for _ in range(3):  # bounded unwrap of nested ``data`` envelopes
+        if not isinstance(body, dict):
+            break
+        if any(k in body for k in ("words", "text", "transcript")) or "participant" in body:
+            return body
+        nxt = body.get("data")
+        if not isinstance(nxt, dict):
+            return body
+        body = nxt
+    return body if isinstance(body, dict) else payload
+
+
+def _transcript_ts(body: dict[str, Any]) -> float:
+    """The line's timestamp (seconds). Recall's word objects carry ``start_timestamp.relative``;
+    a flat body may carry ``timestamp``. Missing → 0.0 (a benign ordering value)."""
+    ts = body.get("timestamp")
+    if ts is not None:
+        try:
+            return float(ts)
+        except (TypeError, ValueError):
+            pass
+    words = body.get("words")
+    if isinstance(words, list) and words and isinstance(words[0], dict):
+        st = words[0].get("start_timestamp")
+        if isinstance(st, dict):
+            try:
+                return float(st.get("relative"))  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                pass
+    return 0.0
 
 
 def _transcript_text(body: dict[str, Any]) -> str:
@@ -137,11 +168,7 @@ def _transcript_line(body: dict[str, Any]) -> tuple[str, str, float] | None:
     text = _transcript_text(body)
     if not text.strip():
         return None
-    ts = body.get("timestamp")
-    try:
-        timestamp = float(ts or 0.0)
-    except (TypeError, ValueError):
-        timestamp = 0.0
+    timestamp = _transcript_ts(body)
     speaker = body.get("speaker")
     if not speaker:
         # AssemblyAI/Recall nests the talker under ``participant`` on some shapes.
