@@ -39,6 +39,11 @@ def test_wire_map_seam_no_auth_leaves_provider_none(monkeypatch: Any) -> None:
     monkeypatch.setattr(
         settings_mod.settings, "claude_code_use_vertex", "", raising=False
     )
+    # The Claude Code SUBSCRIPTION token is a fourth auth mode: clear it too so this "no auth"
+    # case is genuinely auth-less (the live .env carries a real CLAUDE_CODE_OAUTH_TOKEN).
+    monkeypatch.setattr(
+        settings_mod.settings, "anthropic_oauth_token", "", raising=False
+    )
 
     app = _App(db=object())
     server._wire_map_seam(app)  # must not raise

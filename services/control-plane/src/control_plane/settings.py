@@ -74,11 +74,18 @@ class Settings(BaseSettings):
     aes_key_stt: str = Field(default="", validation_alias="AES_KEY_STT")
     aes_key_calendar: str = Field(default="", validation_alias="AES_KEY_CALENDAR")
 
-    # -- Claude / Anthropic auth -- keep all three modes (Doc 00 s7) ----------
+    # -- Claude / Anthropic auth -- keep all four modes (Doc 00 s7) -----------
     anthropic_api_key: str = Field(default="", validation_alias="ANTHROPIC_API_KEY")
     anthropic_auth_token: str = Field(default="", validation_alias="ANTHROPIC_AUTH_TOKEN")
     claude_code_use_vertex: str = Field(
         default="", validation_alias="CLAUDE_CODE_USE_VERTEX"
+    )
+    # The founder's Claude Code SUBSCRIPTION token — the SAME credential the per-meeting
+    # workroom carries into its sandbox so native ``claude`` authenticates (proven working).
+    # The map-build SDK subprocess authenticates on it exactly like ``claude -p`` does, so a
+    # deployment with ONLY the subscription can still build maps (the live founder setup).
+    anthropic_oauth_token: str = Field(
+        default="", validation_alias="CLAUDE_CODE_OAUTH_TOKEN"
     )
 
     # -- prod-gated ----------------------------------------------------------
@@ -99,11 +106,12 @@ class Settings(BaseSettings):
     )
 
     def anthropic_auth_configured(self) -> bool:
-        """At least one of the three Claude SDK auth modes is present."""
+        """At least one of the four Claude SDK auth modes is present."""
         return bool(
             self.anthropic_api_key
             or self.anthropic_auth_token
             or self.claude_code_use_vertex
+            or self.anthropic_oauth_token
         )
 
     def resolved_recall_webhook_secret(self) -> str:

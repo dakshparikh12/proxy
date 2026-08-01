@@ -109,6 +109,73 @@ async def get_by_id(conn: Any, meeting_id: Any) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
 
+async def upsert_repo_for_tenant(
+    conn: Any,
+    *,
+    tenant_id: Any,
+    full_name: str,
+    default_branch: str | None = None,
+    github_installation_id: str | None = None,
+) -> dict[str, Any]:
+    """Ensure a ``repos`` row exists for ``(tenant_id, full_name)`` and return it (idempotent).
+
+    The connect→index flow writes ``tenants`` + ``connect_readiness`` + ``repo_maps`` but never a
+    ``repos`` row, so ``POST /meetings`` (which resolves the invited repo via
+    :func:`get_repo_for_tenant`) 404s even after a clean index. This is the missing insert on the
+    connect SUCCESS path: it binds the tenant's repo durably so the invite route can find it.
+
+    ``full_name`` is stored EXACTLY as the caller will name the repo in the ``POST /meetings``
+    body (``get_repo_for_tenant`` matches it byte-for-byte), and it must derive — via
+    ``premeeting.paths.repo_name_from_url`` — to the SAME key the map was stored under
+    (``repo_maps.repo``), so the invite's HEAD-pin read finds the map. Passing the connect
+    ``repo_url`` verbatim satisfies both at once.
+
+    Idempotent: the ``repos`` table has no unique constraint on ``(tenant_id, full_name)``, so a
+    re-run reads the existing row (returning it, optionally backfilling a NULL
+    ``default_branch`` / ``github_installation_id``) rather than inserting a duplicate — a
+    redelivered connect never double-writes the binding. Tenant-scoped by construction (the read
+    and the insert both carry ``tenant_id``), so no cross-tenant row is ever created or returned.
+    """
+    existing = await conn.fetchrow(
+        "SELECT id, tenant_id, full_name, default_branch, github_installation_id "
+        "FROM repos WHERE tenant_id = $1 AND full_name = $2",
+        tenant_id,
+        full_name,
+    )
+    if existing is not None:
+        # Backfill only NULLs we now know — never overwrite a recorded value with a fabricated one.
+        if (default_branch and existing["default_branch"] is None) or (
+            github_installation_id and existing["github_installation_id"] is None
+        ):
+            updated = await conn.fetchrow(
+                """
+                UPDATE repos
+                   SET default_branch = COALESCE(default_branch, $3),
+                       github_installation_id = COALESCE(github_installation_id, $4)
+                 WHERE tenant_id = $1 AND full_name = $2
+                RETURNING id, tenant_id, full_name, default_branch, github_installation_id
+                """,
+                tenant_id,
+                full_name,
+                default_branch,
+                github_installation_id,
+            )
+            return dict(updated)
+        return dict(existing)
+    row = await conn.fetchrow(
+        """
+        INSERT INTO repos (tenant_id, full_name, default_branch, github_installation_id)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, tenant_id, full_name, default_branch, github_installation_id
+        """,
+        tenant_id,
+        full_name,
+        default_branch,
+        github_installation_id,
+    )
+    return dict(row)
+
+
 async def get_repo_for_tenant(
     conn: Any, *, tenant_id: Any, full_name: str
 ) -> dict[str, Any] | None:

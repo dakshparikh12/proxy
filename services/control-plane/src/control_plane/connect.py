@@ -356,10 +356,48 @@ def trigger_connect_index(
     # flagged-file concept the old graph index had; ``not_ready`` names the gaps verify found.
     if result.ready:
         store.set_ready(install_id, coverage_pct=100.0, flagged=[])
+        # Bind the tenant's repo durably so ``POST /meetings`` can find it (else it 404s even
+        # after a clean index — the connect flow writes tenants/connect_readiness/repo_maps but
+        # never a ``repos`` row). ``full_name`` is stored as the ``repo_url`` VERBATIM so the
+        # invite body's ``repo`` string matches it byte-for-byte AND ``repo_name_from_url`` of it
+        # equals the ``repo_maps.repo`` key the map was stored under (HEAD-pin read finds the map).
+        # Best-effort: a binding fault never un-readies a verified index — the poll already read
+        # ``ready``; the invite would 404 until a retry, which is honest (never a fabricated bind).
+        _bind_repo_row(map_store, tenant_id=tenant_id, repo_url=repo_url)
     else:
         gaps = result.reasons or ["not ready: no reason recorded"]
         store.set_not_ready(install_id, gaps=list(gaps))
     return result
+
+
+def _bind_repo_row(map_store: Any, *, tenant_id: str, repo_url: str) -> None:
+    """Idempotently insert the tenant's ``repos`` row on a clean connect (the invite's referent).
+
+    The async ``MapStore`` carries the live ``Database`` pool (present exactly when a real map
+    build ran — a funded provider), so the same durable substrate the map landed in writes the
+    binding. ``full_name`` is the connect ``repo_url`` VERBATIM: ``get_repo_for_tenant`` matches
+    the ``POST /meetings`` ``repo`` string against it exactly, and ``repo_name_from_url(full_name)``
+    is the ``repo_maps.repo`` key — one value keeps both consistent. Runs in the trigger's daemon
+    thread (no ambient loop), so a private ``asyncio.run`` is safe. Never raises out — a bind fault
+    is logged; the invite simply 404s until a retry rather than the index being falsely un-readied.
+    """
+    import asyncio
+
+    db = getattr(map_store, "db", None)
+    if db is None:
+        return  # no durable pool wired (store-less test path) — nothing to bind
+    from libs.db import repos as _repos
+
+    async def _do() -> None:
+        async with db.acquire() as conn:
+            await _repos.meetings.upsert_repo_for_tenant(
+                conn, tenant_id=tenant_id, full_name=repo_url
+            )
+
+    try:
+        asyncio.run(_do())
+    except Exception:  # noqa: BLE001 - a bind fault never un-readies a verified index (honest)
+        pass
 
 
 # ── GitHub-App install URL ────────────────────────────────────────────────────

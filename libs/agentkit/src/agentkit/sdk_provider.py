@@ -173,6 +173,7 @@ def make_map_provider(
     api_key: str = "",
     auth_token: str = "",
     use_vertex: str = "",
+    oauth_token: str = "",
 ) -> ClaudeAgentProvider | None:
     """Construct the map-build provider from the resolved Anthropic auth, or ``None`` (no auth).
 
@@ -182,6 +183,17 @@ def make_map_provider(
     returns ``None`` so the caller keeps today's honest no-op (``map_provider = None``, D-032) —
     boot still succeeds, connect degrades honestly, and no map is ever fabricated (Law 2).
 
+    Four auth modes, in priority order:
+
+    * ``api_key`` → ``ANTHROPIC_API_KEY`` (console key — simplest for V0);
+    * ``auth_token`` → ``ANTHROPIC_AUTH_TOKEN`` (the raw Anthropic OAuth token mode);
+    * ``oauth_token`` → ``CLAUDE_CODE_OAUTH_TOKEN`` — the founder's Claude Code SUBSCRIPTION
+      token. The claude_agent_sdk subprocess authenticates on this env key EXACTLY like
+      ``claude -p`` does (the SAME token the workroom's native ``claude`` proves working
+      inside the sandbox), so a deployment with ONLY the subscription can still build maps.
+      No ``ANTHROPIC_*`` key is set in this mode — the subscription token is self-sufficient.
+    * ``use_vertex`` → the Vertex flag (ADC ambient), which may COMPOSE with any of the above.
+
     Secrets flow from the resolved settings into the provider's ``auth_env`` only; they are
     never hard-coded and never logged (Hard Rule: Secrets).
     """
@@ -190,6 +202,12 @@ def make_map_provider(
         env["ANTHROPIC_API_KEY"] = api_key
     elif auth_token:
         env["ANTHROPIC_AUTH_TOKEN"] = auth_token
+    elif oauth_token:
+        # The Claude Code SUBSCRIPTION token: the SDK subprocess authenticates on this env
+        # key exactly as ``claude -p`` does. Do NOT also set an ANTHROPIC_* key in this mode —
+        # the subscription token is the sole, self-sufficient credential (the same one the
+        # workroom's native ``claude`` proves working).
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
     if use_vertex:
         # Vertex mode authenticates via ADC; carry the flag the SDK reads. The ADC itself is
         # ambient (workload identity), never a literal secret this code holds.

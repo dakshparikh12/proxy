@@ -395,9 +395,11 @@ def _wire_map_seam(app: Any) -> None:
 
     Reads the ALREADY-resolved Anthropic auth off ``control_plane.settings`` (never re-validates
     or re-reads config; never logs the key) and builds the ONE concrete ``agentkit`` provider from
-    it (``agentkit.make_map_provider``), plus a durable ``premeeting.map_store.MapStore`` over the
-    live ``app.state.db`` async pool. Both are assigned onto ``app.state`` so ``connect`` and the
-    push-freshness ingress (which RESOLVE them off ``app.state``) drive a real map build/store.
+    it (``agentkit.make_map_provider``) — any of the four auth modes (API key / raw auth token /
+    the Claude Code SUBSCRIPTION ``CLAUDE_CODE_OAUTH_TOKEN`` / Vertex), so the live founder setup
+    (subscription only) still builds maps — plus a durable ``premeeting.map_store.MapStore`` over
+    the live ``app.state.db`` async pool. Both are assigned onto ``app.state`` so ``connect`` and
+    the push-freshness ingress (which RESOLVE them off ``app.state``) drive a real map build/store.
 
     Honest no-op boundary: when NO auth mode is configured ``make_map_provider`` returns ``None``,
     so ``map_provider`` stays ``None`` (boot succeeds; connect records an honest ``not_ready``
@@ -415,6 +417,11 @@ def _wire_map_seam(app: Any) -> None:
             api_key=cfg.anthropic_api_key,
             auth_token=cfg.anthropic_auth_token,
             use_vertex=cfg.claude_code_use_vertex,
+            # The founder's Claude Code SUBSCRIPTION token (``CLAUDE_CODE_OAUTH_TOKEN``) — the
+            # SAME credential the workroom proves working inside its sandbox. On the live
+            # founder path this is the ONLY auth present, so passing it here is what unblocks
+            # the map build (no ANTHROPIC_* key needed). Never logged (Hard Rule: Secrets).
+            oauth_token=cfg.anthropic_oauth_token,
         )
         if provider is not None:
             from premeeting.map_store import MapStore
