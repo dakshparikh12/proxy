@@ -18,11 +18,8 @@ route fails CLOSED (401) when it is unset.
 """
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from psycopg.types.json import Json
 from starlette.requests import Request
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -31,61 +28,6 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 # The route the §4.6 allowlist names; kept as a constant so the mount and the
 # allowlist entry can never drift by a typo.
 RECALL_WEBHOOK_PATH = "/webhooks/recall"
-
-
-@dataclass(frozen=True)
-class WebhookResponse:
-    """The immediate webhook ack (returned before any processing)."""
-
-    status: int
-
-
-def ingest(
-    conn: Any,
-    *,
-    delivery_guid: str,
-    body: dict[str, Any],
-    on_step: Callable[[str], None] | None = None,
-) -> WebhookResponse:
-    """Durably land a webhook (dedup), then return 200 — no processing yet.
-
-    ``provider`` is named EXPLICITLY (never left to the schema DEFAULT): it is derived
-    'github'|'recall' from the delivery body via the ONE canonical classifier
-    (``db.repos.webhooks._derive_provider`` — a GitHub push carries ``ref``/``after``/
-    ``commits``; a Recall callback carries ``event``/``bot_id``). Sharing that classifier
-    keeps the sync intake and the async ``insert_event`` repo from drifting on how a
-    delivery is classified. The CHECK domain still rejects any out-of-domain value.
-    """
-    from db.repos.webhooks import _derive_provider
-
-    step = on_step if on_step is not None else (lambda _s: None)
-    provider = _derive_provider(body)
-    conn.execute(
-        """
-        INSERT INTO webhook_events (provider, delivery_guid, payload, status)
-        VALUES (%s, %s, %s, 'pending')
-        ON CONFLICT (delivery_guid) DO NOTHING
-        """,
-        (provider, delivery_guid, Json(body)),
-    )
-    step("inserted")
-    # The durable INSERT precedes the 200; processing is deferred to drain.
-    step("returned_200")
-    return WebhookResponse(status=200)
-
-
-def drain_pending(conn: Any) -> int:
-    """Idempotently process every pending webhook row; return how many drained."""
-    rows = conn.execute(
-        "SELECT id FROM webhook_events WHERE status = 'pending'"
-    ).fetchall()
-    for (row_id,) in rows:
-        conn.execute(
-            "UPDATE webhook_events SET status = 'processed', processed_at = now() "
-            "WHERE id = %s AND status = 'pending'",
-            (row_id,),
-        )
-    return len(rows)
 
 
 # --------------------------------------------------------------------------- #

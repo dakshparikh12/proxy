@@ -1,5 +1,5 @@
-"""Provider-independence seams (§3.8): ``TransportProvider`` (Recall), ``STTProvider``
-(AssemblyAI-via-Recall), ``TTSProvider`` (Cartesia), and the ``OutputMediaSink``.
+"""Provider-independence seams (§3.8): ``TransportProvider`` (Recall),
+``TTSProvider`` (Cartesia), and the ``OutputMediaSink``.
 
 Every external piece sits behind a thin ``Protocol`` so a provider swap is a
 migration, not a redesign (AC-SEAM-01/02/03/04). Callers depend ONLY on these
@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator
 from typing import Protocol, runtime_checkable
 
 from .media import AudioChunk, CanvasFrame
-from .signals import ChatMessage, RosterEvent, Transcript
+from .signals import ChatMessage, RosterEvent
 
 
 @runtime_checkable
@@ -52,18 +52,6 @@ class TransportProvider(Protocol):
     def chat_events(self, bot_id: str) -> AsyncIterator[ChatMessage]: ...
 
     def output_media(self, bot_id: str) -> OutputMediaSink: ...
-
-
-@runtime_checkable
-class STTProvider(Protocol):
-    """Speech-to-text (AssemblyAI Universal-Streaming via Recall BYOK passthrough).
-
-    No Proxy-side STT client is instantiated (AC-HEAR-02): transcripts arrive on the
-    Recall passthrough and are parsed here. Also carries the ``boundary`` field
-    (AAI ``end_of_turn``) consumed by turn-taking (§3.6).
-    """
-
-    def transcripts(self, bot_id: str) -> AsyncIterator[Transcript]: ...
 
 
 @runtime_checkable

@@ -9,7 +9,7 @@ one running the trigger, so an in-process dict would strand readiness at 'connec
 lose it on recycle (the exact failure the ``db:postgres`` dependency_class was written to
 prevent).
 
-Raw psycopg3 only — **no ORM** — matching the sibling sync facade (``db.sync``). Each
+Raw psycopg3 only — **no ORM**. Each
 function takes a borrowed *autocommit* psycopg connection so the caller owns the
 connection's lifetime; the SQL is matched byte-for-byte to the canonical DDL in
 ``migrations/versions/0006_connect_readiness.py``. ``status`` only ever holds a value from

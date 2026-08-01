@@ -1,8 +1,9 @@
-"""Webhook ingest/drain — durable INSERT then 200; drain pending idempotently.
+"""Webhook drain — process pending deliveries idempotently.
 
-Ingest returns 200 immediately after the durable INSERT, BEFORE processing. Pending rows
-are drained on boot + periodically; processing is idempotent. ``webhook_events`` is the
-only external-callback durability surface (no event bus).
+The durable INSERT-then-200 intake lives in ``webhook_routes`` (the HMAC-gated Recall
+route); this module owns the DRAIN. Pending rows are drained on boot + periodically;
+processing is idempotent. ``webhook_events`` is the only external-callback durability
+surface (no event bus).
 
 The drain is the reactive-workroom meeting spine (SPEC §0/§3). On a Recall ``in_call``
 callback it CLAIMS + provisions the meeting through the provisioner (``launch``): a
@@ -37,12 +38,6 @@ _TRANSCRIPT_EVENTS = frozenset({"transcript.data", "transcript", "bot.transcript
 # data.data.participant{ id,name,... } + data.data.data{ text,to }. A chat line feeds the
 # reactive loop too (the wake gate scans it for ``@proxy``).
 _CHAT_EVENTS = frozenset({"participant_events.chat_message"})
-
-
-def ingest_webhook(event: dict[str, Any], *, store: Any) -> int:
-    """Durably record the delivery, then return 200 (processing happens later)."""
-    store.insert(event)
-    return 200
 
 
 def _event_name(payload: dict[str, Any]) -> str:

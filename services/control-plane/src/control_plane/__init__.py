@@ -26,16 +26,12 @@ from .session import (
 from .webhooks import (
     drain_pending_webhooks as drain_pending_webhooks,
 )
-from .webhooks import (
-    ingest_webhook as ingest_webhook,
-)
 
 __all__ = [
     "app",
     "complete_signin",
     "create_app",
     "drain_pending_webhooks",
-    "ingest_webhook",
     "invite_proxy",
     "resolve_bot_id",
     "resolve_session",
