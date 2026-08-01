@@ -64,7 +64,7 @@ async def run_pipeline(
     minter: InstallationTokenMinter | None = None,
     installation_id: str | None = None,
     sha: str | None = None,
-    model: str = "claude-sonnet",
+    model: str | None = None,
     readiness_listener: Any = None,
     exclusions: ExclusionManager | None = None,
 ) -> PipelineResult:

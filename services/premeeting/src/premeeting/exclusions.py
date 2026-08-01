@@ -41,6 +41,26 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 _REDACTION = "[REDACTED]"
 
+# A ``secret|token|...=<rhs>`` capture whose RHS is a plain lowercase CODE IDENTIFIER (a snake_case
+# / lowercase symbol name) is a source symbol, not a secret literal — e.g. click's public
+# ``token_normalize_func`` parameter matched the ``token…=…`` pattern and, being named in the map,
+# falsely tripped "secret value leaked" and failed verify on a perfectly good map (BUG 4). The guard
+# fires ONLY when the value is letters+underscores AND carries a LOWERCASE letter: a real credential
+# is either high-entropy (digits / ``/+=-``) or an ALL-CAPS blob (``AKIAABCDEFGHIJKLMNOP``), neither
+# of which is a lowercase source symbol — so a genuine secret value is still collected + redacted
+# (verified by ``test_pm_verify_03``). This narrows ONLY the identifier false-positive.
+_CODE_IDENTIFIER_RX = re.compile(r"^[A-Za-z][A-Za-z_]*$")
+
+
+def _is_code_identifier(value: str) -> bool:
+    """True iff ``value`` is a lowercase-bearing letters/underscores source symbol (never a secret).
+
+    Requires a lowercase letter so an ALL-CAPS credential blob (``AKIAABCDEFGHIJKLMNOP``) is NOT
+    treated as an identifier and is still collected as a secret, while ``token_normalize_func`` is."""
+    if not _CODE_IDENTIFIER_RX.match(value):
+        return False
+    return any(c.islower() for c in value)
+
 
 class GitleaksLike(Protocol):
     def record(self, paths: Any = ...) -> None: ...
@@ -101,7 +121,7 @@ class ExclusionManager:
         for pat in _SECRET_PATTERNS:
             for m in pat.finditer(text):
                 value = m.group(m.lastindex) if m.lastindex else m.group(0)
-                if value:
+                if value and not _is_code_identifier(value):
                     self._secret_values.add(value)
 
     # -- queries ---------------------------------------------------------- #

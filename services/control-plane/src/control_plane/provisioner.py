@@ -332,7 +332,26 @@ async def _repo_clone_url(resolved: dict[str, Any], *, db: Database) -> str:
         repo = await repos.meetings.get_repo_by_id(conn, repo_id)
     if repo is None or not repo.get("full_name"):
         return ""
-    return f"https://github.com/{str(repo['full_name']).strip('/')}"
+    return _clone_url_from_full_name(str(repo["full_name"]))
+
+
+def _clone_url_from_full_name(full_name: str) -> str:
+    """Normalise a stored ``repos.full_name`` to a cloneable GitHub URL.
+
+    ``connect`` binds ``full_name`` as the ``POST /meetings`` ``repo`` string VERBATIM — and on
+    the live path that string is a FULL URL (``https://github.com/pallets/click``), because the
+    invite body carries the same URL the connect flow received. Blindly prefixing
+    ``https://github.com/`` then produced ``https://github.com/https://github.com/pallets/click``
+    — an unclonable URL, so the E2B workroom's ``git clone`` failed and the meeting booted with no
+    repo (native Claude greps an empty tree, breaking every code answer). Accept either shape: an
+    ``http(s)://…`` or ``git@…`` value is already a clone URL (returned as-is); a bare
+    ``owner/repo`` is prefixed. Trailing slashes trimmed either way."""
+    name = full_name.strip().rstrip("/")
+    if not name:
+        return ""
+    if name.startswith(("http://", "https://", "git@", "ssh://")):
+        return name
+    return f"https://github.com/{name}"
 
 
 async def provision_meeting(

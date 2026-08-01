@@ -34,10 +34,12 @@ import pathlib
 import time
 from typing import Any
 
-#: The persistent session's default model — a FAST (Haiku) id so a quick ask is sub-second.
-#: Overridable via ``PROXY_WORKROOM_MODEL`` (Law 4: no per-task model in code; the agent still
-#: escalates heavy work to a stronger model through its own sub-agents).
-DEFAULT_MODEL = "claude-haiku-4-5"
+#: The persistent session's default model. Sonnet (not Haiku): the real-data dry-run proved Haiku
+#: OVER-EXPLORES a normal ask and exhausts the turn budget WITHOUT calling ``to_meeting`` — it wakes
+#: but delivers nothing (a fast model that says nothing is useless). Sonnet follows the "deliver in
+#: one turn" instruction reliably. Overridable via ``PROXY_WORKROOM_MODEL`` (Law 4: no per-task model
+#: in code; the agent still escalates heavy work to a stronger model through its own sub-agents).
+DEFAULT_MODEL = "claude-sonnet-4-6"
 
 WAKE_IN = os.environ.get("PROXY_WAKE_IN", "/tmp/wake_in.jsonl")  # nosec B108 — path INSIDE the isolated per-tenant E2B microVM
 WAKE_OUT = os.environ.get("PROXY_WAKE_OUT", "/tmp/wake_out")  # nosec B108 — path INSIDE the isolated per-tenant E2B microVM
@@ -189,7 +191,12 @@ async def main() -> None:
         cwd=REPO_DIR,
         permission_mode="bypassPermissions",   # the sandbox holds no push/send creds (Law 3)
         setting_sources=["project"],           # loads CLAUDE.md (the prime) ONCE
-        model=MODEL,                            # fast default; heavy work escalates via sub-agents
+        model=MODEL,                            # reliable default; heavy work escalates via sub-agents
+        # The SDK default (12) is too small: a real ask explores the repo AND must still land the
+        # final `to_meeting` call — the dry-run showed the agent hitting the cap mid-exploration and
+        # delivering nothing. A larger budget lets it finish + deliver (the per-ask wall-clock is
+        # still bounded by ASK_TIMEOUT_S on the driver side; a runaway can't stall the meeting).
+        max_turns=int(os.environ.get("PROXY_MAX_TURNS", "40") or "40"),
         mcp_servers=_mcp_servers(),
     )
     async with ClaudeSDKClient(options=options) as client:

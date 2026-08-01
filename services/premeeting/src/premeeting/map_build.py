@@ -20,6 +20,7 @@ real-model map-QUALITY battery (PM-MAP-06) is BLOCKED-on-credits — never marke
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,27 @@ from agentkit import ProviderQuery
 from agentkit.provider import Provider
 
 from .exclusions import ExclusionManager
+
+# The map-build model id, resolved dynamically (Law 4: never a per-task model literal buried in
+# code). It threads into ``ProviderQuery.model`` → ``ClaudeAgentOptions.model`` → the
+# ``claude_agent_sdk`` subprocess, which validates the id against the SAME model catalog the
+# native ``claude`` CLI uses. A NON-CATALOG id (the old default ``"claude-sonnet"``) is rejected
+# by the SDK with "the selected model … may not exist", captured as a one-line error string, and
+# then correctly rejected by ``verify`` — so EVERY connect ended ``not_ready`` with an empty map
+# and no ``repos`` bind, 404-ing every ``POST /meetings``. The resolver reads the deployment's
+# configured seat (``PROXY_MODEL_MAP`` first, then the shared ``PROXY_MODEL_ANSWER`` the .env
+# already sets to ``claude-sonnet-4-6``) and falls back to a VALID catalog id — never the bare
+# family alias, which is not a Claude Code model id.
+_DEFAULT_MAP_MODEL = "claude-sonnet-4-6"
+
+
+def _default_map_model() -> str:
+    """The map-build model id from config, or a valid catalog fallback (never a bare alias)."""
+    return (
+        os.environ.get("PROXY_MODEL_MAP")
+        or os.environ.get("PROXY_MODEL_ANSWER")
+        or _DEFAULT_MAP_MODEL
+    ).strip() or _DEFAULT_MAP_MODEL
 
 # The bounded skeleton depth (PM-MAP-02): a ``tree -L 3``-style listing — deep enough to name
 # the major areas, shallow enough that even a 100k-file monorepo yields tens-of-k tokens, never
@@ -221,7 +243,7 @@ async def build_map(
     clone_path: Path,
     repo_name: str,
     sha: str,
-    model: str = "claude-sonnet",
+    model: str | None = None,
     exclusions: ExclusionManager | None = None,
     mcp_servers: object | None = None,
     max_turns: int = DEFAULT_MAX_TURNS,
@@ -239,12 +261,13 @@ async def build_map(
 
     Fake ONLY at ``provider`` (the model seam, D-032). PM-MAP-06 (real-model quality) is BLOCKED.
     """
+    resolved_model = (model or "").strip() or _default_map_model()
     skeleton = build_skeleton(clone_path, exclusions=exclusions)
     high_yield = collect_high_yield(clone_path, exclusions=exclusions)
     prompt = _build_prompt(repo_name=repo_name, sha=sha, skeleton=skeleton, high_yield=high_yield)
 
     query = ProviderQuery(
-        model=model,
+        model=resolved_model,
         allowed_tools=MAP_BUILD_READ_TOOLS,
         system_prompt=(
             "You are Proxy, building a navigation map of a company's codebase. Read only what "

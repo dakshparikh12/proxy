@@ -43,7 +43,7 @@ async def refresh_on_push(
     minter: InstallationTokenMinter | None = None,
     installation_id: str | None = None,
     changed_files: list[str] | None = None,
-    model: str = "claude-sonnet",
+    model: str | None = None,
 ) -> RefreshResult:
     """Delta-pull the tenant's existing clone, re-build/store/verify the map (never raises out).
 

@@ -96,53 +96,71 @@ def _top_level_entries(clone_path: Path) -> set[str]:
         return set()
 
 
-# Last-segment values a DOTTED token can carry that mean it is a URL/domain/framework name, not a
-# repo path — a bare-domain TLD (``cal.com`` → ``com``) or a domain-shaped framework (``Next.js`` →
-# ``js`` but the token is a domain-style CamelCase name, handled by the top-level anchor below).
-# The map's prose routinely cites the product/framework/a bare host, so these must never be treated
-# as fabricated file paths (BUG 2). This is a URL-TLD list, NOT a file-extension denylist.
+# URL TLDs a dotted LAST segment can carry — a cited host (``github.com/calcom/cal.com`` → last
+# segment ``cal.com`` → ``com``) is a URL the map cites in prose, never a source file whose
+# extension proves a path claim. Excluding these from the "ends in a source extension" test stops a
+# cited repo URL from false-flagging as a fabricated path (BUG 2/4). A URL-TLD list, NOT a
+# file-extension denylist.
 _DOMAIN_TLDS = frozenset(
     {"com", "org", "io", "net", "dev", "co", "ai", "app", "gg", "sh", "xyz", "me", "so"}
 )
 
 
+# Conventional TOOLING dot-dirs a navigation map is NOT required to cover: they carry CI / editor /
+# dev-container config, not the code Proxy navigates in a meeting. Requiring the map to name every
+# one of them (``.devcontainer`` / ``.vscode`` / …) failed verify on a genuinely good map (BUG 4) —
+# a hallucinated REFERENCE to one is still caught by the path-existence check; this exemption only
+# relaxes the COVERAGE requirement for non-navigational config dirs.
+_COVERAGE_EXEMPT_DIRS = frozenset(
+    {".github", ".devcontainer", ".vscode", ".idea", ".circleci", ".husky", ".changeset"}
+)
+
+
 def _is_path_claim(tok: str, top_entries: set[str]) -> bool:
-    """True iff ``tok`` is a genuine repo-path CLAIM the hallucination check should verify (BUG 2).
+    """True iff ``tok`` is a genuine repo-path CLAIM the hallucination check should verify.
 
-    Two false-positive families the old ``named ⇒ must-exist`` rule wrongly flagged, now excluded:
-
-    * a bare DOMAIN name — a dotted token whose last segment is a URL TLD (``cal.com`` → ``com``,
-      ``github.com`` → ``com``). Its last segment is a TLD, not a file extension, so it is a host
-      the map cites, never a file that must exist. (URL forms with ``://``/``//`` were already
-      dropped upstream in :func:`_looks_like_path`.)
-    * a SLASH token whose FIRST segment is a bare domain — ``github.com/calcom/cal.com`` (first
-      segment ``github.com`` is a domain, not a real top-level entry in the clone). A cited repo
-      URL is prose, not a fabricated path.
-
-    Genuine-path detection is intact: ``src/server.py`` (first segment ``src`` — a real dir, not a
-    domain), a genuinely-missing ``foo/bar.ts`` (first segment ``foo`` — not a domain, so it IS a
-    claim and still flags), and a real top-level ``server.py`` all remain claims and are checked.
-    """
+    A path CLAIM is a token whose FIRST path segment is a real top-level entry in the clone:
+    ``src/click/core.py`` (``src`` is a real dir), ``.github/workflows`` (``.github`` is a real
+    tracked dir), a real top-level ``server.py``. Everything else is prose — the map's
+    slash-bearing enumerations (``BaseCommand/Command``, ``3.10/3.11``, ``I/O``), cited URLs
+    (``github.com/…``), bare domains (``cal.com``), and framework names (``Next.js``) — and is not
+    checked for existence. Anchoring on the clone's own top-level entries is what keeps a faithful
+    map from false-flagging while a genuinely-missing path under a REAL dir (``src/nope.py``) still
+    flags. See BUG 4: the old ``any slash ⇒ claim`` rule rejected a correct 13KB map."""
     if "/" in tok:
         first = tok.split("/", 1)[0]
-        # A slash token anchored on a bare domain first-segment is a cited URL, not a path claim —
-        # unless that first segment is actually a real top-level entry in the clone (never a domain).
-        if _is_bare_domain(first) and first not in top_entries:
-            return False
-        return True
+        # A slash token is a genuine repo-path CLAIM when EITHER:
+        #  (a) its FIRST segment is a real top-level entry in the clone (``src/click/core.py`` →
+        #      ``src``; ``.github/workflows`` → ``.github``) — a path anchored on a real dir, OR
+        #  (b) it ends in a real SOURCE-FILE EXTENSION (``foo/bar.ts`` → ``.ts``) — a file path even
+        #      when its top dir is fabricated, so a genuinely-missing ``foo/bar.ts`` still flags.
+        # Everything else is the map's SLASH-BEARING PROSE: class enumerations
+        # (``BaseCommand/Command/MultiCommand``), version lists (``3.10/3.11/3.12`` — last segment
+        # is not an alpha ext), option pairs (``Option/Argument``), shorthands (``I/O``,
+        # ``read/write``, ``bash/zsh/fish``), and cited URLs (``github.com/…`` — first segment not a
+        # top entry, last segment not a source ext). Treating all of those as file paths flagged a
+        # GENUINELY GOOD 13KB map and 404'd every meeting (BUG 4); requiring (a)-or-(b) keeps real
+        # hallucination detection intact while dropping the prose.
+        if first in top_entries:
+            return True
+        last = tok.rsplit("/", 1)[-1]
+        if "." in last:
+            ext = last.rsplit(".", 1)[-1]
+            # A source-file extension makes it a path claim; a URL TLD (``.com``) does not — that
+            # is a cited host (``github.com/calcom/cal.com``), prose, not a fabricated file.
+            return (
+                bool(ext)
+                and ext.isalpha()
+                and 1 <= len(ext) <= 5
+                and ext.lower() not in _DOMAIN_TLDS
+            )
+        return False
     # A slash-less token names a TOP-LEVEL entry or nothing: it is a path claim ONLY when it is a
     # real top-level entry in the clone (a real top-level file like ``server.py`` / ``go.mod``).
     # A cited bare domain (``cal.com``) or framework name (``Next.js``) is not a top-level entry, so
     # it is prose, never a fabricated file — this is what stops the false hallucination flag (BUG 2)
-    # without weakening nested-path detection (``foo/bar.ts`` above still flags).
+    # without weakening nested-path detection.
     return tok in top_entries
-
-
-def _is_bare_domain(tok: str) -> bool:
-    """True iff ``tok`` is a dotted host/domain name (last segment is a URL TLD, e.g. ``cal.com``)."""
-    if "." not in tok:
-        return False
-    return tok.rsplit(".", 1)[-1].lower() in _DOMAIN_TLDS
 
 
 def verify_map(
@@ -223,8 +241,25 @@ def _uncovered_top_dirs(
             top = rel.split("/", 1)[0]
             if exclusions is not None and exclusions.is_excluded(rel):
                 continue
+            if top in _COVERAGE_EXEMPT_DIRS:
+                continue  # non-navigational tooling dot-dir — not required in the map (BUG 4)
             top_dirs.add(top)
-    return {d for d in top_dirs if not re.search(rf"\b{re.escape(d)}\b", map_text)}
+    return {d for d in top_dirs if not _dir_mentioned(d, map_text)}
+
+
+def _dir_mentioned(name: str, map_text: str) -> bool:
+    """True iff a top-level dir ``name`` is named anywhere in the map (dot-dir safe).
+
+    A ``\\b<name>\\b`` regex CANNOT match a DOT-DIR (``.github`` / ``.devcontainer``): ``\\b``
+    requires a word/non-word transition, but ``.`` is itself a non-word char, so ``\\b\\.github``
+    never anchors — the map named ``.github/workflows/`` yet the dir read as "uncovered", falsely
+    failing verify (BUG 4). Anchor on the LAST word run of the name instead (``github`` for
+    ``.github``), bounded by a word boundary on the trailing side, so a dot-dir the map mentions is
+    correctly seen as covered while a mere substring inside a longer word still does not count."""
+    core = name.lstrip(".")
+    if not core:
+        return name in map_text
+    return re.search(rf"(?<![A-Za-z0-9_]){re.escape(core)}\b", map_text) is not None
 
 
 __all__ = ["VerifyResult", "extract_named_paths", "verify_map"]

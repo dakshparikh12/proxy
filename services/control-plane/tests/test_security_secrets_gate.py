@@ -36,6 +36,7 @@ def _prod_env(monkeypatch, **overrides: str) -> None:
         "SESSION_SIGNING_KEY": "sk",
         "INTERNAL_RECONCILE_TOKEN": "rt",
         "PROXY_INTERNAL_TOKEN": "it",
+        "PUBLIC_BASE_URL": "https://proxy.example",
     }
     base.update(overrides)
     for key, val in base.items():
@@ -59,6 +60,50 @@ def test_prod_missing_signing_secret_crashes_at_load_naming_the_key(
     with pytest.raises(RuntimeError) as excinfo:
         load_settings()
     assert missing_key in str(excinfo.value)
+
+
+def test_prod_missing_public_base_url_crashes_at_load_naming_the_key(monkeypatch) -> None:
+    """BUG 4 — in prod, PUBLIC_BASE_URL is a hard boot gate: absent ⇒ crash NAMING it.
+
+    PUBLIC_BASE_URL is load-bearing (the in-sandbox to_meeting relay + every draft approve link
+    + the output-media page URL are built from it). Unset in prod is a silent dead deployment,
+    so the §6 boot gate must fail loud at boot naming the key rather than lazily on first use.
+    """
+    from control_plane.settings import load_settings
+
+    _prod_env(monkeypatch, PUBLIC_BASE_URL="")
+    with pytest.raises(RuntimeError) as excinfo:
+        load_settings()
+    assert "PUBLIC_BASE_URL" in str(excinfo.value)
+
+
+def test_non_prod_does_not_require_public_base_url(monkeypatch) -> None:
+    """BUG 4 — off-prod PUBLIC_BASE_URL stays optional (a local run degrades honestly to "")."""
+    from control_plane.settings import load_settings
+
+    monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
+    monkeypatch.setenv("PROXY_ENV", "local")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost/db")
+    monkeypatch.setenv("GCS_BUCKET", "b")
+    monkeypatch.setenv("RECALL_API_KEY", "k")
+    monkeypatch.setenv("AES_KEY_RECALL", "a")
+    monkeypatch.setenv("AES_KEY_STT", "a")
+    monkeypatch.setenv("AES_KEY_CALENDAR", "a")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "a")
+    cfg = load_settings()  # must not raise — PUBLIC_BASE_URL is prod-gated only
+    assert cfg.public_base_url == ""
+
+
+def test_env_example_documents_public_base_url() -> None:
+    """BUG 4 — .env.example documents PUBLIC_BASE_URL with a deploy-fact comment."""
+    import pathlib
+
+    # repo root is four levels up from this test file (services/control-plane/tests/<f>).
+    root = pathlib.Path(__file__).resolve().parents[3]
+    text = (root / ".env.example").read_text(encoding="utf-8")
+    line = next((ln for ln in text.splitlines() if ln.startswith("PUBLIC_BASE_URL")), None)
+    assert line is not None, "PUBLIC_BASE_URL must be documented in .env.example"
+    assert "deploy fact" in line.lower() or "load-bearing" in line.lower()
 
 
 def test_non_prod_does_not_require_the_internal_signing_secrets(monkeypatch) -> None:

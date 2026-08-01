@@ -309,8 +309,6 @@ def trigger_connect_index(
     """
     import asyncio
 
-    from premeeting.pipeline import run_pipeline
-
     # Honest no-op when the map-build model seam is unfunded (D-032): no provider → no map.
     # We NEVER fabricate a map; the readiness poll gets an honest not_ready naming the gap.
     if map_provider is None:
@@ -333,14 +331,26 @@ def trigger_connect_index(
         # pre-existing event loop, so a private ``asyncio.run`` here is safe — it never
         # creates/closes another thread's loop. run_pipeline never raises out (it returns an
         # honest PipelineResult), so this is the ONE async→sync bridge for the sync trigger.
+        #
+        # LOOP-LOCAL DB (fixes the connect-store crash on the daemon thread): the injected
+        # ``map_store`` (and the ``_bind_repo_row`` path) hold the asyncpg pool created on the
+        # MAIN app loop at boot — but asyncpg connections are event-loop-bound, so acquiring one
+        # from THIS thread's fresh ``asyncio.run`` loop raises ``ConnectionDoesNotExistError``
+        # (surfacing as ``store: InterfaceError`` → a false ``not_ready`` on EVERY real connect,
+        # so the repo is never bound and ``POST /meetings`` 404s). We therefore open a fresh
+        # ``Database`` on THIS loop from the same DSN and run the store-writing map build + the
+        # repo bind against it, closing it when done. When no ``map_store`` is wired (no funded
+        # provider path only ever reaches here WITH a store), the original store is passed through.
         result = asyncio.run(
-            run_pipeline(
+            _run_pipeline_and_bind(
                 tenant_id=tenant_id,
                 repo_url=repo_url,
-                provider=map_provider,
+                map_provider=map_provider,
                 map_store=map_store,
                 sha=sha,
-                readiness_listener=listener,
+                listener=listener,
+                store=store,
+                install_id=install_id,
             )
         )
     except Exception as exc:  # noqa: BLE001 - honest not_ready, never a silent success
@@ -349,53 +359,112 @@ def trigger_connect_index(
         except (KeyError, ConnectStoreUnavailable):
             pass
         raise
-
-    # Terminal readiness — read the REAL verdict off the pipeline result (never a faked pass).
-    # A verified map covers the whole clone (verify_map is a full-tree check), so a clean
-    # ``ready`` carries 100.0 and no per-file flags — the prose map has no partial-coverage /
-    # flagged-file concept the old graph index had; ``not_ready`` names the gaps verify found.
-    if result.ready:
-        store.set_ready(install_id, coverage_pct=100.0, flagged=[])
-        # Bind the tenant's repo durably so ``POST /meetings`` can find it (else it 404s even
-        # after a clean index — the connect flow writes tenants/connect_readiness/repo_maps but
-        # never a ``repos`` row). ``full_name`` is stored as the ``repo_url`` VERBATIM so the
-        # invite body's ``repo`` string matches it byte-for-byte AND ``repo_name_from_url`` of it
-        # equals the ``repo_maps.repo`` key the map was stored under (HEAD-pin read finds the map).
-        # Best-effort: a binding fault never un-readies a verified index — the poll already read
-        # ``ready``; the invite would 404 until a retry, which is honest (never a fabricated bind).
-        _bind_repo_row(map_store, tenant_id=tenant_id, repo_url=repo_url)
-    else:
-        gaps = result.reasons or ["not ready: no reason recorded"]
-        store.set_not_ready(install_id, gaps=list(gaps))
     return result
 
 
-def _bind_repo_row(map_store: Any, *, tenant_id: str, repo_url: str) -> None:
-    """Idempotently insert the tenant's ``repos`` row on a clean connect (the invite's referent).
+async def _run_pipeline_and_bind(
+    *,
+    tenant_id: str,
+    repo_url: str,
+    map_provider: Any,
+    map_store: Any,
+    sha: str | None,
+    listener: Any,
+    store: ConnectStore,
+    install_id: str,
+) -> Any:
+    """Run the map-build pipeline + terminal readiness + repo bind on ONE loop-local DB.
 
-    The async ``MapStore`` carries the live ``Database`` pool (present exactly when a real map
-    build ran — a funded provider), so the same durable substrate the map landed in writes the
-    binding. ``full_name`` is the connect ``repo_url`` VERBATIM: ``get_repo_for_tenant`` matches
-    the ``POST /meetings`` ``repo`` string against it exactly, and ``repo_name_from_url(full_name)``
-    is the ``repo_maps.repo`` key — one value keeps both consistent. Runs in the trigger's daemon
-    thread (no ambient loop), so a private ``asyncio.run`` is safe. Never raises out — a bind fault
-    is logged; the invite simply 404s until a retry rather than the index being falsely un-readied.
-    """
-    import asyncio
+    All async DB work (the map ``save`` and the ``repos`` bind) runs against a ``Database``
+    opened on THIS coroutine's event loop (the daemon-thread loop), never the main-loop pool
+    the injected ``map_store`` carries — the fix for the cross-loop asyncpg crash. The loop-local
+    pool is opened ONLY when the injected store carries a real async ``.db`` pool (the production
+    path, where that pool belongs to the main loop and would raise ``ConnectionDoesNotExistError``
+    from here); a store-less or fake-store path (tests, an injected recorder) keeps the injected
+    store so the trigger still calls THROUGH it. The loop-local pool is always closed."""
+    from premeeting.pipeline import run_pipeline
 
+    loop_db: Any = None
+    effective_store = map_store
+    # Only swap to a loop-local store when the injected one carries a real async pool bound to
+    # ANOTHER loop (the production ``MapStore(db=app.state.db)``). A store without a ``.db`` (a
+    # test recorder / a store-less path) is used as-is so the call-through contract holds.
+    if map_store is not None and getattr(map_store, "db", None) is not None:
+        try:
+            from premeeting.map_store import MapStore
+
+            from libs.db import Database
+
+            loop_db = await Database.connect(_default_dsn())
+            effective_store = MapStore(db=loop_db)
+        except Exception:  # noqa: BLE001 - fall back to the injected store; never crash the build
+            loop_db = None
+            effective_store = map_store
+    try:
+        result = await run_pipeline(
+            tenant_id=tenant_id,
+            repo_url=repo_url,
+            provider=map_provider,
+            map_store=effective_store,
+            sha=sha,
+            readiness_listener=listener,
+        )
+        # Terminal readiness — read the REAL verdict off the pipeline result (never a faked pass).
+        # A verified map covers the whole clone (verify_map is a full-tree check), so a clean
+        # ``ready`` carries 100.0 and no per-file flags; ``not_ready`` names the gaps verify found.
+        if result.ready:
+            store.set_ready(install_id, coverage_pct=100.0, flagged=[])
+            # Bind the tenant's repo durably so ``POST /meetings`` can find it (else it 404s even
+            # after a clean index). ``full_name`` is the ``repo_url`` VERBATIM so the invite body's
+            # ``repo`` matches byte-for-byte AND ``repo_name_from_url`` equals the ``repo_maps.repo``
+            # key. Runs on THIS loop's DB, awaited inline (no nested ``asyncio.run``).
+            await _bind_repo_row_async(effective_store, tenant_id=tenant_id, repo_url=repo_url)
+        else:
+            gaps = result.reasons or ["not ready: no reason recorded"]
+            store.set_not_ready(install_id, gaps=list(gaps))
+        return result
+    finally:
+        if loop_db is not None:
+            with contextlib.suppress(Exception):
+                await loop_db.close()
+
+
+async def _bind_repo_row_async(map_store: Any, *, tenant_id: str, repo_url: str) -> None:
+    """Idempotently insert the tenant's ``repos`` row on a clean connect — on the CURRENT loop.
+
+    The ``map_store`` carries the ``Database`` the map build just wrote through; this awaits the
+    bind against that SAME pool inline (no nested ``asyncio.run``), so it is loop-safe when called
+    from the daemon-thread pipeline coroutine that opened a loop-local DB. ``full_name`` is the
+    connect ``repo_url`` VERBATIM: ``get_repo_for_tenant`` matches the ``POST /meetings`` ``repo``
+    string byte-for-byte AND ``repo_name_from_url(full_name)`` is the ``repo_maps.repo`` key — one
+    value keeps both consistent. Never raises out — a bind fault leaves the invite to 404 until a
+    retry rather than falsely un-readying a verified index."""
     db = getattr(map_store, "db", None)
     if db is None:
         return  # no durable pool wired (store-less test path) — nothing to bind
     from libs.db import repos as _repos
 
-    async def _do() -> None:
+    try:
         async with db.acquire() as conn:
             await _repos.meetings.upsert_repo_for_tenant(
                 conn, tenant_id=tenant_id, full_name=repo_url
             )
+    except Exception:  # noqa: BLE001 - a bind fault never un-readies a verified index (honest)
+        pass
 
+
+def _bind_repo_row(map_store: Any, *, tenant_id: str, repo_url: str) -> None:
+    """Sync wrapper over :func:`_bind_repo_row_async` for a caller with no ambient loop.
+
+    Runs in a fresh ``asyncio.run`` — safe ONLY when ``map_store.db`` is a pool created on the
+    same (new) loop. The connect trigger no longer uses this path (it awaits the async form on
+    its loop-local DB); kept for any store-and-loop-consistent caller. Never raises out."""
+    import asyncio
+
+    if getattr(map_store, "db", None) is None:
+        return
     try:
-        asyncio.run(_do())
+        asyncio.run(_bind_repo_row_async(map_store, tenant_id=tenant_id, repo_url=repo_url))
     except Exception:  # noqa: BLE001 - a bind fault never un-readies a verified index (honest)
         pass
 

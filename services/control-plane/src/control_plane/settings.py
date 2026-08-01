@@ -91,6 +91,13 @@ class Settings(BaseSettings):
     # -- prod-gated ----------------------------------------------------------
     session_secret: str = Field(default="", validation_alias="SESSION_SECRET")
     gcp_project_id: str = Field(default="", validation_alias="GCP_PROJECT_ID")
+    # The deployment's PUBLIC origin (the tunnel / host URL). LOAD-BEARING in prod: the
+    # in-sandbox ``to_meeting`` relay URL, every draft approve link, and the output-media
+    # page URL are all built from it (relay.py / provisioner.py / meetings.py). Empty in
+    # prod means Proxy cannot reach the room and no draft is ever approvable — a silent
+    # dead deployment — so a prod boot CRASHES naming the key. Off-prod it stays optional
+    # (a local run degrades honestly to "" per the relay's own empty-origin handling).
+    public_base_url: str = Field(default="", validation_alias="PUBLIC_BASE_URL")
     # The internal signing secrets (B4). Each has a clearly-dev fallback in its
     # consumer (session.py / ops.reconcile) so local runs work UNSET; in prod a
     # missing value would let that insecure literal escape into production (session
@@ -148,6 +155,11 @@ def _missing_required(cfg: Settings) -> list[str]:
             missing.append("SESSION_SECRET")
         if not cfg.gcp_project_id:
             missing.append("GCP_PROJECT_ID")
+        # PUBLIC_BASE_URL is load-bearing in prod (relay + draft approve links + output-media
+        # URL). Unset in prod is a silent dead deployment (Proxy can't reach the room, no
+        # approvals) — crash at boot naming it rather than fail lazily on first use.
+        if not cfg.public_base_url:
+            missing.append("PUBLIC_BASE_URL")
         # B4 — the internal signing secrets must never fall back to their insecure
         # dev literals in prod (session forgery / reconcile+offboard bypass). A
         # missing value crashes at boot NAMING the key rather than silently serving
