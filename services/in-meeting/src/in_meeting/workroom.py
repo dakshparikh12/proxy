@@ -292,6 +292,7 @@ class Workroom:
             return None
         out_path = f"{WAKE_OUT}/{wake_id}.json"
         deadline = time.monotonic() + ASK_TIMEOUT_S
+        start = time.monotonic()
         while time.monotonic() < deadline:
             try:
                 raw = getattr(
@@ -314,7 +315,12 @@ class Workroom:
                     error=(str(rec["error"]) if rec.get("error") else None),
                     sent=[dict(s) for s in (rec.get("sent") or []) if isinstance(s, dict)],
                 )
-            await asyncio.sleep(_WARM_POLL_S)
+            # Adaptive backoff: poll fast at first so a quick reply lands snappily, then EASE OFF so a
+            # multi-minute task (PRD, deep code) doesn't hammer the E2B files API hundreds of times
+            # (~720 reads over 3 min at a flat 0.25s → E2B contention/cancellation under load). This
+            # cuts the long-task read count ~8x while keeping short-wake latency low.
+            elapsed = time.monotonic() - start
+            await asyncio.sleep(_WARM_POLL_S if elapsed < 5.0 else (1.0 if elapsed < 30.0 else 2.0))
         return None  # timed out waiting on the warm host → cold fallback
 
     async def _run_ask_cold(self, ask: str, prompt: str) -> WorkroomResult:
