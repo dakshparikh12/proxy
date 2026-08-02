@@ -123,3 +123,32 @@ def test_vendor_fault_never_crashes_the_meeting() -> None:
         assert r.ok is False and "recall 500" in r.detail  # honest, not raised
 
     asyncio.run(_run())
+
+
+def test_spoken_log_records_only_voice_and_stays_bounded() -> None:
+    """The self-echo reference: every SPOKEN line (say/voice) is logged with a wall-clock stamp so
+    the reactive loop can recognize Proxy's own acoustic echo (headphones-optional). Chat/DM are
+    text — they never echo acoustically — so they are NOT logged. The log is bounded."""
+    from in_meeting.meeting_connection import _SPOKEN_LOG_MAX, MeetingConnection
+
+    async def _run() -> None:
+        speak, room = _FakeSpeak(), _FakeRoom()
+        conn = MeetingConnection(speak=speak, room=room, bot_id="b")
+
+        await conn.to_meeting("the entry point is main() in core.py", medium="say")
+        await conn.to_meeting("posting a link", medium="chat")   # text — not logged
+        await conn.to_meeting("psst", medium="dm", to="p-1")      # text — not logged
+        await conn.to_meeting("also this out loud", medium="voice")
+
+        texts = [t for (_ts, t) in conn.spoken]
+        assert texts == ["the entry point is main() in core.py", "also this out loud"]
+        assert all(isinstance(ts, float) and ts > 0 for (ts, _t) in conn.spoken)
+
+        # blank speech is not recorded; the log never grows past the bound
+        await conn.to_meeting("   ", medium="say")
+        for i in range(_SPOKEN_LOG_MAX + 20):
+            await conn.to_meeting(f"line {i}", medium="say")
+        assert len(conn.spoken) == _SPOKEN_LOG_MAX
+        assert conn.spoken[-1][1] == f"line {_SPOKEN_LOG_MAX + 19}"  # newest kept
+
+    asyncio.run(_run())

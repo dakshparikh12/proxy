@@ -19,11 +19,17 @@ simulated meeting) before any live vendor round-trip.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
+
+#: How many recent spoken lines to remember for self-echo suppression (see ``spoken`` below).
+#: Bounded so a long meeting never grows this without limit; the echo window is seconds, so a
+#: handful is plenty — 64 is generous headroom.
+_SPOKEN_LOG_MAX = 64
 
 
 class SpeakSink(Protocol):
@@ -78,6 +84,14 @@ class MeetingConnection:
     audio_mute: AudioMuteSink | None = None
     #: every send, in order — the host-observed record (never the model's prose), for tests + audit.
     sent: list[MeetingSend] = field(default_factory=list)
+    #: what Proxy actually SAID out loud, as ``(wall_ts, text)`` — the ground-truth reference for
+    #: self-echo suppression. When the room has no headphones, Proxy's own voice bleeds from the
+    #: speakers back into a human's mic and returns on the transcript MISLABELED as that human (so
+    #: the speaker-name self-wake filter can't catch it). The reactive loop matches incoming lines
+    #: against THIS log to recognize Proxy's own echo regardless of how it's labeled, so Proxy never
+    #: re-wakes on itself and the line is attributed back to Proxy. Only the spoken ('say') channel
+    #: is recorded — chat/dm are text and never echo acoustically. Bounded to ``_SPOKEN_LOG_MAX``.
+    spoken: list[tuple[float, str]] = field(default_factory=list)
 
     async def to_meeting(
         self, content: str = "", medium: str = "say", to: str | None = None
@@ -93,10 +107,22 @@ class MeetingConnection:
         self.sent.append(result)
         return result
 
+    def _record_spoken(self, content: str) -> None:
+        """Remember what Proxy just SAID (wall-clock stamped) so the reactive loop can recognize the
+        acoustic echo of it — Proxy's own voice returning on a human's mic when the room has no
+        headphones — and never re-wake on itself. Bounded to the most recent ``_SPOKEN_LOG_MAX``."""
+        text = (content or "").strip()
+        if not text:
+            return
+        self.spoken.append((time.time(), text))
+        if len(self.spoken) > _SPOKEN_LOG_MAX:
+            del self.spoken[: len(self.spoken) - _SPOKEN_LOG_MAX]
+
     async def _route(self, m: str, content: str, to: str | None) -> MeetingSend:
         # The physical pipe: the agent's chosen medium → the real vendor op. A driver, not a rule.
         if m in ("say", "speak", "voice"):
             await self.speak.say(content)
+            self._record_spoken(content)
             return MeetingSend("say", True)
         if m in ("chat", "message", "post"):
             await self.room.post_chat(self.bot_id, content)

@@ -25,6 +25,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -45,6 +47,43 @@ _TRANSCRIPT_WINDOW = 400
 #: at least by the boundary; a bounded model confirm is the follow-up refinement.
 _VOICE_ADDR = re.compile(r"\bproxy\b", re.IGNORECASE)
 _CHAT_ADDR = re.compile(r"@proxy\b", re.IGNORECASE)
+
+#: Self-echo suppression — the headphones-optional guard. Without headphones, Proxy's own voice
+#: bleeds from the room speakers into a human's mic and returns on the transcript MISLABELED as that
+#: human, so the speaker-name self-wake filter can't catch it. We instead match the incoming line
+#: against what Proxy actually SAID (the connection's ``spoken`` log): a line that reproduces Proxy's
+#: recent speech is Proxy's own echo — relabeled to Proxy so it is attributed correctly and never
+#: re-wakes Proxy. The bar is deliberately strict (a min length + a high share of the incoming words
+#: present in the recent spoken line) so a brief human reply that happens to reuse a word or two of
+#: Proxy's is NOT swallowed; the window spans playback + STT latency.
+_ECHO_WINDOW_S = 45.0
+_ECHO_MIN_TOKENS = 4
+_ECHO_CONTAINMENT = 0.7
+
+
+def _echo_tokens(text: str) -> list[str]:
+    """Lowercase alphanumeric word tokens — the normalized form for order-insensitive echo matching
+    (an echo's STT drops punctuation/casing and often captures only a partial span, so we compare
+    token sets, not the exact string)."""
+    return re.findall(r"[a-z0-9]+", (text or "").lower())
+
+
+def _is_self_echo(text: str, spoken: Sequence[tuple[float, str]], now: float) -> bool:
+    """True if ``text`` is Proxy's own voice echoing back — it reproduces a line Proxy SAID within
+    the echo window. Label-independent (works when the echo returns mislabeled as a human on a
+    no-headphones mic). Requires a minimum length and that a high share of the incoming tokens appear
+    in the recent spoken line, so a short human interjection is never mistaken for an echo."""
+    tokens = _echo_tokens(text)
+    if len(tokens) < _ECHO_MIN_TOKENS:
+        return False
+    incoming = set(tokens)
+    for said_ts, said in spoken:
+        if now - said_ts > _ECHO_WINDOW_S:
+            continue
+        said_set = set(_echo_tokens(said))
+        if said_set and len(incoming & said_set) / len(incoming) >= _ECHO_CONTAINMENT:
+            return True
+    return False
 
 
 def is_addressed(speaker: str, text: str, *, is_chat: bool = False) -> str | None:
@@ -88,14 +127,27 @@ class MeetingSession:
         ``proxy``). Never blocks: the transcript sync + a wake both run so the room keeps
         flowing while Proxy works. A non-addressed line only updates the notes (the up-to-date
         transcript a later wake — or a mid-task follow-up — reads). Never raises."""
-        self._lines.append((ts, speaker, str(text or "")))
+        speaker, text = str(speaker or ""), str(text or "")
+        # Self-echo suppression (headphones-optional): a voice line that reproduces something Proxy
+        # just SAID is Proxy's own voice echoing back — mislabeled as a human when the room has no
+        # headphones. Relabel it to Proxy so it is recorded as Proxy's contribution and NEVER
+        # re-wakes Proxy (the speaker==proxy_speaker gate below then filters it). Chat is text and
+        # cannot echo acoustically, so only voice lines are checked (a human may legitimately quote
+        # Proxy in chat). Label-independent, so it works with or without headphones.
+        if (
+            not is_chat
+            and speaker != self.proxy_speaker
+            and _is_self_echo(text, getattr(self.connection, "spoken", ()), time.time())
+        ):
+            speaker = self.proxy_speaker
+        self._lines.append((ts, speaker, text))
         # Continuous feed (§3): materialize the latest transcript into the workroom so a
         # woken turn — and any mid-task follow-up — sees the up-to-date room. Never-raise.
         try:
             await self.workroom.feed_transcript(self._render_transcript())
         except Exception:  # noqa: BLE001 — transcript sync never crashes the meeting
             logger.exception("meeting transcript sync failed (meeting continues)")
-        ask = is_addressed(speaker, str(text or ""), is_chat=is_chat)
+        ask = is_addressed(speaker, text, is_chat=is_chat)
         if ask is None:
             return
         task = asyncio.create_task(self._handle(ask))

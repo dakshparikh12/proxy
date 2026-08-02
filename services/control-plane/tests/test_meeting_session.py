@@ -17,6 +17,7 @@ degrade line. There is no ``result.text`` fallback.
 from __future__ import annotations
 
 import asyncio
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -35,14 +36,19 @@ def _say(content: str) -> list[dict[str, Any]]:
 
 
 class _FakeConnection:
-    """Records what actually reached the room, mirroring MeetingConnection.sent / to_meeting."""
+    """Records what actually reached the room, mirroring MeetingConnection.sent / to_meeting —
+    including the ``spoken`` log (voice lines only) the reactive loop reads for self-echo
+    suppression, recorded exactly as the real connection's ``_record_spoken`` does."""
 
     def __init__(self) -> None:
         self.sent: list[SimpleNamespace] = []
+        self.spoken: list[tuple[float, str]] = []
 
     async def to_meeting(self, content: str, medium: str = "say", to: str | None = None) -> Any:
         rec = SimpleNamespace(medium=medium, ok=True, detail="", content=content)
         self.sent.append(rec)
+        if medium in ("say", "speak", "voice") and content.strip():
+            self.spoken.append((time.time(), content))
         return rec
 
 
@@ -416,5 +422,98 @@ def test_chat_line_wakes_only_on_atproxy_via_the_is_chat_flag() -> None:
         await session.drain()
         assert wr.asks == ["@proxy what's the status?"]
         assert conn.sent and conn.sent[-1].content == "chat handled"
+
+    asyncio.run(_run())
+
+
+def test_is_self_echo_matches_proxy_speech_label_independently() -> None:
+    """_is_self_echo recognizes Proxy's own voice returning on the transcript by matching WHAT Proxy
+    said (not the speaker label), within a time window, with a strict length + containment bar."""
+    from control_plane.meeting_session import _is_self_echo
+
+    now = 1_000.0
+    spoken = [(now - 2.0, "The entry point is Command.main() in src/click/core.py at line 1477.")]
+
+    # a near-verbatim echo (STT-style: lowercased, punctuation gone) — matched
+    assert _is_self_echo("the entry point is command main in src click core py", spoken, now) is True
+    # only a partial span of what Proxy said came back — still matched (containment on incoming)
+    assert _is_self_echo("entry point is command main", spoken, now) is True
+    # an unrelated human line — NOT an echo
+    assert _is_self_echo("can we move on to the roadmap item", spoken, now) is False
+    # too short to be a confident echo (< min tokens) — never suppressed
+    assert _is_self_echo("entry point", spoken, now) is False
+    # outside the echo window — a human genuinely saying it much later is NOT suppressed
+    assert _is_self_echo(
+        "the entry point is command main in src click core py", spoken, now + 100.0) is False
+
+
+def test_self_echo_on_a_human_mic_is_relabeled_and_never_rewakes() -> None:
+    """The headphones-optional guarantee: when Proxy's own voice echoes from the speakers into a
+    human's mic, it returns MISLABELED as that human (and may contain the word 'proxy'). It must be
+    recognized as Proxy's own echo, recorded as Proxy in the transcript, and NEVER re-wake Proxy."""
+    from control_plane.meeting_session import PROXY_SPEAKER, MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+        wr = _FakeWorkroom(
+            result=_result(sent=_say("Proxy here — the entry point is Command.main in core.py")),
+            connection=conn,
+        )
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        # a human addresses Proxy → wakes → Proxy answers (its say is logged in conn.spoken)
+        await session.on_line("Bob", "proxy, where is the entry point?", ts=1.0)
+        await session.drain()
+        assert wr.asks == ["proxy, where is the entry point?"]
+        assert len(conn.spoken) == 1  # Proxy's spoken answer was recorded as the echo reference
+
+        asks_before = list(wr.asks)
+        # NO headphones: Proxy's answer echoes into Bob's mic → arrives labeled "Bob" and CONTAINS
+        # 'proxy' (would re-wake under the speaker-name filter alone → an infinite loop).
+        await session.on_line(
+            "Bob", "proxy here the entry point is command main in core py", ts=3.0)
+        await session.drain()
+
+        assert wr.asks == asks_before  # did NOT re-wake — the self-echo loop is broken
+        transcript = wr.fed[-1]
+        assert f"{PROXY_SPEAKER}: proxy here the entry point" in transcript  # attributed to Proxy
+        assert "Bob: proxy here the entry point" not in transcript          # not to the human
+
+    asyncio.run(_run())
+
+
+def test_short_human_line_sharing_a_word_is_not_mistaken_for_echo() -> None:
+    """The strict bar protects a genuine human ask that merely reuses a word or two of Proxy's
+    recent speech: it is NOT swallowed as an echo — it still wakes normally."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+        conn.spoken.append((time.time(), "The entry point is Command.main in src/click/core.py"))
+        wr = _FakeWorkroom(result=_result(sent=_say("ok")), connection=conn)
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        await session.on_line("Ann", "proxy, can you open the entry point file?", ts=2.0)
+        await session.drain()
+        assert wr.asks == ["proxy, can you open the entry point file?"]  # genuine ask, still woke
+
+    asyncio.run(_run())
+
+
+def test_chat_is_never_echo_suppressed() -> None:
+    """Chat is text and cannot echo acoustically, so the echo guard skips it entirely — a human who
+    types @proxy while quoting Proxy's exact words still wakes Proxy."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+        conn.spoken.append((time.time(), "the entry point is command main in core py"))
+        wr = _FakeWorkroom(result=_result(sent=_say("ok")), connection=conn)
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        await session.on_line(
+            "Ann", "@proxy the entry point is command main in core py", ts=2.0, is_chat=True)
+        await session.drain()
+        assert wr.asks == ["@proxy the entry point is command main in core py"]
 
     asyncio.run(_run())
