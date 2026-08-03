@@ -16,7 +16,7 @@ from typing import Any
 
 from premeeting.cloner import Cloner
 from premeeting.exclusions import ExclusionManager
-from premeeting.verify import _looks_like_path, verify_map
+from premeeting.verify import _is_path_claim, _looks_like_path, verify_map
 
 # A realistic map that mentions the product, a framework, a URL, and a real cited path — the
 # shape of any real cal.com subscription map. The clone has a matching real ``packages/lib/x.ts``.
@@ -89,3 +89,34 @@ def test_looks_like_path_drops_url_ish_tokens() -> None:
     # A genuine path is still path-shaped.
     assert _looks_like_path("packages/lib/x.ts")
     assert _looks_like_path("server.py")
+
+
+def test_leading_dot_attribute_ref_is_not_a_path_claim() -> None:
+    """A decorator/attribute ref written path-like (``/.group``, ``cli/.group``) is prose, not a
+    fabricated file. The live-meeting sim caught verify falsely rejecting a genuinely-good 13KB click
+    map on ``/.group`` (leading slash + ``.group`` with an empty stem). Two general rules fix it:
+    a leading-``/`` token is never a relative repo-path claim, and the source-extension branch
+    requires a non-empty stem — while real hallucination detection stays intact."""
+    top = {"src", "tests", "README.md"}
+    # leading-slash absolute-looking tokens → never a relative repo-path claim
+    assert not _is_path_claim("/.group", top)
+    assert not _is_path_claim("/usr/local/bin", top)
+    # leading-dot attribute refs under a (fabricated) dir → empty stem → prose, not a file
+    assert not _is_path_claim("cli/.group", top)
+    assert not _is_path_claim("commands/.option", top)
+    # detection intact: a real file under a real top dir, and a genuinely-missing nested file
+    assert _is_path_claim("src/click/core.py", top)
+    assert _is_path_claim("foo/bar.ts", top)
+
+
+def test_map_with_group_decorator_prose_verifies_ready(make_git_repo: Any) -> None:
+    """Regression (live-meeting sim): a faithful map whose prose contains a ``/.group``-shaped token
+    must still verify READY — not be intermittently rejected because the LLM prose happened to emit
+    an attribute ref that looks path-like."""
+    checkout, em = _clone_fixture(make_git_repo)
+    m = _REALISTIC_MAP + (
+        "\n## Extra\nCommands register under the group root /.group; decorators like @cli.group and "
+        "the .option ref build the tree.\n"
+    )
+    res = verify_map(m, checkout, exclusions=em)
+    assert res.ready, res.reasons

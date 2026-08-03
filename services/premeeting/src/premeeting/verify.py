@@ -127,29 +127,42 @@ def _is_path_claim(tok: str, top_entries: set[str]) -> bool:
     checked for existence. Anchoring on the clone's own top-level entries is what keeps a faithful
     map from false-flagging while a genuinely-missing path under a REAL dir (``src/nope.py``) still
     flags. See BUG 4: the old ``any slash ⇒ claim`` rule rejected a correct 13KB map."""
+    # An absolute-looking token (leading ``/``) is never a RELATIVE repo-path claim — a map's paths
+    # are relative to the clone root. ``/.group`` (an attribute/decorator ref like ``cli``+``.group``
+    # run together in prose), ``/usr/local`` etc. are prose or absolute paths that
+    # ``_path_exists_in_clone`` refuses anyway; treating them as claims falsely fails verify on a
+    # genuinely good map — and INTERMITTENTLY, since the map prose varies run to run. General fix,
+    # not a token denylist (found by the live-meeting sim: click map rejected on ``/.group``).
+    if tok.startswith("/"):
+        return False
     if "/" in tok:
         first = tok.split("/", 1)[0]
         # A slash token is a genuine repo-path CLAIM when EITHER:
         #  (a) its FIRST segment is a real top-level entry in the clone (``src/click/core.py`` →
         #      ``src``; ``.github/workflows`` → ``.github``) — a path anchored on a real dir, OR
-        #  (b) it ends in a real SOURCE-FILE EXTENSION (``foo/bar.ts`` → ``.ts``) — a file path even
-        #      when its top dir is fabricated, so a genuinely-missing ``foo/bar.ts`` still flags.
+        #  (b) it ends in a real SOURCE-FILE name.extension (``foo/bar.ts`` → stem ``bar`` ext
+        #      ``ts``) — a file path even when its top dir is fabricated, so a genuinely-missing
+        #      ``foo/bar.ts`` still flags.
         # Everything else is the map's SLASH-BEARING PROSE: class enumerations
         # (``BaseCommand/Command/MultiCommand``), version lists (``3.10/3.11/3.12`` — last segment
         # is not an alpha ext), option pairs (``Option/Argument``), shorthands (``I/O``,
-        # ``read/write``, ``bash/zsh/fish``), and cited URLs (``github.com/…`` — first segment not a
-        # top entry, last segment not a source ext). Treating all of those as file paths flagged a
-        # GENUINELY GOOD 13KB map and 404'd every meeting (BUG 4); requiring (a)-or-(b) keeps real
+        # ``read/write``, ``bash/zsh/fish``), cited URLs (``github.com/…``), and leading-dot
+        # attribute refs (``foo/.group`` — empty stem). Treating all of those as file paths flagged a
+        # GENUINELY GOOD 13KB map and 404'd every meeting; requiring (a)-or-(b) keeps real
         # hallucination detection intact while dropping the prose.
         if first in top_entries:
             return True
         last = tok.rsplit("/", 1)[-1]
         if "." in last:
-            ext = last.rsplit(".", 1)[-1]
-            # A source-file extension makes it a path claim; a URL TLD (``.com``) does not — that
-            # is a cited host (``github.com/calcom/cal.com``), prose, not a fabricated file.
+            stem, ext = last.rsplit(".", 1)
+            # A real file has a NAME before the extension (``bar.ts`` → stem ``bar``); a leading-dot
+            # attribute/decorator ref (``.group``/``.command``/``.option``) has an EMPTY stem and is
+            # prose, not a fabricated file. A source-file extension makes it a path claim; a URL TLD
+            # (``.com``) does not (a cited host ``github.com/…``). Requiring a non-empty stem drops
+            # the attribute refs without weakening detection of a genuinely-missing ``foo/bar.ts``.
             return (
-                bool(ext)
+                bool(stem)
+                and bool(ext)
                 and ext.isalpha()
                 and 1 <= len(ext) <= 5
                 and ext.lower() not in _DOMAIN_TLDS
