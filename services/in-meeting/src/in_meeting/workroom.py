@@ -589,18 +589,12 @@ async def provision_workroom(
         await wr._run(f"cd {shlex.quote(REPO_DIR)} && git checkout -q {shlex.quote(sha)} || true",
                       timeout=120.0)  # noqa: SLF001
     # Seed the orientation files.
-    # CLAUDE.md = the lean behavioral prime + the repo map INLINE (reference data, below the
-    # instructions). Inlining the map into the always-loaded, prompt-cached prime means a map-resident
-    # question is answered from context in ~1 turn — no per-ask REPO_MAP.md read (a whole turn +
-    # seconds saved) — and Proxy genuinely "enters the meeting knowing the codebase". Behavior stays
-    # FIRST so the instructions are never diluted. REPO_MAP.md is still written as a stable on-disk ref.
-    _map = map_text or "(no pre-built map — explore the repo directly)"
-    await wr._write_file(  # noqa: SLF001
-        PRIME_FILE,
-        f"{prime}\n\n---\n# Repo map — pre-built + verified against THIS clone "
-        f"(your fast, grounded knowledge of the codebase)\n\n{_map}\n",
-    )
-    await wr._write_file(MAP_FILE, _map)  # noqa: SLF001
+    # Prime (CLAUDE.md) and map (REPO_MAP.md) are SEPARATE files. NOTE: inlining the 13KB map into
+    # CLAUDE.md was tried and REVERTED — it made every turn process a huge context (warm latency
+    # ~2x worse) AND diluted the lean behavioral prime (cross-talk over-fire regression). Keeping the
+    # prime lean is what makes the model actually follow it; the map is read on demand.
+    await wr._write_file(PRIME_FILE, prime)  # noqa: SLF001
+    await wr._write_file(MAP_FILE, map_text or "(no pre-built map — explore the repo directly)")  # noqa: SLF001
     await wr._write_file(TRANSCRIPT_FILE, "# Meeting transcript\n")  # noqa: SLF001
     # Wire the agent's ONE connection to the room: the in-sandbox MCP server + the .mcp.json that
     # registers it with native ``claude`` over stdio. The agent chooses the medium live; the server
