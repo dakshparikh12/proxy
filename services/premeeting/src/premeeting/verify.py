@@ -112,7 +112,19 @@ _DOMAIN_TLDS = frozenset(
 # a hallucinated REFERENCE to one is still caught by the path-existence check; this exemption only
 # relaxes the COVERAGE requirement for non-navigational config dirs.
 _COVERAGE_EXEMPT_DIRS = frozenset(
-    {".github", ".devcontainer", ".vscode", ".idea", ".circleci", ".husky", ".changeset"}
+    {
+        # tooling / CI / editor dot-dirs — config, not navigational code (BUG 4)
+        ".github", ".devcontainer", ".vscode", ".idea", ".circleci", ".husky", ".changeset",
+        # conventional NON-navigational dirs a nav map need not enumerate: test fixtures, examples,
+        # docs, vendored/generated code. The agent still greps them live if asked; requiring the map
+        # to name EVERY one false-failed real maps of larger repos (repo-diversity sim: gin/Go has
+        # docs/, examples/, testdata/). Real CODE dirs (src, internal, pkg, lib, cmd, app, services,
+        # packages, …) are NOT exempt, so a map missing a major code area still flags.
+        "testdata", "test-data", "fixtures", "testfixtures", "__fixtures__",
+        "examples", "example", "samples", "demo", "demos",
+        "docs", "doc", "documentation", "website", "site",
+        "vendor", "third_party", "third-party", "node_modules", "dist", "build", "generated",
+    }
 )
 
 

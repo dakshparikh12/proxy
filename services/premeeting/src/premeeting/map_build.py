@@ -311,7 +311,7 @@ async def build_map(
     # An API/content-filter block is often PROBABILISTIC (the model's OUTPUT is filtered, which varies
     # run to run), so a retry frequently succeeds; a persistent failure degrades to the skeleton map
     # (below) rather than returning the error string AS the map. Attempts bounded (each re-explores).
-    attempts = max(1, int(os.environ.get("PROXY_MAP_BUILD_ATTEMPTS", "2") or "2"))
+    attempts = max(1, int(os.environ.get("PROXY_MAP_BUILD_ATTEMPTS", "3") or "3"))
     tool_log: list[Any] = []
     index_md = ""
     turns = 0
