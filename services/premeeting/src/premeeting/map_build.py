@@ -237,6 +237,32 @@ def _record_tool_log(chunks: list[Any]) -> list[str]:
     return log
 
 
+#: Substrings marking a model response that FAILED to build a map — an API/SDK error captured AS
+#: text, not a real map: a content-filter block ("Output blocked by content filtering policy"), a
+#: bad model id ("… may not exist"), a rate-limit/overload/quota. The SDK surfaces these as a
+#: one-line body; returning that AS the map fails verify with a MISLEADING "missing sections" and
+#: hard-blocks onboarding. Found by the repo-diversity sim: gin (Go) tripped the output filter.
+_BUILD_FAILURE_MARKERS = (
+    "api error", "output blocked", "content filtering", "content policy",
+    "may not exist", "rate limit", "overloaded", "quota exceeded", "credit balance",
+)
+
+
+def _is_failed_build(index_md: str) -> bool:
+    """True iff the captured body is NOT a real map: empty, a known API/SDK error string, or too
+    short to be a map AND missing every required section. Such a body must degrade to the skeleton
+    map, never be returned AS the map (which fails verify with a misleading reason)."""
+    text = (index_md or "").strip()
+    if not text:
+        return True
+    low = text.lower()
+    if any(m in low for m in _BUILD_FAILURE_MARKERS):
+        return True
+    if len(text) < 400 and not any(f"## {s}" in index_md for s in REQUIRED_SECTIONS):
+        return True
+    return False
+
+
 async def build_map(
     *,
     provider: Provider,
@@ -281,23 +307,35 @@ async def build_map(
         env={"MAX_OUTPUT_TOKENS": str(max_output_tokens)},
     )
 
-    chunks = [chunk async for chunk in provider.stream(prompt, query)]
-    tool_log = _record_tool_log(chunks)
-    index_md = _capture_terminal_text(chunks)
-
-    # Budget / degradation backstop (PM-MAP-05): if the run hit max_turns or produced no usable
-    # body, emit a COMPLETE top-level navigation map from the skeleton + the degrade note —
-    # never a hang, never a truncated fragment.
+    # Run the bounded build; RETRY a few times if the model returns an error-shaped / non-map body.
+    # An API/content-filter block is often PROBABILISTIC (the model's OUTPUT is filtered, which varies
+    # run to run), so a retry frequently succeeds; a persistent failure degrades to the skeleton map
+    # (below) rather than returning the error string AS the map. Attempts bounded (each re-explores).
+    attempts = max(1, int(os.environ.get("PROXY_MAP_BUILD_ATTEMPTS", "2") or "2"))
+    tool_log: list[Any] = []
+    index_md = ""
     turns = 0
     hit_cap = False
-    for ch in chunks:
-        if getattr(ch, "type", "") == "RESULT":
-            meta = getattr(ch, "metadata", {}) or {}
-            turns = int(meta.get("num_turns", 0) or 0)
-            hit_cap = turns >= max_turns
+    for _attempt in range(attempts):
+        chunks = [chunk async for chunk in provider.stream(prompt, query)]
+        tool_log = _record_tool_log(chunks)
+        index_md = _capture_terminal_text(chunks)
+        turns = 0
+        hit_cap = False
+        for ch in chunks:
+            if getattr(ch, "type", "") == "RESULT":
+                meta = getattr(ch, "metadata", {}) or {}
+                turns = int(meta.get("num_turns", 0) or 0)
+                hit_cap = turns >= max_turns
+        if not _is_failed_build(index_md):
+            break  # got a real map — stop retrying
 
+    # Degradation backstop (PM-MAP-05): a budget cap, an empty body, OR an error-shaped/non-map
+    # response (content-filter / API error / bad model id) → emit a COMPLETE top-level navigation
+    # map from the skeleton + the depth-via-live-search note. Never a hang, a truncated fragment, or
+    # an error string returned AS the map (which fails verify with a misleading "missing sections").
     degraded = False
-    if not index_md.strip() or hit_cap:
+    if _is_failed_build(index_md) or hit_cap:
         degraded = True
         index_md = _degraded_map(repo_name=repo_name, sha=sha, skeleton=skeleton)
 

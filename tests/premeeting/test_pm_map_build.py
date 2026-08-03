@@ -185,3 +185,33 @@ async def test_pm_map_05_budget_backstop_degrades_gracefully(tmp_path: Path) -> 
     assert res.turns <= map_build.DEFAULT_MAX_TURNS
     # The max_turns cap is set on the real ProviderQuery.
     assert hit_cap.seen_query is not None and hit_cap.seen_query.max_turns == map_build.DEFAULT_MAX_TURNS
+
+
+@pytest.mark.asyncio
+async def test_pm_map_content_filter_block_degrades_not_returned_as_map(tmp_path: Path) -> None:
+    """Regression (repo-diversity sim: gin/Go): when the model's OUTPUT is blocked, the SDK returns a
+    one-line error string ('API Error: Output blocked by content filtering policy'). build_map must
+    NOT return that AS the map (it fails verify with a misleading 'missing sections' → connect
+    not_ready → onboarding hard-blocked). It must recognize the error, retry, and degrade to the
+    skeleton map."""
+    root, em = _fixture_repo(tmp_path)
+    blocked = FakeProvider(index_md="API Error: Output blocked by content filtering policy")
+    res = await map_build.build_map(
+        provider=blocked, clone_path=root, repo_name="widget", sha="abc123", exclusions=em,
+    )
+    assert res.degraded
+    assert "API Error" not in res.index_md and "content filtering" not in res.index_md
+    for section in map_build.REQUIRED_SECTIONS:
+        assert f"## {section}" in res.index_md  # a real (skeleton) map, not the error string
+
+
+def test_is_failed_build_detects_error_shaped_bodies() -> None:
+    """The detector: empty / known API-error strings / short-and-sectionless → failed; a real map with
+    the required sections → not failed."""
+    assert map_build._is_failed_build("")
+    assert map_build._is_failed_build("API Error: Output blocked by content filtering policy")
+    assert map_build._is_failed_build("The selected model may not exist or you lack access")
+    assert map_build._is_failed_build("overloaded, try again")
+    # a real map body (has the required sections) is NOT failed, even if terse
+    real = "\n".join(f"## {s}\nx" for s in map_build.REQUIRED_SECTIONS)
+    assert not map_build._is_failed_build(real)
