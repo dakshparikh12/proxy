@@ -161,11 +161,13 @@ class MeetingSession:
         never our prose. There are two delivery paths and we honor whichever one carried the turn,
         in priority order (Law 4 — the mediums are the agent's, not ours):
 
-        * ``acted_live`` — the in-sandbox MCP server relayed ≥1 ``to_meeting`` call to THIS
-          connection during the turn (the connection's ``sent`` grew). The agent already reached the
-          room live → stay quiet (never double-send).
-        * else ``result.sent`` (the no-relay/file path) — the agent recorded ≥1 intent locally.
-          REPLAY each over the connection with the agent's OWN chosen medium.
+        * RELAY mode — the in-sandbox MCP POSTed each ``to_meeting`` call live to THIS connection and
+          recorded nothing locally, so ``result.sent`` is empty: the room already heard the agent,
+          nothing to replay (never double-send).
+        * FILE mode (no relay) — the agent recorded ≥1 intent locally (``result.sent``): REPLAY each
+          over the connection with the agent's OWN chosen medium. We key off ``result.sent``, NOT the
+          shared ``connection.sent`` counter, so overlapping concurrent wakes never drop each other's
+          delivery.
         * else ``result.error`` — the turn crashed/incompleted with nothing delivered. Speak ONE
           honest degrade so a task that needed a response is never met with silence.
         * else (a clean turn, zero intents) — the agent chose not to respond (e.g. it was not really
@@ -173,13 +175,15 @@ class MeetingSession:
 
         A failed wake is an honest no-op the meeting survives (§3.8), never a raise."""
         try:
-            # The connection's ordered record of what actually reached the room; a live to_meeting
-            # relay appends to it. Snapshot the count so we can tell if the agent acted this turn.
-            sent_before = len(getattr(self.connection, "sent", ()))
             result = await self.workroom.run_ask(ask)
             self.results.append(result)
-            if len(getattr(self.connection, "sent", ())) > sent_before:
-                return  # the agent reached the room itself (via the relay) — stay quiet.
+            # How the turn was carried is encoded in result.sent, NOT in the shared connection.sent
+            # counter: a CONCURRENT wake's replay grows connection.sent too, so keying off it makes a
+            # second overlapping wake wrongly think it already delivered and DROP its own response — a
+            # real bug when two people address Proxy close together. In RELAY mode the in-sandbox MCP
+            # POSTs each call live to the connection and records nothing locally, so result.sent is
+            # empty (the room already heard it — nothing to replay, never double-send). In FILE mode
+            # (no relay) it records each intent locally, so result.sent carries them and we replay.
             recorded = list(getattr(result, "sent", None) or [])
             if recorded:
                 # The no-relay/file path: replay the agent's OWN channel choices verbatim.

@@ -182,9 +182,11 @@ def test_non_addressed_line_updates_notes_but_never_wakes() -> None:
 
 
 def test_stays_quiet_when_the_agent_acted_live_via_the_connection() -> None:
-    """§5: when the agent reached the room DURING the turn (a to_meeting relay call recorded on the
-    connection), the session must NOT also replay the recorded intents — no DOUBLE-SEND. The live
-    relay wins even though ``result.sent`` also carries the same intent."""
+    """§5: when the agent reached the room DURING the turn via the live relay, the session must NOT
+    also replay — no DOUBLE-SEND. In RELAY mode the in-sandbox MCP POSTs each call live to the
+    connection and records NOTHING locally, so ``result.sent`` is EMPTY — there is simply nothing to
+    replay. (We key off ``result.sent``, never the shared ``connection.sent`` counter — see the
+    overlapping-wakes regression below.)"""
     from control_plane.meeting_session import MeetingSession
 
     async def _run() -> None:
@@ -193,11 +195,10 @@ def test_stays_quiet_when_the_agent_acted_live_via_the_connection() -> None:
         async def _agent_acts(connection: Any) -> None:
             await connection.to_meeting("here's the answer", medium="chat")
 
-        # The relay recorded the send on the connection AND result.sent carries the same intent
-        # (the MCP server records even in relay mode). The session must NOT replay it a second time.
+        # Relay mode: the live send lands on the connection; the MCP records nothing locally, so
+        # result.sent is EMPTY. The session must not manufacture a second send.
         wr = _FakeWorkroom(
-            result=_result(text="here's the answer",
-                           sent=[{"content": "here's the answer", "medium": "chat", "to": ""}]),
+            result=_result(text="here's the answer", sent=[]),
             connection=conn,
             on_run=_agent_acts,
         )
@@ -206,8 +207,44 @@ def test_stays_quiet_when_the_agent_acted_live_via_the_connection() -> None:
         await session.on_line("Bob", "proxy, summarize it", ts=1.0)
         await session.drain()
 
-        # exactly the one live chat send — the recorded intent was NOT replayed on top:
+        # exactly the one live chat send — nothing replayed on top:
         assert [s.medium for s in conn.sent] == ["chat"]
+
+    asyncio.run(_run())
+
+
+def test_overlapping_wakes_both_deliver_no_dropped_response() -> None:
+    """Regression (live-meeting sim): two people address Proxy close together → two OVERLAPPING wakes.
+    Each must deliver its OWN response. The old code decided "did I already deliver?" from the shared
+    ``connection.sent`` counter, so the second wake saw the FIRST wake's replay grow it and wrongly
+    concluded it had delivered — silently DROPPING its own intent (incl. an offer). Keying off the
+    per-wake ``result.sent`` fixes it: both land."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+
+        class _WR:
+            def __init__(self) -> None:
+                self.fed: list[str] = []
+                self.asks: list[str] = []
+
+            async def feed_transcript(self, md: str) -> None:
+                self.fed.append(md)
+
+            async def run_ask(self, ask: str) -> Any:
+                self.asks.append(ask)
+                await asyncio.sleep(0.05)  # let the two wakes overlap in flight
+                which = "first" if "first" in ask else "second"
+                return _result(sent=_say(f"{which} answer"))
+
+        session = MeetingSession(workroom=_WR(), connection=conn)
+        await session.on_line("Bob", "proxy, the first thing", ts=1.0)
+        await session.on_line("Ann", "proxy, the second thing", ts=2.0)
+        await session.drain()
+
+        # BOTH overlapping wakes delivered — neither was dropped by the other's replay:
+        assert sorted(s.content for s in conn.sent) == ["first answer", "second answer"]
 
     asyncio.run(_run())
 
