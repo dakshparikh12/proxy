@@ -85,9 +85,19 @@ _WARM_POLL_S = 0.25
 #: only bites a host that failed to open (→ fast cold fallback). ``PROXY_WARM_READY_TIMEOUT_S``
 #: overrides for a slow bake; an unset/unparsable value keeps the default.
 try:
-    _WARM_READY_TIMEOUT_S = float(os.environ.get("PROXY_WARM_READY_TIMEOUT_S", "") or 10.0)
+    _WARM_READY_TIMEOUT_S = float(os.environ.get("PROXY_WARM_READY_TIMEOUT_S", "") or 30.0)
 except ValueError:
-    _WARM_READY_TIMEOUT_S = 10.0
+    _WARM_READY_TIMEOUT_S = 30.0
+
+#: How long PROVISION waits for the warm host to open (before the meeting goes live), so the FIRST
+#: wake finds it ready instead of racing the SDK-client+prime open and cold-degrading for the whole
+#: meeting. Provision happens on join (before anyone addresses Proxy), so this wait is transparent —
+#: it just moves the ~15-30s warm-up off the critical path of the first response. Best-effort: if the
+#: host isn't ready in this budget, provision returns anyway and the first wake retries warm → cold.
+try:
+    _WARM_PROVISION_WAIT_S = float(os.environ.get("PROXY_WARM_PROVISION_WAIT_S", "") or 90.0)
+except ValueError:
+    _WARM_PROVISION_WAIT_S = 90.0
 
 #: Timeouts (seconds). The sandbox itself outlives any single ask (keep-warm heartbeat
 #: bumps it); a single ask is bounded so a runaway turn can't stall the meeting.
@@ -242,15 +252,16 @@ class Workroom:
             "PROXY_MEETING_OUT": TO_MEETING_OUT,
         }
 
-    async def _await_host_ready(self) -> bool:
-        """Wait (bounded) for the warm host's readiness breadcrumb the FIRST time, then latch.
+    async def _await_host_ready(self, *, timeout: float | None = None) -> bool:
+        """Wait (bounded) for the warm host's readiness breadcrumb, then latch ``_host_ready``.
 
-        The persistent session takes a beat to open (the SDK client + the MCP stdio child). Only the
-        first wake pays this wait; a host that never comes up returns False fast so the wake degrades
-        to cold. NEVER raises."""
+        The persistent session takes a beat to open (the SDK client + the MCP stdio child + loading
+        the prime). Called at PROVISION with a generous ``timeout`` to warm the host BEFORE the meeting
+        goes live (so no wake races it); and by the first wake as a fallback (default budget). A host
+        that never comes up returns False so the wake degrades to cold. NEVER raises."""
         if self._host_ready:
             return True
-        deadline = time.monotonic() + _WARM_READY_TIMEOUT_S
+        deadline = time.monotonic() + (timeout if timeout is not None else _WARM_READY_TIMEOUT_S)
         while time.monotonic() < deadline:
             try:
                 raw = getattr(
@@ -606,6 +617,14 @@ async def provision_workroom(
     # uses the cold path (honest degrade).
     await wr._write_file(SESSION_HOST_FILE, _session_host_source())  # noqa: SLF001
     wr.warm = await _start_session_host(wr)
+    if wr.warm:
+        # Warm the host DURING provision (before anyone addresses Proxy) so the first wake finds it
+        # ready — otherwise it races the host's ~15-30s SDK-client+prime open, times out, and cold-
+        # degrades for the WHOLE meeting (+11-13s per wake). This moves the warm-up off the first
+        # response's critical path. Best-effort: not-ready-in-budget just leaves the first wake to
+        # retry warm then cold-degrade. THE key latency fix (cold→warm).
+        ready = await wr._await_host_ready(timeout=_WARM_PROVISION_WAIT_S)  # noqa: SLF001
+        logger.info("warm host readiness at provision: sandbox=%s ready=%s", wr.sandbox_id, ready)
     logger.info("workroom provisioned: sandbox=%s repo=%s relay=%s warm=%s resumed=%s",
                 wr.sandbox_id, repo_url, bool(relay_url), wr.warm, resumed)
     return wr
