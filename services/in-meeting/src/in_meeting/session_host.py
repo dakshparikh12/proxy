@@ -190,6 +190,7 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
     #: on the live path the sentence/POST leaves mid-turn, and the trailing wrap-up + result write +
     #: driver poll all come AFTER it, so the room never waits for them. 0.0 = never delivered.
     deliver_at = 0.0
+    ttft = 0.0        # query → FIRST text delta (pure model time-to-first-token; profiling only)
     say_buf = ""      # accumulates streamed response prose until a sentence closes, then flushes to voice
 
     async def _flush_ready(*, final: bool = False) -> None:
@@ -225,11 +226,19 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
                 if ev.get("type") == "content_block_delta":
                     delta = ev.get("delta", {}) or {}
                     if delta.get("type") == "text_delta":
+                        if not ttft:
+                            ttft = round(time.monotonic() - turn_start, 2)
                         say_buf += str(delta.get("text", "") or "")
                         await _flush_ready()
                 continue
             if isinstance(msg, AssistantMessage):
                 turns += 1
+                # The agent is about to ACT (read/run/search). Speak whatever it just said FIRST — a
+                # natural opener like "let me check…" — so the room hears it NOW (~1s), not after the
+                # tool finishes. Force-flush because such an opener often ends in a terminator with no
+                # trailing space (e.g. "…map.Then") that the streaming split leaves buffered.
+                if any(isinstance(b, ToolUseBlock) for b in msg.content):
+                    await _flush_ready(final=True)
                 for block in msg.content:
                     if isinstance(block, ToolUseBlock):
                         name = str(block.name or "")
@@ -247,7 +256,7 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 — a per-turn fault is an honest error, never a crash
         await _flush_ready(final=True)  # speak whatever was already composed before surfacing the fault
         return {"tools": tools, "text": last_text, "cost_usd": cost, "turns": turns,
-                "error": str(exc) or exc.__class__.__name__, "deliver_at": deliver_at,
+                "error": str(exc) or exc.__class__.__name__, "deliver_at": deliver_at, "ttft": ttft,
                 "sent": _parse_intents(_read_intents())}
 
     await _flush_ready(final=True)  # the closing partial sentence (no trailing terminator yet)
@@ -259,7 +268,7 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
     if turns > 0 and not saw_result and not intents:
         error = "turn did not complete"
     return {"tools": tools, "text": text, "cost_usd": cost, "turns": turns,
-            "error": error, "deliver_at": deliver_at, "sent": intents}
+            "error": error, "deliver_at": deliver_at, "ttft": ttft, "sent": intents}
 
 
 async def _serve(client: Any) -> None:

@@ -129,6 +129,10 @@ class WorkroomResult:
     #: come AFTER this and the room never waits for them, so this — NOT the full ``run_ask`` wall
     #: time — is the real perceived latency. 0.0 = never delivered / cold path (not instrumented).
     deliver_at: float = 0.0
+    #: Query → the agent's FIRST streamed text token (pure model time-to-first-token). The floor of
+    #: ``deliver_at``: perceived latency can't beat it. Isolates model/connection TTFT from the extra
+    #: time to compose the first whole sentence. 0.0 = not streamed (cold path / no spoken text).
+    ttft: float = 0.0
     #: The agent's OWN recorded ``to_meeting`` intents (content/medium/to), read from the sandbox's
     #: local JSONL in the no-relay/file path. Each is a channel choice the agent made this turn; the
     #: session replays them over the connection honoring the chosen medium (NOT ``text``).
@@ -341,6 +345,7 @@ class Workroom:
                     cost_usd=float(rec.get("cost_usd", 0.0) or 0.0),
                     error=(str(rec["error"]) if rec.get("error") else None),
                     deliver_at=float(rec.get("deliver_at", 0.0) or 0.0),
+                    ttft=float(rec.get("ttft", 0.0) or 0.0),
                     sent=[dict(s) for s in (rec.get("sent") or []) if isinstance(s, dict)],
                 )
             # Adaptive backoff: poll fast at first so a quick reply lands snappily, then EASE OFF so a
