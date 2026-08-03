@@ -435,9 +435,13 @@ def _wire_map_seam(app: Any) -> None:
     app.state.map_store = map_store
 
 
-# The interval between periodic webhook drains (an in_call that raced boot, or a
-# redelivery, is picked up within this window). unit: seconds.
-WEBHOOK_DRAIN_INTERVAL_S: float = 2.0
+# The interval between periodic webhook drains. EVERY transcript line (a wake) and every in_call
+# (a provision) is picked up within this window, so it is PURE latency before Claude even starts —
+# kept low (was 2.0s: up to 2s added to every response, and 2s slower to warm the sandbox). A tight
+# poll of one cheap indexed SELECT is negligible DB load for the latency it buys. unit: seconds.
+# (A future event-driven trigger from the webhook route would make this near-instant; this is the
+# fallback cadence.)
+WEBHOOK_DRAIN_INTERVAL_S: float = 0.25
 
 
 async def _drain_webhooks_forever(app: Any) -> None:

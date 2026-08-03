@@ -320,7 +320,10 @@ class Workroom:
             # (~720 reads over 3 min at a flat 0.25s → E2B contention/cancellation under load). This
             # cuts the long-task read count ~8x while keeping short-wake latency low.
             elapsed = time.monotonic() - start
-            await asyncio.sleep(_WARM_POLL_S if elapsed < 5.0 else (1.0 if elapsed < 30.0 else 2.0))
+            # Tighter backoff than before (was 1.0/2.0) so a finished turn is DETECTED fast — the
+            # poll lag is pure latency after Claude is done. Still eases off on long tasks to avoid
+            # hammering the E2B files API: 0.25s snappy start, 0.5s mid, 1.0s for multi-minute work.
+            await asyncio.sleep(_WARM_POLL_S if elapsed < 5.0 else (0.5 if elapsed < 30.0 else 1.0))
         return None  # timed out waiting on the warm host → cold fallback
 
     async def _run_ask_cold(self, ask: str, prompt: str) -> WorkroomResult:
@@ -575,8 +578,18 @@ async def provision_workroom(
         await wr._run(f"cd {shlex.quote(REPO_DIR)} && git checkout -q {shlex.quote(sha)} || true",
                       timeout=120.0)  # noqa: SLF001
     # Seed the orientation files.
-    await wr._write_file(PRIME_FILE, prime)  # noqa: SLF001
-    await wr._write_file(MAP_FILE, map_text or "(no pre-built map — explore the repo directly)")  # noqa: SLF001
+    # CLAUDE.md = the lean behavioral prime + the repo map INLINE (reference data, below the
+    # instructions). Inlining the map into the always-loaded, prompt-cached prime means a map-resident
+    # question is answered from context in ~1 turn — no per-ask REPO_MAP.md read (a whole turn +
+    # seconds saved) — and Proxy genuinely "enters the meeting knowing the codebase". Behavior stays
+    # FIRST so the instructions are never diluted. REPO_MAP.md is still written as a stable on-disk ref.
+    _map = map_text or "(no pre-built map — explore the repo directly)"
+    await wr._write_file(  # noqa: SLF001
+        PRIME_FILE,
+        f"{prime}\n\n---\n# Repo map — pre-built + verified against THIS clone "
+        f"(your fast, grounded knowledge of the codebase)\n\n{_map}\n",
+    )
+    await wr._write_file(MAP_FILE, _map)  # noqa: SLF001
     await wr._write_file(TRANSCRIPT_FILE, "# Meeting transcript\n")  # noqa: SLF001
     # Wire the agent's ONE connection to the room: the in-sandbox MCP server + the .mcp.json that
     # registers it with native ``claude`` over stdio. The agent chooses the medium live; the server
