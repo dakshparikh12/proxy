@@ -116,63 +116,56 @@ _COVERAGE_EXEMPT_DIRS = frozenset(
 )
 
 
-def _is_path_claim(tok: str, top_entries: set[str]) -> bool:
-    """True iff ``tok`` is a genuine repo-path CLAIM the hallucination check should verify.
+def _is_source_file_ext(last: str) -> bool:
+    """True iff the last path segment ends in a real FILE extension — a lowercase, short, alpha suffix
+    (``core.py``→``py``, ``x.ts``→``ts``, ``go.mod``→``mod``). NOT a code SYMBOL reference the map
+    cites in prose (``json.API``, ``bytesconv.StringToBytes``, ``Engine.ServeHTTP`` — package/type
+    ``.Symbol``, which is CamelCase/UPPER, not a file), a leading-dot attribute ref (``.group`` —
+    empty stem), a version (``3.11`` — non-alpha), or a URL TLD (``cal.com`` — a cited host). File
+    extensions are lowercase; a symbol suffix is not — that one rule separates real files from the
+    code symbols a codebase map naturally references."""
+    if "." not in last:
+        return False
+    stem, ext = last.rsplit(".", 1)
+    return (
+        bool(stem)          # a real file has a NAME before the ext (drops leading-dot attr refs)
+        and ext.isalpha()
+        and ext.islower()   # file exts are lowercase; CamelCase/UPPER (.API, .ServeHTTP) = a symbol
+        and 1 <= len(ext) <= 5
+        and ext not in _DOMAIN_TLDS
+    )
 
-    A path CLAIM is a token whose FIRST path segment is a real top-level entry in the clone:
-    ``src/click/core.py`` (``src`` is a real dir), ``.github/workflows`` (``.github`` is a real
-    tracked dir), a real top-level ``server.py``. Everything else is prose — the map's
-    slash-bearing enumerations (``BaseCommand/Command``, ``3.10/3.11``, ``I/O``), cited URLs
-    (``github.com/…``), bare domains (``cal.com``), and framework names (``Next.js``) — and is not
-    checked for existence. Anchoring on the clone's own top-level entries is what keeps a faithful
-    map from false-flagging while a genuinely-missing path under a REAL dir (``src/nope.py``) still
-    flags. See BUG 4: the old ``any slash ⇒ claim`` rule rejected a correct 13KB map."""
+
+def _is_path_claim(tok: str, top_entries: set[str]) -> bool:
+    """True iff ``tok`` is a genuine repo FILE/DIR path CLAIM the hallucination check should verify —
+    NOT the map's path-shaped PROSE (class enumerations ``BaseCommand/Command``, versions
+    ``3.10/3.11``, shorthands ``read/write``, cited URLs ``github.com/…``, bare domains ``cal.com``,
+    frameworks ``Next.js``) and NOT a code SYMBOL reference (``codec/json.API``,
+    ``internal/bytesconv.StringToBytes`` — a ``package/path.Symbol`` a codebase map naturally names).
+    Each of these false-flagged a genuinely-good map and blocked onboarding — found incrementally by
+    the live-meeting sim (``/.group`` on click; ``json.API`` / ``bytesconv.StringToBytes`` on gin)."""
     # An absolute-looking token (leading ``/``) is never a RELATIVE repo-path claim — a map's paths
-    # are relative to the clone root. ``/.group`` (an attribute/decorator ref like ``cli``+``.group``
-    # run together in prose), ``/usr/local`` etc. are prose or absolute paths that
-    # ``_path_exists_in_clone`` refuses anyway; treating them as claims falsely fails verify on a
-    # genuinely good map — and INTERMITTENTLY, since the map prose varies run to run. General fix,
-    # not a token denylist (found by the live-meeting sim: click map rejected on ``/.group``).
+    # are relative to the clone root (``/.group``, ``/usr/local`` are prose/absolute).
     if tok.startswith("/"):
         return False
     if "/" in tok:
         first = tok.split("/", 1)[0]
-        # A slash token is a genuine repo-path CLAIM when EITHER:
-        #  (a) its FIRST segment is a real top-level entry in the clone (``src/click/core.py`` →
-        #      ``src``; ``.github/workflows`` → ``.github``) — a path anchored on a real dir, OR
-        #  (b) it ends in a real SOURCE-FILE name.extension (``foo/bar.ts`` → stem ``bar`` ext
-        #      ``ts``) — a file path even when its top dir is fabricated, so a genuinely-missing
-        #      ``foo/bar.ts`` still flags.
-        # Everything else is the map's SLASH-BEARING PROSE: class enumerations
-        # (``BaseCommand/Command/MultiCommand``), version lists (``3.10/3.11/3.12`` — last segment
-        # is not an alpha ext), option pairs (``Option/Argument``), shorthands (``I/O``,
-        # ``read/write``, ``bash/zsh/fish``), cited URLs (``github.com/…``), and leading-dot
-        # attribute refs (``foo/.group`` — empty stem). Treating all of those as file paths flagged a
-        # GENUINELY GOOD 13KB map and 404'd every meeting; requiring (a)-or-(b) keeps real
-        # hallucination detection intact while dropping the prose.
-        if first in top_entries:
-            return True
         last = tok.rsplit("/", 1)[-1]
         if "." in last:
-            stem, ext = last.rsplit(".", 1)
-            # A real file has a NAME before the extension (``bar.ts`` → stem ``bar``); a leading-dot
-            # attribute/decorator ref (``.group``/``.command``/``.option``) has an EMPTY stem and is
-            # prose, not a fabricated file. A source-file extension makes it a path claim; a URL TLD
-            # (``.com``) does not (a cited host ``github.com/…``). Requiring a non-empty stem drops
-            # the attribute refs without weakening detection of a genuinely-missing ``foo/bar.ts``.
-            return (
-                bool(stem)
-                and bool(ext)
-                and ext.isalpha()
-                and 1 <= len(ext) <= 5
-                and ext.lower() not in _DOMAIN_TLDS
-            )
-        return False
-    # A slash-less token names a TOP-LEVEL entry or nothing: it is a path claim ONLY when it is a
-    # real top-level entry in the clone (a real top-level file like ``server.py`` / ``go.mod``).
-    # A cited bare domain (``cal.com``) or framework name (``Next.js``) is not a top-level entry, so
-    # it is prose, never a fabricated file — this is what stops the false hallucination flag (BUG 2)
-    # without weakening nested-path detection.
+            # A dotted last segment is a FILE claim ONLY if it ends in a real (lowercase) file
+            # extension. A ``package/path.Symbol`` reference (``codec/json.API``,
+            # ``internal/bytesconv.StringToBytes``) is a CODE SYMBOL the map cites — NOT a file, even
+            # when its first segment IS a real dir — and a cited URL ends in a domain TLD. Neither is
+            # a fabricated file. A genuinely-missing ``foo/bar.ts`` (real ext) still flags.
+            return _is_source_file_ext(last)
+        # No dot in the last segment → a directory / extensionless-file path: a claim only when
+        # anchored on a real top-level entry (``internal/bytesconv``, ``src/click``,
+        # ``.github/workflows``). The map's slash-bearing prose (``BaseCommand/Command``,
+        # ``read/write``, ``bash/zsh``) has a non-top-entry first segment, so it is not a claim.
+        return first in top_entries
+    # A slash-less token is a claim ONLY if it IS a real top-level entry (a real top file
+    # ``server.py`` / ``go.mod``). A bare domain (``cal.com``) or framework (``Next.js``) is not a
+    # top entry, so it is prose — never a fabricated file.
     return tok in top_entries
 
 

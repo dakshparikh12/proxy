@@ -109,6 +109,21 @@ def test_leading_dot_attribute_ref_is_not_a_path_claim() -> None:
     assert _is_path_claim("foo/bar.ts", top)
 
 
+def test_code_symbol_references_are_not_path_claims() -> None:
+    """Repo-diversity regression (gin/Go): a codebase map naturally cites package/type SYMBOLS in
+    path-like form (``codec/json.API``, ``internal/bytesconv.StringToBytes``, ``Engine.ServeHTTP``).
+    These are CODE SYMBOLS, not files — a dotted segment is a FILE claim only if it ends in a real
+    (lowercase) file extension. Treating symbols as fabricated paths blocked gin onboarding."""
+    top = {"src", "internal", "codec", "README.md", "go.mod"}
+    assert not _is_path_claim("codec/json.API", top)
+    assert not _is_path_claim("internal/bytesconv.StringToBytes", top)
+    assert not _is_path_claim("gin.Engine.ServeHTTP", top)  # slash-less, not a top entry → prose
+    # real files are STILL claims (lowercase ext), even under a real top dir — detection intact
+    assert _is_path_claim("internal/bytesconv/bytesconv.go", top)
+    assert _is_path_claim("src/click/core.py", top)
+    assert _is_path_claim("go.mod", top)  # a real top-level file
+
+
 def test_real_file_cited_by_imprecise_dir_is_grounded_not_hallucinated(make_git_repo: Any) -> None:
     """Repo-diversity regression (gin/Go): a map that names a REAL file at a slightly-wrong directory
     — dropping a parent dir, e.g. a Go internal package cited as ``bytesconv/bytesconv.go`` when the
