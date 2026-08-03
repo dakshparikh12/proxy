@@ -109,6 +109,27 @@ def test_leading_dot_attribute_ref_is_not_a_path_claim() -> None:
     assert _is_path_claim("foo/bar.ts", top)
 
 
+def test_real_file_cited_by_imprecise_dir_is_grounded_not_hallucinated(make_git_repo: Any) -> None:
+    """Repo-diversity regression (gin/Go): a map that names a REAL file at a slightly-wrong directory
+    — dropping a parent dir, e.g. a Go internal package cited as ``bytesconv/bytesconv.go`` when the
+    file is ``internal/bytesconv/...``, or a monorepo abbreviation — is grounded, NOT a hallucination:
+    the file exists in the repo and the agent reads the actual file live. Only a name that resolves
+    NOWHERE in the repo is a fabrication."""
+    checkout, em = _clone_fixture(make_git_repo)  # has packages/lib/x.ts, src/models.py, README.md
+    # cite the REAL packages/lib/x.ts by an imprecise path (dropped the packages/ prefix) → grounded
+    ok = _REALISTIC_MAP.replace(
+        "- packages/lib/x.ts — a shared helper",
+        "- lib/x.ts — a shared helper (cited without the packages/ prefix)",
+    )
+    res = verify_map(ok, checkout, exclusions=em)
+    assert res.ready, res.reasons
+    # a truly fabricated file (basename exists NOWHERE) still flags — detection intact
+    bad = ok + "\n- foo/nope.ts — a fabricated file\n"
+    res2 = verify_map(bad, checkout, exclusions=em)
+    assert not res2.ready
+    assert any("nope.ts" in r for r in res2.reasons)
+
+
 def test_map_with_group_decorator_prose_verifies_ready(make_git_repo: Any) -> None:
     """Regression (live-meeting sim): a faithful map whose prose contains a ``/.group``-shaped token
     must still verify READY — not be intermittently rejected because the LLM prose happened to emit

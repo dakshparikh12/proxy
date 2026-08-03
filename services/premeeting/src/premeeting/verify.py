@@ -216,12 +216,21 @@ def verify_map(
     if clone_path.exists():
         excluded = exclusions.is_excluded if exclusions is not None else (lambda _p: False)
         top_entries = _top_level_entries(clone_path)
+        # A cited file that EXISTS in the repo — even at a slightly different directory than named
+        # (Go internal packages cited as ``bytesconv/bytesconv.go`` when the file is
+        # ``internal/bytesconv/…``, or a monorepo package abbreviation) — is grounded, NOT a
+        # hallucination: the map named a REAL file, and the agent reads the actual file live. Only a
+        # name that resolves NOWHERE in the repo is a fabrication (Law 1). So a path is hallucinated
+        # iff neither its exact path NOR its basename resolves to a tracked file. (Found by the
+        # repo-diversity sim: gin/Go false-flagged real ``internal/`` files.)
+        tracked_names = {rel.rsplit("/", 1)[-1] for rel in (list_tracked_files(clone_path) or [])}
         hallucinated = sorted(
             p
             for p in named
             if _is_path_claim(p, top_entries)
             and not excluded(p)
             and not _path_exists_in_clone(clone_path, p)
+            and p.rsplit("/", 1)[-1] not in tracked_names
         )
         if hallucinated:
             shown = ", ".join(hallucinated[:10])
