@@ -191,7 +191,7 @@ class Workroom:
         except Exception:  # noqa: BLE001 — transcript sync never crashes the meeting
             logger.exception("workroom transcript sync failed (meeting continues)")
 
-    async def run_ask(self, ask: str) -> WorkroomResult:
+    async def run_ask(self, ask: str, *, recent: str = "") -> WorkroomResult:
         """Wake Claude in the workroom on ONE reactive ask; return the result.
 
         Prefers the WARM permanent session (``session_host.py``, started at provision): the prime +
@@ -204,7 +204,7 @@ class Workroom:
         the host connection (or recorded locally when there is no relay).
 
         Never raises — a failed turn is an honest ``WorkroomResult.error`` (§9)."""
-        prompt = self._wake_prompt(ask)
+        prompt = self._wake_prompt(ask, recent)
         if self.warm:
             warm = await self._run_ask_warm(ask, prompt)
             if warm is not None:
@@ -213,16 +213,25 @@ class Workroom:
         return await self._run_ask_cold(ask, prompt)
 
     @staticmethod
-    def _wake_prompt(ask: str) -> str:
+    def _wake_prompt(ask: str, recent: str = "") -> str:
         """The one wake prompt (judge-if-addressed → decline false wake → deliver in one turn →
         output-excellence → offer). Built once here so the WARM and COLD paths hand Claude the SAME
-        instructions — the delivery mechanism changed, the behavior contract did not."""
+        instructions — the delivery mechanism changed, the behavior contract did not. The recent
+        transcript is INLINED so a wake needs no ./MEETING_NOTES.md read just to judge/answer (a
+        turn saved every wake); the full history stays on disk for the rare older-context case."""
+        recent_block = (
+            "Recent transcript (most recent lines — use this DIRECTLY; you do NOT need to open "
+            f"./MEETING_NOTES.md unless you need OLDER context than this):\n{recent}\n\n"
+            if recent.strip() else ""
+        )
         return (
             "Someone in the room may have addressed you (your name was heard). Your identity and how "
-            "to behave are in ./CLAUDE.md; the live meeting transcript is in ./MEETING_NOTES.md.\n\n"
+            "to behave are in ./CLAUDE.md; older meeting history (if you need it) is in "
+            "./MEETING_NOTES.md.\n\n"
+            f"{recent_block}"
             f"The line that woke you:\n{ask}\n\n"
             "FIRST judge whether you were genuinely being addressed — make this call FAST, from the "
-            "transcript ALONE, before you read any code or investigate anything. If 'proxy' was used "
+            "recent transcript above ALONE, before you read any code or investigate anything. If 'proxy' was used "
             "incidentally (e.g. \"our proxy server\", \"the proxy pool\") or people are talking among "
             "themselves and no one is actually asking you for anything, STOP IMMEDIATELY — do nothing, "
             "don't call the tool, don't explore the repo. Only start real work once you're sure you "

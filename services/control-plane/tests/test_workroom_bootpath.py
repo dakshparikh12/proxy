@@ -476,7 +476,7 @@ def test_session_stays_quiet_when_the_agent_acted_live_via_relay() -> None:
         async def feed_transcript(self, md: str) -> None:
             return None
 
-        async def run_ask(self, ask: str) -> Any:
+        async def run_ask(self, ask: str, *, recent: str = "") -> Any:
             # The agent chose chat live during the turn (what the relay would have landed). Its
             # recorded intents ALSO carry the same choice (the MCP server records even in relay
             # mode) — but because the connection already grew, the session must NOT replay them.
@@ -508,7 +508,7 @@ class _StubWorkroom:
     async def feed_transcript(self, md: str) -> None:
         return None
 
-    async def run_ask(self, ask: str) -> Any:
+    async def run_ask(self, ask: str, *, recent: str = "") -> Any:
         return self._result
 
 

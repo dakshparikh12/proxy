@@ -76,7 +76,7 @@ class _FakeWorkroom:
     async def feed_transcript(self, md: str) -> None:
         self.fed.append(md)
 
-    async def run_ask(self, ask: str) -> Any:
+    async def run_ask(self, ask: str, *, recent: str = "") -> Any:
         self.asks.append(ask)
         if self._raise_on_run:
             raise RuntimeError("run_ask blew up")
@@ -232,7 +232,7 @@ def test_overlapping_wakes_both_deliver_no_dropped_response() -> None:
             async def feed_transcript(self, md: str) -> None:
                 self.fed.append(md)
 
-            async def run_ask(self, ask: str) -> Any:
+            async def run_ask(self, ask: str, *, recent: str = "") -> Any:
                 self.asks.append(ask)
                 await asyncio.sleep(0.05)  # let the two wakes overlap in flight
                 which = "first" if "first" in ask else "second"
@@ -271,7 +271,7 @@ def test_monitor_while_working_a_second_line_lands_while_the_first_wake_runs() -
                 if "second question" in md:
                     second_line_fed.set()
 
-            async def run_ask(self, ask: str) -> Any:
+            async def run_ask(self, ask: str, *, recent: str = "") -> Any:
                 self.asks.append(ask)
                 if "first" in ask:
                     # Block until a later line has been fed WHILE this wake is in flight —

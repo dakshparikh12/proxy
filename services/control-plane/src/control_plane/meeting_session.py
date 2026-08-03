@@ -175,7 +175,7 @@ class MeetingSession:
 
         A failed wake is an honest no-op the meeting survives (§3.8), never a raise."""
         try:
-            result = await self.workroom.run_ask(ask)
+            result = await self.workroom.run_ask(ask, recent=self._recent_lines())
             self.results.append(result)
             # How the turn was carried is encoded in result.sent, NOT in the shared connection.sent
             # counter: a CONCURRENT wake's replay grows connection.sent too, so keying off it makes a
@@ -223,6 +223,13 @@ class MeetingSession:
             f"[{ts:.0f}] {speaker}: {text}" for (ts, speaker, text) in recent
         )
         return f"{header}\n{body}\n"
+
+    def _recent_lines(self, n: int = 25) -> str:
+        """The last ``n`` transcript lines, INLINED into the wake prompt so a woken turn judges +
+        answers WITHOUT a per-wake ./MEETING_NOTES.md read (a turn saved every wake). Older history
+        stays on disk for the rare case the agent needs more."""
+        recent = self._lines[-n:]
+        return "\n".join(f"[{speaker}] {text}" for (_ts, speaker, text) in recent)
 
     async def drain(self) -> None:
         """Await every in-flight wake (meeting end / tests). Best-effort, never raises."""
