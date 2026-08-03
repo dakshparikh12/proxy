@@ -123,6 +123,12 @@ class WorkroomResult:
     turns: int = 0                       # sdk turns / duration proxy
     cost_usd: float = 0.0
     error: str | None = None             # honest fault, never re-thrown into the loop
+    #: Elapsed seconds from turn start to the agent's FIRST ``to_meeting`` call — the moment the room
+    #: actually hears/sees the answer on the LIVE (relay) path, where the in-sandbox MCP server POSTs
+    #: on the tool call itself (mid-turn). The trailing wrap-up turn + result write + driver poll all
+    #: come AFTER this and the room never waits for them, so this — NOT the full ``run_ask`` wall
+    #: time — is the real perceived latency. 0.0 = never delivered / cold path (not instrumented).
+    deliver_at: float = 0.0
     #: The agent's OWN recorded ``to_meeting`` intents (content/medium/to), read from the sandbox's
     #: local JSONL in the no-relay/file path. Each is a channel choice the agent made this turn; the
     #: session replays them over the connection honoring the chosen medium (NOT ``text``).
@@ -238,17 +244,18 @@ class Workroom:
             "were really addressed.\n\n"
             "If you were addressed, do exactly as much as the ask needs — a greeting or a quick "
             "question is one direct reply with no tools; a real task gets the real work (read the "
-            "ACTUAL code, run code to verify, draft real files). Reach the room through your "
-            "`mcp__meeting__to_meeting` tool (call it by that exact name — it is already loaded, don't "
-            "search for it): you choose what to convey and how (say/chat/dm/screen/offer/mute), live, "
-            "like a great teammate. CRITICAL: you get exactly ONE turn — there is NO 'later', no "
-            "follow-up turn, no coming back. Never say \"I'll bring it back\" / \"give me a few "
-            "minutes\" / \"will follow up\" and then stop — that leaves the room with nothing. Do the "
-            "ENTIRE task now (a longer one may open with a one-line \"on it…\", but you must then "
-            "finish it), and your LAST action before stopping MUST be delivering the real "
-            "result/artifact to the room in this same turn. For anything world-touching, produce the "
-            "real artifact and, as your final step, offer it (medium='offer') — you have no push/send "
-            "credentials by design, so the offer IS the delivery."
+            "ACTUAL code, run code to verify, draft real files). SPEAK by simply writing your reply — "
+            "your words are spoken to the room live, streamed sentence by sentence as you type. Use "
+            "your `mcp__meeting__to_meeting` tool (call it by that exact name — already loaded, don't "
+            "search for it) ONLY for the non-spoken channels: chat/dm/screen/offer/mute. CRITICAL: you "
+            "get exactly ONE turn — there is NO 'later', no follow-up turn, no coming back. Never say "
+            "\"I'll bring it back\" / \"give me a few minutes\" / \"will follow up\" and then stop — "
+            "that leaves the room with nothing. Do the ENTIRE task now (a longer one may open with a "
+            "one-line \"on it…\", but you must then finish it), and before you stop you MUST have "
+            "delivered the real result/artifact to the room in this same turn. For anything "
+            "world-touching, produce the real artifact and, as your final step, offer it "
+            "(medium='offer') — you have no push/send credentials by design, so the offer IS the "
+            "delivery."
         )
 
     def _wake_envs(self) -> dict[str, str]:
@@ -333,6 +340,7 @@ class Workroom:
                     turns=int(rec.get("turns", 0) or 0),
                     cost_usd=float(rec.get("cost_usd", 0.0) or 0.0),
                     error=(str(rec["error"]) if rec.get("error") else None),
+                    deliver_at=float(rec.get("deliver_at", 0.0) or 0.0),
                     sent=[dict(s) for s in (rec.get("sent") or []) if isinstance(s, dict)],
                 )
             # Adaptive backoff: poll fast at first so a quick reply lands snappily, then EASE OFF so a

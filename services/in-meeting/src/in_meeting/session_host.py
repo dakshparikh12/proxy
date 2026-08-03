@@ -31,7 +31,9 @@ import asyncio
 import json
 import os
 import pathlib
+import re
 import time
+import urllib.request
 from typing import Any
 
 #: The persistent session's default model. Sonnet (not Haiku): the real-data dry-run proved Haiku
@@ -100,10 +102,81 @@ def _write_result(wake_id: str, record: dict[str, Any]) -> None:
     os.replace(tmp, final)
 
 
+#: Sentence terminators that close a spoken chunk. Comma/colon are intentionally NOT here — flushing
+#: on those makes the voice choppy (industry consensus: Pipecat/LiveKit flush on sentence ends only).
+_TERMINATORS = ".!?;…"
+#: Common abbreviations whose trailing dot must NOT end a spoken sentence.
+_ABBREVS = ("mr.", "mrs.", "ms.", "dr.", "st.", "vs.", "etc.", "e.g.", "i.e.", "inc.", "ltd.", "jr.",
+            "sr.", "no.", "fig.", "approx.")
+_WS = re.compile(r"\s")
+
+
+def _sentence_end(buf: str) -> int | None:
+    """Index just past the first COMPLETE sentence in ``buf``, or ``None`` if none has closed yet.
+
+    A sentence closes at ``. ! ? ; …`` that is (a) FOLLOWED BY whitespace — so mid-token dots in
+    ``core.py`` / ``main()`` and the still-growing tail of the buffer don't trigger — (b) NOT
+    preceded by a digit (so ``3.14`` stays whole), and (c) not the tail of a common abbreviation
+    (``e.g.``). This keeps each flushed chunk a natural spoken clause. The final partial sentence
+    (no trailing whitespace yet) is force-flushed by the caller at stream end."""
+    for i, ch in enumerate(buf):
+        if ch not in _TERMINATORS:
+            continue
+        nxt = buf[i + 1] if i + 1 < len(buf) else ""
+        if not (nxt and _WS.match(nxt)):          # needs a following whitespace char to be "closed"
+            continue
+        prev = buf[i - 1] if i > 0 else ""
+        if prev.isdigit():                          # 3.14 — not a sentence end
+            continue
+        head = buf[: i + 1].rstrip().lower()
+        if any(head.endswith(a) for a in _ABBREVS):  # e.g. / i.e. / Dr. — not a sentence end
+            continue
+        return i + 1
+    return None
+
+
+def _relay_post(url: str, rec: dict[str, Any]) -> None:
+    """POST one delivery to the host relay — same shape/auth as the in-sandbox MCP's ``_relay``."""
+    data = json.dumps(rec).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    token = os.environ.get("PROXY_MEETING_TOKEN", "").strip()
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310  # nosec B310 — fixed host relay URL
+        resp.read()
+
+
+async def _deliver_say(content: str) -> None:
+    """Stream ONE spoken sentence to the room the instant it closes — the voice channel itself.
+
+    LIVE (``PROXY_MEETING_RELAY`` set): POST it to the host relay right now, mid-turn, so the room
+    hears sentence 1 while the model is still writing sentence 3. The blocking ``urllib`` POST runs
+    off the event loop (``to_thread``) but is AWAITED, so sentences reach the room strictly in order
+    without stalling the token stream. PROOF/file mode: append it to the intents file (medium
+    ``say``) so the driver's ``sent`` reflects exactly what was spoken, in order. Never raises — a
+    send fault degrades to a recorded ``relay_error`` line, never a crash."""
+    rec: dict[str, Any] = {"ts": time.time(), "content": content, "medium": "say", "to": ""}
+    relay = os.environ.get("PROXY_MEETING_RELAY", "").strip()
+    if relay:
+        try:
+            await asyncio.to_thread(_relay_post, relay, rec)
+            return
+        except Exception as exc:  # noqa: BLE001 — never crash the agent's turn on a send fault
+            rec = {**rec, "relay_error": str(exc)}
+    try:
+        with open(MEETING_OUT, "a", encoding="utf-8") as f:  # noqa: PTH123 — tiny append, in-sandbox
+            f.write(json.dumps(rec) + "\n")
+    except OSError:
+        pass
+
+
 async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
-    """One wake on the WARM session: query, drain the response, capture the SAME data the cold
-    ``_parse_stream`` produced (ordered tool names, final text, cost, turns) + the recorded intents.
-    Never raises — a per-turn error is returned as ``{"error": ...}`` (the driver degrades honestly)."""
+    """One wake on the WARM session: query and drain the response, STREAMING the agent's spoken
+    prose to the room sentence-by-sentence as it is generated (the voice channel — first audio at
+    the first clause, not the whole answer), while capturing tool names / cost / turns / the
+    agent's own ``to_meeting`` intents for the driver. Never raises — a per-turn fault is returned
+    as ``{"error": ...}`` so the driver degrades honestly."""
     from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, ToolUseBlock
 
     tools: list[str] = []
@@ -112,15 +185,57 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
     cost = 0.0
     turns = 0
     saw_result = False
+    #: Elapsed s from turn start to the FIRST thing the room hears — the first streamed spoken
+    #: sentence, or (fallback) the first ``to_meeting`` call. This is the REAL perceived latency:
+    #: on the live path the sentence/POST leaves mid-turn, and the trailing wrap-up + result write +
+    #: driver poll all come AFTER it, so the room never waits for them. 0.0 = never delivered.
+    deliver_at = 0.0
+    say_buf = ""      # accumulates streamed response prose until a sentence closes, then flushes to voice
+
+    async def _flush_ready(*, final: bool = False) -> None:
+        """Flush every complete sentence sitting in ``say_buf`` to the voice channel; on ``final``
+        also flush the trailing partial clause so the answer's last words are never dropped. Each
+        sentence is AWAITED in turn, so the room hears them strictly in order."""
+        nonlocal say_buf, deliver_at
+        while True:
+            cut = _sentence_end(say_buf)
+            if cut is None:
+                break
+            sentence, say_buf = say_buf[:cut].strip(), say_buf[cut:]
+            if sentence:
+                await _deliver_say(sentence)
+                if not deliver_at:
+                    deliver_at = round(time.monotonic() - turn_start, 2)
+        if final and say_buf.strip():
+            await _deliver_say(say_buf.strip())
+            if not deliver_at:
+                deliver_at = round(time.monotonic() - turn_start, 2)
+            say_buf = ""
+
     _reset_intents()
+    turn_start = time.monotonic()
     try:
         await client.query(prompt)
         async for msg in client.receive_response():
+            # Partial-message stream events (include_partial_messages) carry the incremental text
+            # deltas — the spoken answer AS it is typed. Detected structurally (``.event`` dict) so
+            # we don't depend on the SDK's StreamEvent import path.
+            ev = getattr(msg, "event", None)
+            if isinstance(ev, dict):
+                if ev.get("type") == "content_block_delta":
+                    delta = ev.get("delta", {}) or {}
+                    if delta.get("type") == "text_delta":
+                        say_buf += str(delta.get("text", "") or "")
+                        await _flush_ready()
+                continue
             if isinstance(msg, AssistantMessage):
                 turns += 1
                 for block in msg.content:
                     if isinstance(block, ToolUseBlock):
-                        tools.append(str(block.name or ""))
+                        name = str(block.name or "")
+                        tools.append(name)
+                        if not deliver_at and "to_meeting" in name:
+                            deliver_at = round(time.monotonic() - turn_start, 2)
                     elif isinstance(block, TextBlock) and str(block.text or "").strip():
                         last_text = str(block.text).strip()
             elif isinstance(msg, ResultMessage):
@@ -130,10 +245,12 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
                 if msg.num_turns:
                     turns = int(msg.num_turns)
     except Exception as exc:  # noqa: BLE001 — a per-turn fault is an honest error, never a crash
+        await _flush_ready(final=True)  # speak whatever was already composed before surfacing the fault
         return {"tools": tools, "text": last_text, "cost_usd": cost, "turns": turns,
-                "error": str(exc) or exc.__class__.__name__,
+                "error": str(exc) or exc.__class__.__name__, "deliver_at": deliver_at,
                 "sent": _parse_intents(_read_intents())}
 
+    await _flush_ready(final=True)  # the closing partial sentence (no trailing terminator yet)
     intents = _parse_intents(_read_intents())
     # Salvage an abnormally-terminated turn's last prose (parity with ``_parse_stream``).
     if not saw_result and not text:
@@ -142,7 +259,7 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
     if turns > 0 and not saw_result and not intents:
         error = "turn did not complete"
     return {"tools": tools, "text": text, "cost_usd": cost, "turns": turns,
-            "error": error, "sent": intents}
+            "error": error, "deliver_at": deliver_at, "sent": intents}
 
 
 async def _serve(client: Any) -> None:
@@ -198,6 +315,10 @@ async def main() -> None:
         # still bounded by ASK_TIMEOUT_S on the driver side; a runaway can't stall the meeting).
         max_turns=int(os.environ.get("PROXY_MAX_TURNS", "40") or "40"),
         mcp_servers=_mcp_servers(),
+        # Stream the model's text deltas as it generates so the host can speak each sentence the
+        # instant it closes (first audio at the first clause, not the whole answer). Available since
+        # claude-agent-sdk 0.1.48; keeps the MCP tools + the CLAUDE.md prime fully intact.
+        include_partial_messages=True,
     )
     async with ClaudeSDKClient(options=options) as client:
         # Mark the host READY so the driver can tell the warm session came up (vs. a startup fault).

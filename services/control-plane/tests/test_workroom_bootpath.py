@@ -477,14 +477,13 @@ def test_session_stays_quiet_when_the_agent_acted_live_via_relay() -> None:
             return None
 
         async def run_ask(self, ask: str, *, recent: str = "") -> Any:
-            # The agent chose chat live during the turn (what the relay would have landed). Its
-            # recorded intents ALSO carry the same choice (the MCP server records even in relay
-            # mode) — but because the connection already grew, the session must NOT replay them.
+            # RELAY mode: the in-sandbox MCP POSTed the agent's chat choice live to the connection
+            # (grown just below) and — on a SUCCESSFUL relay — recorded NOTHING locally, so
+            # ``result.sent`` is EMPTY (a relayed intent is never also recorded; ``_parse_intents``
+            # skips any ``relay_error`` line). The room already heard it, so the session must find
+            # nothing to replay and add no second send — matching ``sandbox_meeting_mcp._deliver``.
             await self._conn.to_meeting("here's the answer", medium="chat")
-            return SimpleNamespace(
-                text="here's the answer", error=None,
-                sent=[{"content": "here's the answer", "medium": "chat", "to": ""}],
-            )
+            return SimpleNamespace(text="here's the answer", error=None, sent=[])
 
     async def _run() -> None:
         session = MeetingSession(workroom=_LiveWorkroom(connection), connection=connection)

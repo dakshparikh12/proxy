@@ -62,14 +62,16 @@ def main() -> None:
     server = FastMCP("meeting")
 
     @server.tool()
-    def to_meeting(content: str, medium: str = "say", to: str = "") -> str:
-        """Send something to the live meeting. You decide what to convey and how.
+    def to_meeting(content: str, medium: str = "chat", to: str = "") -> str:
+        """Deliver to the live meeting through a NON-SPOKEN channel. To SPEAK ALOUD, do NOT use this
+        tool — just write your reply; your words are spoken to the room live as you type. Use this
+        ONLY for the other channels:
 
-        medium: 'say' (out loud, default) | 'chat' | 'dm' (needs `to`) | 'screen' (show a URL/view) |
-        'offer' (stage a world-touching change/message for a human's one-click approval) | 'mute' |
-        'unmute'. Use your judgment like a great teammate; stay silent by simply not calling this.
+        medium: 'chat' (post in the meeting chat) | 'dm' (a private message, needs `to`) | 'screen'
+        (show a URL/view) | 'offer' (stage a world-touching change for a human's one-click approval) |
+        'mute' | 'unmute'. Use your judgment like a great teammate.
         """
-        return _deliver(content, (medium or "say").strip().lower(), to)
+        return _deliver(content, (medium or "chat").strip().lower(), to)
 
     server.run()
 
