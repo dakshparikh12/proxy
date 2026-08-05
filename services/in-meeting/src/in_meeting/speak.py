@@ -3,7 +3,7 @@
 The Engine streams spoken TEXT deltas into an injected async ``speak`` sink
 (``engine.SpeakFn``). N1 built the real Cartesia synth
 (``transport.tts.CartesiaTTS.synthesize(text) → AsyncIterator[AudioChunk]``,
-s16le 16 kHz mono pcm); OUTPUT-MEDIA built the per-meeting channel that plays
+s16le 44.1 kHz mono pcm); OUTPUT-MEDIA built the per-meeting channel that plays
 pcm in the meeting (``output_media.channel_for(meeting_id)``). This module is
 the PIPE between them — pure physics, no situation→action:
 
@@ -48,6 +48,7 @@ async-callable) and ``engine.SpeakSink`` (it carries async ``say``).
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import deque
 from collections.abc import AsyncIterator, Callable
 from typing import Protocol
@@ -138,6 +139,11 @@ class SpeakPipe:
         self._worker: asyncio.Task[None] | None = None
         self._tail_timer: asyncio.Task[None] | None = None
         self._speaking = False
+        #: Monotonic timestamp until which the ROOM is still audibly playing what we wrote.
+        #: Synthesis outruns playback (Cartesia returns a 10s answer's PCM in ~1-2s), so the
+        #: write-state alone goes idle while the page still has seconds of scheduled audio —
+        #: the live barge-in gap: ``speaking`` must reflect AUDIBILITY, not write activity.
+        self._audible_until = 0.0
         #: The most recent synth fault (never raised into the engine's turn).
         self.last_error: Exception | None = None
 
@@ -155,7 +161,10 @@ class SpeakPipe:
         """
         worker = self._worker
         worker_live = worker is not None and not worker.done()
-        return self._speaking or worker_live or bool(self._queue) or bool(self._buffer)
+        audible = time.monotonic() < self._audible_until
+        return (
+            self._speaking or worker_live or bool(self._queue) or bool(self._buffer) or audible
+        )
 
     async def say(self, text: str) -> None:
         """Accept one TEXT delta; synthesize any newly completed sentences."""
@@ -221,6 +230,7 @@ class SpeakPipe:
         self._cancel_tail_timer()
         self._buffer = ""
         self._queue.clear()
+        self._audible_until = 0.0  # the page dumps its scheduled audio on the cut frame
         worker = self._worker
         self._worker = None
         if worker is not None and not worker.done():
@@ -250,7 +260,15 @@ class SpeakPipe:
         """The FIFO drain: one sentence's synth at a time, in queue order."""
         while True:
             if self._queue:
-                sentence = self._queue.popleft()
+                # Drain EVERYTHING queued as one synth unit: the first sentence rides
+                # alone (it queued first — fast start), and sentences that accumulated
+                # while it synthesized ride together, so the voice keeps ONE prosody
+                # arc instead of restarting cadence per sentence (live founder finding:
+                # per-sentence synthesis sounded disjointed).
+                parts = [self._queue.popleft()]
+                while self._queue:
+                    parts.append(self._queue.popleft())
+                sentence = " ".join(parts)
                 try:
                     await self._pipe_sentence(sentence)
                 except Exception as exc:  # never-throw: honest no-audio (Law 2)
@@ -283,6 +301,12 @@ class SpeakPipe:
             self._speaking = True
             await self._channel.set_speaking(True)
         await self._channel.write_audio(pcm)
+        # Track how long the ROOM stays audible: each s16 mono chunk buys
+        # len/(2*rate) seconds of playback from max(now, the current horizon).
+        from transport.tts import SAMPLE_RATE_HZ
+        now = time.monotonic()
+        base = self._audible_until if self._audible_until > now else now
+        self._audible_until = base + len(pcm) / (2.0 * SAMPLE_RATE_HZ)
 
     def _arm_tail_timer(self) -> None:
         """(Re)start the quiet-window timer — reset on every delta."""

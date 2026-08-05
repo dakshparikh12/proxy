@@ -8,10 +8,10 @@ most one in-flight chunk (§3.3). The synthesis round-trip is issued through the
 call time, so no raw Cartesia client and no provider SDK live in this package. One calm
 voice/register across every line.
 
-PCM format (confirmed against the live docs): raw ``pcm_s16le`` @ 16000 Hz mono —
+PCM format (confirmed against the live docs): raw ``pcm_s16le`` @ 44100 Hz mono —
 Cartesia's real ``output_format`` (https://docs.cartesia.ai/api-reference/tts/bytes)
 matching Recall's documented in-meeting audio convention (16-bit signed little-endian
-PCM, 16 kHz, mono), so the synthesized chunks are in the exact format the meeting-side
+PCM, 44.1 kHz, mono), so the synthesized chunks are in the exact format the meeting-side
 audio surface consumes.
 """
 from __future__ import annotations
@@ -28,8 +28,12 @@ _CARTESIA_BASE = "https://api.cartesia.ai"
 _CARTESIA_VERSION = "2026-03-01"
 # Sonic 3 — the managed-V0 model generation (§2); a real ``model_id`` per the docs.
 _MODEL_ID = "sonic-3"
-# Raw 16-bit signed little-endian PCM at 16 kHz mono — see the module docstring.
-_SAMPLE_RATE_HZ = 16000
+# Raw 16-bit signed little-endian PCM at 44.1 kHz mono. 16 kHz was telephone-band and made
+# Proxy audibly worse than every human in the room (live founder finding); 44.1 kHz is full-band,
+# Cartesia-supported, and the output-media page resamples cleanly. ONE constant, exported — the
+# page and the speak pipe derive from it so the rates can never drift apart.
+SAMPLE_RATE_HZ = 44100
+_SAMPLE_RATE_HZ = SAMPLE_RATE_HZ
 _BYTES_PER_SAMPLE = 2  # s16le, mono
 _OUTPUT_FORMAT: dict[str, str | int] = {
     "container": "raw",
@@ -116,7 +120,7 @@ class CartesiaTTS:
         key never enters the body and is never logged (AC-XCUT-02).
 
         The streamed response bytes are collected and re-framed into ≤ ``tts_chunk_ms``
-        PCM chunks (16 kHz s16le mono ⇒ 32 bytes/ms) so a surviving in-flight chunk
+        PCM chunks (44.1 kHz s16le mono ⇒ ~88 bytes/ms) so a surviving in-flight chunk
         can't defeat the mid-word cut (AC-SPEAK-08 / AC-TURN-10). A non-2xx raises
         (honest degrade, Law 2 — retried/absorbed by the seam and the never-throw
         delivery boundary above); the return is EXACTLY the audio Cartesia streamed,

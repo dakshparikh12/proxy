@@ -7,7 +7,7 @@ headless browser and streams the PAGE — its canvas and its audio — into the
 meeting as the bot's camera + microphone. This module is that missing surface:
 
 * ``OutputMediaChannel`` — the server-side handle the speak path writes into:
-  ``write_audio(pcm)`` enqueues raw PCM (s16le, 16 kHz, mono — the format the
+  ``write_audio(pcm)`` enqueues raw PCM (s16le, 44.1 kHz, mono — the format the
   speech synth emits) and ``set_speaking(bool)`` drives the orb pulse.
 * ``build_output_media_router()`` / ``router`` — the FastAPI router serving
   ``GET /output-media/{meeting_id}`` (the orb page, one inline HTML string —
@@ -59,7 +59,7 @@ __all__ = [
     "router",
 ]
 
-#: Cap on buffered outbound frames per meeting. At ~100 ms of 16 kHz s16le per
+#: Cap on buffered outbound frames per meeting. At ~100 ms of 44.1 kHz s16le per
 #: chunk, 256 frames is ~25 s of audio — ample for a page reconnect window,
 #: bounded against a page that never comes back.
 MAX_BUFFERED_FRAMES: Final[int] = 256
@@ -102,7 +102,7 @@ class OutputMediaChannel:
     # -- the speak-path surface ---------------------------------------------
 
     async def write_audio(self, pcm: bytes) -> None:
-        """Enqueue one raw PCM chunk (s16le, 16 kHz, mono) for the page.
+        """Enqueue one raw PCM chunk (s16le, 44.1 kHz, mono) for the page.
 
         While muted (C5) the enqueue is DROPPED — no PCM plays into the room until unmute
         lifts the flag (Law 3, human control is absolute)."""
@@ -287,11 +287,11 @@ _PAGE_TEMPLATE: Final[str] = """<!DOCTYPE html>
 <script>
 "use strict";
 const WS_PATH = __WS_PATH__;
-const SAMPLE_RATE = 16000;
+const SAMPLE_RATE = 44100;
 const orb = document.getElementById("orb");
 // Recall's headless browser allows autoplay; resume() also covers any
 // browser that starts the context suspended.
-const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 audioCtx.resume();
 // Small jitter/lead-in buffer (seconds): the FIRST chunk of a fresh utterance is
 // scheduled this far AHEAD of now, not at now. Cartesia streams a sentence at a
@@ -314,7 +314,7 @@ function playChunk(arrayBuffer) {
   const int16 = new Int16Array(arrayBuffer, 0, sampleCount);
   const floats = new Float32Array(sampleCount);
   for (let i = 0; i < sampleCount; i++) { floats[i] = int16[i] / 32768; }
-  // The buffer declares 16 kHz itself, so even if the context ended up at a
+  // The buffer declares 44.1 kHz itself, so even if the context ended up at a
   // different hardware rate, WebAudio resamples on playback.
   const buffer = audioCtx.createBuffer(1, sampleCount, SAMPLE_RATE);
   buffer.getChannelData(0).set(floats);
