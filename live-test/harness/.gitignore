@@ -1,0 +1,3 @@
+# harness run artifacts (bundles, SAID logs, wake records) — generated, not source
+live-runs/
+__pycache__/

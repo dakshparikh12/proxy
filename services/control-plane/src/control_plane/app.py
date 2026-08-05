@@ -190,6 +190,14 @@ def create_app() -> FastAPI:
     from .meetings_route import install_meetings_route
 
     install_meetings_route(app, session_resolver=_resolve_session_from_request)
+    # The MONITORED-smoke taps (dev-only, gated by the internal admin bearer, NOT a user session):
+    # POST /admin/test-provision drives the REAL invite_proxy without the Google-OAuth wall so a
+    # headless smoke can put Proxy into a real Meet; GET /admin/transcript surfaces the live sandbox
+    # MEETING_NOTES.md so the harness can SEE what Proxy heard. Both fail CLOSED (401) unless
+    # PROXY_INTERNAL_TOKEN is provisioned, so they are inert on any process without that bearer.
+    from .dev_smoke_routes import install_dev_smoke_routes
+
+    install_dev_smoke_routes(app)
     # The in-sandbox meeting MCP relay receiver (SPEC §4/§5): POST /meetings/{id}/relay. Native
     # Claude in the per-meeting sandbox reaches the live room through its ONE ``to_meeting`` tool;
     # the in-sandbox MCP server POSTs each call here, authenticated by the per-meeting relay bearer

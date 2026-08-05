@@ -384,3 +384,125 @@ def _reset_sandbox_mcp_env() -> None:
 
     import in_meeting.sandbox_meeting_mcp as mcp
     importlib.reload(mcp)
+
+
+# ── wake-record bridge: the DID trace reaches a HOST dir the monitor reads ─────────
+
+
+def _warm_sandbox_serving(record: dict[str, Any]) -> Any:
+    """A fake warm sandbox that serves ``record`` as the per-wake result (host-ready, tails WAKE_IN)."""
+    from in_meeting.workroom import HOST_READY_FILE, WAKE_IN, WAKE_OUT
+
+    class _WarmSandbox:
+        def __init__(self) -> None:
+            self._store: dict[str, str] = {HOST_READY_FILE: "1"}
+            self.sandbox_id = "s"
+            outer = self
+
+            class _Files:
+                async def write(self, path: str, content: str) -> None:
+                    outer._store[path] = content
+
+                async def read(self, path: str) -> str:
+                    if path not in outer._store:
+                        raise FileNotFoundError(path)
+                    return outer._store[path]
+
+            class _Cmds:
+                async def run(self, cmd: str, timeout: int | None = None,
+                              envs: dict[str, str] | None = None,
+                              background: bool = False) -> Any:
+                    if ">>" in cmd and WAKE_IN in cmd:
+                        argv = shlex.split(cmd[cmd.index("printf"):cmd.index(" >>")])
+                        req = json.loads(argv[-1])
+                        outer._store[f"{WAKE_OUT}/{req['id']}.json"] = json.dumps(record)
+                    return SimpleNamespace(exit_code=0, stdout="DONE", stderr="")
+
+            self.files = _Files()
+            self.commands = _Cmds()
+
+    return _WarmSandbox()
+
+
+def test_wake_record_is_mirrored_to_the_host_dir_the_monitor_reads(tmp_path) -> None:
+    """The DID trace is written INSIDE the sandbox (``$PROXY_WAKE_OUT/<id>.json``); the harness
+    monitor reads a HOST dir. The bridge: as ``run_ask`` reads a record out of the sandbox it MIRRORS
+    the raw JSON into ``wake_out_mirror`` on the host — so the tools/cache-vs-read/timing/sent trace
+    reaches the monitor. This proves the mirror lands a parseable record on disk."""
+    from in_meeting.workroom import Workroom
+
+    record = {
+        "tools": ["to_meeting"], "text": "Entry is app/main.py:12.", "turns": 1,
+        "cost_usd": 0.02, "error": None, "deliver_at": 1.1, "ttft": 0.7,
+        "sent": [{"content": "Entry is app/main.py:12.", "medium": "say", "to": ""}],
+        "_served_at": 1000.0,
+    }
+    mirror = tmp_path / "wake_out"
+
+    async def _run() -> None:
+        wr = Workroom(
+            sandbox=_warm_sandbox_serving(record), call=_passthru_call, token="t",
+            warm=True, wake_out_mirror=str(mirror),
+        )
+        res = await wr.run_ask("where is the entrypoint?")
+        assert res.error is None and res.text == "Entry is app/main.py:12."
+
+    asyncio.run(_run())
+
+    # The record landed on the HOST dir, keyed by a wake id, and round-trips through the raw JSON.
+    mirrored = list(mirror.glob("*.json"))
+    assert len(mirrored) == 1, f"expected one mirrored record, got {mirrored}"
+    on_disk = json.loads(mirrored[0].read_text(encoding="utf-8"))
+    assert on_disk["tools"] == ["to_meeting"]
+    assert on_disk["sent"][0]["medium"] == "say"
+    assert on_disk["_served_at"] == 1000.0
+
+
+def test_wake_mirror_is_a_no_op_when_unset(tmp_path, monkeypatch) -> None:
+    """With no mirror configured (production default) the bridge is inert — no host write, and the
+    turn is unaffected. Guards against the tap leaking records off a normal deployment."""
+    monkeypatch.delenv("PROXY_WAKE_OUT_MIRROR", raising=False)
+    monkeypatch.delenv("PROXY_WAKE_OUT", raising=False)
+    from in_meeting.workroom import Workroom
+
+    record = {"tools": [], "text": "", "turns": 1, "cost_usd": 0.0, "error": None, "sent": []}
+
+    async def _run() -> None:
+        wr = Workroom(sandbox=_warm_sandbox_serving(record), call=_passthru_call, token="t",
+                      warm=True)
+        assert wr.wake_out_mirror == ""      # nothing configured → no mirror
+        res = await wr.run_ask("hi")
+        assert res.error is None
+
+    asyncio.run(_run())
+    assert not list(tmp_path.glob("*.json"))  # nothing written to the host
+
+
+def test_read_transcript_surfaces_the_sandbox_notes(tmp_path) -> None:
+    """The HEARD tap reads the sandbox ``MEETING_NOTES.md`` host-side; a read fault degrades to ""."""
+    from in_meeting.workroom import TRANSCRIPT_FILE, Workroom
+
+    class _NotesSandbox:
+        def __init__(self, body: str | None) -> None:
+            self._body = body
+            self.sandbox_id = "s"
+            outer = self
+
+            class _Files:
+                async def read(self, path: str) -> str:
+                    if outer._body is None or path != TRANSCRIPT_FILE:
+                        raise FileNotFoundError(path)
+                    return outer._body
+
+            self.files = _Files()
+
+    async def _run() -> None:
+        wr = Workroom(sandbox=_NotesSandbox("# Meeting transcript\n[10] Riya: hi proxy\n"),
+                      call=_passthru_call, token="t")
+        got = await wr.read_transcript()
+        assert "Riya: hi proxy" in got
+        # a read fault is an honest "" (the monitor records the gap), never a raise:
+        wr2 = Workroom(sandbox=_NotesSandbox(None), call=_passthru_call, token="t")
+        assert await wr2.read_transcript() == ""
+
+    asyncio.run(_run())

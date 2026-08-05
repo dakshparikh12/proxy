@@ -164,9 +164,10 @@ def test_redelivered_in_call_is_idempotent_no_second_claim(monkeypatch) -> None:
     asyncio.run(_run())
 
 
-def test_non_in_call_event_and_unknown_bot_are_safe_no_ops(monkeypatch) -> None:
-    """A non-in_call event, a payload with no bot, and an unresolvable bot each no-op with
-    claimed=False and never raise on the webhook path."""
+def test_non_liveness_event_and_unknown_bot_are_safe_no_ops(monkeypatch) -> None:
+    """A non-liveness event (bot-status noise / an ended event), a payload with no bot, and
+    an unresolvable bot each no-op with claimed=False and never raise on the webhook path.
+    (A transcript event IS a liveness signal and provisions — dedicated test below.)"""
     from control_plane import provisioner
     from libs.db import repos
 
@@ -174,11 +175,19 @@ def test_non_in_call_event_and_unknown_bot_are_safe_no_ops(monkeypatch) -> None:
 
     async def _run() -> None:
         registry = MeetingRuntimeRegistry(_FakeDB())
-        # not an in_call event:
+        # not a liveness event — status noise / ended events never provision:
         o1 = await provisioner.provision_meeting(
-            {"event": "bot.transcript", "data": {"bot_id": "b"}}, db=_FakeDB(), registry=registry
+            {"event": "recording.started", "data": {"bot_id": "b"}},
+            db=_FakeDB(),
+            registry=registry,
         )
         assert o1.claimed is False
+        o1b = await provisioner.provision_meeting(
+            {"event": "bot.call_ended", "data": {"bot_id": "b"}},
+            db=_FakeDB(),
+            registry=registry,
+        )
+        assert o1b.claimed is False
         # in_call but no bot id:
         o2 = await provisioner.provision_meeting(
             {"event": "in_call", "data": {}}, db=_FakeDB(), registry=registry
@@ -193,6 +202,57 @@ def test_non_in_call_event_and_unknown_bot_are_safe_no_ops(monkeypatch) -> None:
             _in_call_payload(), db=_FakeDB(), registry=registry
         )
         assert o3.claimed is False
+
+    asyncio.run(_run())
+
+
+def test_transcript_event_is_liveness_and_provisions(monkeypatch) -> None:
+    """THE general liveness contract: a realtime transcript delivery for a bot WE launched
+    provisions the runtime exactly like an in_call — Recall only sends bot-status to the
+    account-level dashboard webhook (a per-deployment config the product must not depend
+    on), so the first per-bot realtime event must claim + provision. AND the words that
+    event carries — the meeting's first utterance — must reach the wired session (the
+    drain could not feed them: no runtime existed when it dispatched)."""
+    from control_plane import provisioner
+
+    class _RecordingSession:
+        def __init__(self) -> None:
+            self.lines: list[tuple[str, str, float, bool]] = []
+
+        async def on_line(
+            self, speaker: str, text: str, *, ts: float = 0.0, is_chat: bool = False
+        ) -> None:
+            self.lines.append((speaker, text, ts, is_chat))
+
+    sess = _RecordingSession()
+    calls = _install_fakes(
+        monkeypatch,
+        claim_result="run-1",
+        assemble_result=(sess, SimpleNamespace(), None, SimpleNamespace()),
+    )
+
+    async def _run() -> None:
+        registry = MeetingRuntimeRegistry(_FakeDB())
+        # the REAL realtime envelope: bot nested as an object + the utterance under data.data
+        outcome = await provisioner.provision_meeting(
+            {
+                "event": "transcript.data",
+                "data": {
+                    "bot": {"id": "bot-1"},
+                    "data": {
+                        "words": [{"text": "Hey"}, {"text": "Proxy,"}, {"text": "hello?"}],
+                        "participant": {"name": "Riya"},
+                    },
+                },
+            },
+            db=_FakeDB(),
+            registry=registry,
+        )
+        assert outcome.claimed is True
+        assert calls["claim"] == 1
+        assert registry.get("m-1") is not None  # the runtime is live
+        # the trigger utterance reached the session, chronologically first, voice-rule
+        assert sess.lines == [("Riya", "Hey Proxy, hello?", 0.0, False)]
 
     asyncio.run(_run())
 

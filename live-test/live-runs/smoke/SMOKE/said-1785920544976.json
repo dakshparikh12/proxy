@@ -1,0 +1,17 @@
+{
+  "checkpoint": "SMOKE",
+  "started_at": 1785920544.9767418,
+  "finished_at": 1785920545.954565,
+  "said": [
+    {
+      "timestamp": "T+00:00",
+      "speaker": "Riya",
+      "gate": "speak-now",
+      "line": "Proxy, can you hear me?",
+      "channel_id": "riya",
+      "chunks_written": 10,
+      "played_at": 1785920545.954551,
+      "note": ""
+    }
+  ]
+}

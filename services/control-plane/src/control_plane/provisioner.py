@@ -63,10 +63,17 @@ SANDBOX_KEEPWARM_INTERVAL_S: float = 1800.0
 # provisions the sandbox with its own PROVISION_TIMEOUT_S; the beat re-extends by this).
 SANDBOX_TIMEOUT_S: float = 3600.0
 
-# Recall bot-status event names that mean "the bot is now IN the room" — the moment the
-# harness claims + provisions the per-meeting runtime (mirrors ``control_plane.webhooks``).
+# Recall LIVENESS event names — any of these proves the meeting is live and claims +
+# provisions the per-meeting runtime (mirrors ``control_plane.webhooks``). Bot-status
+# ``in_call`` arrives ONLY via Recall's account-level dashboard webhook (a per-deployment
+# configuration this product must not depend on), so the realtime transcript/chat events —
+# which ride the per-bot ``realtime_endpoints`` we set at join — count as liveness too.
+# The atomic claim keeps a burst of these idempotent; end-events NEVER provision.
 _IN_CALL_EVENTS = frozenset(
     {"bot.in_call", "in_call", "bot.in_call_recording", "bot.joining_call"}
+)
+_LIVENESS_EVENTS = _IN_CALL_EVENTS | frozenset(
+    {"transcript.data", "transcript", "bot.transcript", "participant_events.chat_message"}
 )
 
 
@@ -107,11 +114,41 @@ def _event_name(payload: dict[str, Any]) -> str:
 
 
 def _bot_id(payload: dict[str, Any]) -> str | None:
+    """The Recall ``bot_id`` from the callback body — tolerant of ALL real envelopes
+    (mirrors ``control_plane.webhooks._bot_id``): the flat ``bot_id`` forms (bot-status
+    events) AND the nested ``data.bot.id`` object the realtime transcript/chat envelopes
+    carry. The liveness provision (transcript-triggered) depends on the nested shape."""
     data = payload.get("data")
     if isinstance(data, dict) and data.get("bot_id"):
         return str(data["bot_id"])
+    if isinstance(data, dict):
+        bot = data.get("bot")
+        if isinstance(bot, dict) and bot.get("id"):
+            return str(bot["id"])
     if payload.get("bot_id"):
         return str(payload["bot_id"])
+    return None
+
+
+def _liveness_line(payload: dict[str, Any]) -> tuple[str, str, float, bool] | None:
+    """The ``(speaker, text, ts, is_chat)`` a liveness payload carries, or ``None`` (an in_call).
+
+    The FIRST transcript/chat delivery both provisions the meeting AND carries the meeting's
+    first words — the drain cannot feed them (no runtime existed when it dispatched), so the
+    provision path ingests them itself. Reuses the drain's own tolerant parsers so the two
+    paths can never disagree about a payload's shape."""
+    from control_plane import webhooks as _wh
+
+    name = _event_name(payload)
+    if name in _wh._TRANSCRIPT_EVENTS:  # noqa: SLF001 - the drain's own parser set, shared on purpose
+        line = _wh._transcript_line(_wh._transcript_body(payload))  # noqa: SLF001
+        if line is not None:
+            speaker, text, ts = line
+            return (speaker, text, ts, False)
+    if name in _wh._CHAT_EVENTS:  # noqa: SLF001
+        chat = _wh._chat_line(payload)  # noqa: SLF001
+        if chat is not None:
+            return (chat[0], chat[1], 0.0, True)
     return None
 
 
@@ -377,7 +414,7 @@ async def provision_meeting(
     ``oauth_token``) are the vendor seams — ``None`` everywhere means the REAL production
     edges (RecallTransport, Cartesia speak pipe, the subscription token from env).
     """
-    if _event_name(payload) not in _IN_CALL_EVENTS:
+    if _event_name(payload) not in _LIVENESS_EVENTS:
         return ProvisionOutcome(claimed=False)
 
     bot_id = _bot_id(payload)
@@ -401,11 +438,31 @@ async def provision_meeting(
         db, meeting_id, MEETING_HARNESS_OP, created_by=db.instance_id
     )
     if run_id is None:
-        return ProvisionOutcome(claimed=False)  # lost the race — back off, no harness
+        # Lost the race — back off, no second harness. But a lost claim can still CARRY the
+        # meeting's words (two liveness lines racing the first provision): hand the line to
+        # the winner's runtime when it is visible so no words are dropped.
+        lost_line = _liveness_line(payload)
+        winner = registry.get(meeting_id)
+        if lost_line is not None and winner is not None:
+            await winner.ingest_line(
+                lost_line[0], lost_line[1], ts=lost_line[2], is_chat=lost_line[3]
+            )
+        return ProvisionOutcome(claimed=False)
 
     handle = OperationHandle(db, run_id, meeting_id, MEETING_HARNESS_OP)
     runtime = MeetingRuntime(meeting_id=meeting_id, operation_handle=handle)
     registry.register(runtime)
+
+    # The liveness event that triggered this provision often carries the meeting's FIRST
+    # words (a transcript/chat delivery — see _LIVENESS_EVENTS). Ingest them NOW: the session
+    # is not wired yet, so they land in the pre-wire buffer, chronologically first, and
+    # wire_session flushes them into the reactive loop when assembly completes. The drain
+    # could not feed them — no runtime existed when it dispatched this payload.
+    trigger = _liveness_line(payload)
+    if trigger is not None:
+        await runtime.ingest_line(
+            trigger[0], trigger[1], ts=trigger[2], is_chat=trigger[3]
+        )
 
     # Provision the workroom + build the connection + wire the session. A provision fault
     # must never strand the claimed meeting OR crash the webhook path — it degrades to a
@@ -430,10 +487,15 @@ async def provision_meeting(
             exc_info=True,
         )
     else:
-        runtime.session = session
         runtime.workroom = workroom
         runtime.connection = connection
         runtime.speak_pipe = speak_pipe
+        # wire_session (not bare assignment): attaches the session AND flushes every line
+        # buffered while assembly ran — including the liveness utterance that triggered this
+        # very provision — so the words that raced the join reach the wake gate. A session-
+        # less assembly (degraded boot) keeps the buffer; nothing to flush into.
+        if session is not None:
+            await runtime.wire_session(session)
         if workroom is not None:
             # Keep-warm: a meeting has no time cap, so the 1h-lifetime sandbox is
             # periodically re-extended while the meeting is live. Cancelled at meeting end

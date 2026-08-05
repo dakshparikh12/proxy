@@ -242,6 +242,23 @@ class Workroom:
     #: Latches True once the host's readiness breadcrumb is first seen — so only the FIRST wake pays
     #: the readiness wait; every later wake goes straight to the (warm) turn.
     _host_ready: bool = False
+    #: Optional HOST directory the per-wake record (the DID trace) is MIRRORED into as it is read
+    #: from the sandbox, so a host-side monitor (the live-test harness) can see the tools/cache-vs-
+    #: read/timing/sent trace WITHOUT reaching into the sandbox. Empty ⇒ no mirror (production
+    #: default — the record stays inside the isolated microVM). The mirror is a monitoring TAP, never
+    #: on the meeting path: a mirror write fault is swallowed (the room is unaffected). When unset it
+    #: defaults from ``PROXY_WAKE_OUT_MIRROR``, then ``PROXY_WAKE_OUT`` — the SAME dir the harness
+    #: monitor reads — so setting ONE env var on the control-plane host wires the bridge end to end.
+    #: (On the HOST process ``PROXY_WAKE_OUT`` is the mirror dir; the ``/tmp/wake_out`` sandbox path
+    #: is a DIFFERENT process's env, set inside the microVM by ``_start_session_host`` — no clash.)
+    wake_out_mirror: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.wake_out_mirror:
+            self.wake_out_mirror = (
+                os.environ.get("PROXY_WAKE_OUT_MIRROR", "").strip()
+                or os.environ.get("PROXY_WAKE_OUT", "").strip()
+            )
 
     @property
     def sandbox_id(self) -> str:
@@ -284,6 +301,23 @@ class Workroom:
             await self._write_file(TRANSCRIPT_FILE, transcript_md)
         except Exception:  # noqa: BLE001 — transcript sync never crashes the meeting
             logger.exception("workroom transcript sync failed (meeting continues)")
+
+    async def read_transcript(self) -> str:
+        """Read the sandbox ``MEETING_NOTES.md`` (the meeting transcript capture) as host-side text.
+
+        The session continuously feeds the live transcript into the sandbox as ``MEETING_NOTES.md``
+        (a crash/reconnect record). This host-side read surfaces that capture for MONITORING — the
+        live-test HEARD tap confirms the transcript is actually being captured (even when Proxy stays
+        silent). Best-effort: any read fault degrades to ``""`` (the monitor records the gap honestly),
+        never a raise. Rides the ONE ``call_external`` seam like every E2B round-trip."""
+        try:
+            outcome = await self.call(
+                lambda: self.sandbox.files.read(TRANSCRIPT_FILE), service="e2b"
+            )
+            return str(getattr(outcome, "value", outcome) or "")
+        except Exception:  # noqa: BLE001 — a monitoring read fault is an honest "", never a crash
+            logger.warning("workroom transcript read failed (monitoring only)", exc_info=True)
+            return ""
 
     async def run_ask(self, ask: str, *, delta: str = "") -> WorkroomResult:
         """Wake Claude in the workroom on ONE reactive ask; return the result.
@@ -535,6 +569,10 @@ class Workroom:
                     rec = json.loads(raw)
                 except json.JSONDecodeError:
                     return None  # a corrupt result → restart-and-retry (never present garbage)
+                # Monitoring TAP (never on the meeting path): mirror the raw per-wake record to the
+                # host dir so the live-test harness monitor can read the DID trace without reaching
+                # into the sandbox. A mirror fault is swallowed — the room's turn is unaffected.
+                self._mirror_wake_record(wake_id, raw)
                 return WorkroomResult(
                     ask=ask,
                     text=str(rec.get("text", "") or ""),
@@ -570,6 +608,27 @@ class Workroom:
             # hammering the E2B files API: 0.25s snappy start, 0.5s mid, 1.0s for multi-minute work.
             await asyncio.sleep(_WARM_POLL_S if elapsed < 5.0 else (0.5 if elapsed < 30.0 else 1.0))
         return None  # timed out waiting on the warm host → restart-and-retry
+
+    def _mirror_wake_record(self, wake_id: str, raw: str) -> None:
+        """Mirror one per-wake record's RAW JSON into ``wake_out_mirror`` (the host monitor dir).
+
+        The record is written INSIDE the sandbox (``$PROXY_WAKE_OUT/<id>.json``); the harness monitor
+        reads a HOST directory. This copies the record the host just read out of the sandbox onto the
+        host so the DID trace (tools / cache-vs-read / timing / sent) reaches the monitor. A no-mirror
+        deployment (``wake_out_mirror`` empty) is a no-op. Written atomically (temp + rename) so the
+        monitor never sees a half-file, and NEVER-throw: a mirror fault is logged, never raised — this
+        is a monitoring tap, not the meeting path."""
+        mirror = self.wake_out_mirror
+        if not mirror:
+            return
+        try:
+            dest_dir = pathlib.Path(mirror)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            tmp = dest_dir / f".{wake_id}.json.tmp"
+            tmp.write_text(raw, encoding="utf-8")
+            tmp.replace(dest_dir / f"{wake_id}.json")
+        except Exception:  # noqa: BLE001 — a monitoring-tap fault never affects the meeting turn
+            logger.warning("wake-record mirror to %s failed (monitoring only)", mirror, exc_info=True)
 
     async def _restart_session_host(self) -> bool:
         """Restart the WARM session host after a miss, then wait (bounded) for it to come READY —
@@ -682,6 +741,7 @@ async def provision_workroom(
     relay_url: str = "",
     relay_token: str = "",
     resume_id: str | None = None,
+    wake_out_mirror: str = "",
 ) -> Workroom:
     """Provision + seed a per-meeting workroom, warm and ready before the first ask.
 
@@ -736,7 +796,8 @@ async def provision_workroom(
                              unit_cost_usd=0.0)
         sandbox = getattr(outcome, "value", outcome)
     wr = Workroom(sandbox=sandbox, call=call, token=token,
-                  relay_url=relay_url, relay_token=relay_token)
+                  relay_url=relay_url, relay_token=relay_token,
+                  wake_out_mirror=wake_out_mirror)
 
     # Setup (idempotent; a pre-baked template / resumed snapshot makes most of this a no-op/instant):
     #  - shallow-clone the repo into REPO_DIR (fast; ~6s on cal.com)

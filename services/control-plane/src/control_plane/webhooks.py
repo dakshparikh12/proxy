@@ -242,9 +242,18 @@ async def _dispatch_meeting_event(
         # Feed each FINAL line into the meeting's reactive loop: the workroom's MEETING_NOTES.md
         # recovery record gets it (continuous), and the cheap wake gate decides whether to run a
         # reactive turn (recall itself is resident in the warm session's cache, fed the delta per
-        # wake — not this file). A transcript before the runtime is provisioned is a safe
-        # no-op (fail closed — ingest_line no-ops when the session is unwired).
+        # wake — not this file).
+        #
+        # LIVENESS PROVISION (general, §3.6): a transcript delivery for a bot WE launched is
+        # itself proof the meeting is live. Recall sends bot-status ``in_call`` only to the
+        # account-level DASHBOARD webhook — a per-deployment configuration this product must
+        # not depend on — so the FIRST liveness event claims + provisions the runtime through
+        # the same atomic-claim ``launch`` an in_call uses (idempotent: the claim arbitrates
+        # races; a loss opens no second runtime). Then the triggering line feeds normally.
         runtime = registry.get(meeting_id)
+        if runtime is None and launch is not None:
+            await launch(payload)
+            runtime = registry.get(meeting_id)
         if runtime is None:
             return
         line = _transcript_line(_transcript_body(payload))
@@ -263,8 +272,11 @@ async def _dispatch_meeting_event(
             )
     elif is_chat:
         # Meeting chat → the same reactive loop (the wake gate scans for ``@proxy``). A chat
-        # before the runtime is provisioned is a safe no-op (fail closed).
+        # is a liveness event too: first delivery provisions (same atomic-claim path).
         runtime = registry.get(meeting_id)
+        if runtime is None and launch is not None:
+            await launch(payload)
+            runtime = registry.get(meeting_id)
         if runtime is None:
             return
         chat = _chat_line(payload)

@@ -229,7 +229,10 @@ class RecallTransport:
         return bot_id
 
     async def leave(self, bot_id: str) -> None:
-        await self._call_external(lambda: self._api("POST", f"/bot/{bot_id}/leave", {}), service="recall")
+        # Recall's real endpoint is ``leave_call/`` (verified live; ``/leave`` is a 404).
+        await self._call_external(
+            lambda: self._api("POST", f"/bot/{bot_id}/leave_call/", {}), service="recall"
+        )
 
     async def post_chat(self, bot_id: str, message: str, *, pinned: bool = False) -> None:
         # Recall's real chat endpoint is ``/bot/{id}/send_chat_message/`` (trailing

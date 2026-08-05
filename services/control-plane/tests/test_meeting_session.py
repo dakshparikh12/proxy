@@ -916,3 +916,40 @@ def test_barge_in_cut_fault_never_crashes_the_meeting() -> None:
         assert len(wr.fed) == 1  # the line was still fed despite the cut fault
 
     asyncio.run(_run())
+
+
+def test_pre_wire_lines_buffer_and_flush_in_order_on_wire_session() -> None:
+    """THE join-race contract: lines that arrive BEFORE the session is wired (registration
+    precedes the ~tens-of-seconds assembly; the liveness utterance itself triggers the
+    provision) are buffered and flushed IN ORDER by wire_session — never silently dropped."""
+    import asyncio
+
+    from control_plane.meeting_runtime import MeetingRuntime
+
+    class _FakeSession:
+        def __init__(self) -> None:
+            self.lines: list[tuple[str, str, float, bool]] = []
+
+        async def on_line(
+            self, speaker: str, text: str, *, ts: float = 0.0, is_chat: bool = False
+        ) -> None:
+            self.lines.append((speaker, text, ts, is_chat))
+
+    async def _run() -> None:
+        rt = MeetingRuntime(meeting_id="m-1")
+        # pre-wire: both lines buffer (no session yet), nothing raises
+        await rt.ingest_line("Riya", "Hey Proxy, can you hear me?", ts=1.0)
+        await rt.ingest_line("Daksh", "second line", ts=2.0, is_chat=True)
+        assert len(rt.pending_lines) == 2
+        s = _FakeSession()
+        await rt.wire_session(s)  # type: ignore[arg-type]
+        assert s.lines == [
+            ("Riya", "Hey Proxy, can you hear me?", 1.0, False),
+            ("Daksh", "second line", 2.0, True),
+        ]
+        assert rt.pending_lines == []
+        # post-wire: lines feed straight through
+        await rt.ingest_line("Riya", "third", ts=3.0)
+        assert s.lines[-1] == ("Riya", "third", 3.0, False)
+
+    asyncio.run(_run())

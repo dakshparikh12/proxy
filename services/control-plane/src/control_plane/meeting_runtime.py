@@ -20,10 +20,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from .meeting_session import MeetingSession
+
+logger = logging.getLogger(__name__)
 
 # Bound on EACH meeting-end teardown step (drain the in-flight turns, flush + close the
 # speak pipe, kill the warm sandbox). Teardown must never deadlock meeting end (§3.8): a
@@ -72,6 +75,16 @@ class MeetingRuntime:
     #: meeting has no time cap, so the 1h-lifetime sandbox is periodically re-extended).
     #: Cancelled in the meeting-end teardown BEFORE the kill. ``None`` = nothing to warm.
     sandbox_keepwarm: Any = field(default=None)
+    #: Lines that arrived BEFORE the session was wired. Registration precedes the ~tens-of-
+    #: seconds workroom assembly — and the provision launch itself is triggered by the FIRST
+    #: transcript line (the liveness event) — so words that race the join, INCLUDING the very
+    #: utterance that provisioned the meeting, land here (bounded) and are flushed in order by
+    #: :meth:`wire_session`. Never silently dropped.
+    pending_lines: list[tuple[str, str, float, bool]] = field(default_factory=list)
+
+    #: Bound on the pre-wire buffer — far above anything a real join window produces; the
+    #: oldest lines drop first if a pathological flood exceeds it.
+    _PENDING_CAP: ClassVar[int] = 512
 
     async def ingest_line(
         self, speaker: str, text: str, *, ts: float = 0.0, is_chat: bool = False
@@ -80,11 +93,31 @@ class MeetingRuntime:
 
         ``is_chat`` selects the chat wake rule (``@proxy``) vs the voice rule (a spoken
         ``proxy``) — the drain sets it True for a ``participant_events.chat_message``. A line
-        before the session is wired (no workroom, or a line that raced the join) is a safe
-        no-op — never a raise on the drain path."""
+        before the session is wired is BUFFERED (bounded) and flushed by :meth:`wire_session`
+        when assembly completes — never dropped, never a raise on the drain path."""
         if self.session is None:
+            self.pending_lines.append((speaker, text, ts, is_chat))
+            if len(self.pending_lines) > self._PENDING_CAP:
+                del self.pending_lines[0 : len(self.pending_lines) - self._PENDING_CAP]
             return
         await self.session.on_line(speaker, text, ts=ts, is_chat=is_chat)
+
+    async def wire_session(self, session: MeetingSession) -> None:
+        """Attach the assembled session and flush every buffered pre-wire line, in order.
+
+        The ONE way the provisioner attaches a session: assignment + flush live together so
+        no caller can wire a session and strand the buffer. A flush fault on one line is
+        logged and the rest still feed (never-raise on the drain path)."""
+        self.session = session
+        pending, self.pending_lines = self.pending_lines, []
+        for speaker, text, ts, is_chat in pending:
+            try:
+                await session.on_line(speaker, text, ts=ts, is_chat=is_chat)
+            except Exception:  # noqa: BLE001 - one bad line never strands the rest
+                logger.exception(
+                    "pre-wire line flush failed on meeting %s (line dropped, rest continue)",
+                    self.meeting_id,
+                )
 
 
 class MeetingRuntimeRegistry:
