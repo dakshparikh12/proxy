@@ -102,6 +102,18 @@ class MeetingRuntime:
             return
         await self.session.on_line(speaker, text, ts=ts, is_chat=is_chat)
 
+    async def ingest_partial(self, speaker: str, text: str, *, ts: float = 0.0) -> None:
+        """Feed ONE non-final (partial) transcript line for BARGE-IN ONLY (BUG 3, Law 3).
+
+        A partial is the earliest signal a human has started talking (~0.5-1.5s before the final
+        line). It exists solely to CUT Proxy's active speech the instant a human interjects — it is
+        NOT fed as transcript, never wakes, never provisions. Dropped when no session is wired yet: a
+        partial can only barge in on active speech, which cannot exist before the session runs. Never
+        raises on the drain path."""
+        if self.session is None:
+            return
+        await self.session.on_partial(speaker, text, ts=ts)
+
     async def wire_session(self, session: MeetingSession) -> None:
         """Attach the assembled session and flush every buffered pre-wire line, in order.
 

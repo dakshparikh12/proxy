@@ -175,6 +175,15 @@ class _SpeakSink:
 
     pipe: Any
 
+    @property
+    def speaking(self) -> bool:
+        """Forward the underlying ``SpeakPipe.speaking`` state (BUG 3). The barge-in guard in
+        :meth:`MeetingSession.on_line` reads ``connection.speak.speaking`` to decide whether a human
+        interjection lands mid-utterance — without this forward it read a wrapper with no ``speaking``
+        attribute (always False), so a real barge-in NEVER fired on the live path. False when the pipe
+        exposes no ``speaking`` (honest degrade)."""
+        return bool(getattr(self.pipe, "speaking", False))
+
     async def say(self, text: str) -> None:
         await self.pipe.say(text)
         flush = getattr(self.pipe, "flush", None)

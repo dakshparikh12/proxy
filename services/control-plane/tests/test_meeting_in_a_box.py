@@ -48,14 +48,22 @@ _REAL_ENVELOPE: dict[str, Any] = json.loads(
 )
 
 
-def _transcript_webhook(bot_id: str, words: str, speaker: str, ts: float) -> dict[str, Any]:
+def _transcript_webhook(bot_id: str, words: str, speaker: str, ts: float,
+                        *, event: str = "transcript.data") -> dict[str, Any]:
     payload = copy.deepcopy(_REAL_ENVELOPE)
+    payload["event"] = event
     payload["data"]["bot"]["id"] = bot_id
     payload["data"]["data"]["words"] = [
         {"text": w, "start_timestamp": {"relative": ts}} for w in words.split()
     ]
     payload["data"]["data"]["participant"]["name"] = speaker
     return payload
+
+
+def _partial_webhook(bot_id: str, words: str, speaker: str, ts: float) -> dict[str, Any]:
+    """A NON-FINAL (partial) transcript webhook — the real-shape envelope with the partial event
+    name Recall subscribes to. Used to prove the BUG-3 barge-in reflex fires on human onset."""
+    return _transcript_webhook(bot_id, words, speaker, ts, event="transcript.partial_data")
 
 
 # The record the FAKE session host writes into WAKE_OUT/<id>.json — exactly the shape session_host.py
@@ -94,6 +102,8 @@ class _FakeCommands:
         self._wake_in = WAKE_IN
         self._wake_out = WAKE_OUT
         self._beat = 0.0
+        #: Override the served turn record (BUG 2 silent turn = ``sent=[]``); None ⇒ the voice answer.
+        self.next_record: dict[str, Any] | None = None
 
     async def run(self, cmd: str, timeout: int | None = None,
                   envs: dict[str, str] | None = None,
@@ -109,7 +119,10 @@ class _FakeCommands:
             # Advance the heartbeat each wake so the dead-host watch never trips.
             self._beat += 1.0
             self._store[self._ready_file] = str(self._beat)
-            record = {
+            # The served turn record. Default: the agent replied by voice. A SILENT turn (BUG 2) sets
+            # ``sent=[]`` — exactly the record the real session_host writes when it emitted the sentinel
+            # and delivered nothing — so the box proves a silent turn produces NO PCM.
+            record = dict(self.next_record) if self.next_record is not None else {
                 "tools": ["to_meeting"],
                 "text": _ANSWER,
                 "turns": 1,
@@ -383,3 +396,114 @@ def test_meeting_in_a_box_full_chain(monkeypatch, tmp_path) -> None:
         # never leak the per-meeting channel across tests
         from in_meeting import output_media
         output_media.close_channel("m-in-a-box")
+
+
+async def _provision_live(db: "FakeDB", registry: Any, launch: Any, *, bot_id: str,
+                          meeting_id: str) -> Any:
+    """Drive the real drain+provision path to a live, wired runtime (shared box setup)."""
+    from control_plane.webhooks import drain_pending_webhooks
+
+    db.land(_transcript_webhook(bot_id, "Hey Proxy can you hear me just say hi back", "Riya", 1.0))
+    await drain_pending_webhooks(db, registry=registry, launch=launch)
+    for _ in range(400):
+        rt = registry.get(meeting_id)
+        if rt is not None and rt.session is not None and rt.workroom is not None and rt.session.results:
+            break
+        await asyncio.sleep(0.02)
+    return registry.get(meeting_id)
+
+
+def test_meeting_in_a_box_silent_turn_produces_no_pcm(monkeypatch, tmp_path) -> None:
+    """BUG 2, end to end in the box: a SILENT turn (the host emitted the sentinel and delivered
+    nothing → record ``sent=[]``) reaches the room as ZERO new PCM — the room hears nothing. The
+    silent-judgment path never touches the speak channel."""
+    FakeSandbox.created_kwargs.clear()
+    from control_plane.meeting_runtime import MeetingRuntimeRegistry
+    from control_plane.provisioner import make_provision_launcher
+    from control_plane.webhooks import drain_pending_webhooks
+    from in_meeting import output_media
+
+    bot_id, meeting_id = "bot-silent-1", "m-box-silent"
+    db = FakeDB()
+    _wire_fakes(monkeypatch, db, bot_id=bot_id, meeting_id=meeting_id)
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://proxy.example.com")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-oauth-test")
+    monkeypatch.setenv("PROXY_WARM_PROVISION_WAIT_S", "5")
+    monkeypatch.setenv("PROXY_WARM_READY_TIMEOUT_S", "5")
+
+    async def _run() -> None:
+        registry = MeetingRuntimeRegistry(db)
+        launch = make_provision_launcher(db, registry, timeout_s=30.0)
+        runtime = await _provision_live(db, registry, launch, bot_id=bot_id, meeting_id=meeting_id)
+        assert runtime is not None and runtime.session.results, "meeting is live"
+
+        # Now a cross-talk line names 'proxy' incidentally → the host judges silence (sent=[]).
+        runtime.workroom.sandbox.commands.next_record = {
+            "tools": [], "text": "[SILENT]", "turns": 1, "cost_usd": 0.0, "error": None, "sent": [],
+        }
+        channel = output_media.channel_for(meeting_id)
+        frames_before = len(list(channel._frames))
+
+        db.land(_transcript_webhook(bot_id, "our proxy server keeps dropping connections", "Riya", 9.0))
+        await drain_pending_webhooks(db, registry=registry, launch=launch)
+        await runtime.session.drain()
+
+        # The silent turn ran (a result recorded) but delivered NOTHING — no new PCM on the channel.
+        assert len(runtime.session.results) == 2, "the wake ran"
+        assert runtime.session.results[-1].sent == [], "the host judged silence (no intents)"
+        frames_after = list(channel._frames)
+        new_pcm = [f for f in frames_after[frames_before:] if isinstance(f, bytes) and f]
+        assert new_pcm == [], "a silent turn produced NO new PCM — the room heard nothing"
+
+    try:
+        asyncio.run(_run())
+    finally:
+        from in_meeting import output_media as _om
+        _om.close_channel(meeting_id)
+
+
+def test_meeting_in_a_box_partial_barges_in_and_cuts_the_pipe(monkeypatch, tmp_path) -> None:
+    """BUG 3, end to end in the box: while Proxy is mid-utterance, a NON-FINAL (partial) transcript
+    webhook — the earliest human-onset signal — drives the real barge-in reflex through the drain and
+    CUTS the real SpeakPipe (speaking goes False; the cut latch is up), without waking or feeding."""
+    FakeSandbox.created_kwargs.clear()
+    from control_plane.meeting_runtime import MeetingRuntimeRegistry
+    from control_plane.provisioner import make_provision_launcher
+    from control_plane.webhooks import drain_pending_webhooks
+    from in_meeting import output_media
+
+    bot_id, meeting_id = "bot-partial-1", "m-box-partial"
+    db = FakeDB()
+    _wire_fakes(monkeypatch, db, bot_id=bot_id, meeting_id=meeting_id)
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://proxy.example.com")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-oauth-test")
+    monkeypatch.setenv("PROXY_WARM_PROVISION_WAIT_S", "5")
+    monkeypatch.setenv("PROXY_WARM_READY_TIMEOUT_S", "5")
+
+    async def _run() -> None:
+        registry = MeetingRuntimeRegistry(db)
+        launch = make_provision_launcher(db, registry, timeout_s=30.0)
+        runtime = await _provision_live(db, registry, launch, bot_id=bot_id, meeting_id=meeting_id)
+        assert runtime is not None, "meeting is live"
+
+        # Stage Proxy mid-utterance: push audio through the REAL speak pipe so ``speaking`` is True.
+        pipe = runtime.speak_pipe
+        await pipe.say("I am currently explaining something long ")
+        # The pipe is now synthesizing/queued → speaking True (the barge-in guard reads this).
+        assert runtime.connection.speak.speaking is True, "Proxy is audibly speaking"
+
+        # A human talks over Proxy — a PARTIAL webhook arrives first (~1s before the final). It must
+        # drive the barge-in reflex and cut the pipe NOW.
+        db.land(_partial_webhook(bot_id, "wait hold on that is not right", "Riya", 12.0))
+        await drain_pending_webhooks(db, registry=registry, launch=launch)
+
+        assert runtime.connection.speak.speaking is False, "the partial cut the active speech"
+        assert runtime.connection.cut_latched is True, "the barge-in latch is up"
+        # The partial neither woke nor fed a transcript line (barge-in only).
+        assert len(runtime.session.results) == 1, "the partial did NOT wake a new turn"
+
+    try:
+        asyncio.run(_run())
+    finally:
+        from in_meeting import output_media as _om
+        _om.close_channel(meeting_id)

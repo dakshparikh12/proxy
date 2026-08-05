@@ -16,6 +16,7 @@ The load-bearing invariants proven here:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import pathlib
 import shlex
@@ -94,6 +95,67 @@ def test_warm_hit_returns_the_same_workroom_result_shape() -> None:
         assert res.cost_usd == 0.02
         assert res.error is None
         assert res.sent == [{"content": "found it at a.py:3", "medium": "say", "to": ""}]
+
+    asyncio.run(_run())
+
+
+def test_warm_result_surfaces_queued_ms_for_the_queue_latency_battery() -> None:
+    """BUG 5: the host records QUEUE LATENCY (how long a wake sat behind an in-flight turn on the
+    single-flight warm session); the driver surfaces it on WorkroomResult.queued_ms so the live
+    battery can assert the feed→turn-start gap."""
+    from in_meeting.workroom import Workroom
+
+    record = {"tools": [], "text": "ok", "turns": 1, "cost_usd": 0.0, "error": None,
+              "sent": [], "queued_ms": 31200.0}
+
+    async def _run() -> None:
+        wr = Workroom(sandbox=_WarmSandbox(record), call=_passthru_call, token="t", warm=True)
+        res = await wr.run_ask("q")
+        assert res.queued_ms == 31200.0
+
+    asyncio.run(_run())
+
+
+def test_session_host_serve_stamps_queued_ms_from_queued_at(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """BUG 5: the session host computes ``queued_ms`` from the driver's ``queued_at`` enqueue stamp
+    — the honest measure of the single-flight queue wait. A missing/old stamp degrades to 0.0."""
+    import time as _time
+
+    import in_meeting.session_host as sh
+
+    monkeypatch.setattr(sh, "WAKE_IN", str(tmp_path / "wake_in.jsonl"))
+    monkeypatch.setattr(sh, "WAKE_OUT", str(tmp_path / "wake_out"))
+    served: list[dict[str, Any]] = []
+
+    async def _fake_run_turn(client: Any, prompt: str) -> dict[str, Any]:
+        return {"tools": [], "text": "ok", "turns": 1, "cost_usd": 0.0, "error": None, "sent": []}
+
+    monkeypatch.setattr(sh, "_run_turn", _fake_run_turn)
+
+    def _fake_write(wake_id: str, record: dict[str, Any]) -> None:
+        served.append(record)
+
+    monkeypatch.setattr(sh, "_write_result", _fake_write)
+
+    # Enqueue one wake stamped 0.2s ago, then run _serve just long enough to serve it.
+    wake_in = pathlib.Path(sh.WAKE_IN)
+    wake_in.parent.mkdir(parents=True, exist_ok=True)
+    queued_at = _time.time() - 0.2
+    wake_in.write_text(json.dumps({"id": "w1", "prompt": "p", "queued_at": queued_at}) + "\n",
+                       encoding="utf-8")
+
+    async def _run() -> None:
+        task = asyncio.ensure_future(sh._serve(object()))
+        for _ in range(50):
+            if served:
+                break
+            await asyncio.sleep(0.02)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        assert served, "the wake was served"
+        assert served[0]["queued_ms"] >= 150.0, "queued_ms reflects the ~0.2s the wake sat queued"
 
     asyncio.run(_run())
 
@@ -719,6 +781,154 @@ def test_session_host_opener_suppressed_when_model_mid_stream_at_budget(
         assert says == ["Sure, here's the lay of the land."], "only the model's own words are spoken"
 
     asyncio.run(_run())
+
+
+# ── BUG 1: never speak markdown syntax or a raw URL ──────────────────────────────
+
+
+def test_sanitize_for_voice_drops_urls_and_markdown_syntax() -> None:
+    """BUG 1 unit. The voice sanitizer strips markdown syntax and never lets a URL through to TTS —
+    it does NOT try to read markdown beautifully, only ensures the room never hears literal `**` or a
+    forecast.weather.gov query string read out character by character (the live failure)."""
+    import in_meeting.session_host as sh
+
+    assert sh._sanitize_for_voice("It's **82°F** right now") == "It's 82°F right now"
+    assert sh._sanitize_for_voice("`Context` is at context.go:61") == "Context is at context.go:61"
+    # A markdown link keeps only the human label; the URL is never spoken.
+    assert sh._sanitize_for_voice(
+        "See the [NWS 7-Day Forecast](https://forecast.weather.gov/MapClick.php?x=1&y=2)."
+    ) == "See the NWS 7-Day Forecast."
+    # A bare URL is dropped (never read out as characters).
+    assert sh._sanitize_for_voice(
+        "Sources: https://forecast.weather.gov/MapClick.php?CityName=Santa+Clara"
+    ) == "Sources:"
+    # A leading markdown bullet/heading marker is dropped (no spoken "dash"/"hash").
+    assert sh._sanitize_for_voice("- first point") == "first point"
+    assert sh._sanitize_for_voice("## Summary") == "Summary"
+    # A chunk that is ONLY a URL sanitizes to empty → the caller skips it.
+    assert sh._sanitize_for_voice("https://example.com/a/b?c=1") == ""
+    # Plain prose is untouched (no over-eager stripping of ordinary punctuation / underscores in code).
+    assert sh._sanitize_for_voice("The value is 3.14 exactly.") == "The value is 3.14 exactly."
+    assert sh._sanitize_for_voice("call some_func(x) now") == "call some_func(x) now"
+
+
+def test_run_turn_never_streams_a_raw_url_or_markdown_to_voice(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """BUG 1 integration. The live trace: the weather answer streamed `**82°F**` and a raw
+    forecast.weather.gov URL and TTS spoke them verbatim. After the fix the streamed voice carries the
+    sanitized gist only — no markdown syntax, no URL — proving the physics net at the text→TTS boundary
+    (``_deliver_say``). The agent's own words still reach the room; only the syntax/URL is dropped."""
+    import in_meeting.session_host as sh
+
+    out = tmp_path / "to_meeting.jsonl"
+    monkeypatch.setattr(sh, "MEETING_OUT", str(out))
+    monkeypatch.setattr(sh, "_OPENER_HARD_FLOOR_S", 999.0)
+    monkeypatch.setattr(sh, "_OPENER_AFTER_TOOL_S", 999.0)
+
+    client = _SlowClient(
+        [ResultMessageT()],
+        delay=0.0,
+        deltas=[
+            "It's **82°F** in Santa Clara right now. ",
+            "Sources: https://forecast.weather.gov/MapClick.php?x=1 more later. ",
+        ],
+    )
+
+    async def _run() -> None:
+        rec = await sh._run_turn(client, "what's the weather?")
+        says = [s["content"] for s in rec["sent"] if s["medium"] == "say"]
+        assert says == [
+            "It's 82°F in Santa Clara right now.",
+            "Sources: more later.",
+        ], "voice carries the sanitized gist — no markdown syntax, no raw URL"
+        assert not any("http" in s or "**" in s for s in says)
+
+    asyncio.run(_run())
+
+
+# ── BUG 2: a stay-silent turn speaks NOTHING (sentinel-gated) ─────────────────────
+
+
+def _silent_deltas(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> Any:
+    import in_meeting.session_host as sh
+
+    out = tmp_path / "to_meeting.jsonl"
+    monkeypatch.setattr(sh, "MEETING_OUT", str(out))
+    # Production shape: the no-tool hard floor sits ABOVE the (fast) silent-decision band — the
+    # sentinel streams first, standing the opener down (``ttft``/``say_buf``/``silent`` are set the
+    # instant the first token lands). Modelled here with a floor well above the sentinel's arrival.
+    monkeypatch.setattr(sh, "_OPENER_HARD_FLOOR_S", 5.0)
+    monkeypatch.setattr(sh, "_OPENER_AFTER_TOOL_S", 5.0)
+    return sh
+
+
+def test_silent_sentinel_turn_speaks_nothing(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """BUG 2 core. The live trace: a cross-talk wake streamed its reasoning ("...not addressing me.
+    Staying silent.") and TTS spoke it. After the fix the model emits the `[SILENT]` sentinel; the
+    delivery layer suppresses ALL voice (zero say deliveries) while the record still captures the text
+    for the trace, and NO canned opener fires either."""
+    sh = _silent_deltas(monkeypatch, tmp_path)
+
+    # The model streams the sentinel (possibly split across deltas, with trailing reasoning it may jot
+    # AFTER the line — none of which is spoken). It "thinks" 0.1s first, past the tiny opener floor.
+    client = _SlowClient(
+        [ResultMessageT(result="[SILENT]\nDaksh means a technical proxy, not me.")],
+        delay=0.1,
+        deltas=["[SIL", "ENT]\n", "Daksh means a technical proxy, not me."],
+    )
+
+    async def _run() -> None:
+        rec = await sh._run_turn(client, "My proxy stopped helping.")
+        says = [s for s in rec["sent"] if s["medium"] == "say"]
+        assert says == [], "a silent-sentinel turn produces ZERO say deliveries (no reasoning spoken)"
+        assert sh._OPENER_TEXT not in [s.get("content") for s in rec["sent"]], \
+            "the opener watchdog must not fire a spoken opener on a silent turn"
+
+    asyncio.run(_run())
+
+
+def test_silent_sentinel_is_case_and_whitespace_robust(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """BUG 2 robustness. A stray capital or surrounding whitespace must still be recognized as the
+    sentinel — never leak a spoken 'staying silent' into the room."""
+    sh = _silent_deltas(monkeypatch, tmp_path)
+    client = _SlowClient([ResultMessageT(result="  [silent]  ")], delay=0.0,
+                         deltas=["  [silent]  "])
+
+    async def _run() -> None:
+        rec = await sh._run_turn(client, "our proxy server is down")
+        assert [s for s in rec["sent"] if s["medium"] == "say"] == []
+
+    asyncio.run(_run())
+
+
+def test_normal_turn_after_sentinel_prefix_still_speaks(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """BUG 2 no-regression. A normal answer that merely STARTS with a bracket (e.g. "[cal.com] uses…")
+    must NOT be swallowed as silent — once the streamed content diverges from the sentinel, the held
+    buffer is spoken. A plain answer is unchanged."""
+    sh = _silent_deltas(monkeypatch, tmp_path)
+    monkeypatch.setattr(sh, "_OPENER_HARD_FLOOR_S", 999.0)  # don't let the opener confuse this test
+    monkeypatch.setattr(sh, "_OPENER_AFTER_TOOL_S", 999.0)
+    client = _SlowClient([ResultMessageT(result="done")], delay=0.0,
+                         deltas=["[cal", ".com] uses Prisma for the ORM. "])
+
+    async def _run() -> None:
+        rec = await sh._run_turn(client, "what ORM does it use?")
+        says = [s["content"] for s in rec["sent"] if s["medium"] == "say"]
+        assert says == ["[cal.com] uses Prisma for the ORM."], \
+            "a normal answer that starts with a bracket is spoken (not swallowed as silent)"
+
+    asyncio.run(_run())
+
+
+def ResultMessageT(result: str = "done") -> Any:
+    """A minimal success ResultMessage for the BUG-1/2 tests (kept local so the sdk import stays in
+    ``_sdk_msgs`` for the older tests)."""
+    _, ResultMessage, _, _ = _sdk_msgs()
+    return ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False,
+                         num_turns=1, session_id="s", total_cost_usd=0.0, result=result)
 
 
 def test_spurious_transport_cancel_on_the_result_read_does_not_orphan_the_turn() -> None:

@@ -33,6 +33,13 @@ _CALL_ENDED_EVENTS = frozenset(
 # Recall real-time transcript passthrough event names (AssemblyAI Universal-Streaming via
 # Recall BYOK). On a FINAL line the drain feeds it into the meeting's reactive loop.
 _TRANSCRIPT_EVENTS = frozenset({"transcript.data", "transcript", "bot.transcript"})
+# Recall NON-FINAL (partial) transcript events — the earliest signal a human has started talking
+# (~0.5-1.5s before the final line). The drain feeds these into the meeting's BARGE-IN reflex ONLY
+# (cut Proxy's active speech on a human onset — BUG 3, Law 3): a partial NEVER wakes, never
+# provisions, and is not fed as transcript. Recall subscribes to it via ``realtime_endpoints``
+# (transport.recall) — it was arriving in ``webhook_events`` but not dispatched, so a live barge-in
+# only caught the ~8s-late FINAL line instead of cutting at once.
+_PARTIAL_TRANSCRIPT_EVENTS = frozenset({"transcript.partial_data", "transcript.partial"})
 # Recall's REAL meeting-chat event name — ``participant_events.chat_message`` (docs.recall.ai
 # "Real-Time Event Payloads"): the participant-events family; payload nests
 # data.data.participant{ id,name,... } + data.data.data{ text,to }. A chat line feeds the
@@ -237,8 +244,9 @@ async def _dispatch_meeting_event(
     is_start = name in _IN_CALL_EVENTS
     is_end = name in _CALL_ENDED_EVENTS
     is_transcript = name in _TRANSCRIPT_EVENTS
+    is_partial = name in _PARTIAL_TRANSCRIPT_EVENTS
     is_chat = name in _CHAT_EVENTS
-    if not (is_start or is_end or is_transcript or is_chat):
+    if not (is_start or is_end or is_transcript or is_partial or is_chat):
         return
 
     # An in_call claims + provisions the workroom runtime through the provisioner. The
@@ -287,6 +295,26 @@ async def _dispatch_meeting_event(
             # row unprocessed (never a poison row).
             _log.exception(
                 "transcript feed failed on meeting %s (never-raise boundary escaped) — the "
+                "row still drains",
+                meeting_id,
+            )
+    elif is_partial:
+        # A NON-FINAL (partial) line → BARGE-IN ONLY (BUG 3, Law 3). It is the earliest signal a
+        # human has started talking; feed it into the meeting's barge-in reflex to CUT Proxy's active
+        # speech at once. A partial NEVER provisions (no ``launch``) and is dropped if the meeting
+        # isn't live yet — it can only barge in on speech that already exists.
+        runtime = registry.get(meeting_id)
+        if runtime is None:
+            return
+        line = _transcript_line(_transcript_body(payload))
+        if line is None:
+            return
+        speaker, text, ts = line
+        try:
+            await runtime.ingest_partial(speaker, text, ts=ts)
+        except Exception:  # noqa: BLE001 - the barge-in path is never-raise; an escape still drains.
+            _log.exception(
+                "partial barge-in failed on meeting %s (never-raise boundary escaped) — the "
                 "row still drains",
                 meeting_id,
             )

@@ -124,6 +124,70 @@ except ValueError:
 _OPENER_TEXT = "On it — give me a moment."
 
 
+#: THE SILENT-TURN SENTINEL (BUG 2). When the model judges no response is warranted (cross-talk, an
+#: incidental "proxy", people talking among themselves), the prime instructs it to output NOTHING but
+#: this one line. ``_run_turn`` detects it in the FIRST streamed content and suppresses ALL voice
+#: delivery for the turn (no opener, no TTS, no relay say) while the record still captures the reasoning
+#: for the trace. Matched case- and whitespace-insensitively so a stray capital/space never leaks a
+#: spoken "staying silent" into the room (the exact live BUG-2 failure). Kept as a plain sentinel token
+#: (physics), not a situation→action rule — WHAT counts as silence is still the agent's live judgement.
+SILENT_SENTINEL = "[SILENT]"
+
+
+def _is_silent_sentinel(text: str) -> bool:
+    """True iff ``text`` (the turn's streamed content so far) is JUST the silent sentinel — the model
+    chose to stay quiet. Robust to case + surrounding whitespace/newlines so a stray capital or a
+    leading space never lets a spoken 'staying silent' leak into the room (the live BUG-2 failure)."""
+    return text.strip().upper() == SILENT_SENTINEL
+
+
+def _could_be_silent_sentinel(text: str) -> bool:
+    """True while ``text`` (the turn's streamed content so far) could STILL become the silent sentinel
+    — i.e. its stripped, upper-cased form is a prefix of ``[SILENT]`` (including empty / whitespace).
+    Used to HOLD the first streamed tokens without speaking them until the content either completes the
+    sentinel (⇒ stay silent) or diverges into real prose (⇒ speak it as a normal turn). Robust to case
+    + leading whitespace so no partial 'staying silent' ever leaks to voice (the live BUG-2 failure)."""
+    head = text.strip().upper()
+    return SILENT_SENTINEL.startswith(head)
+
+
+#: Bare-URL matcher for the voice sanitizer (BUG 1): an ``http(s)://…`` or ``www.…`` run of non-space
+#: characters. TTS must NEVER speak a URL verbatim (the live failure: it read a whole weather.gov query
+#: string aloud). We DROP the URL rather than try to pronounce it — the prime already tells the agent to
+#: put links/detail in chat; this is the physics net for when a URL slips into the spoken stream anyway.
+_URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
+#: Markdown link ``[label](url)`` → keep only the human ``label`` (the URL is never spoken).
+_MD_LINK_RE = re.compile(r"\[([^\]]*)\]\((?:[^)]*)\)")
+#: Inline markdown emphasis/code syntax the voice must not pronounce as literal characters
+#: (``**bold**`` → ``bold``, ``` `code` ``` → ``code``, ``__x__`` / ``*x*`` / ``_x_`` / ``~~x~~``).
+#: We strip the SYNTAX only — never try to render markdown beautifully as speech (kept simple + general).
+_MD_SYNTAX_RE = re.compile(r"(\*\*|__|~~|`|(?<![A-Za-z0-9])[*_](?![*_ ]))")
+#: A leading markdown block marker on a line: heading ``#``, blockquote ``>``, or a list bullet
+#: (``- ``/``* ``/``+ ``/``1. ``). Dropped so the voice doesn't speak "hash" / "greater than" / "dash".
+_MD_BLOCK_RE = re.compile(r"^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)")
+
+
+def _sanitize_for_voice(text: str) -> str:
+    """Make ONE chunk safe to SPEAK: strip markdown syntax and never hand a raw URL to TTS (BUG 1).
+
+    Two layers protect the room; this is the PHYSICS net (the prime is the other). It does NOT try to
+    read markdown beautifully — it only ensures the room never hears literal syntax or a URL read out
+    character-by-character (the live failure: TTS spoke ``**82°F**`` and a whole forecast.weather.gov
+    query string). Order matters: markdown links collapse to their label first (so the label survives
+    while its URL is dropped), THEN any remaining bare URL is removed, THEN inline/block syntax is
+    stripped. Collapses the whitespace a dropped URL leaves. Returns ``""`` when nothing speakable is
+    left (e.g. a lone URL) — the caller simply skips an empty chunk. Pure string physics (Law 4)."""
+    if not text:
+        return text
+    out = _MD_LINK_RE.sub(r"\1", text)        # [label](url) → label
+    out = _URL_RE.sub(" ", out)               # drop any remaining bare URL (never spoken)
+    out = _MD_BLOCK_RE.sub("", out)           # strip a leading heading/quote/bullet marker
+    out = _MD_SYNTAX_RE.sub("", out)          # strip inline **/`/_/~ emphasis+code syntax
+    # Collapse the runs of whitespace a dropped URL / stripped marker leaves, so the voice doesn't
+    # pause oddly; keep it a single-line spoken clause.
+    return re.sub(r"\s{2,}", " ", out).strip()
+
+
 def _parse_intents(raw: str) -> list[dict[str, Any]]:
     """The in-sandbox MCP server's recorded ``to_meeting`` intents → ``[{content, medium, to}]`` —
     the agent's OWN channel choices this turn. Skips relay-error/malformed lines (best-effort record).
@@ -225,6 +289,12 @@ async def _deliver_say(content: str) -> None:
     without stalling the token stream. PROOF/file mode: append it to the intents file (medium
     ``say``) so the driver's ``sent`` reflects exactly what was spoken, in order. Never raises — a
     send fault degrades to a recorded ``relay_error`` line, never a crash."""
+    # PHYSICS voice safety net (BUG 1): never hand markdown syntax or a raw URL to TTS. Sanitize at
+    # the exact boundary where text meets the voice channel; a chunk that was ONLY a URL sanitizes to
+    # empty and is skipped (nothing to speak) rather than spoken as silence-of-characters.
+    content = _sanitize_for_voice(content)
+    if not content:
+        return
     rec: dict[str, Any] = {"ts": time.time(), "content": content, "medium": "say", "to": ""}
     relay = os.environ.get("PROXY_MEETING_RELAY", "").strip()
     if relay:
@@ -267,6 +337,15 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
     #: atomic under single-threaded asyncio (no await between test and set).
     spoke = False
     opener_fired = False  # the canned opener has been emitted (fired at most once per turn)
+    #: BUG 2 — the SILENT-TURN gate. When the model's FIRST streamed content is the silent sentinel
+    #: (``[SILENT]``), the whole turn is a judged non-response (cross-talk / incidental "proxy"): NO
+    #: voice delivery, NO opener — the room hears nothing — while the record still captures the
+    #: reasoning for the trace. ``silent`` latches True once the streamed content settles as the
+    #: sentinel; ``sentinel_maybe`` is the "still could be the sentinel" hold-state so we buffer the
+    #: first tokens (``[`` … ``[SILENT]``) WITHOUT speaking them until it either completes the sentinel
+    #: (⇒ silent) or diverges into real prose (⇒ a normal turn, flush what we held).
+    silent = False
+    sentinel_maybe = True
     #: Has the model called its first REAL tool this turn (Read/Bash/Grep/Write/a sub-agent — anything
     #: but ``to_meeting``, which is delivery, not work)? This is the "committed to multi-step work"
     #: signal the opener gates on: a direct answer or a silent cross-talk decline never calls a tool
@@ -276,8 +355,15 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
     async def _flush_ready(*, final: bool = False) -> None:
         """Flush every complete sentence sitting in ``say_buf`` to the voice channel; on ``final``
         also flush the trailing partial clause so the answer's last words are never dropped. Each
-        sentence is AWAITED in turn, so the room hears them strictly in order."""
+        sentence is AWAITED in turn, so the room hears them strictly in order.
+
+        A SILENT turn (BUG 2) never flushes: the model chose the sentinel, so the buffered content is
+        internal reasoning the room must not hear. A turn still in the ``sentinel_maybe`` hold-state
+        also doesn't flush yet — the streamed content could still complete the sentinel; only once it
+        has diverged into real prose (``sentinel_maybe`` cleared) is the held buffer spoken."""
         nonlocal say_buf, deliver_at, spoke
+        if silent or sentinel_maybe:
+            return
         while True:
             cut = _sentence_end(say_buf)
             if cut is None:
@@ -315,7 +401,9 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
         try:
             while True:
                 # The model has spoken / is mid-stream ⇒ its own words are imminent; stand down forever.
-                if spoke or opener_fired or ttft or say_buf:
+                # A SILENT turn (BUG 2) also stands the opener down — the turn is a judged non-response,
+                # so the room must hear NOTHING, not a canned "on it…".
+                if spoke or opener_fired or ttft or say_buf or silent:
                     return
                 now = time.monotonic()
                 if tool_started and tool_seen_at is None:
@@ -355,6 +443,15 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
                         if not ttft:
                             ttft = round(time.monotonic() - turn_start, 2)
                         say_buf += str(delta.get("text", "") or "")
+                        # BUG 2 — silent-turn gate. Resolve the sentinel hold-state as content grows:
+                        # while the streamed content could STILL be the sentinel, hold (don't speak);
+                        # once it settles as exactly the sentinel the turn is SILENT (never speak);
+                        # once it diverges into real prose, it's a normal turn (flush what we held).
+                        if sentinel_maybe:
+                            if _is_silent_sentinel(say_buf):
+                                silent = True
+                            elif not _could_be_silent_sentinel(say_buf):
+                                sentinel_maybe = False
                         await _flush_ready()
                 continue
             if isinstance(msg, AssistantMessage):
@@ -454,7 +551,18 @@ async def _serve(client: Any) -> None:
                 prompt = str(req["prompt"])
             except (json.JSONDecodeError, KeyError, TypeError):
                 continue  # a malformed line is skipped (the driver's poll will time out → cold path)
+            # BUG 5 — QUEUE LATENCY. The warm session is ONE ClaudeSDKClient: it runs one query at a
+            # time, so a wake enqueued while a prior turn is in flight WAITS here (an honest, documented
+            # single-flight constraint). Measure that wait: the driver stamps ``queued_at`` (wall s)
+            # when it appended the wake; the gap until we start serving it is the host-side queue time
+            # the live battery asserts on. Robust to an absent/old ``queued_at`` (⇒ 0.0).
+            try:
+                queued_at = float(req.get("queued_at", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                queued_at = 0.0
+            queued_ms = round(max(0.0, time.time() - queued_at) * 1000.0, 1) if queued_at else 0.0
             record = await _run_turn(client, prompt)
+            record["queued_ms"] = queued_ms
             record["_served_at"] = time.time()
             _write_result(wake_id, record)
         await asyncio.sleep(_POLL_S)

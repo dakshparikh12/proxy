@@ -230,6 +230,33 @@ class MeetingSession:
             return
         self._spawn(self._handle(cont, self._take_delta()))
 
+    async def on_partial(self, speaker: str, text: str, *, ts: float = 0.0) -> None:
+        """A NON-FINAL (partial) transcript line — used ONLY for barge-in onset (Law 3, BUG 3).
+
+        Recall streams ``transcript.partial_data`` as a human speaks, ~0.5-1.5s before the FINAL
+        ``transcript.data`` line. On the live path a human talking over Proxy was only caught by the
+        final line ~8s later (handled as a fresh wake, not a cut). Feeding partials here lets a real
+        human onset CUT the active speech at once. A partial is NOT fed as transcript, NOT logged, and
+        NEVER wakes/provisions — it is noisy and non-final; its ONLY job is the barge-in reflex.
+
+        Same debounce as :meth:`on_line` (physics, not a rule): Proxy's own echo is relabeled and
+        never barges; a sub-onset blip (< ``_BARGE_MIN_TOKENS``) does NOT cut; only a real human
+        interjection arriving while Proxy is mid-utterance cuts. Never raises into the drain."""
+        speaker, text = str(speaker or ""), str(text or "")
+        if speaker == self.proxy_speaker:
+            return
+        # Proxy's own voice bleeding back (no headphones) can arrive as a partial too — relabel it so
+        # it never self-barges (same label-independent echo test the final path uses).
+        if _is_self_echo(text, getattr(self.connection, "spoken", ()), time.time()):
+            return
+        if not _is_barge_in(text):
+            return
+        try:
+            if getattr(getattr(self.connection, "speak", None), "speaking", False):
+                await self.connection.barge_in()
+        except Exception:  # noqa: BLE001 — a barge-in fault never crashes the meeting
+            logger.exception("partial barge-in cut failed (meeting continues)")
+
     def _spawn(self, coro: Any) -> None:
         """Fire a wake as a background task tracked in ``_inflight`` (the room keeps flowing while it
         runs; ``drain`` awaits it). Factored out so the address path and the continuation path enqueue

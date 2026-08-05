@@ -30,6 +30,7 @@ class _FakeDB:
 class _FakeRuntime:
     def __init__(self) -> None:
         self.lines: list[tuple[str, str, float, bool]] = []
+        self.partials: list[tuple[str, str, float]] = []
         self.raise_on_ingest = False
 
     async def ingest_line(self, speaker: str, text: str, *, ts: float = 0.0,
@@ -37,6 +38,11 @@ class _FakeRuntime:
         if self.raise_on_ingest:
             raise RuntimeError("ingest boom")
         self.lines.append((speaker, text, ts, is_chat))
+
+    async def ingest_partial(self, speaker: str, text: str, *, ts: float = 0.0) -> None:
+        if self.raise_on_ingest:
+            raise RuntimeError("partial boom")
+        self.partials.append((speaker, text, ts))
 
 
 class _FakeRegistry:
@@ -101,6 +107,58 @@ def test_transcript_data_feeds_a_final_line_into_the_loop(monkeypatch) -> None:
             payload, db=_FakeDB(), registry=_FakeRegistry({"m-1": rt})
         )
         assert rt.lines == [("Bob", "proxy, where is the helper?", 12.5, False)]
+
+    asyncio.run(_run())
+
+
+def test_partial_transcript_feeds_barge_in_only_never_wakes_or_provisions(monkeypatch) -> None:
+    """BUG 3: a ``transcript.partial_data`` event is dispatched to the runtime's BARGE-IN path
+    (``ingest_partial``) — NOT fed as a transcript line, and NEVER routed through ``launch`` (a
+    partial must not provision). Before this fix partials arrived in webhook_events but were never
+    dispatched, so a live barge-in only caught the ~8s-late final line."""
+    from control_plane.webhooks import _dispatch_meeting_event
+
+    _patch_resolve(monkeypatch, "m-1")
+    rt = _FakeRuntime()
+    launched: list[dict[str, Any]] = []
+
+    async def _launch(payload: dict[str, Any]) -> None:
+        launched.append(payload)
+
+    async def _run() -> None:
+        payload = {
+            "event": "transcript.partial_data",
+            "data": {"bot_id": "b1", "words": "wait hold on that's",
+                     "speaker": "Bob", "timestamp": 5.0},
+        }
+        await _dispatch_meeting_event(
+            payload, db=_FakeDB(), registry=_FakeRegistry({"m-1": rt}), launch=_launch
+        )
+        assert rt.partials == [("Bob", "wait hold on that's", 5.0)]  # barge-in path
+        assert rt.lines == []                                        # never fed as transcript
+        assert launched == []                                       # never provisions
+
+    asyncio.run(_run())
+
+
+def test_partial_before_runtime_exists_is_a_safe_no_op(monkeypatch) -> None:
+    """BUG 3: a partial for a meeting with no live runtime is a safe no-op (it never provisions —
+    a partial can only barge in on active speech, which requires a live meeting)."""
+    from control_plane.webhooks import _dispatch_meeting_event
+
+    _patch_resolve(monkeypatch, "m-1")
+    launched: list[dict[str, Any]] = []
+
+    async def _launch(payload: dict[str, Any]) -> None:
+        launched.append(payload)
+
+    async def _run() -> None:
+        payload = {"event": "transcript.partial_data",
+                   "data": {"bot_id": "b1", "words": "some words", "speaker": "Bob"}}
+        await _dispatch_meeting_event(
+            payload, db=_FakeDB(), registry=_FakeRegistry({}), launch=_launch
+        )
+        assert launched == []  # a partial never provisions
 
     asyncio.run(_run())
 

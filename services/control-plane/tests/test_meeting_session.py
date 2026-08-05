@@ -918,6 +918,171 @@ def test_barge_in_cut_fault_never_crashes_the_meeting() -> None:
     asyncio.run(_run())
 
 
+# ── BUG 3: partial-transcript barge-in (cut on human onset, not the ~8s-late final) ──
+
+
+def test_partial_transcript_line_cuts_active_speech() -> None:
+    """BUG 3: a NON-FINAL (partial) line — the earliest 'a human started talking' signal — cuts
+    Proxy's active speech at once via ``on_partial``, without waking, feeding, or logging. On the
+    live path only the ~8s-late FINAL line was dispatched, so a barge-in never fired in time."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection(speaking=True)          # Proxy is mid-utterance
+        wr = _FakeWorkroom(result=_result(sent=[]))
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        await session.on_partial("Bob", "wait hold on that's", ts=1.0)  # a real partial onset
+
+        assert conn.speak.cuts == 1          # speech cut on the partial (not the late final)
+        assert conn.cut_latched is True
+        assert wr.asks == []                 # a partial never wakes
+        assert wr.fed == []                  # a partial is never fed as transcript
+
+    asyncio.run(_run())
+
+
+def test_partial_sub_onset_blip_does_not_cut() -> None:
+    """BUG 3 debounce: a sub-onset partial blip (a lone filler token) must NOT cut — same floor as
+    the final path, so Proxy never flinches at STT noise (Law 3)."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection(speaking=True)
+        session = MeetingSession(workroom=_FakeWorkroom(result=_result(sent=[])), connection=conn)
+        await session.on_partial("Bob", "um", ts=1.0)   # one token — below the barge floor
+        assert conn.speak.cuts == 0
+
+    asyncio.run(_run())
+
+
+def test_partial_when_idle_or_self_echo_never_cuts() -> None:
+    """BUG 3: a partial while Proxy is idle cuts nothing; a partial that reproduces Proxy's own recent
+    speech (its echo on a no-headphones mic) is never a self-barge-in."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        idle = _FakeConnection(speaking=False)
+        s1 = MeetingSession(workroom=_FakeWorkroom(result=_result(sent=[])), connection=idle)
+        await s1.on_partial("Bob", "a real sentence being spoken", ts=1.0)
+        assert idle.speak.cuts == 0          # nothing to cut when idle
+
+        echo = _FakeConnection(speaking=True)
+        echo.spoken.append((time.time(), "the entry point is command main in src click core py"))
+        s2 = MeetingSession(workroom=_FakeWorkroom(result=_result(sent=[])), connection=echo)
+        await s2.on_partial("Bob", "the entry point is command main in src click core py", ts=1.0)
+        assert echo.speak.cuts == 0          # Proxy's own echo never self-barges
+
+    asyncio.run(_run())
+
+
+def test_runtime_ingest_partial_drops_when_no_session() -> None:
+    """BUG 3: a partial before the session is wired is DROPPED (not buffered) — a partial can only
+    barge in on active speech, which cannot exist before the meeting is live. Never raises."""
+    from control_plane.meeting_runtime import MeetingRuntime
+
+    async def _run() -> None:
+        rt = MeetingRuntime(meeting_id="m-p")
+        await rt.ingest_partial("Bob", "some words while unwired", ts=1.0)  # no session yet
+        assert rt.pending_lines == []        # a partial is never buffered
+
+    asyncio.run(_run())
+
+
+# ── BUG 5: the turns queue must never block ingest/drain; barge-in cuts mid-turn ──
+
+
+def test_barge_in_cut_fires_while_a_turn_is_in_flight() -> None:
+    """BUG 5: 'stop talking' must bypass the queue. The barge-in cut runs SYNCHRONOUSLY in on_line
+    (before any wake is spawned), so it fires even while a prior wake's run_ask is still in flight —
+    it never queues behind the running turn."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection(speaking=True)
+        turn_running = asyncio.Event()
+        may_finish = asyncio.Event()
+
+        class _SlowWorkroom:
+            def __init__(self) -> None:
+                self.asks: list[str] = []
+                self.fed: list[str] = []
+
+            async def feed_transcript(self, md: str) -> None:
+                self.fed.append(md)
+
+            async def run_ask(self, ask: str, *, delta: str = "") -> Any:
+                self.asks.append(ask)
+                turn_running.set()
+                await asyncio.wait_for(may_finish.wait(), timeout=2.0)
+                return _result(sent=[])
+
+        wr = _SlowWorkroom()
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        # First line wakes Proxy — its run_ask blocks (a long in-flight turn).
+        await session.on_line("Bob", "proxy, do the big task", ts=1.0)
+        await asyncio.wait_for(turn_running.wait(), timeout=2.0)
+
+        # While that turn is in flight, a human talks over Proxy ("stop talking"). The cut must fire
+        # NOW (synchronously in on_line, before any wake is spawned) — not behind the queued turn. The
+        # cut is the load-bearing guarantee here: the barge-in reflex bypasses the single-flight queue.
+        # ("proxy stop talking" also matches the wake gate, so a wake is spawned too — its begin_turn
+        # then lowers the latch again; in production that wake judges silence and speaks nothing.)
+        await session.on_line("Bob", "proxy stop talking", ts=2.0)
+        assert conn.speak.cuts == 1          # cut fired mid-turn (bypassed the queue)
+
+        may_finish.set()
+        await session.drain()
+
+    asyncio.run(_run())
+
+
+def test_ingest_never_blocks_behind_an_in_flight_turn() -> None:
+    """BUG 5 req 1+2: the transcript feed + wake gate for a NEW line run immediately while a prior
+    wake is still in flight — on_line returns without awaiting the running turn (the wake is a
+    background task). Hearing is continuous; a new wake is at least SEEN at once."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+        first_running = asyncio.Event()
+        may_finish = asyncio.Event()
+
+        class _SlowWorkroom:
+            def __init__(self) -> None:
+                self.asks: list[str] = []
+                self.fed: list[str] = []
+
+            async def feed_transcript(self, md: str) -> None:
+                self.fed.append(md)
+
+            async def run_ask(self, ask: str, *, delta: str = "") -> Any:
+                self.asks.append(ask)
+                if "first" in ask:
+                    first_running.set()
+                    await asyncio.wait_for(may_finish.wait(), timeout=2.0)
+                return _result(sent=[])
+
+        wr = _SlowWorkroom()
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        await session.on_line("Bob", "proxy, the first big task", ts=1.0)
+        await asyncio.wait_for(first_running.wait(), timeout=2.0)
+
+        # A NEW line arrives mid-turn. on_line must return promptly (feed + spawn), NOT block on the
+        # in-flight first turn.
+        await asyncio.wait_for(
+            session.on_line("Ann", "someone said something new", ts=2.0), timeout=0.5
+        )
+        assert len(wr.fed) >= 2              # the new line was fed while the first turn ran
+
+        may_finish.set()
+        await session.drain()
+
+    asyncio.run(_run())
+
+
 def test_pre_wire_lines_buffer_and_flush_in_order_on_wire_session() -> None:
     """THE join-race contract: lines that arrive BEFORE the session is wired (registration
     precedes the ~tens-of-seconds assembly; the liveness utterance itself triggers the

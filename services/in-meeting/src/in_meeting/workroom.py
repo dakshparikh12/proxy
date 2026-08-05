@@ -215,6 +215,11 @@ class WorkroomResult:
     #: local JSONL in the no-relay/file path. Each is a channel choice the agent made this turn; the
     #: session replays them over the connection honoring the chosen medium (NOT ``text``).
     sent: list[dict[str, Any]] = field(default_factory=list)
+    #: HOST-SIDE QUEUE LATENCY (ms) — how long this wake sat in the sandbox's single-flight WAKE_IN
+    #: queue (behind a prior in-flight turn) before the warm host started serving it (BUG 5). ~0 for a
+    #: wake that hit an idle host; large when it queued behind a long turn (the measured ~30s+ live
+    #: gap). Surfaced so the live battery can assert the feed→turn-start gap. 0.0 = not measured.
+    queued_ms: float = 0.0
 
 
 @dataclass(slots=True)
@@ -405,12 +410,16 @@ class Workroom:
             "you already know of the room, before you read any code or investigate anything. If 'proxy' was used "
             "incidentally (e.g. \"our proxy server\", \"the proxy pool\", a proxy/nginx config) or "
             "people are talking among "
-            "themselves and no one is actually asking you for anything, STAY COMPLETELY SILENT — write "
-            "NO words at all (your words are spoken aloud, so a spoken \"not addressed\" / \"staying "
-            "quiet\" / \"no one's asking me\" is itself an unwanted interruption — the room must hear "
-            "NOTHING from you), don't call the tool, don't explore the repo. Just end your turn empty. "
-            "Silence is the correct, complete response to cross-talk. Only start real work — or say a "
-            "single word — once you're sure you were really addressed.\n\n"
+            "themselves and no one is actually asking you for anything, STAY SILENT. Your words are "
+            "spoken aloud, so a spoken \"not addressed\" / \"staying quiet\" / any reasoning is itself "
+            "an unwanted interruption — the room must hear NOTHING from you. To stay silent, output "
+            "NOTHING except this one exact line and nothing else:\n"
+            "[SILENT]\n"
+            "That single sentinel line is swallowed by the delivery layer and never reaches the room "
+            "(if you must jot WHY you stayed quiet, put it only AFTER that line — it is never spoken). "
+            "Don't call the tool, don't explore the repo. Silence is the correct, complete response to "
+            "cross-talk. Only start real work — or say a single word aloud — once you're sure you were "
+            "really addressed.\n\n"
             "If you were addressed, do exactly as much as the ask needs — a greeting or a quick "
             "question is one direct reply with no tools; a real task gets the real work (read the "
             "ACTUAL code, run code to verify, draft real files). SPEAK by simply writing your reply — "
@@ -523,7 +532,10 @@ class Workroom:
         if not await self._await_host_ready():
             return None  # the warm host never opened → restart-and-retry (fast)
         wake_id = uuid.uuid4().hex
-        req = json.dumps({"id": wake_id, "prompt": prompt})
+        # Stamp the enqueue wall-time so the host can measure QUEUE LATENCY (BUG 5): the warm session
+        # is single-flight (one ClaudeSDKClient), so a wake enqueued behind an in-flight turn waits;
+        # ``queued_at`` → the host computes ``queued_ms`` = how long it sat before serving.
+        req = json.dumps({"id": wake_id, "prompt": prompt, "queued_at": time.time()})
         try:
             # Append the wake line (the host tails WAKE_IN). ``printf '%s\n' <arg>`` writes the JSON
             # verbatim + one newline; ``shlex.quote`` safely quotes the payload's embedded quotes so
@@ -583,6 +595,7 @@ class Workroom:
                     deliver_at=float(rec.get("deliver_at", 0.0) or 0.0),
                     ttft=float(rec.get("ttft", 0.0) or 0.0),
                     sent=[dict(s) for s in (rec.get("sent") or []) if isinstance(s, dict)],
+                    queued_ms=float(rec.get("queued_ms", 0.0) or 0.0),
                 )
             # No result yet — is the host still ALIVE? Check its heartbeat: a changed value means it is
             # (idle or grinding on a long turn); if it hasn't moved for the whole dead-host window the
