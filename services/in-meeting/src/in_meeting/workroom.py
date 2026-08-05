@@ -468,6 +468,16 @@ class Workroom:
         context7_key = os.environ.get("CONTEXT7_API_KEY", "").strip()
         if context7_key:
             envs["CONTEXT7_API_KEY"] = context7_key
+        # Research-spend keys (founder-authorized): forwarded ONLY when the founder has provisioned
+        # them host-side, so the agent can ACTUALLY run things it recommends (fire test renders,
+        # compare image models) instead of only describing them — the go-above-and-beyond principle
+        # made executable. These are read/generate spend keys, NOT push/send creds — the Law-3
+        # credential boundary (no world-touching creds in the sandbox) is unchanged. Absent ⇒
+        # nothing is added and the agent degrades honestly ("I'd need a key to run this").
+        for research_key in ("FAL_KEY", "REPLICATE_API_TOKEN", "OPENAI_API_KEY"):
+            val = os.environ.get(research_key, "").strip()
+            if val:
+                envs[research_key] = val
         return envs
 
     async def _await_host_ready(self, *, timeout: float | None = None) -> bool:

@@ -101,6 +101,40 @@ def test_prime_carries_the_conciseness_and_interruption_principles() -> None:
     assert "address what they just said first" in low
 
 
+def test_prime_carries_the_participant_depth_principle() -> None:
+    """PARTICIPANT-DEPTH (a behavior principle, NOT a code cap — Law 4; GENERALIZABLE to any ask,
+    chitchat to deep R&D). The prime must make Proxy answer as a super-intelligent participant who
+    holds the full context: (1) USE the code/context to actually understand before answering (no
+    shallow find-the-answer when it holds the whole repo); (2) RELATE the answer back to THIS
+    product/meeting (named components + constraints, never paste-anywhere generic advice);
+    (3) answer, then GO BEYOND — offer the next concrete thing it can actually do; (4) response
+    SIZE is dynamic (composes with the concision principle — no duplicate size rule here) but the
+    quality bar is constant: concrete recommendation with tradeoffs, honest about what it can't
+    run; shallow-when-the-ask-deserved-more is a failure."""
+    from in_meeting.prime import WORKROOM_PRIME
+
+    low = WORKROOM_PRIME.lower()
+    # Participant identity holding the full context, for ANY ask.
+    assert "participant on this team" in low
+    assert "any ask" in low
+    # (1) Use the context to actually understand — no shallow find-the-answer.
+    assert "use the code" in low and "actually understand" in low
+    assert "shallow find-the-answer" in low
+    # (2) Relate the answer back to THIS product/meeting; never paste-anywhere generic.
+    assert "relate the answer back to this" in low
+    assert "any other product's meeting" in low
+    # (3) Answer, then go beyond: offer the next concrete thing it can actually do.
+    assert "go beyond" in low
+    assert "next concrete thing" in low
+    # (4) Dynamic size (deferring to the concision principle), constant quality bar.
+    assert "crisp line" in low and "deep verified work" in low
+    assert "quality bar is constant" in low
+    # Concrete recommendation + tradeoffs + honesty; shallow/generic = failure.
+    assert "concrete recommendation" in low
+    assert "tradeoffs" in low
+    assert "failure" in low
+
+
 # ── Workroom.feed_transcript / run_ask: never-raise honest degrade ────────────────
 
 
