@@ -163,10 +163,16 @@ def install_dev_smoke_routes(app: "FastAPI") -> None:
         # THE real invite path — the SAME one POST /meetings drives, minus the user-session wall. A
         # test seam transport rides app.state.transport_provider when injected; unset (the live smoke)
         # invite_proxy constructs the real Recall transport and launches a real bot.
+        #
+        # READY-BEFORE-JOIN (FIX 1): the same (before_join, after_join) hooks the product front door
+        # uses — the E2B workroom + warm Claude session are fully assembled BEFORE the bot joins, so
+        # the FIRST utterance pays zero provision penalty and the founder never talks into a void. The
+        # route may take ~90s to return (assembly runs inline) — fine for a dev smoke tap.
         transport = getattr(request.app.state, "transport_provider", None)
-        try:
-            from . import meetings as _meetings
+        from . import meetings as _meetings
 
+        before_join, after_join = _meetings.ready_before_join_hooks(request.app.state)
+        try:
             invited = await _meetings.invite_proxy(
                 db,
                 tenant_id=repo_row["tenant_id"],
@@ -174,26 +180,14 @@ def install_dev_smoke_routes(app: "FastAPI") -> None:
                 meeting_url=meeting_url,
                 head_sha=head_sha,
                 transport=transport,
+                before_join=before_join,
+                after_join=after_join,
             )
         except Exception as exc:  # noqa: BLE001 - never-throw: honest JSON with the reason (this is a DEV tap)
             logger.exception("test-provision invite failed (meeting_url=%s repo=%s)", meeting_url, repo)
             return JSONResponse(
                 {"error": "invite failed", "detail": str(exc) or exc.__class__.__name__},
                 status_code=502,
-            )
-
-        # PRE-WARM AT INVITE (Bug 4): fire the provision NOW — a synthetic ``bot.joining_call``
-        # liveness payload with the REAL bot id — so the E2B workroom + warm session are ready
-        # while the bot is still knocking/in the waiting room, and the FIRST utterance pays zero
-        # provision penalty. Fire-and-forget (launch spawns a background task); the atomic claim
-        # keeps the later transcript-liveness fallback a no-op (never a double provision).
-        launch = getattr(request.app.state, "provision_launch", None)
-        if launch is not None and invited.recall_bot_id:
-            await launch(
-                {
-                    "event": "bot.joining_call",
-                    "data": {"bot_id": str(invited.recall_bot_id)},
-                }
             )
 
         return JSONResponse(

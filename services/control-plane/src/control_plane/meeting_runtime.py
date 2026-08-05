@@ -122,14 +122,18 @@ class MeetingRuntime:
         logged and the rest still feed (never-raise on the drain path)."""
         self.session = session
         pending, self.pending_lines = self.pending_lines, []
-        for speaker, text, ts, is_chat in pending:
-            try:
-                await session.on_line(speaker, text, ts=ts, is_chat=is_chat)
-            except Exception:  # noqa: BLE001 - one bad line never strands the rest
-                logger.exception(
-                    "pre-wire line flush failed on meeting %s (line dropped, rest continue)",
-                    self.meeting_id,
-                )
+        if not pending:
+            return
+        # ONE catch-up, not N wakes: the founder may have addressed Proxy repeatedly while
+        # assembly ran — a late-joining human answers once after hearing everything, so the
+        # batch flushes through catch_up (all lines into the notes, at most one wake).
+        try:
+            await session.catch_up(pending)
+        except Exception:  # noqa: BLE001 - a flush fault never strands the meeting
+            logger.exception(
+                "pre-wire catch-up flush failed on meeting %s (lines in notes only)",
+                self.meeting_id,
+            )
 
 
 class MeetingRuntimeRegistry:

@@ -449,9 +449,14 @@ def test_ask_reply_continue_an_unaddressed_answer_resumes_the_task() -> None:
 
 
 def test_continuation_does_not_fire_when_last_turn_ended_on_a_statement() -> None:
-    """The latch is set ONLY when Proxy ends its turn on a question. A completed answer (a statement)
-    latches nothing, so a following un-addressed line stays pure cross-talk (name-gate untouched)."""
-    from control_plane.meeting_session import MeetingSession
+    """The CONTINUATION latch is set ONLY when Proxy ends its turn on a question. A completed answer
+    (a statement) latches nothing — so an un-addressed line is never carried as a task CONTINUATION.
+
+    FIX 3 (F1): a delivered turn opens the short follow-up window, within which an un-addressed line
+    IS routed to judgment (a separate path). To isolate the continuation contract from that window,
+    the un-addressed cross-talk here arrives AFTER the window has expired — proving no continuation
+    latch fires (the name-gate is in sole control once the window closes)."""
+    from control_plane.meeting_session import _FOLLOW_UP_WINDOW_S, MeetingSession
 
     async def _run() -> None:
         conn = _FakeConnection()
@@ -460,9 +465,10 @@ def test_continuation_does_not_fire_when_last_turn_ended_on_a_statement() -> Non
 
         await session.on_line("Bob", "proxy, where's the helper?", ts=1.0)
         await session.drain()
-        assert session._pending_question is None              # nothing to continue
+        assert session._pending_question is None              # nothing to continue (a statement)
 
-        await session.on_line("Ann", "great, thanks everyone", ts=3.0)  # ordinary cross-talk
+        # ordinary cross-talk AFTER the follow-up window closed → no continuation, no wake:
+        await session.on_line("Ann", "great, thanks everyone", ts=1.0 + _FOLLOW_UP_WINDOW_S + 5.0)
         await session.drain()
         assert wr.asks == ["proxy, where's the helper?"]      # NOT re-woken by the un-addressed line
 
@@ -555,6 +561,115 @@ def test_a_named_readdress_supersedes_a_pending_question() -> None:
         assert wr.asks[1] == "proxy, actually just draft the changelog"  # verbatim, not a continuation
         assert "Earlier you asked" not in wr.asks[1]
         assert session._pending_question is None
+
+    asyncio.run(_run())
+
+
+# ── FOLLOW-UP WINDOW (F1) ─────────────────────────────────────────────────────────
+
+
+def test_follow_up_window_routes_an_unaddressed_line_after_a_delivered_turn() -> None:
+    """F1: after a turn that DELIVERED (ended on a statement — no pending question), a substantive
+    human line WITHIN the short window is ROUTED to the model's judgment even without 'proxy'. We
+    test the ROUTING (run_ask was called with the line verbatim), not the model — the model's own
+    [SILENT] verdict is the over-fire guard, exercised separately below."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+        # A delivered STATEMENT turn (no trailing '?') so the pending-question latch is NOT involved —
+        # this isolates the follow-up window from the ASK→CONTINUE path.
+        wr = _FakeWorkroom(result=_result(sent=_say("The build is green on main.")))
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        await session.on_line("Bob", "proxy, is the build green?", ts=1.0)
+        await session.drain()
+        assert session._pending_question is None            # a statement — no continuation latch
+        assert session._follow_up_until > 0.0               # ...but the follow-up window opened
+
+        # a follow-up that does NOT name Proxy, inside the window → routed to judgment (a wake ran)
+        assert __import__("control_plane.meeting_session", fromlist=["is_addressed"]).is_addressed(
+            "Bob", "cool, the audio was choppy last time") is None
+        await session.on_line("Bob", "cool, the audio was choppy last time", ts=5.0)
+        await session.drain()
+        assert len(wr.asks) == 2, "the in-window line woke the model's judgment (no name needed)"
+        assert wr.asks[1] == "cool, the audio was choppy last time", "routed verbatim (normal prompt)"
+
+    asyncio.run(_run())
+
+
+def test_follow_up_window_expires_and_an_unaddressed_line_after_it_does_not_wake() -> None:
+    """F1: the window is SHORT. A line arriving AFTER it expires is pure cross-talk again — the
+    name-gate is back in sole control, so it does NOT wake (expired silently, no response)."""
+    from control_plane.meeting_session import _FOLLOW_UP_WINDOW_S, MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+        wr = _FakeWorkroom(result=_result(sent=_say("The build is green on main.")))
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        await session.on_line("Bob", "proxy, is the build green?", ts=1.0)
+        await session.drain()
+        assert session._follow_up_until > 0.0
+
+        # well after the window closes → not routed, no wake:
+        await session.on_line("Bob", "anyway lets grab lunch", ts=1.0 + _FOLLOW_UP_WINDOW_S + 5.0)
+        await session.drain()
+        assert len(wr.asks) == 1, "a line after the window expired did NOT wake"
+        assert session._follow_up_until == 0.0, "the expired window was cleared"
+
+    asyncio.run(_run())
+
+
+def test_a_silent_turn_opens_no_follow_up_window() -> None:
+    """F1 guard: a true SILENT turn (cross-talk the agent judged not-for-it — zero delivery) must
+    NOT open the window, else every incidental 'proxy' mention would route the next lines. Here the
+    incidental mention runs a silent turn (sent=[], no relay), so the FOLLOWING un-addressed line
+    stays pure cross-talk and does not wake."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+        wr = _FakeWorkroom(result=_result(text="[SILENT]", sent=[]))  # silence, zero delivery
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        # an incidental 'proxy server' mention wakes the gate but the agent stays silent (sent=[])
+        await session.on_line("Bob", "our proxy server keeps dropping", ts=1.0)
+        await session.drain()
+        assert len(wr.asks) == 1 and conn.sent == []        # ran, delivered nothing
+        assert session._follow_up_until == 0.0, "a silent turn opened NO window"
+
+        # the next un-addressed line is therefore NOT routed (name-gate in sole control):
+        await session.on_line("Bob", "and the DB is slow too", ts=3.0)
+        await session.drain()
+        assert len(wr.asks) == 1, "no window ⇒ the following cross-talk line did not wake"
+
+    asyncio.run(_run())
+
+
+def test_barge_in_opens_the_follow_up_window_so_the_interrupting_line_reaches_judgment() -> None:
+    """F1 + Law 3: being interrupted IS mid-exchange. When a human talks over Proxy (a barge-in
+    fires), the window opens — so the interrupting line itself, and the next lines within the window,
+    reach the model's judgment WITHOUT the wake word. The founder's 'wait, hold on that's not right'
+    is almost always still to Proxy; the model's [SILENT] verdict remains the over-fire guard."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        # Proxy is mid-utterance (speaking True) so the human line is a real barge-in.
+        conn = _FakeConnection(speaking=True)
+        wr = _FakeWorkroom(result=_result(sent=_say("Understood — I'll re-check that.")))
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        # a real interjection (≥2 tokens) over active speech, NOT naming Proxy:
+        assert __import__("control_plane.meeting_session", fromlist=["is_addressed"]).is_addressed(
+            "Bob", "wait hold on that is not right") is None
+        await session.on_line("Bob", "wait hold on that is not right", ts=10.0)
+        await session.drain()
+
+        assert conn.speak.cuts == 1, "the barge-in cut Proxy's speech (Law 3)"
+        assert session._follow_up_until > 0.0, "the barge-in opened the follow-up window"
+        # the interrupting line itself reached the model's judgment (routed as a wake, no name):
+        assert wr.asks == ["wait hold on that is not right"], "the interrupting line reached judgment"
 
     asyncio.run(_run())
 
@@ -791,12 +906,17 @@ def test_chat_is_never_echo_suppressed() -> None:
 def test_human_line_during_speech_triggers_a_barge_in_cut() -> None:
     """Law 3: a HUMAN talking while Proxy is mid-utterance stops its speech at once — the reactive
     loop calls ``connection.barge_in`` (which cuts the pipe). This holds whether or not the line is an
-    address: a human simply talking over Proxy silences it. The cut runs BEFORE the line is fed."""
+    address: a human simply talking over Proxy silences it. The cut runs BEFORE the line is fed.
+
+    FIX 3 (F1): being interrupted IS mid-exchange, so the barge-in also OPENS the follow-up window and
+    the interrupting line reaches the model's judgment name-free. So this line DOES wake — but the
+    fake workroom returns a SILENT result (``sent=[]``), so no new spoken output is produced; the
+    barge-in's job (cut the interrupted speech) is unchanged."""
     from control_plane.meeting_session import MeetingSession
 
     async def _run() -> None:
         conn = _FakeConnection(speaking=True)  # Proxy is audibly speaking
-        wr = _FakeWorkroom(result=_result(sent=[]))
+        wr = _FakeWorkroom(result=_result(sent=[]))  # the judged turn stays silent
         session = MeetingSession(workroom=wr, connection=conn)
 
         # a human interjects while Proxy speaks (not even an address — just talking over it)
@@ -804,8 +924,11 @@ def test_human_line_during_speech_triggers_a_barge_in_cut() -> None:
         await session.drain()
 
         assert conn.speak.cuts == 1          # speech was cut
-        assert conn.cut_latched is True      # and the rest of the interrupted turn is latched out
-        assert wr.asks == []                 # this cross-talk line did not itself wake
+        assert session._follow_up_until > 0.0  # the barge-in opened the follow-up window (F1)
+        # the interrupting line reached the model's judgment (routed as a wake, no name needed) —
+        # and the model judged silence here, so nothing new was said:
+        assert wr.asks == ["hold on, that's not right"]
+        assert conn.sent == []               # a silent judged turn delivered nothing new
 
     asyncio.run(_run())
 
@@ -872,18 +995,32 @@ def test_proxy_self_echo_never_barges_in_on_itself() -> None:
 
 def test_a_new_wake_clears_the_cut_latch_so_its_speech_flows() -> None:
     """After a barge-in latches out the interrupted turn, the NEXT wake's delivery begins with a clean
-    latch (``begin_turn``) so its spoken output is not wrongly suppressed."""
+    latch (``begin_turn``) so its spoken output is not wrongly suppressed.
+
+    FIX 3 (F1): a barge-in now ALSO routes the interrupting line to judgment — so that judged turn's
+    ``begin_turn`` is the new-wake that clears the latch. Here the interrupting line is judged SILENT
+    (``sent=[]``), and a following named address delivers the real answer with a clean latch."""
     from control_plane.meeting_session import MeetingSession
 
     async def _run() -> None:
         conn = _FakeConnection(speaking=True)
-        wr = _FakeWorkroom(result=_result(sent=_say("here is the fresh answer")))
+
+        class _WR(_FakeWorkroom):
+            async def run_ask(self, ask: str, *, delta: str = "") -> Any:
+                self.asks.append(ask)
+                if "what's the fix" in ask:      # the named address delivers the real answer
+                    return _result(sent=_say("here is the fresh answer"))
+                return _result(sent=[])          # the interrupting line is judged silent
+
+        wr = _WR()
         session = MeetingSession(workroom=wr, connection=conn)
 
-        # a human barges in (latch goes up)
+        # a human barges in (cut fires); the interrupting line is judged silent → begin_turn ran but
+        # produced nothing, so the cut of the interrupted turn stands and no new speech flowed.
         await session.on_line("Bob", "wait, stop for a second", ts=1.0)
         await session.drain()
-        assert conn.cut_latched is True
+        assert conn.speak.cuts == 1
+        assert conn.sent == []               # the judged interrupting line delivered nothing
 
         # now a real address wakes Proxy → the wake clears the latch before delivering its intent
         await session.on_line("Bob", "proxy, what's the fix?", ts=2.0)
@@ -1094,11 +1231,18 @@ def test_pre_wire_lines_buffer_and_flush_in_order_on_wire_session() -> None:
     class _FakeSession:
         def __init__(self) -> None:
             self.lines: list[tuple[str, str, float, bool]] = []
+            self.batches: list[list[tuple[str, str, float, bool]]] = []
 
         async def on_line(
             self, speaker: str, text: str, *, ts: float = 0.0, is_chat: bool = False
         ) -> None:
             self.lines.append((speaker, text, ts, is_chat))
+
+        async def catch_up(
+            self, lines: list[tuple[str, str, float, bool]]
+        ) -> None:
+            self.batches.append(list(lines))
+            self.lines.extend(lines)
 
     async def _run() -> None:
         rt = MeetingRuntime(meeting_id="m-1")
@@ -1108,9 +1252,12 @@ def test_pre_wire_lines_buffer_and_flush_in_order_on_wire_session() -> None:
         assert len(rt.pending_lines) == 2
         s = _FakeSession()
         await rt.wire_session(s)  # type: ignore[arg-type]
-        assert s.lines == [
-            ("Riya", "Hey Proxy, can you hear me?", 1.0, False),
-            ("Daksh", "second line", 2.0, True),
+        # ONE catch-up batch (not per-line feeds): both lines arrive together.
+        assert s.batches == [
+            [
+                ("Riya", "Hey Proxy, can you hear me?", 1.0, False),
+                ("Daksh", "second line", 2.0, True),
+            ]
         ]
         assert rt.pending_lines == []
         # post-wire: lines feed straight through

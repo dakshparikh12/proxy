@@ -413,64 +413,156 @@ function clearScreen() {
   screen.removeAttribute("srcdoc");
   stage.classList.remove("hidden");
 }
-// Recall's headless browser allows autoplay; resume() also covers any
-// browser that starts the context suspended.
-const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-audioCtx.resume();
-// Small jitter/lead-in buffer (seconds): the FIRST chunk of a fresh utterance is
-// scheduled this far AHEAD of now, not at now. Cartesia streams a sentence at a
-// time with network jitter between /tts/bytes calls, so scheduling right at
-// currentTime made the first samples race the audio thread and clip the leading
-// word ("So for the demo plan" heard as "plan."). ~150ms is inaudible as latency
-// but absorbs the arrival jitter so no word onset is ever dropped or choppy.
-const JITTER_LEAD_S = 0.15;
-// nextStartTime is the rolling playback cursor: every chunk is scheduled at
-// max(cursor, now+lead) and the cursor advances by the chunk's exact duration, so
-// chunks butt seamlessly with no inter-chunk gap and no cross-sentence discontinuity.
-let nextStartTime = 0;
-// Every scheduled-but-not-yet-finished source, so a barge-in cut can stop them all
-// at once (WebAudio has no global "stop everything"). Sources self-remove on end.
-let liveSources = [];
+// CONTINUOUS-STREAM PLAYER (FIX 4 — the best audio). The old player scheduled each
+// ~120ms PCM chunk as its OWN AudioBufferSourceNode created at 44100 on a context
+// running at the browser's native rate — so WebAudio RESAMPLED EVERY CHUNK SEPARATELY,
+// planting an interpolation seam at each chunk boundary (~8 seams/sec = the classic
+// choppy/gravelly voice). A rolling cursor can't fix a per-chunk resample seam. So we
+// play ONE continuous stream instead: an AudioWorklet pulls from a single Float32 FIFO
+// that every incoming chunk is APPENDED to — no per-chunk buffers, no per-chunk resample,
+// no seams. On underrun the worklet emits ramped silence (a ~5ms fade so even a true gap
+// is click-free) and re-prebuffers before resuming. Sample-rate is handled ONCE: we ask
+// for a 44100 context (Chrome honors it → zero resampling in our path) and, only if the
+// created context reports a different rate, resample ONCE at append (never per chunk).
+const PREBUFFER_S = 0.35;   // samples to bank before emitting after silence (jitter cushion)
+const RAMP_S = 0.005;       // fade-out/in at underrun gap edges → click-free silence
 
-function playChunk(arrayBuffer) {
+// The worklet processor SOURCE — an inline module (the page is one served HTML string, so
+// we register it from a Blob URL). It owns the FIFO and the prebuffer/underrun/cut logic;
+// the main thread only decodes+appends and sends control messages over the port. This JS
+// is the byte-for-byte MIRROR of the reference implementation proven in
+// tests/test_output_media_stream_player.py (fifo_player.py) — keep them in lockstep.
+const WORKLET_SRC = `
+class StreamProcessor extends AudioWorkletProcessor {
+  constructor(options) {
+    super();
+    const opt = (options && options.processorOptions) || {};
+    this._fifo = new Float32Array(0);   // the single continuous sample FIFO
+    this._read = 0;                     // read cursor into _fifo
+    this._prebuffer = Math.max(1, Math.floor((opt.prebufferS || 0.35) * sampleRate));
+    this._ramp = Math.max(1, Math.floor((opt.rampS || 0.005) * sampleRate));
+    this._priming = true;               // banking samples before the first emit
+    this._fadingIn = 0;                 // remaining fade-in samples after an underrun
+    this.port.onmessage = (e) => {
+      const m = e.data;
+      if (m && m.type === 'samples') { this._append(m.samples); return; }
+      if (m && m.type === 'cut') { this._cut(); return; }
+    };
+  }
+  _available() { return this._fifo.length - this._read; }
+  _append(samples) {
+    // Compact consumed head occasionally so _fifo can't grow unboundedly.
+    if (this._read > 0 && this._read >= this._fifo.length) {
+      this._fifo = new Float32Array(0); this._read = 0;
+    }
+    const keep = this._fifo.subarray(this._read);
+    const next = new Float32Array(keep.length + samples.length);
+    next.set(keep, 0); next.set(samples, keep.length);
+    this._fifo = next; this._read = 0;
+  }
+  _cut() { this._fifo = new Float32Array(0); this._read = 0; this._priming = true; this._fadingIn = 0; }
+  process(inputs, outputs) {
+    const out = outputs[0][0];
+    if (!out) { return true; }
+    // Prebuffer: after silence, wait until we've banked PREBUFFER_S before emitting, so
+    // jittered arrivals don't immediately underrun the first block.
+    if (this._priming) {
+      if (this._available() < this._prebuffer) { out.fill(0); return true; }
+      this._priming = false; this._fadingIn = this._ramp;   // fade the first block in
+    }
+    for (let i = 0; i < out.length; i++) {
+      if (this._available() <= 0) {
+        // UNDERRUN: emit ramped silence (fade the tail out over _ramp), then re-prime so
+        // the resume fades back in — no truncation, no click.
+        out[i] = 0;
+        this._priming = true; this._fadingIn = 0;
+        // fade the last emitted samples out:
+        const start = Math.max(0, i - this._ramp);
+        for (let j = start; j < i; j++) { out[j] *= (i - j) / (i - start || 1); }
+        for (let k = i + 1; k < out.length; k++) { out[k] = 0; }
+        return true;
+      }
+      let s = this._fifo[this._read++];
+      if (this._fadingIn > 0) { s *= 1 - this._fadingIn / this._ramp; this._fadingIn--; }
+      out[i] = s;
+    }
+    return true;
+  }
+}
+registerProcessor('stream-processor', StreamProcessor);
+`;
+
+// Recall's headless browser allows autoplay; resume() also covers any browser that starts
+// the context suspended. Ask for a 44100 context so our s16le@44.1k path needs ZERO
+// resampling; if the browser refuses and reports another rate we resample ONCE at append.
+let audioCtx;
+try {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+} catch (err) {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+}
+audioCtx.resume();
+const CTX_RATE = audioCtx.sampleRate;
+
+let workletNode = null;
+let gainNode = null;
+let muted = false;
+
+async function startWorklet() {
+  const blob = new Blob([WORKLET_SRC], { type: "application/javascript" });
+  const url = URL.createObjectURL(blob);
+  await audioCtx.audioWorklet.addModule(url);
+  URL.revokeObjectURL(url);
+  workletNode = new AudioWorkletNode(audioCtx, "stream-processor", {
+    outputChannelCount: [1],
+    processorOptions: { prebufferS: PREBUFFER_S, rampS: RAMP_S },
+  });
+  gainNode = audioCtx.createGain();
+  gainNode.gain.value = muted ? 0 : 1;
+  workletNode.connect(gainNode).connect(audioCtx.destination);
+}
+const workletReady = startWorklet();
+
+// Linear-interpolation resample ONCE at append (only used if CTX_RATE !== 44100). This is
+// the single, whole-utterance-consistent resample — never the per-chunk seam we removed.
+function resampleTo(floats, fromRate, toRate) {
+  if (fromRate === toRate) { return floats; }
+  const ratio = toRate / fromRate;
+  const outLen = Math.max(1, Math.round(floats.length * ratio));
+  const out = new Float32Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const pos = i / ratio;
+    const i0 = Math.floor(pos);
+    const i1 = Math.min(i0 + 1, floats.length - 1);
+    const frac = pos - i0;
+    out[i] = floats[i0] * (1 - frac) + floats[i1] * frac;
+  }
+  return out;
+}
+
+function appendChunk(arrayBuffer) {
   const sampleCount = Math.floor(arrayBuffer.byteLength / 2);
   if (sampleCount === 0) { return; }
   const int16 = new Int16Array(arrayBuffer, 0, sampleCount);
-  const floats = new Float32Array(sampleCount);
+  let floats = new Float32Array(sampleCount);
   for (let i = 0; i < sampleCount; i++) { floats[i] = int16[i] / 32768; }
-  // The buffer declares 44.1 kHz itself, so even if the context ended up at a
-  // different hardware rate, WebAudio resamples on playback.
-  const buffer = audioCtx.createBuffer(1, sampleCount, SAMPLE_RATE);
-  buffer.getChannelData(0).set(floats);
-  const source = audioCtx.createBufferSource();
-  source.buffer = buffer;
-  source.connect(audioCtx.destination);
-  // Gapless + jitter-safe: schedule on the rolling cursor, but never earlier than
-  // now+lead — that floor gives the first chunk of an utterance its lead-in and
-  // re-arms the lead-in after any underrun (a gap between sentences), so the next
-  // sentence's first word isn't clipped either.
-  const floor = audioCtx.currentTime + JITTER_LEAD_S;
-  if (nextStartTime < floor) { nextStartTime = floor; }
-  source.start(nextStartTime);
-  nextStartTime += buffer.duration;
-  liveSources.push(source);
-  source.onended = () => {
-    const i = liveSources.indexOf(source);
-    if (i !== -1) { liveSources.splice(i, 1); }
-  };
+  floats = resampleTo(floats, SAMPLE_RATE, CTX_RATE);
+  workletReady.then(() => {
+    if (workletNode) { workletNode.port.postMessage({ type: "samples", samples: floats }); }
+  });
 }
 
 function cutPlayback() {
-  // Barge-in (Law 3): a human talked over Proxy. Stop and discard ALL scheduled/
-  // playing audio immediately and reset the cursor so the interrupted turn's
-  // remaining, already-buffered samples never play on top of the human.
-  const sources = liveSources;
-  liveSources = [];
-  for (const s of sources) {
-    try { s.onended = null; s.stop(); } catch (err) { /* already stopped/ended */ }
-    try { s.disconnect(); } catch (err) { /* already disconnected */ }
-  }
-  nextStartTime = 0;
+  // Barge-in (Law 3): a human talked over Proxy. Clear the FIFO instantly so the interrupted
+  // turn's remaining buffered samples never play on top of the human. The worklet re-primes.
+  workletReady.then(() => {
+    if (workletNode) { workletNode.port.postMessage({ type: "cut" }); }
+  });
+}
+
+function setMuted(v) {
+  muted = v;
+  if (gainNode) { gainNode.gain.value = muted ? 0 : 1; }
 }
 
 function connect() {
@@ -486,6 +578,9 @@ function connect() {
         orb.classList.remove("speaking");
         return;
       }
+      if (msg && typeof msg.muted === "boolean") {
+        setMuted(msg.muted);
+      }
       if (msg && typeof msg.speaking === "boolean") {
         orb.classList.toggle("speaking", msg.speaking);
       }
@@ -496,7 +591,7 @@ function connect() {
       }
       return;
     }
-    playChunk(event.data);
+    appendChunk(event.data);
   };
   ws.onclose = () => {
     orb.classList.remove("speaking");

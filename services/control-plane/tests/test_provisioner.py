@@ -218,11 +218,21 @@ def test_transcript_event_is_liveness_and_provisions(monkeypatch) -> None:
     class _RecordingSession:
         def __init__(self) -> None:
             self.lines: list[tuple[str, str, float, bool]] = []
+            self.catch_up_batches: list[list[tuple[str, str, float, bool]]] = []
 
         async def on_line(
             self, speaker: str, text: str, *, ts: float = 0.0, is_chat: bool = False
         ) -> None:
             self.lines.append((speaker, text, ts, is_chat))
+
+        async def catch_up(
+            self, lines: list[tuple[str, str, float, bool]]
+        ) -> None:
+            # wire_session flushes the pre-wire buffer through catch_up (one batch, at most one
+            # wake). Mirror the real session: record the batch AND append its lines, so the trigger
+            # utterance that provisioned the meeting is observed in ``lines`` exactly as before.
+            self.catch_up_batches.append(list(lines))
+            self.lines.extend(lines)
 
     sess = _RecordingSession()
     calls = _install_fakes(

@@ -156,10 +156,17 @@ def install_meetings_route(
                 status_code=409,
             )
 
-        # (4) The one real invite path: meetings row + REAL bot launch through the
-        #     transport seam. ``transport_provider`` is the test seam; unset (the
-        #     live deployment) invite_proxy constructs the real Recall transport.
+        # (4) The one real invite path: meetings row + workroom ASSEMBLED FIRST, THEN a REAL bot
+        #     launch through the transport seam. ``transport_provider`` is the test seam; unset
+        #     (the live deployment) invite_proxy constructs the real Recall transport.
+        #
+        # READY-BEFORE-JOIN (FIX 1): build the (before_join, after_join) hooks so the workroom is
+        # fully assembled BEFORE the bot joins — "if Proxy is knocking, Proxy is ready". before_join
+        # claims + assembles from the meeting row (no bot yet); after_join binds the real bot id onto
+        # the live connection, posts the ready line, and spawns the run-until-end lifecycle. Absent
+        # provisioning state (a bare test app) leaves the hooks None — the plain row+bot invite runs.
         transport = getattr(request.app.state, "transport_provider", None)
+        before_join, after_join = _meetings.ready_before_join_hooks(request.app.state)
         try:
             invited = await _meetings.invite_proxy(
                 db,
@@ -168,6 +175,8 @@ def install_meetings_route(
                 meeting_url=meeting_url,
                 head_sha=head_sha,
                 transport=transport,
+                before_join=before_join,
+                after_join=after_join,
             )
         except Exception:  # noqa: BLE001 - the join failure is honest but its internals stay server-side
             # §4.6 safeError: the caller learns the join failed (plainly, Law 2) but
@@ -175,19 +184,6 @@ def install_meetings_route(
             _log.exception("invite failed for meeting_url=%s repo=%s", meeting_url, repo)
             return JSONResponse(
                 {"error": "Proxy could not join the meeting"}, status_code=502
-            )
-
-        # PRE-WARM AT INVITE (Bug 4): fire the provision NOW — a synthetic ``bot.joining_call``
-        # liveness payload with the REAL bot id — so the workroom + warm session are ready while
-        # the bot is still knocking. Fire-and-forget; the atomic claim keeps the transcript-
-        # liveness fallback idempotent (never a double provision).
-        launch = getattr(request.app.state, "provision_launch", None)
-        if launch is not None and invited.recall_bot_id:
-            await launch(
-                {
-                    "event": "bot.joining_call",
-                    "data": {"bot_id": str(invited.recall_bot_id)},
-                }
             )
 
         return JSONResponse(

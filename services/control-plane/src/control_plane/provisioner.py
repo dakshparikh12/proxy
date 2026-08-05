@@ -412,6 +412,7 @@ async def provision_meeting(
     transport: Any = None,
     speak: Any = None,
     oauth_token: str | None = None,
+    resolved: dict[str, Any] | None = None,
 ) -> ProvisionOutcome:
     """Claim + provision the per-meeting workroom runtime from a Recall ``in_call`` webhook.
 
@@ -426,18 +427,30 @@ async def provision_meeting(
     never a raise on the webhook path. The injection kwargs (``transport``/``speak``/
     ``oauth_token``) are the vendor seams — ``None`` everywhere means the REAL production
     edges (RecallTransport, Cartesia speak pipe, the subscription token from env).
+
+    ``resolved`` is the READY-BEFORE-JOIN seam (FIX 1): when the invite path has ALREADY
+    created the meeting row and wants the workroom assembled BEFORE launching the bot, it
+    passes the pre-resolved row directly — the claim keys on ``resolved['id']`` (exactly how
+    ``claim_meeting`` already keys), so no ``get_by_bot_id`` lookup is needed (the bot does
+    not exist yet). The webhook path passes ``resolved=None`` and resolves the bot itself;
+    the atomic claim makes an already-assembled meeting a no-op on the later liveness event.
     """
     if _event_name(payload) not in _LIVENESS_EVENTS:
         return ProvisionOutcome(claimed=False)
 
+    # bot_id is the payload's when the webhook drives this; on the ready-before-join path the
+    # bot does not exist yet (``resolved`` was passed), so it may be None — the connection is
+    # built with an empty bot_id and the caller binds the real id right after the bot joins.
     bot_id = _bot_id(payload)
-    if bot_id is None:
-        return ProvisionOutcome(claimed=False)
 
-    async with db.acquire() as conn:
-        resolved = await repos.meetings.get_by_bot_id(conn, bot_id)
     if resolved is None:
-        return ProvisionOutcome(claimed=False)  # unknown bot never opens a harness
+        # Webhook path: resolve the bot back to its meeting. No bot ⇒ nothing to provision.
+        if bot_id is None:
+            return ProvisionOutcome(claimed=False)
+        async with db.acquire() as conn:
+            resolved = await repos.meetings.get_by_bot_id(conn, bot_id)
+        if resolved is None:
+            return ProvisionOutcome(claimed=False)  # unknown bot never opens a harness
     meeting_id = str(resolved["id"])
 
     # An already-registered runtime on THIS instance means we already own the meeting; a
@@ -470,7 +483,8 @@ async def provision_meeting(
     # words (a transcript/chat delivery — see _LIVENESS_EVENTS). Ingest them NOW: the session
     # is not wired yet, so they land in the pre-wire buffer, chronologically first, and
     # wire_session flushes them into the reactive loop when assembly completes. The drain
-    # could not feed them — no runtime existed when it dispatched this payload.
+    # could not feed them — no runtime existed when it dispatched this payload. On the
+    # ready-before-join path the payload is the synthetic invite trigger (no words) — a no-op.
     trigger = _liveness_line(payload)
     if trigger is not None:
         await runtime.ingest_line(
@@ -485,7 +499,7 @@ async def provision_meeting(
         session, workroom, connection, speak_pipe = await _assemble_workroom(
             resolved,
             db=db,
-            bot_id=bot_id,
+            bot_id=bot_id or "",
             transport=transport,
             speak=speak,
             oauth_token=oauth_token,
@@ -507,6 +521,13 @@ async def provision_meeting(
         # buffered while assembly ran — including the liveness utterance that triggered this
         # very provision — so the words that raced the join reach the wake gate. A session-
         # less assembly (degraded boot) keeps the buffer; nothing to flush into.
+        #
+        # NO ready-chat post here. On the READY-BEFORE-JOIN path the bot is not in the room
+        # yet (there is nothing to post to) — that signal fires from the invite orchestrator's
+        # ``after_join`` the instant the bot joins. On the WEBHOOK fallback path the meeting is
+        # ALREADY live (a transcript/chat delivery is what triggered this provision), so a
+        # "ready" post is redundant AND would both pollute the agent's delivery log and race the
+        # first wake's own response. Wire straight through and let the agent's first turn speak.
         if session is not None:
             await runtime.wire_session(session)
         if workroom is not None:
@@ -517,6 +538,40 @@ async def provision_meeting(
                 _sandbox_keepwarm(workroom, meeting_id)
             )
     return ProvisionOutcome(claimed=True, run_id=run_id)
+
+
+async def assemble_before_join(
+    resolved: dict[str, Any],
+    *,
+    db: Database,
+    registry: Any,
+    transport: Any = None,
+    speak: Any = None,
+    oauth_token: str | None = None,
+) -> ProvisionOutcome:
+    """READY-BEFORE-JOIN (FIX 1): claim + assemble the workroom from a meeting ROW, no bot yet.
+
+    The invite path calls this AFTER creating the meeting row and BEFORE launching the Recall
+    bot, so the E2B sandbox + clone + warm Claude session are fully assembled and registered
+    while there is still no bot in the room. It is exactly :func:`provision_meeting` driven by
+    a pre-resolved row (``resolved``) with a synthetic, word-free liveness payload — the atomic
+    claim is keyed on ``resolved['id']`` so a later real webhook for the same meeting no-ops
+    (idempotent). The connection is built with an empty ``bot_id``; the caller binds the real
+    id onto ``runtime.connection.bot_id`` the instant the bot joins.
+
+    Returns the :class:`ProvisionOutcome`; ``claimed`` is True iff this instance assembled the
+    runtime. Honest-degrade throughout — an assembly fault keeps the claim but boots without a
+    brain (never a raise), exactly as the webhook path does.
+    """
+    return await provision_meeting(
+        {"event": "bot.joining_call", "data": {}},  # synthetic, word-free liveness trigger
+        db=db,
+        registry=registry,
+        transport=transport,
+        speak=speak,
+        oauth_token=oauth_token,
+        resolved=resolved,
+    )
 
 
 async def _assemble_workroom(
@@ -720,9 +775,45 @@ async def run_meeting_until_end(
         return outcome  # a claim won but the bot no longer resolves — nothing to run
     meeting_id = str(resolved["id"])
 
-    # Wait for the meeting-end webhook to drop the runtime (the drain runs end_meeting on a
-    # terminal webhook). No meeting time cap (SPEC §9) — the resolved bound is only the
-    # generous leak-backstop ceiling, resolved at launch time so a deploy can raise it.
+    return await _run_until_end(
+        db, registry, meeting_id=meeting_id, outcome=outcome, timeout_s=timeout_s
+    )
+
+
+async def run_until_end_for_meeting(
+    db: Database,
+    registry: Any,
+    *,
+    meeting_id: str,
+    outcome: ProvisionOutcome,
+    timeout_s: float | None = None,
+) -> ProvisionOutcome:
+    """READY-BEFORE-JOIN lifecycle continuation (FIX 1): run an ALREADY-provisioned meeting to end.
+
+    The invite path assembles the workroom BEFORE the bot joins (via
+    :func:`assemble_before_join`), then launches the bot. This carries the run-until-end lifecycle
+    for that meeting — identical to the tail of :func:`run_meeting_until_end` (wait for the
+    meeting-end webhook to drop the runtime, else the safety ceiling tears it down, then complete
+    the ``operation_runs`` row) — but keyed on the meeting id we already own, not on a bot resolve
+    (the webhook drain keys post-join events by bot id; only this launch is row-keyed)."""
+    return await _run_until_end(
+        db, registry, meeting_id=meeting_id, outcome=outcome, timeout_s=timeout_s
+    )
+
+
+async def _run_until_end(
+    db: Database,
+    registry: Any,
+    *,
+    meeting_id: str,
+    outcome: ProvisionOutcome,
+    timeout_s: float | None = None,
+) -> ProvisionOutcome:
+    """Wait for meeting end (registry drop) or the leak-backstop ceiling, then complete the row.
+
+    The shared tail of both meeting entries (webhook-driven + ready-before-join). No meeting time
+    cap (SPEC §9) — ``timeout_s=None`` resolves the generous env-configurable safety ceiling; an
+    explicit bound is honored for tests/shutdown. On the ceiling the runtime is torn down here."""
     bound_s = timeout_s if timeout_s is not None else _meeting_max_s()
     ran_to_end = False
     try:
@@ -795,12 +886,83 @@ def make_provision_launcher(
     return _launch
 
 
+def make_ready_before_join_hooks(
+    db: Database,
+    registry: Any,
+    *,
+    timeout_s: float | None = None,
+    tasks: set[asyncio.Task[Any]] | None = None,
+) -> tuple[Any, Any]:
+    """Build the ``(before_join, after_join)`` hooks the invite route hands :func:`invite_proxy`.
+
+    READY-BEFORE-JOIN (FIX 1) — the invite route wires these so the workroom is FULLY ASSEMBLED
+    before the Recall bot joins:
+
+    * ``before_join(row)`` — claims + assembles the workroom from the just-created meeting ROW
+      (no bot yet) via :func:`assemble_before_join`, and returns the ``ProvisionOutcome``. This is
+      what makes the ~60-90s of sandbox+clone+warm-Claude happen BEFORE the bot knocks. An
+      assembly fault is already honest-degraded inside (the meeting boots brainless, never raises).
+    * ``after_join(outcome, bot_id)`` — once the bot is in the room and its real id is bound to the
+      row, this binds that id onto the live connection (the room verbs address the real bot), fires
+      the "ready" chat line NOW (there is finally a room to post into), and spawns the run-until-end
+      lifecycle as a background task so the invite route returns while the meeting runs for hours.
+
+    ``tasks`` holds a strong ref to the background run-loop so it is never GC'd mid-flight. On a
+    claim LOSS (some other instance already owns the meeting) ``after_join`` is a safe no-op."""
+    live: set[asyncio.Task[Any]] = tasks if tasks is not None else set()
+    # ``before_join`` stashes the just-created meeting id here so ``after_join`` binds/runs the
+    # exact runtime it assembled — no fragile reverse lookup (one invite, one closure).
+    state: dict[str, str] = {}
+
+    async def _before_join(row: dict[str, Any]) -> ProvisionOutcome:
+        state["meeting_id"] = str(row["id"])
+        return await assemble_before_join(row, db=db, registry=registry)
+
+    async def _after_join(outcome: Any, bot_id: str) -> None:
+        if not isinstance(outcome, ProvisionOutcome) or not outcome.claimed:
+            return  # some other instance owns this meeting — nothing to bind or run here
+        meeting_id = state.get("meeting_id", "")
+        runtime = registry.get(meeting_id) if meeting_id else None
+        if runtime is None:
+            return
+        # Bind the real bot id onto the live connection so the Recall room verbs (chat/dm/mute)
+        # address the bot that actually joined — assembly built the connection with an empty id.
+        conn = runtime.connection
+        if conn is not None:
+            with contextlib.suppress(Exception):
+                conn.bot_id = bot_id
+            # READY signal, NOW that the bot is in the room (never before — you can't post to a
+            # meeting you haven't joined). Best-effort; a chat fault never blocks the meeting.
+            if runtime.session is not None:
+                try:
+                    await conn.to_meeting(
+                        "Proxy is warmed up and ready — go ahead.", medium="chat"
+                    )
+                except Exception:  # noqa: BLE001 - courtesy signal, never load-bearing
+                    _log.warning(
+                        "ready-signal chat post failed (meeting continues)", exc_info=True
+                    )
+        # Continue the lifecycle: run until the meeting-end webhook drops the runtime.
+        task = asyncio.ensure_future(
+            run_until_end_for_meeting(
+                db, registry, meeting_id=meeting_id, outcome=outcome, timeout_s=timeout_s
+            )
+        )
+        live.add(task)
+        task.add_done_callback(live.discard)
+
+    return _before_join, _after_join
+
+
 __all__ = [
     "DEFAULT_MEETING_MAX_HOURS",
     "MEETING_MAX_HOURS_ENV",
     "SANDBOX_KEEPWARM_INTERVAL_S",
     "ProvisionOutcome",
+    "assemble_before_join",
     "make_provision_launcher",
+    "make_ready_before_join_hooks",
     "provision_meeting",
     "run_meeting_until_end",
+    "run_until_end_for_meeting",
 ]

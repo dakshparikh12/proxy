@@ -78,23 +78,25 @@ def test_speakpipe_cut_propagates_a_cut_frame_to_the_real_channel() -> None:
     asyncio.run(_run())
 
 
-def test_page_js_handles_the_cut_frame_and_tracks_sources() -> None:
-    """The inline page JS must (a) track scheduled sources, (b) stop them all on a cut frame, and
-    (c) schedule the first chunk with a jitter lead-in (never at bare currentTime). This asserts the
-    exact JS shipped in the page so the client-side half of the fix can't silently regress."""
+def test_page_js_handles_the_cut_frame_and_clears_the_stream() -> None:
+    """The inline page JS must (a) handle a cut control frame and (b) clear the continuous-stream
+    FIFO on it (barge-in, Law 3) so the interrupted turn's buffered audio never plays on top of the
+    human. This asserts the exact JS shipped in the page so the client-side half can't regress.
+
+    FIX 4 rebuild: the player is now a continuous-stream AudioWorklet over a single FIFO (no per-chunk
+    source scheduling), so a cut CLEARS THE FIFO rather than stopping N scheduled sources. The full
+    continuous-player assertions live in tests/test_output_media_stream_player.py."""
     from in_meeting.output_media import _render_page
 
     page = _render_page("m-page-1")
     # (a) a cut control frame is handled and clears playback:
     assert 'msg.type === "cut"' in page
     assert "cutPlayback()" in page
-    # (b) sources are tracked and stopped in cutPlayback:
-    assert "liveSources" in page
-    assert "s.stop()" in page
-    # (c) a jitter lead-in so the first word isn't clipped, and a rolling cursor:
-    assert "JITTER_LEAD_S" in page
-    assert "audioCtx.currentTime + JITTER_LEAD_S" in page
-    assert "nextStartTime += buffer.duration" in page
+    # (b) the cut clears the FIFO instantly via the worklet port message (the new stream player):
+    assert 'postMessage({ type: "cut" }' in page
+    # the old per-chunk scheduling machinery is fully gone (no dead code, no per-chunk resample seam):
+    assert "liveSources" not in page
+    assert "createBufferSource" not in page
 
 
 def test_barge_in_final_line_is_not_suppressed_by_the_cut_path() -> None:

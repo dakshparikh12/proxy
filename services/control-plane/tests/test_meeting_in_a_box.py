@@ -365,14 +365,18 @@ def test_meeting_in_a_box_full_chain(monkeypatch, tmp_path) -> None:
         assert rec["sent"][0]["content"] == _ANSWER
 
         # --- STAGE 7: a follow-up POST-WIRE transcript line (registry.get non-None path) feeds AND a
-        # non-addressed line does NOT wake — the drain's steady-state feed, end to end.
-        cross = _transcript_webhook(bot_id, "great lets move on to the next agenda item", "Riya", 5.0)
+        # non-addressed line OUTSIDE the follow-up window does NOT wake — the drain's steady-state feed
+        # under the name-gate, end to end. (The first turn opened the short follow-up window (F1); this
+        # cross-talk arrives well AFTER it closes, so only the name-gate can wake it — and it can't.)
+        from control_plane.meeting_session import _FOLLOW_UP_WINDOW_S
+        late_ts = 1.0 + _FOLLOW_UP_WINDOW_S + 30.0
+        cross = _transcript_webhook(bot_id, "great lets move on to the next agenda item", "Riya", late_ts)
         db.land(cross)
         await drain_pending_webhooks(db, registry=registry, launch=launch)
         await runtime.session.drain()
-        assert len(runtime.session.results) == 1, "a non-addressed post-wire line did NOT wake"
+        assert len(runtime.session.results) == 1, "a non-addressed post-wire line (after the window) did NOT wake"
 
-        addressed = _transcript_webhook(bot_id, "Proxy are you still with us", "Riya", 6.0)
+        addressed = _transcript_webhook(bot_id, "Proxy are you still with us", "Riya", late_ts + 1.0)
         db.land(addressed)
         await drain_pending_webhooks(db, registry=registry, launch=launch)
         for _ in range(400):

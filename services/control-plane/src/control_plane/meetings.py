@@ -13,6 +13,7 @@ is ever fabricated; a join/consent failure surfaces plainly, never a false succe
 """
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -107,16 +108,28 @@ async def invite_proxy(
     head_sha: str,
     transport: TransportProvider | None = None,
     source: JoinSource = JoinSource.LINK,
+    before_join: Callable[[dict[str, Any]], Awaitable[Any]] | None = None,
+    after_join: Callable[[Any, str], Awaitable[None]] | None = None,
 ) -> InvitedMeeting:
-    """Create the meeting, launch a REAL Recall bot, bind the id Recall returns.
+    """Create the meeting, ASSEMBLE THE WORKROOM, then launch a REAL Recall bot, bind the id.
 
-    The meetings row is created first (bound to tenant/repo/pinned_sha=HEAD) with a
-    null ``recall_bot_id``; the ``JoinSession`` then launches the bot via
-    ``transport.join(meeting_url)`` and, on launch, writes the REAL bot id back onto
-    the row (AC-JOIN-10) — never a synthetic ``recall-bot-<uuid>``. The consent
-    notice posts pinned as the first observable action before observation begins
-    (AC-JOIN-03/15). A join or consent-post failure raises with the honest reason
-    (Law 2) — no false joined/posted state is ever recorded.
+    READY-BEFORE-JOIN ordering (FIX 1 — "if Proxy is knocking, Proxy is ready"):
+
+    1. the meetings row is created first (bound to tenant/repo/pinned_sha=HEAD) with a
+       null ``recall_bot_id`` — NO bot exists yet;
+    2. ``before_join`` (when given) runs against that row and assembles the whole workroom
+       (E2B sandbox + clone + warm Claude session) WHILE THERE IS STILL NO BOT IN THE ROOM —
+       so the ~60-90s of assembly happens before, not during, the founder talking into a void;
+    3. only THEN does the ``JoinSession`` launch the bot via ``transport.join(meeting_url)``
+       and write the REAL bot id back onto the row (AC-JOIN-10) — never a synthetic id. The
+       consent notice posts pinned as the first observable action (AC-JOIN-03/15);
+    4. ``after_join`` (when given) runs with the assembly handle + the real bot id, so the
+       caller can bind the id onto the live connection and post the "ready" line now that the
+       bot is actually in the room.
+
+    ``before_join``/``after_join`` are optional so every existing caller/test that just wants a
+    row + a bot (no workroom) is unchanged. A join or consent-post failure raises with the
+    honest reason (Law 2) — no false joined/posted state is ever recorded.
     """
     async with db.acquire() as conn:
         row = await repos.meetings.insert_meeting(
@@ -130,6 +143,14 @@ async def invite_proxy(
             platform=_platform_for_url(meeting_url),  # set at join (CANONICAL §11.1)
         )
     meeting_id = row["id"]
+
+    # READY-BEFORE-JOIN: assemble the workroom NOW, against the just-created row, before any
+    # bot is launched. The hook owns honest-degrade (an assembly fault must not block the join
+    # — a meeting can still boot brainless), so its result is opaque here and simply handed to
+    # ``after_join`` once the bot id is known.
+    assembly: Any = None
+    if before_join is not None:
+        assembly = await before_join(dict(row))
 
     if transport is None:
         # Per-meeting transport: the Output-Media camera URL carries THIS meeting_id
@@ -148,6 +169,11 @@ async def invite_proxy(
     if result.failed or result.bot_id is None:
         # Honest failure — never a false 'joined'/'consent posted' (AC-JOIN-16, Law 2).
         raise RuntimeError(result.reason or "join failed")
+
+    # The bot is now in the room and its real id is bound to the row. Bind it onto the live
+    # connection + announce readiness now that there IS a room to announce into.
+    if after_join is not None:
+        await after_join(assembly, result.bot_id)
 
     return InvitedMeeting(
         id=meeting_id,
@@ -177,6 +203,28 @@ def _platform_for_url(meeting_url: str | None) -> str:
     if "meet.google.com" in url:
         return "meet"
     return "recall"
+
+
+def ready_before_join_hooks(app_state: Any) -> tuple[Any, Any]:
+    """Resolve the ``(before_join, after_join)`` READY-BEFORE-JOIN hooks off ``app.state`` (FIX 1).
+
+    The two invite routes (``POST /meetings`` + the dev ``test-provision`` tap) both want the
+    workroom assembled before the bot joins. Both call this to build the hooks from the live
+    provisioning state (the meeting-runtime registry + the in-flight task set) that startup wired.
+
+    When the provisioning state is absent — a bare test app that only exercises the row+bot invite,
+    or a process where provisioning never came up — this returns ``(None, None)`` so ``invite_proxy``
+    falls back to its plain create-row + launch-bot behavior (no assembly), unchanged. That keeps
+    every existing invite test that injects only a recording transport working as before."""
+    registry = getattr(app_state, "meeting_runtimes", None)
+    if registry is None:
+        return None, None
+    from .provisioner import make_ready_before_join_hooks
+
+    tasks = getattr(app_state, "meeting_tasks", None)
+    return make_ready_before_join_hooks(
+        app_state.db, registry, tasks=tasks if isinstance(tasks, set) else None
+    )
 
 
 async def resolve_bot_id(db: Database, recall_bot_id: str) -> dict[str, Any] | None:
