@@ -3,12 +3,13 @@ name = "workroom"
 version = "0.0.0"
 description = "services.workroom — sandboxed Workroom (E2B mutable work)."
 requires-python = ">=3.12"
-dependencies = ["contracts", "agentkit", "db", "ops", "premeeting", "pydantic>=2"]
+dependencies = ["contracts", "agentkit", "db", "http", "ops", "premeeting", "pydantic>=2"]
 
 [tool.uv.sources]
 contracts = { workspace = true }
 agentkit = { workspace = true }
 db = { workspace = true }
+http = { workspace = true }
 ops = { workspace = true }
 premeeting = { workspace = true }
 

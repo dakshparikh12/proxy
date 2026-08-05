@@ -74,6 +74,10 @@ module = [
     # is an optional/integration-tier dep (imported lazily inside the writer).
     "google", "google.*", "google.cloud", "google.cloud.*",
     "google.api_core", "google.api_core.*", "google.api_core.exceptions",
+    # The deterministic symbol-map stack (premeeting/symbol_map.py): the Aider tree-sitter +
+    # PageRank deps. networkx/grep_ast/tree_sitter_language_pack ship no type stubs.
+    "networkx", "networkx.*", "grep_ast", "grep_ast.*",
+    "tree_sitter_language_pack", "tree_sitter_language_pack.*",
 ]
 ignore_missing_imports = true
 
@@ -86,7 +90,7 @@ ignore_missing_imports = true
 # under its walk name. (Doc 02 transport is the first cross-member runtime importer;
 # it imports both ``contracts`` and ``agentkit`` — the AbortRegistry reused for barge-in.)
 [[tool.mypy.overrides]]
-module = ["contracts.*", "agentkit.*", "control_plane.*", "premeeting.*", "in_meeting.*", "transport.*", "workroom.*", "llm.*", "db.*"]
+module = ["contracts.*", "agentkit.*", "control_plane.*", "premeeting.*", "in_meeting.*", "transport.*", "workroom.*", "db.*"]
 ignore_missing_imports = true
 
 # ``libs.contracts`` binds itself to the canonical ``contracts`` package via a runtime
@@ -100,14 +104,25 @@ module = ["libs.contracts", "libs.contracts.*"]
 ignore_missing_imports = true
 follow_imports = "skip"
 
-# ``libs.llm`` / ``libs.lint`` facade submodules mypy can't resolve to a checked source (the
-# real code is checked under the bare ``llm.*`` name). Silence only the missing-import.
+# ``libs.lint`` facade submodules mypy can't resolve to a checked source (the real code is
+# checked under the bare name). Silence only the missing-import.
 [[tool.mypy.overrides]]
-module = ["libs.llm.*", "libs.lint.*"]
+module = ["libs.lint.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# The whole-product test universe: the root cross-service suites PLUS every workspace member's
+# own tests (services/*/tests + libs/*/tests). The gate must see them all — a per-service suite
+# that is not collected here is an invisible, unguarded regression (a suite left out here once let
+# 4 stale-RED per-service tests hide from `bash scripts/signoff.sh`, which runs a bare pytest).
+# Any new member that grows a tests/ dir MUST be added to this list.
+testpaths = [
+    "tests",
+    "services/premeeting/tests",
+    "services/in-meeting/tests",
+    "services/control-plane/tests",
+    "libs/agentkit/tests",
+]
 norecursedirs = [".venv", "node_modules", "fixtures"]
 # doc00 and doc01 each ship a `test_w_workflows.py` / `conftest.py` (no package
 # __init__.py); the default prepend import mode collides on the shared basenames.
@@ -145,7 +160,7 @@ dev = [
 ]
 # Integration/reality-tier vendor SDKs. Kept OUT of the default install and any
 # package's runtime deps on purpose: the product imports them lazily and degrades
-# honestly when absent (see notes_artifact.py / the llm gateway). This opt-in group
+# honestly when absent (see notes_artifact.py). This opt-in group
 # provisions them for running the `reality`/`integration` tiers against real vendors:
 #   uv sync --group reality
 # - anthropic: the real Claude SDK the reality cassettes record against.

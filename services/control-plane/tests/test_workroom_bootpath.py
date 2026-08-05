@@ -12,8 +12,9 @@ faked at their exact seam boundaries:
 EVERYTHING ELSE IS THE REAL PRODUCT CODE: ``provisioner._assemble_workroom`` (token gate, repo
 resolve, honest-degrade, connection + session assembly), ``provision_workroom`` (real
 clone/setup/seed command sequence through the real ``call_external`` retry+telemetry seam), the
-real ``Workroom`` methods, the real ``_parse_stream``, the real ``MeetingSession`` (transcript-in
--> wake gate -> run_ask -> respond), the real ``MeetingConnection`` (medium routing to the physical
+real ``Workroom`` methods (the single WARM delivery path — provision starts the session host, a wake
+is served through WAKE_IN/WAKE_OUT), the real ``MeetingSession`` (transcript-in -> wake gate ->
+run_ask -> respond), the real ``MeetingConnection`` (medium routing to the physical
 pipe), and the real ``MeetingRuntimeRegistry.end_meeting`` teardown drain+kill.
 
 The meeting is driven exactly as the webhook feed drives it in production: one
@@ -31,28 +32,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shlex
 from types import SimpleNamespace
 
-# The canonical grounded answer a real native-Claude turn would stream back as stream-json:
-# two tool_use events (Bash, then Read), a to_meeting tool_use (the agent reaching the room), then a
-# final result carrying a file:line citation + cost. A clean turn always emits the ``result`` event.
+# The canonical grounded answer a real native-Claude turn produces: two tools (Bash, then Read), a
+# ``to_meeting`` call (the agent reaching the room), a file:line citation + cost, and the agent's OWN
+# recorded channel choice (medium 'say'). This is the record the WARM session host (session_host.py)
+# writes to WAKE_OUT/<id>.json — the SINGLE delivery path — which run_ask parses into a WorkroomResult
+# and the session replays over the connection honoring the chosen medium.
 _ANSWER = ("The slugify helper lives at packages/lib/slugify.ts:4 — it lowercases then strips "
            "non-alphanumerics. I read the actual file to confirm.")
-_CANNED_STREAM = "\n".join(
-    [
-        json.dumps({"type": "assistant",
-                    "message": {"content": [{"type": "tool_use", "name": "Bash"}]}}),
-        json.dumps({"type": "assistant",
-                    "message": {"content": [{"type": "tool_use", "name": "Read"}]}}),
-        json.dumps({"type": "assistant",
-                    "message": {"content": [{"type": "tool_use", "name": "to_meeting"}]}}),
-        json.dumps({"type": "result", "result": _ANSWER, "total_cost_usd": 0.0123}),
-    ]
-)
-# In the no-relay/file path the in-sandbox MCP server appends each ``to_meeting`` call as one JSON
-# line to $PROXY_MEETING_OUT. This is the agent's OWN recorded channel choice for the turn (medium
-# 'say' here), which the session replays over the connection honoring that medium.
-_CANNED_INTENTS = json.dumps({"ts": 1.0, "content": _ANSWER, "medium": "say", "to": ""})
+_CANNED_RECORD = {
+    "tools": ["Bash", "Read", "to_meeting"],
+    "text": _ANSWER,
+    "turns": 3,
+    "cost_usd": 0.0123,
+    "error": None,
+    "sent": [{"content": _ANSWER, "medium": "say", "to": ""}],
+}
 
 
 class _FakeFiles:
@@ -63,27 +60,42 @@ class _FakeFiles:
         self._store[path] = content
 
     async def read(self, path: str) -> str:
-        return self._store.get(path, "")
+        # The warm driver polls WAKE_OUT/<id>.json and the readiness breadcrumb; a genuinely absent
+        # file RAISES in the real E2B SDK, so model that (the driver treats it as "not ready yet").
+        if path not in self._store:
+            raise FileNotFoundError(path)
+        return self._store[path]
 
 
 class _FakeCommands:
+    """Serves the WARM session-host protocol: the detached launch (``background=True``) brings the
+    host 'up' (drops the readiness breadcrumb + records the launch envs), and an appended wake line
+    (``printf … >> WAKE_IN``) is 'served' into ``WAKE_OUT/<id>.json`` with the canned record — exactly
+    what session_host.py does inside the sandbox, so the real driver parse + replay run for real."""
+
     def __init__(self, store: dict[str, str], log: list[str],
-                 env_log: list[dict[str, str]]) -> None:
+                 env_log: list[dict[str, str]], launch_envs: list[dict[str, str]]) -> None:
         self._store = store
         self._log = log
         self._env_log = env_log
+        self._launch_envs = launch_envs
+        from in_meeting.workroom import HOST_READY_FILE, WAKE_IN, WAKE_OUT
+        self._ready_file = HOST_READY_FILE
+        self._wake_in = WAKE_IN
+        self._wake_out = WAKE_OUT
 
     async def run(self, cmd: str, timeout: int | None = None,
-                  envs: dict[str, str] | None = None) -> SimpleNamespace:
+                  envs: dict[str, str] | None = None,
+                  background: bool = False) -> SimpleNamespace:
         self._log.append(cmd)
         self._env_log.append(dict(envs or {}))
-        # A woken turn shells out to native ``claude`` and redirects its stream-json to
-        # /tmp/ask.jsonl; the fake "produces" that file so the real reader+parser run for real. In
-        # the no-relay/file path it ALSO records the agent's ``to_meeting`` intent to the local JSONL
-        # (what the in-sandbox MCP server would write), so the real replay path runs for real too.
-        if "claude -p" in cmd:
-            self._store["/tmp/ask.jsonl"] = _CANNED_STREAM
-            self._store["/tmp/to_meeting.jsonl"] = _CANNED_INTENTS
+        if background:                       # the detached session-host launch → host comes 'up'
+            self._launch_envs.append(dict(envs or {}))
+            self._store[self._ready_file] = str(1.0)
+        if ">>" in cmd and self._wake_in in cmd:   # a wake enqueue → 'serve' it like the warm host
+            argv = shlex.split(cmd[cmd.index("printf"):cmd.index(" >>")])
+            req = json.loads(argv[-1])       # printf '%s\n' <shlex-quoted-json>  → last token is the arg
+            self._store[f"{self._wake_out}/{req['id']}.json"] = json.dumps(_CANNED_RECORD)
         return SimpleNamespace(exit_code=0, stdout="DONE", stderr="")
 
 
@@ -96,8 +108,9 @@ class FakeSandbox:
         self._store: dict[str, str] = {}
         self.cmd_log: list[str] = []
         self.env_log: list[dict[str, str]] = []
+        self.launch_envs: list[dict[str, str]] = []
         self.files = _FakeFiles(self._store)
-        self.commands = _FakeCommands(self._store, self.cmd_log, self.env_log)
+        self.commands = _FakeCommands(self._store, self.cmd_log, self.env_log, self.launch_envs)
         self.sandbox_id = "sbx-fake-boot"
         self.killed = False
 
@@ -258,20 +271,21 @@ def test_workroom_serves_a_meeting_on_the_real_bootpath(monkeypatch) -> None:
         assert res.tools == ["Bash", "Read", "to_meeting"]
         assert res.cost_usd > 0.0                    # cost surfaced from the stream
 
-        # (3b) run_ask launched native ``claude`` WITH the meeting MCP server and handed it the
-        # relay wiring, so a live turn's ``to_meeting`` calls can reach the host (SPEC §4/§5):
-        ask_cmd = next(c for c in sandbox.cmd_log if "claude -p" in c)
-        assert f"--mcp-config {MCP_CONFIG_FILE}" in ask_cmd   # the MCP server is loaded for the turn
-        ask_envs = sandbox.env_log[sandbox.cmd_log.index(ask_cmd)]
-        assert ask_envs["PROXY_MEETING_RELAY"] == workroom.relay_url    # relay endpoint
-        assert ask_envs["PROXY_MEETING_TOKEN"] == workroom.relay_token  # per-meeting bearer
-        assert ask_envs["PROXY_MEETING_OUT"] == "/tmp/to_meeting.jsonl"
-        assert ask_envs["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-oauth-test"   # subscription auth
+        # (3b) provision started the WARM session host (the single delivery path) and handed it the
+        # relay wiring + subscription auth + wake-protocol paths, so a live turn's ``to_meeting`` calls
+        # can reach the host (SPEC §4/§5). This is where those envs flow now (no per-turn cold spawn):
+        assert sandbox.launch_envs, "the warm session host was launched at provision"
+        host_envs = sandbox.launch_envs[0]
+        assert host_envs["PROXY_MEETING_RELAY"] == workroom.relay_url    # relay endpoint
+        assert host_envs["PROXY_MEETING_TOKEN"] == workroom.relay_token  # per-meeting bearer
+        assert host_envs["PROXY_MEETING_OUT"] == "/tmp/to_meeting.jsonl"
+        assert host_envs["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-oauth-test"   # subscription auth
+        # ...and the .mcp.json that registers the meeting MCP server is present in the sandbox:
+        assert MCP_CONFIG_FILE in sandbox._store
 
-        # (3c) FILE-MODE REPLAY path: the FAKE claude does not actually POST to the host relay, but
-        # it DID record the agent's own ``to_meeting`` intent to the local JSONL (as the in-sandbox
-        # MCP server would in the no-relay path). run_ask captured it onto result.sent, and the
-        # session REPLAYED the agent's OWN channel choice (medium 'say') over the REAL connection —
+        # (3c) FILE-MODE REPLAY path: the warm host recorded the agent's own ``to_meeting`` intent
+        # (medium 'say') in its turn record's ``sent``. run_ask captured it onto result.sent, and the
+        # session REPLAYED the agent's OWN channel choice over the REAL connection —
         # never our own prose, never result.text:
         assert res.sent == [{"content": _ANSWER, "medium": "say", "to": ""}]
         assert any("slugify.ts:4" in s for s in pipe.said)
@@ -476,7 +490,7 @@ def test_session_stays_quiet_when_the_agent_acted_live_via_relay() -> None:
         async def feed_transcript(self, md: str) -> None:
             return None
 
-        async def run_ask(self, ask: str, *, recent: str = "") -> Any:
+        async def run_ask(self, ask: str, *, delta: str = "") -> Any:
             # RELAY mode: the in-sandbox MCP POSTed the agent's chat choice live to the connection
             # (grown just below) and — on a SUCCESSFUL relay — recorded NOTHING locally, so
             # ``result.sent`` is EMPTY (a relayed intent is never also recorded; ``_parse_intents``
@@ -507,7 +521,7 @@ class _StubWorkroom:
     async def feed_transcript(self, md: str) -> None:
         return None
 
-    async def run_ask(self, ask: str, *, recent: str = "") -> Any:
+    async def run_ask(self, ask: str, *, delta: str = "") -> Any:
         return self._result
 
 

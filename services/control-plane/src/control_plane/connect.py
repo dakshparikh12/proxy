@@ -280,6 +280,10 @@ def trigger_connect_index(
     registry: Any = None,
     map_provider: Any = None,
     map_store: Any = None,
+    call: Any = None,
+    minter: Any = None,
+    oauth_token: str = "",  # nosec B107 - empty default = "no subscription token", not a secret
+    installation_id: str = "",
 ) -> Any:
     """The connect→index TRIGGER — the pre-meeting map build (SPEC §8).
 
@@ -302,6 +306,14 @@ def trigger_connect_index(
     ``not_ready`` naming that gap rather than fabricating a map (Law 2). ``registry`` is
     accepted for call-site compatibility; push-freshness is now ``premeeting.refresh_on_push``,
     wired by the meeting/webhook spine (this trigger no longer registers a code_intel pipeline).
+
+    ``call`` (the ``libs.http.call_external`` E2B seam), ``oauth_token`` (the subscription
+    ``CLAUDE_CODE_OAUTH_TOKEN``), ``minter`` (the GitHub-App installation-token minter) +
+    ``installation_id`` are the Part-2 comprehension seams: threaded straight into
+    ``run_pipeline`` so the LIVE connect path fires Part 2 — the bounded native-Claude holistic
+    comprehension pass, verified against the real repo, combined with Part 1 into ONE dense
+    understanding (SD-1). Absent ⇒ Part 2 is skipped and the artifact is the deterministic
+    symbol map alone (a clean, complete degrade — Part 2 only ever ADDS, Law 2).
 
     Returns the :class:`~premeeting.pipeline.PipelineResult` (the route fires this in a
     background thread and discards it). Never raises out to the caller — a build failure is
@@ -351,6 +363,10 @@ def trigger_connect_index(
                 listener=listener,
                 store=store,
                 install_id=install_id,
+                call=call,
+                minter=minter,
+                oauth_token=oauth_token,
+                installation_id=installation_id,
             )
         )
     except Exception as exc:  # noqa: BLE001 - honest not_ready, never a silent success
@@ -372,6 +388,10 @@ async def _run_pipeline_and_bind(
     listener: Any,
     store: ConnectStore,
     install_id: str,
+    call: Any = None,
+    minter: Any = None,
+    oauth_token: str = "",
+    installation_id: str = "",
 ) -> Any:
     """Run the map-build pipeline + terminal readiness + repo bind on ONE loop-local DB.
 
@@ -381,7 +401,11 @@ async def _run_pipeline_and_bind(
     pool is opened ONLY when the injected store carries a real async ``.db`` pool (the production
     path, where that pool belongs to the main loop and would raise ``ConnectionDoesNotExistError``
     from here); a store-less or fake-store path (tests, an injected recorder) keeps the injected
-    store so the trigger still calls THROUGH it. The loop-local pool is always closed."""
+    store so the trigger still calls THROUGH it. The loop-local pool is always closed.
+
+    ``call`` / ``minter`` / ``installation_id`` / ``oauth_token`` are the Part-2 comprehension
+    seams passed straight through to ``run_pipeline`` so the live connect path fires Part 2 (SD-1);
+    absent, ``run_pipeline`` produces the deterministic symbol map alone (a clean degrade)."""
     from premeeting.pipeline import run_pipeline
 
     loop_db: Any = None
@@ -408,6 +432,14 @@ async def _run_pipeline_and_bind(
             map_store=effective_store,
             sha=sha,
             readiness_listener=listener,
+            # Part-2 comprehension seams (SD-1): the E2B ``call`` seam + subscription OAuth token
+            # turn on the bounded native-Claude holistic pass; the ``minter`` + ``installation_id``
+            # mint the token that clones a PRIVATE repo inside the Part-2 sandbox. Absent ⇒ Part 2
+            # is skipped and the artifact degrades to the Part-1 symbol map alone (honest, Law 2).
+            call=call,
+            minter=minter,
+            installation_id=installation_id,
+            oauth_token=oauth_token,
         )
         # Terminal readiness — read the REAL verdict off the pipeline result (never a faked pass).
         # A verified map covers the whole clone (verify_map is a full-tree check), so a clean
@@ -674,6 +706,15 @@ def install_connect_routes(app: "FastAPI") -> None:
         # fabricated map (Law 2). Secrets/handles come from env-wired app state, never hard-coded.
         map_provider = getattr(request.app.state, "map_provider", None)
         map_store = getattr(request.app.state, "map_store", None)
+        # The Part-2 comprehension seams the boot step (``server._wire_comprehension_seam``)
+        # assigns onto ``app.state``: the E2B ``call`` seam, the subscription OAuth token, the
+        # GitHub-App installation-token minter + its installation id. Threaded straight into the
+        # trigger so the live connect path fires Part 2 (SD-1). Absent ⇒ Part 2 degrades to Part 1
+        # alone (honest, Law 2) — never a fabricated credential.
+        map_call = getattr(request.app.state, "map_call", None)
+        map_minter = getattr(request.app.state, "map_minter", None)
+        map_oauth_token = getattr(request.app.state, "map_oauth_token", "") or ""
+        installation_id = getattr(request.app.state, "github_installation_id", "") or ""
         _spawn_trigger(
             store,
             install_id,
@@ -682,6 +723,10 @@ def install_connect_routes(app: "FastAPI") -> None:
             registry=registry,
             map_provider=map_provider,
             map_store=map_store,
+            call=map_call,
+            minter=map_minter,
+            oauth_token=map_oauth_token,
+            installation_id=installation_id,
         )
         return JSONResponse(
             {"install_id": install_id, "install_url": github_app_install_url(repo_url)},
@@ -740,6 +785,10 @@ def _spawn_trigger(
     registry: Any = None,
     map_provider: Any = None,
     map_store: Any = None,
+    call: Any = None,
+    minter: Any = None,
+    oauth_token: str = "",  # nosec B107 - empty default = "no subscription token", not a secret
+    installation_id: str = "",
 ) -> None:
     """Fire the connect→index trigger in a background thread (never blocks the response).
 
@@ -750,8 +799,15 @@ def _spawn_trigger(
     (the durable ``MapStore``) are threaded straight into the trigger so a real map build runs
     when a funded provider is wired; when ``map_provider`` is ``None`` (the live default today,
     D-032) the trigger records an honest ``not_ready`` naming the gap rather than fabricating a
-    map (Law 2). A trigger failure is captured as an honest ``not_ready`` inside the trigger —
-    it never surfaces as an unhandled crash on the request path.
+    map (Law 2).
+
+    ``call`` (the ``libs.http.call_external`` E2B seam), ``oauth_token`` (the subscription
+    ``CLAUDE_CODE_OAUTH_TOKEN``), ``minter`` (the GitHub-App installation-token minter) +
+    ``installation_id`` are the Part-2 comprehension seams — threaded straight through so the live
+    connect path fires Part 2 (SD-1). Absent ⇒ Part 2 degrades to Part 1 alone (honest, Law 2).
+
+    A trigger failure is captured as an honest ``not_ready`` inside the trigger — it never
+    surfaces as an unhandled crash on the request path.
     """
 
     def _run() -> None:
@@ -764,6 +820,10 @@ def _spawn_trigger(
                 registry=registry,
                 map_provider=map_provider,
                 map_store=map_store,
+                call=call,
+                minter=minter,
+                oauth_token=oauth_token,
+                installation_id=installation_id,
             )
         except Exception:  # noqa: BLE001 - already recorded as not_ready inside the trigger
             pass

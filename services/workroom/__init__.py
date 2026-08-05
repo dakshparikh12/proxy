@@ -15,14 +15,10 @@ __path__ = [
     _os.path.join(_os.path.dirname(__file__), "src", "workroom"),
 ]
 
-from .src.workroom import accept_code_change_draft as accept_code_change_draft
 from .src.workroom import accept_draft as accept_draft
 from .src.workroom import propose_change as propose_change
-from .src.workroom import recover_task as recover_task
 
 __all__ = [
-    "accept_code_change_draft",
     "accept_draft",
     "propose_change",
-    "recover_task",
 ]

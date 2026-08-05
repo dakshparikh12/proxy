@@ -21,38 +21,6 @@ from .consent import consent_notice
 from .seams import TransportProvider
 
 
-class ConsentGate:
-    """The per-meeting consent hard-gate the LIVE ``HearingStage`` reads (AC-JOIN-04, Law 3).
-
-    The invite-path ``JoinSession`` owns its own :meth:`JoinSession.can_observe` predicate,
-    but that session is local to the invite call and does not survive to the ``in_call``
-    webhook where the harness assembles the live runtime. This is the durable, injectable
-    gate the runtime carries: it starts **CLOSED** (fail-closed — nothing is observed,
-    recorded, or routed) and only :meth:`grant` opens it, once the harness has confirmed the
-    consent notice posted for the meeting (the bot reaching ``in_call`` means it joined and,
-    by construction of :meth:`JoinSession.join`, posted the notice as its first action).
-
-    Fail-closed by construction: a runtime whose gate is never granted drops every record
-    (records_before_consent_allowed=0) rather than silently defaulting to always-allow — the
-    exact hole a ``HearingStage(can_observe=None)`` on the live path would leave open.
-    """
-
-    def __init__(self, *, granted: bool = False) -> None:
-        self._granted = granted
-
-    def grant(self) -> None:
-        """Open the gate — consent notice confirmed posted; observation may begin."""
-        self._granted = True
-
-    @property
-    def granted(self) -> bool:
-        return self._granted
-
-    def can_observe(self) -> bool:
-        """The predicate the live ``HearingStage`` reads: True only once consent is granted."""
-        return self._granted
-
-
 class JoinState(enum.Enum):
     PENDING = "pending"
     JOINING = "joining"

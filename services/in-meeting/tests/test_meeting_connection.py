@@ -152,3 +152,39 @@ def test_spoken_log_records_only_voice_and_stays_bounded() -> None:
         assert conn.spoken[-1][1] == f"line {_SPOKEN_LOG_MAX + 19}"  # newest kept
 
     asyncio.run(_run())
+
+
+def test_barge_in_cuts_speech_and_latches_out_the_rest_of_the_turn() -> None:
+    """Law 3: ``barge_in`` STOPS the in-flight speech (``speak.cut``) and raises the cut latch, so the
+    remaining streamed sentences of the INTERRUPTED turn are DROPPED (not played over the human) until
+    a new wake calls ``begin_turn``. A chat the agent chose still lands — a voice barge-in silences
+    Proxy's VOICE, not its typing."""
+    from in_meeting.meeting_connection import MeetingConnection
+
+    async def _run() -> None:
+        speak, room = _FakeSpeak(), _FakeRoom()
+        conn = MeetingConnection(speak=speak, room=room, bot_id="b")
+
+        # first sentence of the turn goes out normally
+        assert (await conn.to_meeting("here is the first part", medium="say")).ok
+        assert speak.said == ["here is the first part"]
+
+        # human barges in → speech is cut and the latch goes up
+        await conn.barge_in()
+        assert speak.cuts == 1 and conn.cut_latched is True
+
+        # later streamed sentences of the SAME turn are dropped (not spoken over the human)...
+        r = await conn.to_meeting("and here is the second part", medium="say")
+        assert r.ok is False and "barged-in" in r.detail
+        assert speak.said == ["here is the first part"]  # nothing new spoken
+        # ...but a chat the agent chose still lands (voice barge-in silences voice only)
+        assert (await conn.to_meeting("posting the detail", medium="chat")).ok
+        assert room.chats[-1] == "posting the detail"
+
+        # a NEW wake's delivery begins → latch clears, speech flows again
+        conn.begin_turn()
+        assert conn.cut_latched is False
+        assert (await conn.to_meeting("fresh turn", medium="say")).ok
+        assert speak.said == ["here is the first part", "fresh turn"]
+
+    asyncio.run(_run())

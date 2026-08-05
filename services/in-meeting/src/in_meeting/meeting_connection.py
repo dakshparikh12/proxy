@@ -92,6 +92,27 @@ class MeetingConnection:
     #: re-wakes on itself and the line is attributed back to Proxy. Only the spoken ('say') channel
     #: is recorded — chat/dm are text and never echo acoustically. Bounded to ``_SPOKEN_LOG_MAX``.
     spoken: list[tuple[float, str]] = field(default_factory=list)
+    #: The barge-in "cut" latch (Law 3). A human talking over Proxy calls :meth:`barge_in`, which
+    #: stops the in-flight speech AND raises this latch. While it is up, the say-path DROPS further
+    #: spoken deliveries for the INTERRUPTED turn: after a cut the sandbox may still be streaming
+    #: later sentences of that turn to the relay, and playing them would talk over the human who just
+    #: interrupted. :meth:`begin_turn` lowers it again when a new wake's delivery begins. Only the
+    #: spoken channel is latched — a human's voice barge-in silences Proxy's VOICE, not its chat/dm.
+    cut_latched: bool = False
+
+    async def barge_in(self) -> None:
+        """A human is talking over Proxy — STOP its speech now (Law 3) and latch out the rest of the
+        interrupted turn's spoken deliveries. Detection (a human line during speech, not a sub-onset
+        blip) lives in the reactive loop; this is the physical stop + latch. Never raises the loop:
+        the underlying ``speak.cut()`` is the barge-in primitive and is itself never-throw."""
+        self.cut_latched = True
+        await self.speak.cut()
+
+    def begin_turn(self) -> None:
+        """Lower the barge-in cut latch — a NEW wake's delivery is beginning, so its spoken output
+        must flow again. The latch only ever silences the ONE turn that was interrupted; the next
+        turn starts clean (physics, not a decision — Law 4)."""
+        self.cut_latched = False
 
     async def to_meeting(
         self, content: str = "", medium: str = "say", to: str | None = None
@@ -121,6 +142,12 @@ class MeetingConnection:
     async def _route(self, m: str, content: str, to: str | None) -> MeetingSend:
         # The physical pipe: the agent's chosen medium → the real vendor op. A driver, not a rule.
         if m in ("say", "speak", "voice"):
+            # Barge-in latch (Law 3): a human talked over Proxy, so the rest of THIS turn's streamed
+            # sentences are dropped rather than played on top of the interrupter. The latch clears on
+            # the next wake (``begin_turn``). Only the spoken channel is silenced — a chat/dm the
+            # agent chose still lands, since a voice barge-in silences Proxy's VOICE, not its typing.
+            if self.cut_latched:
+                return MeetingSend("say", False, "dropped: barged-in")
             await self.speak.say(content)
             self._record_spoken(content)
             return MeetingSend("say", True)

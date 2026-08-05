@@ -138,4 +138,47 @@ class InstallationTokenMinter:
         return token
 
 
-__all__ = ["AuthError", "InstallationTokenMinter", "build_app_jwt"]
+def make_installation_minter(
+    *,
+    app_id: str,
+    private_key_path: str,
+    call_external: CallExternal | None = None,
+) -> InstallationTokenMinter | None:
+    """Construct the ONE minter from the GitHub-App id + its private-key .pem PATH, or ``None``.
+
+    The single factory a funded deployment calls at boot to wire the Part-2 clone-token minter:
+    it reads the App private key OFF DISK (the ``GITHUB_APP_PRIVATE_KEY_PATH`` the deployment
+    resolved) and builds the :class:`InstallationTokenMinter` over the ONE ``call_external`` seam
+    (retry + cost telemetry, the §14 external-call hard rule). The key body stays in memory only
+    on the minter — never hard-coded, never logged (PM-AUTH-02 / Hard Rule: Secrets).
+
+    Returns ``None`` (an HONEST no-op) when the app id, the key path, or the key file is absent /
+    unreadable — the caller then clones unauthenticated (a PUBLIC repo like cal.com still works;
+    a private repo degrades to Part-1 alone). A wiring gap never crashes boot and never fabricates
+    a credential (Law 2). ``call_external`` defaults to the real ``libs.http.call_external`` seam.
+    """
+    if not app_id.strip() or not private_key_path.strip():
+        return None
+    try:
+        with open(private_key_path.strip(), encoding="utf-8") as fh:
+            private_key_pem = fh.read()
+    except OSError:
+        return None
+    if not private_key_pem.strip():
+        return None
+    seam = call_external
+    if seam is None:
+        from libs.http.src.http.external import call_external as _call_external
+
+        seam = _call_external
+    return InstallationTokenMinter(
+        app_id=app_id.strip(), private_key_pem=private_key_pem, call_external=seam
+    )
+
+
+__all__ = [
+    "AuthError",
+    "InstallationTokenMinter",
+    "build_app_jwt",
+    "make_installation_minter",
+]

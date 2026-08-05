@@ -10,6 +10,10 @@ dependencies = [
     "http",
     "cryptography>=42",
     "claude-agent-sdk>=0.2.128",
+    "grep-ast>=0.9",
+    "tree-sitter-language-pack>=0.13",
+    "networkx>=3.4",
+    "scipy>=1.11",
 ]
 
 [tool.uv.sources]

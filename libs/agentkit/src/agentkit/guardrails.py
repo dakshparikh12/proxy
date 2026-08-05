@@ -1,13 +1,14 @@
 """The SHARED Proxy guardrails (§3.10 / §3.4) — ONE body, no per-service divergence.
 
-The security-critical injection guardrail lives HERE, in the shared runner lib, so every
-call layer — the in-meeting engine's turn context (``in_meeting.context``), the shared
-``BehaviorRunner.build_query`` path, AND the Workroom (``workroom.agent_config`` DELEGATES
-to this) — uses the SAME body. There is deliberately no second copy of this text: a
-divergent redefinition is exactly the drift risk (a live meeting is a richer injection
-surface than a batch job — the guardrail must never quietly differ between paths). No
-user-visible internal component name appears (Hard Rule: naming); the product and the
-agent are Proxy.
+The security-critical injection guardrail lives HERE, in the shared lib, so every call layer
+uses the SAME body. In the live product it is the Workroom's resident prime
+(``in_meeting.workroom.compose_resident_prime`` appends it LAST to the CLAUDE.md seeded into the
+warm session), so the guardrail is the final authoritative word of the prime native Claude reads —
+and the meeting transcript, which accumulates resident in the conversation, is treated as untrusted
+DATA, never instructions. There is deliberately no second copy of this text: a divergent
+redefinition is exactly the drift risk (a live meeting is a richer injection surface than a batch
+job — the guardrail must never quietly differ between paths). No user-visible internal component
+name appears (Hard Rule: naming); the product and the agent are Proxy.
 """
 from __future__ import annotations
 

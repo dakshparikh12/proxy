@@ -57,9 +57,20 @@ async def call_external(
     ``op`` performs the raw round-trip against a client built here. Transient
     transport errors are retried with exponential backoff up to ``max_retries``;
     every attempt is metered and the accumulated ``total_cost_usd`` is recorded.
+
+    TRANSPORT-CANCEL RESILIENCE (Law 4 — physics of the pipe, not a situation→action rule): the
+    E2B / httpx / anyio stack converts an HTTP/2 stream-reset or GOAWAY under load into a bare
+    ``asyncio.CancelledError`` at the await point — a TRANSPORT blip, not a real task cancellation.
+    Letting that propagate crashed a whole meeting wake on one flaky poll (WS6 long-session
+    regression). So a ``CancelledError`` from ``op()`` is retried WITH backoff exactly like any other
+    transient — BUT ONLY when THIS task is not itself being cancelled by a caller
+    (``current_task().cancelling() == 0``). A GENUINE caller cancellation (meeting-end drain →
+    ``task.cancel()`` sets ``cancelling() > 0``) is honored immediately: re-raised, never retried, so
+    shutdown stays prompt. Fixing it once at the seam makes EVERY external round-trip (E2B read/write/
+    provision, model, GCS, HTTP) uniformly resilient — no per-call-site cancel guard can be forgotten.
     """
     attempt = 0
-    last_exc: Exception | None = None
+    last_exc: BaseException | None = None
     while attempt < max_retries:
         attempt += 1
         try:
@@ -67,6 +78,16 @@ async def call_external(
         except (httpx.HTTPError, TimeoutError) as exc:
             last_exc = exc
             await asyncio.sleep(_BASE_BACKOFF_S * float(attempt))  # backoff
+            continue
+        except asyncio.CancelledError as exc:
+            # A caller genuinely cancelling THIS task increments its cancelling() count — honor it at
+            # once (no retry, no swallow). A cancelling()==0 CancelledError is a transport-induced
+            # blip (HTTP/2 reset / GOAWAY under load surfaced by anyio) → retry like any transient.
+            task = asyncio.current_task()
+            if task is not None and task.cancelling() > 0:
+                raise
+            last_exc = exc
+            await asyncio.sleep(_BASE_BACKOFF_S * float(attempt))  # backoff, then retry the round-trip
             continue
         total_cost_usd = _record_cost(service, unit_cost_usd, attempt)
         return ExternalCallOutcome(value=value, attempts=attempt, total_cost_usd=total_cost_usd)

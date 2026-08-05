@@ -41,6 +41,9 @@ logger = logging.getLogger(__name__)
 #: not writable by the default sandbox user — verified).
 WORKROOM_ROOT = "/home/user/work"
 REPO_DIR = f"{WORKROOM_ROOT}/repo"
+#: The crash/reconnect RECOVERY record of the transcript (SPEC §3). Recall is resident (the warm
+#: session's cache, fed the delta per wake), NOT this file — it exists only to re-seed context if the
+#: warm session is lost/restarted, so a woken turn never reads it just to know what was said.
 TRANSCRIPT_FILE = f"{REPO_DIR}/MEETING_NOTES.md"
 MAP_FILE = f"{REPO_DIR}/REPO_MAP.md"
 PRIME_FILE = f"{REPO_DIR}/CLAUDE.md"
@@ -64,26 +67,42 @@ SDK_PIN = "claude-agent-sdk>=0.2.115"
 # provision so it is warm before the first wake. Each wake is a file round-trip to it (~1-3s) instead
 # of a cold ``claude -p`` spawn (~11-13s: re-spawns the MCP server, re-discovers the tool, reloads the
 # prime EVERY turn). The driver (:meth:`Workroom.run_ask`) writes the wake to WAKE_IN and polls
-# WAKE_OUT/<id>.json; if the host isn't up/responding it FALLS BACK to the cold path (honest degrade).
+# WAKE_OUT/<id>.json; if the host isn't up/responding it RESTARTS the host and retries the warm turn
+# ONCE, then honest-degrades — there is ONE delivery path (no separate cold engine).
 SESSION_HOST_FILE = f"{REPO_DIR}/session_host.py"
 WAKE_IN = "/tmp/wake_in.jsonl"  # nosec B108 — path INSIDE the isolated per-tenant E2B microVM, not the host
 WAKE_OUT = "/tmp/wake_out"  # nosec B108 — path INSIDE the isolated per-tenant E2B microVM, not the host
 #: The host's readiness breadcrumb (written once its persistent session is open); its presence lets
-#: the driver skip the warm attempt entirely when the session never came up (straight to cold).
+#: the driver latch readiness so only the first wake pays the readiness wait.
 HOST_READY_FILE = f"{WAKE_OUT}/_host.ready"
 #: Where the host's stdout/stderr land (a fault breadcrumb for diagnosis; never on the meeting path).
 SESSION_HOST_LOG = "/tmp/session_host.log"  # nosec B108 — path INSIDE the isolated per-tenant E2B microVM, not the host
 #: Poll cadence for the warm round-trip. The turn itself is bounded by ASK_TIMEOUT_S (once the host
 #: is READY); a host that never comes up is caught by the SHORT readiness gate below, not that budget.
 _WARM_POLL_S = 0.25
-#: How long the FIRST wake waits for the host's readiness breadcrumb before giving up on warm and
-#: falling back to cold. Generous enough for the persistent session to open (the SDK client + the MCP
-#: stdio child), short enough that a never-started host degrades quickly. Only paid until the host is
-#: seen ready ONCE (then :attr:`Workroom._host_ready` short-circuits it for the rest of the meeting).
+
+#: The DEAD-HOST budget (seconds) — the short window in which a wake must see EITHER its result OR a
+#: living host, before the driver stops waiting and restarts-and-retries. It is DISTINCT from
+#: ASK_TIMEOUT_S (the ceiling for a genuinely-long *working* turn): a live host keeps advancing its
+#: heartbeat breadcrumb (``session_host`` rewrites HOST_READY_FILE every ~2s, even mid-turn), so a
+#: long turn is NEVER mistaken for dead — only a host whose heartbeat has FROZEN for this whole window
+#: (OOM/SIGKILL/hang) is. This turns "up to 15 min of dead air on a crashed host" into a few-second
+#: recover. Wide enough (relative to the host's ~2s heartbeat) to tolerate transient E2B read
+#: hiccups; short enough that a crash mid-ask recovers in seconds. ``PROXY_DEAD_HOST_TIMEOUT_S``
+#: overrides; an unset/unparsable value keeps the default.
+try:
+    _DEAD_HOST_TIMEOUT_S = float(os.environ.get("PROXY_DEAD_HOST_TIMEOUT_S", "") or 20.0)
+except ValueError:
+    _DEAD_HOST_TIMEOUT_S = 20.0
+#: How long a wake waits for the host's readiness breadcrumb before giving up on the (current) warm
+#: session. Generous enough for the persistent session to open (the SDK client + the MCP stdio
+#: child), short enough that a never-started host is caught quickly (→ restart-and-retry). Only paid
+#: until the host is seen ready ONCE (then :attr:`Workroom._host_ready` short-circuits it for the
+#: rest of the meeting; a restart clears the latch so the fresh host's readiness is re-checked).
 #: In production the host is started at provision (which itself takes tens of seconds for clone +
 #: install), so by the first wake it is long ready and this returns on the first poll — the budget
-#: only bites a host that failed to open (→ fast cold fallback). ``PROXY_WARM_READY_TIMEOUT_S``
-#: overrides for a slow bake; an unset/unparsable value keeps the default.
+#: only bites a host that failed to open. ``PROXY_WARM_READY_TIMEOUT_S`` overrides for a slow bake;
+#: an unset/unparsable value keeps the default.
 try:
     _WARM_READY_TIMEOUT_S = float(os.environ.get("PROXY_WARM_READY_TIMEOUT_S", "") or 30.0)
 except ValueError:
@@ -93,7 +112,8 @@ except ValueError:
 #: wake finds it ready instead of racing the SDK-client+prime open and cold-degrading for the whole
 #: meeting. Provision happens on join (before anyone addresses Proxy), so this wait is transparent —
 #: it just moves the ~15-30s warm-up off the critical path of the first response. Best-effort: if the
-#: host isn't ready in this budget, provision returns anyway and the first wake retries warm → cold.
+#: host isn't ready in this budget, provision returns anyway and the first wake waits, then
+#: restarts-and-retries if still not ready.
 try:
     _WARM_PROVISION_WAIT_S = float(os.environ.get("PROXY_WARM_PROVISION_WAIT_S", "") or 90.0)
 except ValueError:
@@ -108,9 +128,67 @@ ASK_TIMEOUT_S = 900.0
 #: ``None`` provisions a base sandbox and sets it up at warm time (proven path).
 DEFAULT_TEMPLATE: str | None = None
 
+#: The delimiter that OPENS the resident codebase-understanding block appended to the prime
+#: (CLAUDE.md). The symbol map (real file:line, ranked) lives here so it is part of the CACHED
+#: prime — the agent's understanding is RESIDENT, not a REPO_MAP.md it must Read every wake. Kept
+#: visually distinct from the behavioral prime above it (a clear header + a one-line contract) so
+#: the lean behavior isn't diluted. The prime text (``prime.py``) points HERE, not at ./REPO_MAP.md.
+UNDERSTANDING_HEADER = (
+    "\n\n# Your understanding of this codebase\n"
+    "(Your resident mental model — a holistic, qualitative comprehension of this codebase. It is NOT "
+    "a line-number index: use it to understand the system and to know WHICH area/module to go to. "
+    "When you need to cite an exact `file:line`, look it up LIVE with a quick grep/read at that "
+    "location — never cite a line from memory.)\n\n"
+)
+
+
+def compose_resident_prime(prime: str, map_text: str) -> str:
+    """Compose the CLAUDE.md that is seeded RESIDENT into the warm session: the lean behavioral
+    ``prime`` followed by the codebase-understanding block (the comprehension-first resident doc —
+    the qualitative mental model + a compact navigation aid, under :data:`UNDERSTANDING_HEADER`),
+    and finally the SHARED prompt-injection guardrail as the strict LAST word.
+
+    This whole text becomes the cached prime, so the agent's understanding rides in-context every
+    wake with ZERO reads — resident, not a file. Exact ``file:line`` citations are grounded LIVE at
+    answer time (Law 1), using the understanding to know where to look. An empty ``map_text`` appends
+    no understanding block (a clean degrade), but the guardrail is ALWAYS present.
+
+    The guardrail (``agentkit.with_injection_guardrail`` — the ONE shared body, no per-service copy)
+    is appended LAST so it is the final authoritative word of the CLAUDE.md that native Claude reads:
+    transcript content — which now accumulates resident in the conversation — is UNTRUSTED DATA, never
+    instructions (Hard Rule: prompt safety / SPEC §3.10). Placing it after the understanding block
+    keeps it strictly last, so nothing later in the prime (or injected via transcript data) can lift it."""
+    # Import from the fully-typed deep module (``agentkit.guardrails``), not the opaque facade
+    # (``agentkit``) — so mypy --strict sees the real ``-> str`` signature (matches how the
+    # premeeting map-build imports ``agentkit.provider``). ONE shared body, no per-service copy.
+    from agentkit.guardrails import with_injection_guardrail
+
+    body = prime if not map_text.strip() else prime + UNDERSTANDING_HEADER + map_text.rstrip() + "\n"
+    # ``with_injection_guardrail`` is declared ``-> str``; the cross-member ``agentkit.*`` import is
+    # opaque to the strict walk (``ignore_missing_imports``), so the return is seen as Any — the value
+    # is a real ``str`` (matches the sandbox_meeting_mcp convention for the same cross-boundary case).
+    return with_injection_guardrail(body)  # type: ignore[no-any-return]
+
 # The E2B command/file round-trips ride this seam signature: a thunk returning an awaitable,
 # wrapped by ``call_external`` (retry + telemetry). Injected so tests pass a fake.
 Seam = Callable[..., Awaitable[Any]]
+
+
+def _poll_cancel_is_spurious() -> bool:
+    """True if a ``CancelledError`` just raised from an E2B POLL read is a spurious TRANSPORT cancel
+    (swallow it — keep polling), False if THIS task is genuinely being cancelled (re-raise — honor it).
+
+    The E2B envd RPC layer converts a connect-level CANCELED — an HTTP/2 stream reset / a connection
+    dropped mid-request under load — into ``asyncio.CancelledError`` (``e2b/envd/rpc.py``: "restore the
+    original CancelledError"). On a poll read that is a blip: the sandbox keeps advancing and the value
+    will be there next poll, so cutting the wait would ORPHAN a turn whose result the warm session is
+    still writing (the room then hears nothing on a wake that actually SUCCEEDED server-side). A GENUINE
+    task cancellation raises the same type at the same await point, so we disambiguate the only robust
+    way: ``asyncio.current_task().cancelling()`` > 0 means a real cancellation is pending on THIS task
+    (honor it); otherwise the ``CancelledError`` came from the E2B transport and this poll simply saw no
+    data. Physics (a liveness poll tolerating a transport blip), not a situation→action rule (Law 4)."""
+    task = asyncio.current_task()
+    return task is not None and task.cancelling() == 0
 
 
 @dataclass(slots=True)
@@ -157,8 +235,9 @@ class Workroom:
     relay_url: str = ""
     #: The per-meeting bearer the relay route authenticates. Empty when there is no relay.
     relay_token: str = ""
-    #: Whether the WARM session host was started at provision. True ⇒ :meth:`run_ask` tries the warm
-    #: round-trip first (falling back to the cold ``claude -p`` path on any miss). False ⇒ cold only.
+    #: Whether the WARM session host launched successfully (at provision, or after a restart). Purely
+    #: informational now — :meth:`run_ask` ALWAYS attempts the warm round-trip and self-heals via
+    #: :meth:`_restart_session_host` on a miss; there is no separate cold engine to route to.
     warm: bool = False
     #: Latches True once the host's readiness breadcrumb is first seen — so only the FIRST wake pays
     #: the readiness wait; every later wake goes straight to the (warm) turn.
@@ -193,70 +272,137 @@ class Workroom:
         getattr(outcome, "value", outcome)
 
     async def feed_transcript(self, transcript_md: str) -> None:
-        """Materialize the live transcript into the sandbox (the workroom always holds the
-        latest meeting notes). The bridge calls this as lines accumulate — a full rewrite is
-        simplest + cheap; the file is what a woken turn reads."""
+        """Materialize the live transcript into the sandbox as a CRASH/RECONNECT RECOVERY record.
+
+        This is NOT the primary recall path (SPEC §3): a woken turn recalls the meeting from the
+        WARM session's resident cache — each wake inlines only the delta, which accumulates in-context
+        — so it never reads this file just to know what was said. The file exists so that if the warm
+        session is lost and restarted, or a reconnect needs to re-seed context, the room-so-far is on
+        disk to catch up from. The bridge writes a bounded tail as lines accumulate. Never crashes the
+        meeting on a write fault."""
         try:
             await self._write_file(TRANSCRIPT_FILE, transcript_md)
         except Exception:  # noqa: BLE001 — transcript sync never crashes the meeting
             logger.exception("workroom transcript sync failed (meeting continues)")
 
-    async def run_ask(self, ask: str, *, recent: str = "") -> WorkroomResult:
+    async def run_ask(self, ask: str, *, delta: str = "") -> WorkroomResult:
         """Wake Claude in the workroom on ONE reactive ask; return the result.
 
-        Prefers the WARM permanent session (``session_host.py``, started at provision): the prime +
-        the ``to_meeting`` MCP tool are already loaded, so a wake is ~1-3s instead of a ~11-13s cold
-        ``claude -p`` spawn. The wake prompt (the exact instructions below) is handed to the warm
-        session; its result is parsed into the SAME :class:`WorkroomResult`. If the warm host isn't
-        up/responding (never started, crashed, or the round-trip times out) this FALLS BACK to the
-        cold ``claude -p`` path — an honest degrade, never a crash. Either path reaches the room only
-        through the agent's ONE ``to_meeting`` tool (speak/chat/dm/screen/offer/mute), relayed live to
-        the host connection (or recorded locally when there is no relay).
+        ``delta`` is the NEW transcript since the last wake (SPEC §3). It is inlined into the wake
+        prompt handed to the WARM session — where it enters the cached conversation — so the whole
+        meeting ACCUMULATES resident turn-over-turn: the agent already knows everything said before,
+        and only this delta + the ask are fresh this turn. Nothing directs it to read a transcript
+        file for recall; ``MEETING_NOTES.md`` exists only as a crash/reconnect record.
 
-        Never raises — a failed turn is an honest ``WorkroomResult.error`` (§9)."""
-        prompt = self._wake_prompt(ask, recent)
-        if self.warm:
+        There is ONE delivery path — the WARM permanent session (``session_host.py``, started at
+        provision): the prime + the ``to_meeting`` MCP tool are already loaded, so a wake is a fast
+        file round-trip to an already-warm session. The wake prompt (the exact instructions below) is
+        handed to that session; its result is parsed into a :class:`WorkroomResult`. If the warm host
+        isn't up/responding (never started, crashed, or the round-trip times out) this RESTARTS the
+        session host and RETRIES the warm turn ONCE; if it still can't be reached the turn honest-
+        degrades to a :class:`WorkroomResult` error (§9) — never a crash. The turn reaches the room
+        only through the agent's ONE ``to_meeting`` tool (speak/chat/dm/screen/offer/mute), relayed
+        live to the host connection (or recorded locally when there is no relay).
+
+        Never raises — a failed turn is an honest ``WorkroomResult.error`` (§9). This includes a
+        TRANSPORT-induced ``CancelledError`` from a wake's own E2B I/O: the E2B/httpx/anyio stack
+        cancels an in-flight read's cancel-scope when the HTTP/2 connection is reset / GOAWAYs under
+        load, which surfaces here as a ``CancelledError`` even though the meeting is NOT ending. Left
+        unhandled it would crash the meeting driver on a single flaky poll (WS6 long-session
+        regression: 2 such cancels across ~26 wakes on real E2B). So a spurious transport cancel is
+        absorbed into an honest ``WorkroomResult.error`` (the wake simply delivered nothing this turn —
+        the room self-heals on the next line); ONLY a GENUINE task cancellation pending on THIS task
+        (a real meeting-end drain — ``current_task().cancelling() > 0``) is re-raised so shutdown stays
+        prompt (Law 3: human control / prompt teardown is never swallowed)."""
+        prompt = self._wake_prompt(ask, delta)
+        try:
+            return await self._run_ask_once(ask, prompt)
+        except asyncio.CancelledError:
+            # A genuine caller drain (meeting end) increments this task's cancelling() count — honor
+            # it. A cancelling()==0 CancelledError is a transport cancel-scope blip surfaced from the
+            # E2B round-trip → absorb it as an honest no-reply turn (never crash the meeting loop).
+            if not _poll_cancel_is_spurious():
+                raise
+            logger.warning("wake absorbed a transport-induced cancel — honest no-reply this turn",
+                           exc_info=True)
+            return WorkroomResult(ask=ask, error="workroom transport interrupted this turn")
+
+    async def _run_ask_once(self, ask: str, prompt: str) -> WorkroomResult:
+        """The warm turn + single self-heal, wrapped by :meth:`run_ask` (which absorbs a transport
+        cancel). Returns the parsed result or an honest degrade — never fakes a reply."""
+        warm = await self._run_ask_warm(ask, prompt)
+        if warm is not None:
+            return warm
+        # The warm host missed (never opened, crashed, or the round-trip timed out). Restart it once
+        # and retry — a single self-heal that recovers a faulted session without a whole second
+        # engine to maintain. Still a bounded, honest attempt: if the restarted host doesn't answer
+        # either, the turn degrades to an honest error rather than hanging or faking a reply.
+        logger.warning("warm session miss for meeting ask — restarting the session host, retry once")
+        if await self._restart_session_host():
             warm = await self._run_ask_warm(ask, prompt)
             if warm is not None:
                 return warm
-            logger.warning("warm session miss for meeting ask — falling back to cold claude -p")
-        return await self._run_ask_cold(ask, prompt)
+        logger.error("warm session unavailable after restart — honest degrade (no reply this turn)")
+        return WorkroomResult(ask=ask, error="workroom session unavailable")
 
     @staticmethod
-    def _wake_prompt(ask: str, recent: str = "") -> str:
+    def _wake_prompt(ask: str, delta: str = "") -> str:
         """The one wake prompt (judge-if-addressed → decline false wake → deliver in one turn →
-        output-excellence → offer). Built once here so the WARM and COLD paths hand Claude the SAME
-        instructions — the delivery mechanism changed, the behavior contract did not. The recent
-        transcript is INLINED so a wake needs no ./MEETING_NOTES.md read just to judge/answer (a
-        turn saved every wake); the full history stays on disk for the rare older-context case."""
-        recent_block = (
-            "Recent transcript (most recent lines — use this DIRECTLY; you do NOT need to open "
-            f"./MEETING_NOTES.md unless you need OLDER context than this):\n{recent}\n\n"
-            if recent.strip() else ""
+        output-excellence → offer). Built once here so the warm session (and its restart-retry) hand
+        Claude the SAME instructions on every wake — one behavior contract.
+
+        Only the transcript DELTA since the last wake is inlined (SPEC §3). Because this runs on the
+        WARM session, everything inlined on prior wakes is already in the cached conversation — so the
+        agent ALREADY knows the whole meeting resident, and this turn only needs the new lines + the
+        ask. There is deliberately NO direction to read a transcript file for recall: recall comes
+        from the resident cache, not a per-wake file read (``MEETING_NOTES.md`` is only a crash record)."""
+        delta_block = (
+            "The latest transcript since you last checked in (you already know everything said before "
+            f"this — it's resident in your memory of the room):\n{delta}\n\n"
+            if delta.strip() else ""
         )
         return (
             "Someone in the room may have addressed you (your name was heard). Your identity and how "
-            "to behave are in ./CLAUDE.md; older meeting history (if you need it) is in "
-            "./MEETING_NOTES.md.\n\n"
-            f"{recent_block}"
+            "to behave are in ./CLAUDE.md; you've been in this meeting the whole time and remember the "
+            "conversation — no need to go re-read it anywhere.\n\n"
+            f"{delta_block}"
             f"The line that woke you:\n{ask}\n\n"
-            "FIRST judge whether you were genuinely being addressed — make this call FAST, from the "
-            "recent transcript above ALONE, before you read any code or investigate anything. If 'proxy' was used "
-            "incidentally (e.g. \"our proxy server\", \"the proxy pool\") or people are talking among "
-            "themselves and no one is actually asking you for anything, STOP IMMEDIATELY — do nothing, "
-            "don't call the tool, don't explore the repo. Only start real work once you're sure you "
-            "were really addressed.\n\n"
+            "FIRST judge whether you were genuinely being addressed — make this call FAST, from what "
+            "you already know of the room, before you read any code or investigate anything. If 'proxy' was used "
+            "incidentally (e.g. \"our proxy server\", \"the proxy pool\", a proxy/nginx config) or "
+            "people are talking among "
+            "themselves and no one is actually asking you for anything, STAY COMPLETELY SILENT — write "
+            "NO words at all (your words are spoken aloud, so a spoken \"not addressed\" / \"staying "
+            "quiet\" / \"no one's asking me\" is itself an unwanted interruption — the room must hear "
+            "NOTHING from you), don't call the tool, don't explore the repo. Just end your turn empty. "
+            "Silence is the correct, complete response to cross-talk. Only start real work — or say a "
+            "single word — once you're sure you were really addressed.\n\n"
             "If you were addressed, do exactly as much as the ask needs — a greeting or a quick "
             "question is one direct reply with no tools; a real task gets the real work (read the "
             "ACTUAL code, run code to verify, draft real files). SPEAK by simply writing your reply — "
             "your words are spoken to the room live, streamed sentence by sentence as you type. Use "
             "your `mcp__meeting__to_meeting` tool (call it by that exact name — already loaded, don't "
-            "search for it) ONLY for the non-spoken channels: chat/dm/screen/offer/mute. CRITICAL: you "
-            "get exactly ONE turn — there is NO 'later', no follow-up turn, no coming back. Never say "
-            "\"I'll bring it back\" / \"give me a few minutes\" / \"will follow up\" and then stop — "
-            "that leaves the room with nothing. Do the ENTIRE task now (a longer one may open with a "
-            "one-line \"on it…\", but you must then finish it), and before you stop you MUST have "
-            "delivered the real result/artifact to the room in this same turn. For anything "
+            "search for it) ONLY for the non-spoken channels: chat/dm/screen/offer/mute. CRITICAL: "
+            "deliver the real result IN THIS TURN — do the work now and hand over the actual "
+            "result/artifact before you stop. To the ROOM this whole response is ONE continuous "
+            "moment: even though you may take several internal steps to get there, speak as if you did "
+            "it just now in one go — NEVER tell the room you \"already did this\" / did it in a "
+            "\"previous turn\" / \"last turn\" / \"as I showed earlier\", never claim an artifact is "
+            "\"already up\" unless you actually produced it this response, and never re-offer or "
+            "restage as if repeating yourself. Your internal steps are not earlier exchanges with the "
+            "room; unless the action really happened earlier in the meeting, it is happening NOW — narrate "
+            "it that way (Law 2: never overstate what has happened). Never say \"I'll bring it back\" / "
+            "\"give me a few "
+            "minutes\" / \"will follow up\" and then stop with nothing delivered — that leaves the "
+            "room hanging. The ONE exception: if you genuinely CANNOT finish without an answer from "
+            "the room (a real ambiguity, or a blocker only they can clear), ask that ONE question "
+            "clearly and stop — when they reply you WILL be brought back with their answer to "
+            "continue this same task, so ask crisply rather than guessing (Law 1: grounded or "
+            "silent). Otherwise do the ENTIRE task now — lead with the answer itself when it's close "
+            "(don't spend your first line on \"on it…\" when the reply is a second away); save a "
+            "brief \"give me a moment\" for genuine multi-step work that will visibly take a while, "
+            "and then you MUST finish it. Before you stop you MUST have delivered "
+            "the real result/artifact to the room in this same turn. For anything "
             "world-touching, produce the real artifact and, as your final step, offer it "
             "(medium='offer') — you have no push/send credentials by design, so the offer IS the "
             "delivery."
@@ -265,20 +411,29 @@ class Workroom:
     def _wake_envs(self) -> dict[str, str]:
         """The subscription auth + the relay wiring the in-sandbox MCP server needs. When ``relay_url``
         is empty the server appends intents to ``PROXY_MEETING_OUT`` (no live relay) — honest degrade."""
-        return {
+        envs = {
             "CLAUDE_CODE_OAUTH_TOKEN": self.token,
             "PROXY_MEETING_RELAY": self.relay_url,
             "PROXY_MEETING_TOKEN": self.relay_token,
             "PROXY_MEETING_OUT": TO_MEETING_OUT,
         }
+        # Tool-workshop convenience: forward the Context7 key ONLY when the founder has provisioned it
+        # (from Secret Manager into this host's env). Present ⇒ the warm session host pre-wires the
+        # Context7 (live library docs) MCP; absent ⇒ nothing is added and behavior is unchanged. It is
+        # gated because Context7 is egress-dependent (npx-fetch + a live API call per lookup) and
+        # read-egress is the founder-gated infra toggle — see ``session_host.CONTEXT7_API_KEY``.
+        context7_key = os.environ.get("CONTEXT7_API_KEY", "").strip()
+        if context7_key:
+            envs["CONTEXT7_API_KEY"] = context7_key
+        return envs
 
     async def _await_host_ready(self, *, timeout: float | None = None) -> bool:
         """Wait (bounded) for the warm host's readiness breadcrumb, then latch ``_host_ready``.
 
         The persistent session takes a beat to open (the SDK client + the MCP stdio child + loading
         the prime). Called at PROVISION with a generous ``timeout`` to warm the host BEFORE the meeting
-        goes live (so no wake races it); and by the first wake as a fallback (default budget). A host
-        that never comes up returns False so the wake degrades to cold. NEVER raises."""
+        goes live (so no wake races it); by a wake (default budget); and after a restart. A host that
+        never comes up returns False so the wake restarts-and-retries, then degrades. NEVER raises."""
         if self._host_ready:
             return True
         deadline = time.monotonic() + (timeout if timeout is not None else _WARM_READY_TIMEOUT_S)
@@ -290,11 +445,37 @@ class Workroom:
                 )
             except Exception:  # noqa: BLE001 — not ready yet (file absent) → keep polling
                 raw = ""
+            except asyncio.CancelledError:
+                # A spurious E2B transport cancel is just "not ready this poll"; a genuine task
+                # cancellation (a pending request on THIS task) is re-raised to honor the caller.
+                if not _poll_cancel_is_spurious():
+                    raise
+                raw = ""
             if raw:
                 self._host_ready = True
                 return True
             await asyncio.sleep(_WARM_POLL_S)
         return False
+
+    async def _read_heartbeat(self) -> str:
+        """The host's current heartbeat token — the content of HOST_READY_FILE, which the warm host
+        REWRITES every beat (idle and mid-turn) with a fresh timestamp. A CHANGED value between reads
+        ⇒ the host is alive (even deep in a long turn); a value frozen for the whole dead-host budget
+        ⇒ the host is gone/hung. Returns "" on any read fault (treated as no-progress this poll — the
+        budget, not a single miss, decides). NEVER raises."""
+        try:
+            return str(getattr(
+                await self.call(lambda: self.sandbox.files.read(HOST_READY_FILE), service="e2b"),
+                "value", "",
+            ) or "")
+        except Exception:  # noqa: BLE001 — a transient/absent read is just "no beat seen this poll"
+            return ""
+        except asyncio.CancelledError:
+            # A spurious E2B transport cancel is "no beat this poll" (the dead-host BUDGET, not one
+            # missed read, decides); a genuine task cancellation is re-raised to honor the caller.
+            if not _poll_cancel_is_spurious():
+                raise
+            return ""
 
     async def _run_ask_warm(self, ask: str, prompt: str) -> WorkroomResult | None:
         """Serve the wake on the WARM permanent session (``session_host.py``): confirm the host is
@@ -303,10 +484,10 @@ class Workroom:
 
         Returns the parsed :class:`WorkroomResult` on success, or ``None`` on ANY miss (host never
         came up, the round-trip timed out, a write/read fault) — a ``None`` tells :meth:`run_ask` to
-        fall back to the cold path. NEVER raises. If the host wrote an honest per-turn ``error`` we
-        still surface it as a real result (that IS the answer — the session degrades, no cold retry)."""
+        restart the host and retry once. NEVER raises. If the host wrote an honest per-turn ``error``
+        we still surface it as a real result (that IS the answer — the session degrades, no retry)."""
         if not await self._await_host_ready():
-            return None  # the warm host never opened → cold fallback (fast)
+            return None  # the warm host never opened → restart-and-retry (fast)
         wake_id = uuid.uuid4().hex
         req = json.dumps({"id": wake_id, "prompt": prompt})
         try:
@@ -318,12 +499,19 @@ class Workroom:
                 f"printf '%s\\n' {shlex.quote(req)} >> {shlex.quote(WAKE_IN)}",
                 timeout=30.0,
             )
-        except Exception:  # noqa: BLE001 — a write fault → fall back to cold (never crash)
-            logger.exception("warm wake enqueue failed — falling back to cold")
+        except Exception:  # noqa: BLE001 — a write fault → restart-and-retry (never crash)
+            logger.exception("warm wake enqueue failed — will restart the session host and retry")
             return None
         out_path = f"{WAKE_OUT}/{wake_id}.json"
         deadline = time.monotonic() + ASK_TIMEOUT_S
         start = time.monotonic()
+        # DEAD-HOST watch: the wake is only allowed the full ASK_TIMEOUT_S while the host is LIVING —
+        # proven by its heartbeat breadcrumb advancing. If the breadcrumb value hasn't changed for the
+        # whole _DEAD_HOST_TIMEOUT_S window (host OOM'd/SIGKILLed/hung mid-turn) we STOP waiting and
+        # tell run_ask to restart-and-retry — seconds, not the 900s ceiling (no 15-min dead air on a
+        # crashed host). A long WORKING turn keeps the heartbeat moving, so it is never cut short.
+        last_beat = await self._read_heartbeat()
+        last_beat_change = time.monotonic()
         while time.monotonic() < deadline:
             try:
                 raw = getattr(
@@ -332,11 +520,21 @@ class Workroom:
                 )
             except Exception:  # noqa: BLE001 — not written yet (or a transient read) → keep polling
                 raw = ""
+            except asyncio.CancelledError:
+                # The result read is the CRITICAL one: the E2B SDK converts a connect-level CANCELED
+                # (HTTP/2 reset / dropped connection under load) into CancelledError, and letting that
+                # kill the poll would ABANDON a wake whose result the warm session is still writing —
+                # the room hears nothing on a turn that SUCCEEDED in the sandbox. So a spurious
+                # transport cancel is just "not written yet this poll" (keep polling); only a genuine
+                # task cancellation (meeting-end drain) is re-raised.
+                if not _poll_cancel_is_spurious():
+                    raise
+                raw = ""
             if raw:
                 try:
                     rec = json.loads(raw)
                 except json.JSONDecodeError:
-                    return None  # a corrupt result → cold fallback (never present garbage)
+                    return None  # a corrupt result → restart-and-retry (never present garbage)
                 return WorkroomResult(
                     ask=ask,
                     text=str(rec.get("text", "") or ""),
@@ -348,6 +546,20 @@ class Workroom:
                     ttft=float(rec.get("ttft", 0.0) or 0.0),
                     sent=[dict(s) for s in (rec.get("sent") or []) if isinstance(s, dict)],
                 )
+            # No result yet — is the host still ALIVE? Check its heartbeat: a changed value means it is
+            # (idle or grinding on a long turn); if it hasn't moved for the whole dead-host window the
+            # host is gone/hung → stop fast so run_ask restarts-and-retries (vs. spinning to 900s).
+            beat = await self._read_heartbeat()
+            now = time.monotonic()
+            if beat and beat != last_beat:
+                last_beat, last_beat_change = beat, now
+            elif now - last_beat_change >= _DEAD_HOST_TIMEOUT_S:
+                logger.error(
+                    "warm host heartbeat frozen %.0fs (no result) — host presumed dead, aborting the "
+                    "wait to restart-and-retry (not the %.0fs ceiling)",
+                    now - last_beat_change, ASK_TIMEOUT_S,
+                )
+                return None  # dead/hung host → restart-and-retry FAST (blocker B2 fix)
             # Adaptive backoff: poll fast at first so a quick reply lands snappily, then EASE OFF so a
             # multi-minute task (PRD, deep code) doesn't hammer the E2B files API hundreds of times
             # (~720 reads over 3 min at a flat 0.25s → E2B contention/cancellation under load). This
@@ -357,41 +569,27 @@ class Workroom:
             # poll lag is pure latency after Claude is done. Still eases off on long tasks to avoid
             # hammering the E2B files API: 0.25s snappy start, 0.5s mid, 1.0s for multi-minute work.
             await asyncio.sleep(_WARM_POLL_S if elapsed < 5.0 else (0.5 if elapsed < 30.0 else 1.0))
-        return None  # timed out waiting on the warm host → cold fallback
+        return None  # timed out waiting on the warm host → restart-and-retry
 
-    async def _run_ask_cold(self, ask: str, prompt: str) -> WorkroomResult:
-        """The COLD path (fallback / when no warm host): spawn a fresh ``claude -p`` per wake with the
-        meeting MCP server (``--mcp-config``). Slower (~11-13s) but self-contained — the honest degrade
-        when the warm session is unavailable. Never raises — a fault becomes ``WorkroomResult.error``."""
-        cmd = (
-            # Reset the per-turn intent log FIRST: the in-sandbox MCP server only APPENDS to
-            # TO_MEETING_OUT, so without this each cold wake would re-read wakes 1..N-1's intents
-            # and double-send them. ``sent`` must be exactly THIS turn's ``to_meeting`` calls
-            # (mirrors the warm host's per-turn reset).
-            f"rm -f {shlex.quote(TO_MEETING_OUT)} && "
-            f"cd {shlex.quote(self.repo_dir)} && "
-            f"claude -p {shlex.quote(prompt)} "
-            f"--mcp-config {shlex.quote(MCP_CONFIG_FILE)} --dangerously-skip-permissions "
-            f"--output-format stream-json --verbose > /tmp/ask.jsonl 2>/tmp/ask.err; echo DONE"
-        )
+    async def _restart_session_host(self) -> bool:
+        """Restart the WARM session host after a miss, then wait (bounded) for it to come READY —
+        the single self-heal :meth:`run_ask` uses instead of a whole second (cold) engine.
+
+        Kills any lingering host process, clears the latched readiness so the next wait re-checks the
+        fresh breadcrumb, relaunches the host (:func:`_start_session_host`), and awaits readiness on
+        the normal budget. Returns True iff the restarted host opened (so the caller retries the warm
+        turn); False degrades the turn honestly. NEVER raises — a restart fault is just a False."""
         try:
-            await self._run(cmd, timeout=ASK_TIMEOUT_S, envs=self._wake_envs())
-            raw = getattr(await self.call(lambda: self.sandbox.files.read("/tmp/ask.jsonl"),  # nosec B108 — path INSIDE the isolated per-tenant E2B microVM, not the host
-                                          service="e2b"), "value", "")
-            # The agent's OWN channel choices this turn, as the in-sandbox MCP server recorded them
-            # to $PROXY_MEETING_OUT (the no-relay/file path). A MISSING file is the NORMAL silence
-            # case — the agent chose not to call to_meeting (e.g. declined a false wake), so the MCP
-            # server never created it. Treat that as "no intents", NEVER an error: otherwise a correct
-            # silence would surface a spurious "I hit a problem" degrade into a room Proxy stayed out of.
-            try:
-                intents_raw = getattr(await self.call(lambda: self.sandbox.files.read(TO_MEETING_OUT),
-                                                      service="e2b"), "value", "")
-            except Exception:  # noqa: BLE001 — absent intent file = clean silence, not a fault
-                intents_raw = ""
-            return _parse_stream(ask, raw or "", intents_raw or "")
-        except Exception as exc:  # noqa: BLE001 — never crash the loop
-            logger.exception("workroom run_ask (cold) failed")
-            return WorkroomResult(ask=ask, error=str(exc) or exc.__class__.__name__)
+            # Best-effort: stop a half-dead prior host so the fresh one owns WAKE_IN/WAKE_OUT cleanly.
+            # ``|| true`` keeps a no-match pkill from failing the command (nothing to kill is fine).
+            await self._run(f"pkill -f {shlex.quote(SESSION_HOST_FILE)} || true", timeout=30.0)
+        except Exception:  # noqa: BLE001 — the kill is best-effort; relaunch regardless
+            logger.warning("session-host kill before restart failed (continuing)", exc_info=True)
+        self._host_ready = False
+        self.warm = await _start_session_host(self)
+        if not self.warm:
+            return False
+        return await self._await_host_ready()
 
     async def pause(self) -> str | None:
         """Pause the sandbox at teardown so a warm per-repo snapshot can RESUME in ~1s (vs a cold
@@ -417,63 +615,6 @@ class Workroom:
             logger.exception("workroom teardown kill failed")
 
 
-def _parse_intents(raw: str) -> list[dict[str, Any]]:
-    """Parse the in-sandbox MCP server's recorded ``to_meeting`` intents (one JSON object per line)
-    into ``[{content, medium, to}]`` — the agent's OWN channel choices in the no-relay/file path.
-    Skips relay-error/malformed lines silently (the local record is best-effort)."""
-    intents: list[dict[str, Any]] = []
-    for line in raw.splitlines():
-        try:
-            rec = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(rec, dict) or "relay_error" in rec:
-            continue
-        intents.append({
-            "content": str(rec.get("content", "") or ""),
-            "medium": str(rec.get("medium", "say") or "say"),
-            "to": str(rec.get("to", "") or ""),
-        })
-    return intents
-
-
-def _parse_stream(ask: str, raw: str, intents_raw: str = "") -> WorkroomResult:
-    """Parse ``claude`` stream-json output → the ordered tool names + the final result text, and
-    fold in the agent's recorded ``to_meeting`` intents. Detects ABNORMAL TERMINATION: a clean turn
-    always emits a ``result`` event; if there were assistant turns but no ``result`` (crash/OOM) and
-    no recorded intents, mark it an honest ``error`` so the session can degrade without silence.
-
-    ``text`` carries ONLY the model's own ``result`` event (never salvaged from mid-turn assistant
-    prose): that prose is internal scratchpad the agent did NOT choose to say to the room, so the
-    session must not speak it — an errored turn with no recorded intent gets a bare honest apology,
-    not the agent's private notes (soft Law 2)."""
-    tools: list[str] = []
-    text = ""
-    cost = 0.0
-    turns = 0
-    saw_result = False
-    for line in raw.splitlines():
-        try:
-            ev = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if ev.get("type") == "assistant":
-            turns += 1
-            for b in ev.get("message", {}).get("content", []):
-                if b.get("type") == "tool_use":
-                    tools.append(str(b.get("name", "")))
-        elif ev.get("type") == "result":
-            saw_result = True
-            text = str(ev.get("result", "") or "")
-            cost = float(ev.get("total_cost_usd", 0.0) or 0.0)
-    intents = _parse_intents(intents_raw)
-    error = None
-    if turns > 0 and not saw_result and not intents:
-        error = "turn did not complete"
-    return WorkroomResult(ask=ask, text=text, tools=tools, turns=turns, cost_usd=cost,
-                          error=error, sent=intents)
-
-
 def _packaged_source(name: str) -> str:
     """A packaged script's source, read off disk next to this module — the ONE source of truth for a
     file COPIED into the sandbox verbatim at provision (the script runs where the workspace is not
@@ -488,19 +629,19 @@ def _mcp_server_source() -> str:
 
 def _session_host_source() -> str:
     """The packaged WARM session-host source (``session_host.py``) — the ONE persistent Claude
-    session that serves each wake without a cold spawn."""
+    session that serves every wake (no per-turn spawn)."""
     return _packaged_source("session_host.py")
 
 
 async def _start_session_host(wr: Workroom) -> bool:
     """Start the WARM permanent session host as a BACKGROUND process in the sandbox, warm before the
-    first wake. Best-effort: on any fault we leave ``warm=False`` and the meeting runs the cold path.
+    first wake. Also the relaunch step of :meth:`Workroom._restart_session_host`. Best-effort: on any
+    fault we leave ``warm=False`` and the wake self-heals (restart-and-retry) or honest-degrades.
 
-    The host is ``nohup``-detached (survives the provision command's return), its stdout/stderr land
-    in ``SESSION_HOST_LOG`` (a fault breadcrumb), and it inherits the subscription auth + the relay
-    wiring so a warm turn's ``to_meeting`` reaches the host exactly as the cold path's does. Returns
-    True iff the launch command ran (not that the session is fully open — the driver's first wake
-    detects a dead host by timing out and falling back)."""
+    The host is detached (survives the provision command's return), its stdout/stderr land in
+    ``SESSION_HOST_LOG`` (a fault breadcrumb), and it inherits the subscription auth + the relay
+    wiring so a warm turn's ``to_meeting`` reaches the host. Returns True iff the launch command ran
+    (not that the session is fully open — a wake detects a dead host by timing out and restarting)."""
     envs = {
         **wr._wake_envs(),  # noqa: SLF001 — same module: auth + relay wiring the host inherits
         "PROXY_REPO_DIR": wr.repo_dir,
@@ -521,8 +662,8 @@ async def _start_session_host(wr: Workroom) -> bool:
             f"> {shlex.quote(SESSION_HOST_LOG)} 2>&1"
         )
         await wr._run(start, timeout=0.0, envs=envs, background=True)  # noqa: SLF001 — same module
-    except Exception:  # noqa: BLE001 — the warm host is an optimization; a launch fault = cold path
-        logger.warning("warm session host launch failed — meeting runs the cold path", exc_info=True)
+    except Exception:  # noqa: BLE001 — a launch fault leaves warm=False; the wake self-heals/degrades
+        logger.warning("warm session host launch failed — wake will restart-and-retry", exc_info=True)
         return False
     logger.info("warm session host launched (sandbox=%s)", wr.sandbox_id)
     return True
@@ -545,8 +686,11 @@ async def provision_workroom(
     """Provision + seed a per-meeting workroom, warm and ready before the first ask.
 
     Provisions an E2B sandbox (pre-baked ``template`` when available), clones the repo in
-    (shallow), ensures native ``claude`` is present, and seeds the prime (CLAUDE.md), the map
-    (REPO_MAP.md), and an empty transcript file. It ALSO wires the agent's ONE meeting interface:
+    (shallow), ensures native ``claude`` is present, and seeds CLAUDE.md — the lean behavioral prime
+    PLUS the RESIDENT codebase-understanding block (the ranked symbol map with real file:line,
+    :func:`compose_resident_prime`), so the map rides the cached prime every wake with zero reads —
+    the map (REPO_MAP.md) is also written as an older-context fallback, and an empty transcript file.
+    It ALSO wires the agent's ONE meeting interface:
     pip-installs the pinned ``mcp`` + ``claude-agent-sdk``, writes the ``sandbox_meeting_mcp.py``
     server in, drops a ``.mcp.json`` pointing native ``claude`` at it (stdio), AND starts the WARM
     permanent session (``session_host.py``) in the background so the first wake is served on an
@@ -596,49 +740,75 @@ async def provision_workroom(
 
     # Setup (idempotent; a pre-baked template / resumed snapshot makes most of this a no-op/instant):
     #  - shallow-clone the repo into REPO_DIR (fast; ~6s on cal.com)
-    #  - ensure native claude is installed
-    #  - install the pinned mcp SDK + the claude-agent-sdk the WARM session host needs
+    #  - install the pinned mcp SDK + the claude-agent-sdk the WARM session host needs  (~11s cold)
+    #  - ensure native claude is installed  (~7s cold)
+    #
+    # SERIALIZE THE TWO HEAVYWEIGHT INSTALLS (reliability over a few off-path seconds — measured on
+    # real infra). These were run CONCURRENTLY to shave ~6-7s off the dependency phase, but the E2B
+    # BASE sandbox has only ~478 MB RAM (measured: ``free -m`` → total 478), and running ``pip install``
+    # (mcp + claude-agent-sdk) and ``npm install -g claude-code`` AT THE SAME TIME pushes peak memory
+    # past that ceiling — the kernel OOM-kills one of them (observed: ``Killed`` on pip, then on npm),
+    # which fails the WHOLE provision → NO meeting at all. Run serially and each fits comfortably
+    # (proven: serial pip → OK, then serial npm → OK, ``claude --version`` runs). Provision happens at
+    # JOIN, before anyone addresses Proxy, so those ~6s are entirely off the room's perceived critical
+    # path — trading them for a provision that doesn't OOM is the right call every time (a pre-baked
+    # template, the founder-gated deploy artifact, removes this cost entirely). pip FIRST (it is the
+    # heavier peak); ``&&`` fails the setup on either install error (no silent half-provision).
+    # (The npm EBADENGINE warning — claude-code wants node >=22, the base ships node v20 — is only a
+    # WARNING: the CLI installs and runs fine on v20; the baked template will ship node >=22.)
     depth = "--depth 1" if sha is None else ""
     setup = (
         f"mkdir -p {shlex.quote(WORKROOM_ROOT)} && "
         f"(test -d {shlex.quote(REPO_DIR)}/.git || git clone {depth} {shlex.quote(repo_url)} "
         f"{shlex.quote(REPO_DIR)}) && "
-        f"(command -v claude >/dev/null 2>&1 || npm install -g @anthropic-ai/claude-code) && "
-        f"pip3 install -q {shlex.quote(MCP_PIN)} {shlex.quote(SDK_PIN)}"
+        f"pip3 install -q {shlex.quote(MCP_PIN)} {shlex.quote(SDK_PIN)} && "
+        f"{{ command -v claude >/dev/null 2>&1 || npm install -g @anthropic-ai/claude-code; }}"
     )
     await wr._run(setup, timeout=PROVISION_TIMEOUT_S)  # noqa: SLF001 — same module
     if sha:
         await wr._run(f"cd {shlex.quote(REPO_DIR)} && git checkout -q {shlex.quote(sha)} || true",
                       timeout=120.0)  # noqa: SLF001
     # Seed the orientation files.
-    # Prime (CLAUDE.md) and map (REPO_MAP.md) are SEPARATE files. NOTE: inlining the 13KB map into
-    # CLAUDE.md was tried and REVERTED — it made every turn process a huge context (warm latency
-    # ~2x worse) AND diluted the lean behavioral prime (cross-talk over-fire regression). Keeping the
-    # prime lean is what makes the model actually follow it; the map is read on demand.
-    await wr._write_file(PRIME_FILE, prime)  # noqa: SLF001
+    # RESIDENT understanding: CLAUDE.md = the lean behavioral prime + the codebase-understanding block
+    # (the comprehension-first resident doc — a holistic qualitative mental model + a compact
+    # navigation aid, under UNDERSTANDING_HEADER). Because the WARM session loads CLAUDE.md ONCE into
+    # its CACHED prefix, the understanding rides in-context every wake with ZERO reads — resident, not
+    # a REPO_MAP.md the agent must open. Exact file:line is grounded LIVE at answer time (Law 1), using
+    # the understanding to know where to look.
+    #   History: a NAIVE PROSE map inlined into CLAUDE.md was tried and reverted (bloat + cross-talk
+    #   over-fire). This is different: caching is now proven (the warm session reuses the cached prefix,
+    #   so the block is written ONCE not re-parsed per turn) AND the doc is a DENSE, holistic mental
+    #   model kept visually distinct from the behavior above it — understanding, not dilution.
+    # REPO_MAP.md is ALSO still written as an older-context fallback, but the resident block is primary.
+    await wr._write_file(PRIME_FILE, compose_resident_prime(prime, map_text))  # noqa: SLF001
     await wr._write_file(MAP_FILE, map_text or "(no pre-built map — explore the repo directly)")  # noqa: SLF001
     await wr._write_file(TRANSCRIPT_FILE, "# Meeting transcript\n")  # noqa: SLF001
     # Wire the agent's ONE connection to the room: the in-sandbox MCP server + the .mcp.json that
     # registers it with native ``claude`` over stdio. The agent chooses the medium live; the server
     # relays each call to the host (or records it locally when there is no relay).
     await wr._write_file(MCP_SERVER_FILE, _mcp_server_source())  # noqa: SLF001
+    # ``alwaysLoad: true`` — mirror the warm host's config so the ONE meeting tool (``to_meeting``)
+    # skips tool-search deferral and is ALWAYS immediately callable (never behind a ToolSearch
+    # round-trip). See the rationale on ``session_host._mcp_servers``: Claude Code defers MCP tools by
+    # default once descriptions exceed ~10% of context, which put a wasted ``ToolSearch`` right before
+    # the first ``to_meeting`` call on EVERY delivering task. ``to_meeting`` is the sole line to the
+    # room — it must never be deferred.
     mcp_config = {
         "mcpServers": {
-            "meeting": {"command": "python3", "args": [MCP_SERVER_FILE]}
+            "meeting": {"command": "python3", "args": [MCP_SERVER_FILE], "alwaysLoad": True}
         }
     }
     await wr._write_file(MCP_CONFIG_FILE, json.dumps(mcp_config))  # noqa: SLF001
-    # Write + START the WARM permanent session (the #1 latency fix): one persistent Claude session
-    # per meeting, warm before the first wake. On any launch fault ``warm`` stays False and run_ask
-    # uses the cold path (honest degrade).
+    # Write + START the WARM permanent session (the ONE delivery path): one persistent Claude session
+    # per meeting, warm before the first wake. On any launch fault ``warm`` stays False and the first
+    # wake self-heals (restart-and-retry) or honest-degrades.
     await wr._write_file(SESSION_HOST_FILE, _session_host_source())  # noqa: SLF001
     wr.warm = await _start_session_host(wr)
     if wr.warm:
         # Warm the host DURING provision (before anyone addresses Proxy) so the first wake finds it
-        # ready — otherwise it races the host's ~15-30s SDK-client+prime open, times out, and cold-
-        # degrades for the WHOLE meeting (+11-13s per wake). This moves the warm-up off the first
-        # response's critical path. Best-effort: not-ready-in-budget just leaves the first wake to
-        # retry warm then cold-degrade. THE key latency fix (cold→warm).
+        # ready — otherwise it races the host's ~15-30s SDK-client+prime open and the first wake pays
+        # the readiness wait (then restarts-and-retries if still not up). This moves the warm-up off
+        # the first response's critical path. Best-effort: not-ready-in-budget just defers to the wake.
         ready = await wr._await_host_ready(timeout=_WARM_PROVISION_WAIT_S)  # noqa: SLF001
         logger.info("warm host readiness at provision: sandbox=%s ready=%s", wr.sandbox_id, ready)
     logger.info("workroom provisioned: sandbox=%s repo=%s relay=%s warm=%s resumed=%s",

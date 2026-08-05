@@ -239,9 +239,10 @@ async def _dispatch_meeting_event(
     meeting_id = str(resolved["id"])
 
     if is_transcript:
-        # Feed each FINAL line into the meeting's reactive loop: the workroom's
-        # MEETING_NOTES.md gets it (continuous), and the cheap wake gate decides whether to
-        # run a reactive turn. A transcript before the runtime is provisioned is a safe
+        # Feed each FINAL line into the meeting's reactive loop: the workroom's MEETING_NOTES.md
+        # recovery record gets it (continuous), and the cheap wake gate decides whether to run a
+        # reactive turn (recall itself is resident in the warm session's cache, fed the delta per
+        # wake — not this file). A transcript before the runtime is provisioned is a safe
         # no-op (fail closed — ingest_line no-ops when the session is unwired).
         runtime = registry.get(meeting_id)
         if runtime is None:

@@ -27,7 +27,7 @@ from .cloner import Cloner
 from .exclusions import ExclusionManager
 from .github_auth import AuthError, InstallationTokenMinter
 from .gitio import head_sha
-from .map_build import MapBuildResult, build_map
+from .map_build import MapBuildResult, build_understanding_map
 from .paths import repo_name_from_url
 from .verify import VerifyResult, verify_map
 
@@ -67,14 +67,26 @@ async def run_pipeline(
     model: str | None = None,
     readiness_listener: Any = None,
     exclusions: ExclusionManager | None = None,
+    call: Any | None = None,
+    oauth_token: str = "",
+    sandbox_class: Any = None,
 ) -> PipelineResult:
     """Run one pre-meeting pass and return the honest terminal readiness (never raises out).
 
-    ``provider`` is the model seam (fake at credit-out, D-032). ``minter`` mints the clone token;
-    when absent (a public fixture repo / a test), the clone runs unauthenticated. ``map_store``
-    persists the map (``MapStore``); when absent the map is produced + verified but not stored
-    (still a valid ``ready`` verdict for a store-less test). Readiness states are emitted onto
-    ``readiness_listener`` so the connect poll renders the live progression."""
+    ``provider`` is the (legacy) model seam, retained for signature compatibility. ``minter`` mints
+    the clone token; when absent (a public fixture repo / a test), the clone runs unauthenticated.
+    ``map_store`` persists the map (``MapStore``); when absent the map is produced + verified but not
+    stored (still a valid ``ready`` verdict for a store-less test). Readiness states are emitted onto
+    ``readiness_listener`` so the connect poll renders the live progression.
+
+    ``call`` (the ``libs.http.call_external`` E2B seam) + ``oauth_token`` (the subscription
+    ``CLAUDE_CODE_OAUTH_TOKEN``) turn on Part 2 — the bounded native-Claude holistic comprehension
+    pass, verified against the real repo, combined with the Part-1 symbol map into ONE dense
+    understanding document (:func:`premeeting.map_build.build_understanding_map`). Absent ⇒ the
+    deterministic symbol map alone (a clean, complete degrade — Part 2 only ever adds). The SAME
+    minted installation ``token`` that authenticates the Part-1 clone is threaded into the Part-2
+    in-sandbox ``git clone`` (``github_token``) so a PRIVATE customer repo clones successfully there
+    too — else the comprehension pass sees an empty repo and produces nothing."""
     listener = readiness_listener if readiness_listener is not None else _NullListener()
     repo = repo_name_from_url(repo_url)
     states: list[str] = []
@@ -110,12 +122,16 @@ async def run_pipeline(
         )
     resolved_sha = sha or head_sha(clone_path) or ""
 
-    # (3) map-build (the 'indexing' state — no separate 'mapping' state).
+    # (3) map-build (the 'indexing' state — no separate 'mapping' state). Part 1 always; Part 2 (the
+    # verified holistic comprehension, combined into ONE dense doc) when the E2B seam + token are
+    # present — else the symbol map alone (a clean degrade).
     _emit("indexing")
-    build: MapBuildResult = await build_map(
-        provider=provider, clone_path=clone_path, repo_name=repo, sha=resolved_sha,
-        model=model, exclusions=em,
+    build: MapBuildResult = await build_understanding_map(
+        clone_path=clone_path, repo_name=repo, sha=resolved_sha, model=model, exclusions=em,
+        call=call, token=oauth_token, sandbox_class=sandbox_class, repo_url=repo_url,
+        github_token=token,
     )
+    _ = provider  # legacy model seam retained for signature compatibility
 
     # (4) store durably (best-effort seam; absence is not a readiness failure by itself).
     if map_store is not None:

@@ -12,20 +12,16 @@ This module owns the seam's *shape*, not a concrete vendor client:
 
   * :class:`ProviderQuery` — the immutable per-call options the runner computes,
     carrying the SDK-isolation triad (``strict_mcp_config=True``,
-    ``setting_sources=[]``, a computed built-in ``tools`` list) plus the targeted
-    extended-thinking budget (D-022 / CANONICAL §10.6);
+    ``setting_sources=[]``, a computed built-in ``tools`` list);
   * :class:`ProviderError` — the boundary exception a pass-through ``ERROR`` chunk
     is surfaced as at the runner boundary, where §3.5 recovery catches it;
   * :class:`Provider` — the ``Protocol`` a concrete Claude-SDK provider satisfies
-    (``stream(prompt, query) -> AsyncIterator[AgentChunk]``);
-  * :func:`compute_builtin_tools` — the built-in host-tool list (``[]`` in sandbox
-    mode: no ``Read``/``Grep``/``Bash`` on the host);
-  * :func:`register_provider` / :func:`pick_provider` — the model-id → provider
-    registry, so a role can run a cheaper family later without rewriting the runner.
+    (``stream(prompt, query) -> AsyncIterator[AgentChunk]``).
 
 The concrete SDK-message → ``AgentChunk`` mapping is a confirm-at-build item
 (D-010 / CANONICAL §11.10): the live ``claude_agent_sdk`` message shapes are
-pinned inside the concrete provider impl, never guessed here.
+pinned inside the concrete provider impl (:mod:`~agentkit.sdk_provider`), never
+guessed here.
 """
 from __future__ import annotations
 
@@ -48,24 +44,12 @@ SDK_LOCAL_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob", "Bash", "Write", "Ed
 # the correct — and the only workable — mode for these headless agents. Isolation is NOT
 # weakened by it: the real gate is the curated built-in ``tools`` list (``[]`` in sandbox mode)
 # + ``strict_mcp_config`` + ``setting_sources=[]`` + ``disallowed_tools`` (the host-built-in
-# block-list), never an interactive permission prompt. This mirrors ``workroom.agent_config``'s
-# ``permission_mode="bypassPermissions"`` so the wake path and the Workroom path never disagree.
+# block-list), never an interactive permission prompt. This mirrors the Workroom warm session's
+# (``in_meeting.session_host``) ``permission_mode="bypassPermissions"`` so the two paths never disagree.
 permission_mode: str = "bypassPermissions"
 # World-touching built-ins that must never be advertised to a seam-routed call —
 # they run on the orchestrator host, not in E2B. Kept OUT of every computed list.
 disallowed_tools: tuple[str, ...] = SDK_LOCAL_TOOLS
-
-# Extended/adaptive thinking is ON only for real code reasoning that earns the
-# latency: the Opus-escalated grounded-answer turn and the Workroom build-planning
-# disposition. It is OFF on every fast path (should-I-speak gate, quick lookups,
-# Scribe micro-call) where a thinking preamble is latency-toxic (CANONICAL §10.6).
-_THINKING_ROLES: frozenset[str] = frozenset({"grounded-answer", "plan-artifact", "build-planning"})
-_THINKING_MODEL_PREFIXES: tuple[str, ...] = ("claude-opus",)
-# Cap the thinking budget well below MAX_OUTPUT_TOKENS: extended thinking shares
-# the output-token budget, so an uncapped preamble can truncate a large structured
-# emission mid-object (D-022). This ceiling is the seam-level default.
-MAX_OUTPUT_TOKENS: int = 32000
-EXTENDED_THINKING_BUDGET_TOKENS: int = 3000
 
 
 class ProviderError(Exception):
@@ -131,37 +115,6 @@ class ProviderQuery:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
-def compute_builtin_tools(curated: tuple[str, ...] | list[str]) -> tuple[str, ...]:
-    """The built-in host-tool list for a seam call — ``()`` in sandbox mode.
-
-    Seam-routed calls never advertise host built-ins (``Read``/``Grep``/``Bash``):
-    those would execute on the orchestrator host, not in E2B, which is exactly the
-    isolation leak the ``[CRITICAL]`` tripwire (§3.3) guards against. The behavior's
-    curated MCP tools are mounted via ``allowed_tools``; the built-in list stays
-    empty so nothing runs host-side.
-    """
-    _ = curated  # the curated subset flows through allowed_tools, not the built-in list
-    return ()
-
-
-def thinking_policy(model: str, role: str) -> tuple[bool, int]:
-    """Targeted extended-thinking decision for a turn (D-022 / CANONICAL §10.6).
-
-    Returns ``(enabled, budget_tokens)``. Thinking is enabled ONLY for a real
-    code-reasoning turn — an Opus-tier grounded-answer or a Workroom build-planning
-    disposition — and is off for every fast path. When on, the budget is capped
-    well below ``MAX_OUTPUT_TOKENS`` so the preamble can't truncate a large
-    structured emission mid-object.
-    """
-    role_wants = role in _THINKING_ROLES
-    model_is_reasoning = model.startswith(_THINKING_MODEL_PREFIXES)
-    enabled = role_wants and model_is_reasoning
-    if not enabled:
-        return (False, 0)
-    budget = min(EXTENDED_THINKING_BUDGET_TOKENS, MAX_OUTPUT_TOKENS // 4)
-    return (True, budget)
-
-
 @runtime_checkable
 class Provider(Protocol):
     """A provider translates a rendered prompt + :class:`ProviderQuery` into a
@@ -170,34 +123,3 @@ class Provider(Protocol):
     the runner boundary."""
 
     def stream(self, prompt: str, query: ProviderQuery) -> AsyncIterator[AgentChunk]: ...
-
-
-_PROVIDERS: dict[str, Provider] = {}
-_DEFAULT_PROVIDER: list[Provider] = []
-
-
-def register_provider(provider: Provider, *, models: tuple[str, ...] = (), default: bool = False) -> Provider:
-    """Register a provider for a set of model ids (and optionally as the default)."""
-    for model in models:
-        _PROVIDERS[model] = provider
-    if default or not _DEFAULT_PROVIDER:
-        if default:
-            _DEFAULT_PROVIDER[:] = [provider]
-        elif not _DEFAULT_PROVIDER:
-            _DEFAULT_PROVIDER.append(provider)
-    return provider
-
-
-def pick_provider(model: str) -> Provider:
-    """Resolve the provider for a model id (falls back to the registered default).
-
-    A role runs a cheaper model family later by registering another provider — the
-    runner is unchanged; the seam picks by ``config.model``.
-    """
-    if model in _PROVIDERS:
-        return _PROVIDERS[model]
-    if _DEFAULT_PROVIDER:
-        return _DEFAULT_PROVIDER[0]
-    raise KeyError(
-        f"no provider registered for model {model!r} and no default provider set"
-    )

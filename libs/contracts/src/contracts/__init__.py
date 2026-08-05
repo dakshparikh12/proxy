@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from . import channel as channel  # noqa: F401 — import fires §4.2/§4.5 model registration
-from .bundle import Bundle as Bundle
 from .channel import (
     ActionSurface as ActionSurface,
 )
@@ -48,9 +47,6 @@ from .chunks import (
 from .chunks import (
     ChunkType as ChunkType,
 )
-from .material_change import MaterialChangeKind as MaterialChangeKind
-from .notes import NoteDelta as NoteDelta
-from .notes import NoteOp as NoteOp
 from .readiness import Readiness as Readiness
 from .readiness import ReadinessReport as ReadinessReport
 from .registry import (
@@ -120,7 +116,6 @@ from .registry import (
 __all__ = [
     "AGENT_CHUNK_METADATA_KEYS",
     "AgentChunk",
-    "Bundle",
     "ActionSurface",
     "CanvasPatch",
     "ChannelAction",
@@ -145,9 +140,6 @@ __all__ = [
     "OUTBOUND",
     "validate_inbound_message",
     "ChunkType",
-    "MaterialChangeKind",
-    "NoteDelta",
-    "NoteOp",
     "ProxyMessage",
     "Readiness",
     "ReadinessReport",

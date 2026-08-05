@@ -433,6 +433,72 @@ def _wire_map_seam(app: Any) -> None:
         map_store = None
     app.state.map_provider = provider
     app.state.map_store = map_store
+    _wire_comprehension_seam(app)
+
+
+def _wire_comprehension_seam(app: Any) -> None:
+    """Construct + assign the Part-2 comprehension seam onto ``app.state`` (SD-1 unblocker).
+
+    Part 1 (the deterministic symbol map) is already wired by ``_wire_map_seam``. Part 2 — the
+    bounded native-Claude holistic comprehension pass, run in a per-repo E2B sandbox and verified
+    against the real repo (``premeeting.comprehension``) — needs THREE more seams the connect
+    trigger threads into ``premeeting.pipeline.run_pipeline``:
+
+    * ``map_call`` — the ONE ``libs.http.call_external`` seam every E2B round-trip rides;
+    * ``map_oauth_token`` — the founder's Claude Code SUBSCRIPTION ``CLAUDE_CODE_OAUTH_TOKEN``
+      (the in-sandbox native-``claude`` auth). Absent ⇒ Part 2 is skipped (Part 1 stands);
+    * ``map_minter`` (+ ``github_installation_id``) — the GitHub-App installation-token minter
+      (``premeeting.github_auth.make_installation_minter``) so a PRIVATE customer repo clones
+      inside the Part-2 sandbox. Absent (no App creds, or no installation id yet) ⇒ the in-sandbox
+      clone runs unauthenticated: a PUBLIC repo (e.g. cal.com) still works; a private repo lands
+      empty and Part 2 degrades to Part 1 alone (honest — Part 2 only ever ADDS, Law 2).
+
+    ``sandbox_class`` is left ``None`` so ``premeeting.comprehension`` resolves the real E2B class
+    lazily (``libs.http.e2b_sandbox_class``) only when Part 2 actually runs — boot stays offline.
+
+    Every piece is HONEST-no-op-safe: any construction fault (missing token, unreadable key,
+    absent installation id) leaves that seam ``None`` and Part 2 degrades cleanly to Part 1 — never
+    a crash, never a fabricated credential (Law 2). Secrets flow from resolved settings only; never
+    hard-coded, never logged (Hard Rule: Secrets)."""
+    call_seam: Any = None
+    minter: Any = None
+    oauth_token: str = ""
+    installation_id: str = ""
+    try:
+        from control_plane import settings as settings_mod
+
+        cfg = settings_mod.settings
+        oauth_token = cfg.anthropic_oauth_token or ""
+        installation_id = cfg.github_app_installation_id or ""
+
+        # The single external-call seam every E2B round-trip rides (retry + cost telemetry).
+        from libs.http.src.http.external import call_external as _call_external
+
+        call_seam = _call_external
+
+        # The GitHub-App installation-token minter — constructed off the resolved App id + the
+        # private-key path (read off disk once). ``None`` when the App creds are absent/unreadable
+        # (then the in-sandbox clone runs unauthenticated; a public repo still works).
+        from premeeting.github_auth import make_installation_minter
+
+        minter = make_installation_minter(
+            app_id=cfg.github_app_id,
+            private_key_path=cfg.github_app_private_key_path,
+            call_external=_call_external,
+        )
+    except Exception:  # noqa: BLE001 - a wiring fault degrades to Part-1-only, never a boot crash
+        _log.warning(
+            "comprehension (Part 2) seam wiring failed — Part 2 seams left None (honest no-op)",
+            exc_info=True,
+        )
+        call_seam = None
+        minter = None
+        oauth_token = ""  # nosec B105 - clearing the seam on a wiring fault, not a hardcoded secret
+        installation_id = ""
+    app.state.map_call = call_seam
+    app.state.map_minter = minter
+    app.state.map_oauth_token = oauth_token
+    app.state.github_installation_id = installation_id
 
 
 # The interval between periodic webhook drains. EVERY transcript line (a wake) and every in_call

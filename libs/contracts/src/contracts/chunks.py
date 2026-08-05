@@ -29,11 +29,11 @@ class AgentChunk(BaseModel):
     (``tests/doc00/test_m00_cmp.py`` T-CMP-015, ``tests/doc00/test_w_workflows.py`` W11),
     so ``None`` is locked in and cannot be narrowed to ``str = ''`` without editing a
     sealed test. ``None`` is a safe SUPERSET of ``''``: every consumer that reads a chunk's
-    text guards it — the load-bearing one is ``agentkit.deltas.stream_deltas`` at
-    ``deltas.py:49`` (``accumulated = chunk.text or ""``), which is the single delta
-    seam every downstream consumer reads through. Non-TEXT chunks never reach that read
-    with a meaningful body. This is ONE consistent contract: producers emit ``None`` on
-    non-TEXT variants; the sole text consumer coalesces ``None``→``""``.
+    text guards it — the load-bearing one is ``agentkit.deltas.stream_deltas``
+    (``accumulated = chunk.text or ""``), the single delta seam every downstream consumer
+    reads through. Non-TEXT chunks never reach that read with a meaningful body. This is ONE
+    consistent contract: producers emit ``None`` on non-TEXT variants; the sole text consumer
+    coalesces ``None``→``""``.
     """
 
     type: ChunkType

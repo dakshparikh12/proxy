@@ -4,22 +4,20 @@ Recall gives bot join + per-speaker audio + Output Media + chat + roster/status
 webhooks across Meet/Zoom/Teams behind a single API, so zero per-platform code lives
 here. This is the sole ``TransportProvider`` impl; callers depend only on the Protocol
 (AC-SEAM-01). Every outbound round-trip is issued through the injected ``call_external``
-seam (AC-XCUT-03) — no raw provider client is held in this package. Live roster/chat
-events arrive on in-process queues fed by the harness webhook layer (Doc 02 M2); the
-carrier to the Orchestrator stays an in-process ``asyncio`` path (AC-SEAM-07).
+seam (AC-XCUT-03) — no raw provider client is held in this package. The transcript
+reaches the agent via the meeting webhook drain (``webhook_routes`` → the resident
+conversation cache), not through this carrier.
 """
 from __future__ import annotations
 
-import asyncio
 import base64
 import os
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from .external import CallExternal
 from .media import AudioChunk, CanvasFrame
 from .seams import OutputMediaSink
-from .signals import ChatMessage, RosterEvent
 
 # Recall's global default host — the us-east-1 alias (per the live regions doc); used
 # only when no RECALL_REGION is configured, so unset envs see zero behavior change.
@@ -158,8 +156,6 @@ class RecallTransport:
         # every ``_api`` round-trip (and every output-media sink bound to it) rides
         # the workspace's own region host; unset env keeps the global default.
         self._base = _recall_base()
-        self._roster: dict[str, asyncio.Queue[RosterEvent]] = {}
-        self._chat: dict[str, asyncio.Queue[ChatMessage]] = {}
         # Bots whose output audio is muted (C5): sink-side suppression, per bot —
         # observed live by every OutputMediaSink handed out for that bot.
         self._muted: set[str] = set()
@@ -230,8 +226,6 @@ class RecallTransport:
             # (Law 2; a non-unique 'bot' id would collide across meetings).
             raise RuntimeError("Recall /bot returned no bot id — no bot launched")
         bot_id = str(result["id"])
-        self._roster.setdefault(bot_id, asyncio.Queue())
-        self._chat.setdefault(bot_id, asyncio.Queue())
         return bot_id
 
     async def leave(self, bot_id: str) -> None:
@@ -283,12 +277,6 @@ class RecallTransport:
         """
         self._muted.discard(bot_id)
 
-    def roster_events(self, bot_id: str) -> AsyncIterator[RosterEvent]:
-        return _drain(self._roster.setdefault(bot_id, asyncio.Queue()))
-
-    def chat_events(self, bot_id: str) -> AsyncIterator[ChatMessage]:
-        return _drain(self._chat.setdefault(bot_id, asyncio.Queue()))
-
     def output_media(self, bot_id: str) -> OutputMediaSink:
         return _RecallOutputMedia(
             self._call_external,
@@ -296,13 +284,6 @@ class RecallTransport:
             api=self._api,
             is_muted=lambda: bot_id in self._muted,
         )
-
-    # ── harness webhook layer feeds live events onto the in-process queues (M2) ──
-    def _ingest_roster(self, bot_id: str, event: RosterEvent) -> None:
-        self._roster.setdefault(bot_id, asyncio.Queue()).put_nowait(event)
-
-    def _ingest_chat(self, bot_id: str, message: ChatMessage) -> None:
-        self._chat.setdefault(bot_id, asyncio.Queue()).put_nowait(message)
 
     async def _api(self, method: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
         """The sole raw Recall round-trip; invoked only via ``call_external`` (AC-XCUT-03).
@@ -328,8 +309,3 @@ class RecallTransport:
                 return {}
             payload: dict[str, Any] = resp.json()
             return payload
-
-
-async def _drain(queue: asyncio.Queue[Any]) -> AsyncIterator[Any]:
-    while True:
-        yield await queue.get()

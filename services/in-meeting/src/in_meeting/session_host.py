@@ -15,8 +15,8 @@ The protocol (files, so the host driver stays dependency-light and never shares 
 * IN  — ``$PROXY_WAKE_IN`` (default ``/tmp/wake_in.jsonl``): the driver APPENDS one JSON object
   ``{"id": "<uuid>", "prompt": "<the wake prompt>"}`` per wake. The host tails the file.
 * OUT — ``$PROXY_WAKE_OUT`` (default ``/tmp/wake_out``): the host writes ``<id>.json`` with the
-  SAME shape the cold path's ``_parse_stream`` produced: ``{tools, text, cost_usd, turns,
-  error, sent}``. Written atomically (temp + rename) so the poller never reads a half-file.
+  turn record the driver parses into a ``WorkroomResult``: ``{tools, text, cost_usd, turns, error,
+  sent, deliver_at, ttft}``. Written atomically (temp + rename) so the poller never reads a half-file.
 * The per-turn ``to_meeting`` intents are read from ``$PROXY_MEETING_OUT`` (the same file the
   in-sandbox MCP server records to), which the host TRUNCATES before each turn so a wake's
   ``sent`` is exactly that turn's intents.
@@ -50,9 +50,78 @@ REPO_DIR = os.environ.get("PROXY_REPO_DIR", "/home/user/work/repo")
 MCP_SERVER_FILE = os.environ.get("PROXY_MCP_SERVER", f"{REPO_DIR}/sandbox_meeting_mcp.py")
 MODEL = (os.environ.get("PROXY_WORKROOM_MODEL", "") or DEFAULT_MODEL).strip()
 
+#: Context7 (live library docs) as a PRE-WIRED convenience MCP — a "workshop" tool the agent can reach
+#: for without discovery. OFF by default and gated on ONE founder-provisioned secret: set
+#: ``CONTEXT7_API_KEY`` (from Secret Manager, injected into the sandbox env) to switch it on. It is
+#: NOT wired unconditionally because it is DOUBLY egress-dependent — ``npx`` fetches
+#: ``@upstash/context7-mcp`` from the npm registry AND every lookup calls ``https://context7.com/api``
+#: — and read-egress from the sandbox is itself the founder-gated infra toggle (see the tool-workshop
+#: note on ``_mcp_servers`` below). Wiring it while egress is denied would only stand up a stdio child
+#: that fails at npx-fetch / on every call — a FAKE capability (Law 2). So it rides the same gate: a
+#: key present asserts the founder has provisioned egress + the key, and only then does it load.
+CONTEXT7_API_KEY = os.environ.get("CONTEXT7_API_KEY", "").strip()
+
+#: The meeting-wide thinking EFFORT — FIXED for the whole session so the CLI flags are byte-identical
+#: every turn (a per-turn change would invalidate the resident-prime prompt cache mid-meeting). Adaptive
+#: thinking (below) still decides PER ASK whether to think at all — hard asks think, trivial ones skip —
+#: this only bounds HOW hard when it does. "high" is the sweet spot for grounded code work; overridable
+#: via ``PROXY_WORKROOM_EFFORT`` (Law 4: no per-task effort in code; one constant for the meeting).
+_EFFORT_ALLOWED = {"low", "medium", "high", "xhigh", "max"}
+EFFORT = (os.environ.get("PROXY_WORKROOM_EFFORT", "") or "high").strip()
+if EFFORT not in _EFFORT_ALLOWED:
+    EFFORT = "high"
+
 #: How long the host waits for the next wake line before re-polling (seconds). The session stays
 #: warm across this idle; the driver's append is picked up within one beat.
 _POLL_S = 0.1
+
+#: The readiness breadcrumb IS the host's HEARTBEAT: a background task rewrites it on this cadence
+#: for the whole life of the process — idle AND mid-turn — so its mtime keeps advancing while the
+#: host is alive. The driver watches that mtime: a frozen breadcrumb (host OOM'd/SIGKILLed/hung) is
+#: caught in seconds and triggers restart-and-retry, instead of the driver spinning the full
+#: ASK_TIMEOUT_S on a dead host (up to 15 min of dead air on an ask). A genuinely-long WORKING turn
+#: keeps this advancing (the heartbeat runs concurrently with the turn), so it is NOT mistaken for
+#: dead. Kept well under the driver's dead-host budget so several beats land inside that window.
+_HEARTBEAT_S = 2.0
+
+#: OPENER SAFETY NET (Law 5, talk-and-glance / be present). On a heavy ask (e.g. a repo-wide rename)
+#: adaptive thinking at ``EFFORT=high`` makes the model think hard BEFORE any text streams, and the
+#: prime's "say a quick word first" is only soft guidance — nothing FORCES a first utterance. That let
+#: a real ask sit ~86s in silence before first audio: a presence failure on exactly the ask where the
+#: room needs reassurance. So if NO spoken content has left the sandbox by the time the model has
+#: COMMITTED TO WORK, we emit ONE short canned acknowledgment, THEN let the real work + answer stream.
+#: A SAFETY NET, not a replacement: the model's own opener suppresses it (no double-speak).
+#:
+#: THE TRIGGER IS "WORK HAS STARTED", NOT PURE WALL-CLOCK (the generalizable fix). A pure time budget
+#: is un-tunable across repos/asks: on a well-mapped repo a judged answer streams its first words by
+#: ~2.6s (TTFT 0.75-2.56s), but on a less-familiar repo or a harder-to-judge (messy) wake the SAME
+#: kind of direct answer — or a silent cross-talk DECLINE — first thinks 6-12s before any token
+#: (measured on gin: TTFT 6-12s, and the "staying quiet" turn thought 11.8s). A 4s wall-clock net fired
+#: on ALL of those: redundant "On it…" in front of an answer a beat away, and — worse — a spurious
+#: "On it…" on a turn that then chose SILENCE (cross-talk), so the room heard Proxy blurt filler on a
+#: line that wasn't even addressed to it. The robust discriminator: a direct answer and a silent
+#: decline emit NO tool call before their text; a genuinely heavy ask starts ACTING (Read/Bash/Grep/a
+#: sub-agent) early. So the net fires once the model has (a) called its first real tool AND (b) still
+#: spoken nothing after ``_OPENER_AFTER_TOOL_S`` — i.e. it is demonstrably off doing multi-step work
+#: in silence, exactly when the room needs reassurance — never during the judge-then-answer/decline
+#: phase. A pure-thinking heavy answer that emits NO tool for a long time is caught by the higher
+#: ``_OPENER_HARD_FLOOR_S`` backstop (well above the judged-answer TTFT band, so it still never fires
+#: on a normal answer/decline). ``PROXY_OPENER_BUDGET_S`` overrides the after-tool delay (kept name-
+#: compatible); ``PROXY_OPENER_HARD_FLOOR_S`` overrides the no-tool backstop; unparsable keeps defaults.
+try:
+    _OPENER_AFTER_TOOL_S = float(os.environ.get("PROXY_OPENER_BUDGET_S", "") or 2.0)
+except ValueError:
+    _OPENER_AFTER_TOOL_S = 2.0
+#: The no-tool backstop: even if the model never calls a tool, guarantee presence if it has been
+#: silent this long (a rare pure-reasoning heavy answer). Set well ABOVE the observed judged-answer
+#: TTFT band (6-12s) so it never pre-empts a normal answer/decline that is merely thinking.
+try:
+    _OPENER_HARD_FLOOR_S = float(os.environ.get("PROXY_OPENER_HARD_FLOOR_S", "") or 15.0)
+except ValueError:
+    _OPENER_HARD_FLOOR_S = 15.0
+#: The single canned acknowledgment spoken by the safety net (kept short + generic — the real answer
+#: follows immediately after). Deliberately not situation-specific (Law 4: no code maps ask→words).
+_OPENER_TEXT = "On it — give me a moment."
 
 
 def _parse_intents(raw: str) -> list[dict[str, Any]]:
@@ -192,29 +261,86 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
     deliver_at = 0.0
     ttft = 0.0        # query → FIRST text delta (pure model time-to-first-token; profiling only)
     say_buf = ""      # accumulates streamed response prose until a sentence closes, then flushes to voice
+    #: Has ANY spoken content left the sandbox this turn — the model's own prose OR the canned opener?
+    #: The opener safety net only fires while this is still False (so the model's own opener suppresses
+    #: it). Flipped to True right BEFORE each real ``_deliver_say`` await, so the check-then-set stays
+    #: atomic under single-threaded asyncio (no await between test and set).
+    spoke = False
+    opener_fired = False  # the canned opener has been emitted (fired at most once per turn)
+    #: Has the model called its first REAL tool this turn (Read/Bash/Grep/Write/a sub-agent — anything
+    #: but ``to_meeting``, which is delivery, not work)? This is the "committed to multi-step work"
+    #: signal the opener gates on: a direct answer or a silent cross-talk decline never calls a tool
+    #: before its text, so the opener never fires on them; a genuinely heavy ask starts acting early.
+    tool_started = False
 
     async def _flush_ready(*, final: bool = False) -> None:
         """Flush every complete sentence sitting in ``say_buf`` to the voice channel; on ``final``
         also flush the trailing partial clause so the answer's last words are never dropped. Each
         sentence is AWAITED in turn, so the room hears them strictly in order."""
-        nonlocal say_buf, deliver_at
+        nonlocal say_buf, deliver_at, spoke
         while True:
             cut = _sentence_end(say_buf)
             if cut is None:
                 break
             sentence, say_buf = say_buf[:cut].strip(), say_buf[cut:]
             if sentence:
+                spoke = True  # real prose is going out ⇒ suppress the canned opener from here on
                 await _deliver_say(sentence)
                 if not deliver_at:
                     deliver_at = round(time.monotonic() - turn_start, 2)
         if final and say_buf.strip():
+            spoke = True
             await _deliver_say(say_buf.strip())
             if not deliver_at:
                 deliver_at = round(time.monotonic() - turn_start, 2)
             say_buf = ""
 
+    async def _opener_watchdog() -> None:
+        """The presence safety net, gated on WORK-COMMITTED not pure wall-clock. Poll until EITHER the
+        model has committed to multi-step work (its first real tool call) and stayed silent
+        ``_OPENER_AFTER_TOOL_S`` past it, OR it has been silent the ``_OPENER_HARD_FLOOR_S`` no-tool
+        backstop — then emit ONE canned acknowledgment so a genuinely-working turn isn't dead air.
+
+        WHY GATE ON A TOOL CALL, not time alone: a direct answer and a silent cross-talk decline emit
+        NO tool before their text, and their first token can lag 6-12s on a less-familiar repo / a hard
+        judgment — a pure time budget fired canned filler in front of the answer, or (worse) spoke
+        'On it…' on a turn that then chose SILENCE. Tying the net to 'a tool has started' makes it fire
+        ONLY when the model is demonstrably off doing work, exactly when the room needs reassurance, and
+        never during the judge-then-answer/decline phase. Suppressed the instant the model's OWN words
+        stream (``spoke`` / ``ttft`` / ``say_buf``): its opener always wins (no double-speak). The
+        check-then-set of ``spoke``/``opener_fired`` is atomic (no await before the set), so it can
+        never double-speak with a concurrently-flushing real sentence."""
+        nonlocal spoke, opener_fired, deliver_at
+        tool_seen_at: float | None = None
+        try:
+            while True:
+                # The model has spoken / is mid-stream ⇒ its own words are imminent; stand down forever.
+                if spoke or opener_fired or ttft or say_buf:
+                    return
+                now = time.monotonic()
+                if tool_started and tool_seen_at is None:
+                    tool_seen_at = now  # start the short after-work-began grace
+                due = (
+                    (tool_seen_at is not None and now - tool_seen_at >= _OPENER_AFTER_TOOL_S)
+                    or (now - turn_start >= _OPENER_HARD_FLOOR_S)
+                )
+                if due:
+                    break
+                await asyncio.sleep(0.05)
+        except asyncio.CancelledError:
+            return
+        # Re-check atomically after the loop's last await: the model may have just started speaking.
+        if spoke or opener_fired or ttft or say_buf:
+            return
+        spoke = True
+        opener_fired = True
+        await _deliver_say(_OPENER_TEXT)
+        if not deliver_at:
+            deliver_at = round(time.monotonic() - turn_start, 2)
+
     _reset_intents()
     turn_start = time.monotonic()
+    watchdog = asyncio.create_task(_opener_watchdog())
     try:
         await client.query(prompt)
         async for msg in client.receive_response():
@@ -243,6 +369,10 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
                     if isinstance(block, ToolUseBlock):
                         name = str(block.name or "")
                         tools.append(name)
+                        # First REAL tool (anything but the delivery channel) ⇒ the model has committed
+                        # to multi-step work: arm the presence opener (see ``_opener_watchdog``).
+                        if "to_meeting" not in name:
+                            tool_started = True
                         if not deliver_at and "to_meeting" in name:
                             deliver_at = round(time.monotonic() - turn_start, 2)
                     elif isinstance(block, TextBlock) and str(block.text or "").strip():
@@ -253,15 +383,24 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
                 cost = float(msg.total_cost_usd or 0.0)
                 if msg.num_turns:
                     turns = int(msg.num_turns)
+                # PROOF instrumentation: is the cache actually engaging (resident prefix reused,
+                # not re-parsed)? cache_read growing turn-over-turn = caching works.
+                u = getattr(msg, "usage", None) or {}
+                _g = u.get if isinstance(u, dict) else (lambda k, d=0: getattr(u, k, d))
+                print(f"[usage] cache_read={_g('cache_read_input_tokens', 0)} "
+                      f"cache_write={_g('cache_creation_input_tokens', 0)} "
+                      f"input={_g('input_tokens', 0)} output={_g('output_tokens', 0)}", flush=True)
     except Exception as exc:  # noqa: BLE001 — a per-turn fault is an honest error, never a crash
+        watchdog.cancel()
         await _flush_ready(final=True)  # speak whatever was already composed before surfacing the fault
         return {"tools": tools, "text": last_text, "cost_usd": cost, "turns": turns,
                 "error": str(exc) or exc.__class__.__name__, "deliver_at": deliver_at, "ttft": ttft,
                 "sent": _parse_intents(_read_intents())}
 
+    watchdog.cancel()
     await _flush_ready(final=True)  # the closing partial sentence (no trailing terminator yet)
     intents = _parse_intents(_read_intents())
-    # Salvage an abnormally-terminated turn's last prose (parity with ``_parse_stream``).
+    # Salvage an abnormally-terminated turn's last prose (no ``result`` event but prose was streamed).
     if not saw_result and not text:
         text = last_text
     error = None
@@ -269,6 +408,27 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
         error = "turn did not complete"
     return {"tools": tools, "text": text, "cost_usd": cost, "turns": turns,
             "error": error, "deliver_at": deliver_at, "ttft": ttft, "sent": intents}
+
+
+def _beat() -> None:
+    """Bump the readiness breadcrumb's mtime — one heartbeat tick. Rewriting the file (not just
+    ``os.utime``) is simplest and portable; the content (the launch timestamp) is unchanged. The
+    driver reads the mtime, so a fresh write = a live host. Best-effort: a write fault is swallowed
+    (the NEXT tick retries; the driver only concludes 'dead' after MANY missed ticks)."""
+    try:
+        (pathlib.Path(WAKE_OUT) / "_host.ready").write_text(str(time.time()), encoding="utf-8")
+    except OSError:
+        pass
+
+
+async def _heartbeat() -> None:
+    """Advance the readiness/heartbeat breadcrumb forever, CONCURRENTLY with the serve loop — so its
+    mtime keeps moving even while a single long turn is running (a real multi-minute code task must
+    NOT look dead). If this task's process is SIGKILLed/OOM'd the ticks simply stop and the file goes
+    stale, which is exactly the dead-host signal the driver watches for."""
+    while True:
+        _beat()
+        await asyncio.sleep(_HEARTBEAT_S)
 
 
 async def _serve(client: Any) -> None:
@@ -304,15 +464,65 @@ def _mcp_servers() -> dict[str, Any]:
     """The meeting MCP server config for the WARM session — the SAME stdio server the cold path
     registered via ``.mcp.json``, so ``to_meeting`` loads ONCE for the whole session. The relay envs
     (``PROXY_MEETING_RELAY``/``_TOKEN``/``_OUT``) are already in this process's env and inherited by
-    the stdio child, so a live turn's ``to_meeting`` reaches the host exactly as before."""
-    return {
-        "meeting": {"type": "stdio", "command": "python3", "args": [MCP_SERVER_FILE]}
+    the stdio child, so a live turn's ``to_meeting`` reaches the host exactly as before.
+
+    TOOL-WORKSHOP HONESTY (Law 2): the agent keeps its FULL native toolset regardless (Read/Grep/
+    Bash/Write/Edit/Glob/WebSearch/WebFetch/Task sub-agents) — see the ``ClaudeAgentOptions`` note in
+    ``main`` — so this dict only adds PRE-WIRED convenience MCP servers on top. The one non-meeting
+    server we can offer, Context7 (live library docs), is gated: it loads ONLY when ``CONTEXT7_API_KEY``
+    is set, because it is egress-dependent (npx-fetch + a live API call per lookup) and read-egress is
+    the founder-gated infra toggle. Standing it up while egress is denied would fake a capability, so
+    it stays off until the key (which implies egress + the secret are provisioned) is present."""
+    # ``alwaysLoad: true`` — the meeting server's ONE tool (``to_meeting``) skips tool-search
+    # deferral, so it is ALWAYS immediately callable, never behind a ToolSearch/MCPSearch round-trip.
+    # WHY THIS MATTERS (measured, generalizable): Claude Code turns on MCP tool-search auto-mode by
+    # default — when tool descriptions exceed ~10% of the context window the tools are DEFERRED and
+    # must be discovered via a ToolSearch call before use. In every delivering quality-battery trace
+    # the agent spent one whole tool round-trip on ``ToolSearch`` right before its FIRST ``to_meeting``
+    # call — pure latency on the CRITICAL delivery path of EVERY task, plus a reliability risk (if the
+    # search fails to surface it, the room hears nothing). ``to_meeting`` is the agent's SOLE line to
+    # the room; it must never be deferred. Scoped to THIS server only, so tool-search still lazy-loads
+    # everything else (the workshop stays intact). This makes the prime's "already loaded, don't search
+    # for it" literally TRUE (Law 4: a wiring fact, not a situation→action rule).
+    servers: dict[str, Any] = {
+        "meeting": {"type": "stdio", "command": "python3", "args": [MCP_SERVER_FILE],
+                    "alwaysLoad": True},
     }
+    if CONTEXT7_API_KEY:
+        # Pre-wired only when the founder has provisioned the key (⇒ egress + secret are in place).
+        servers["context7"] = {
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@upstash/context7-mcp", "--api-key", CONTEXT7_API_KEY],
+        }
+    return servers
 
 
 async def main() -> None:
     from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 
+    # THE TOOL-WORKSHOP GUARANTEE (do NOT add ``allowed_tools``/``tools``/``disallowed_tools`` here).
+    # The workshop metaphor in the prime ("reach for the best tool… if you don't have it, get it") is
+    # only HONEST if the agent actually holds its full native toolset. It does, precisely BECAUSE these
+    # three params are left UNSET:
+    #   * ``tools`` unset (None) ⇒ the CLI default = the WHOLE Claude Code toolset (Read, Grep, Glob,
+    #     Bash, Write, Edit, WebSearch, WebFetch, the Task sub-agent tool, …). Setting it to ``[]``
+    #     would DISABLE all tools; a curated list would shrink the workshop to that list.
+    #   * ``allowed_tools`` unset ⇒ it is only an AUTO-APPROVE allowlist, it does NOT remove tools from
+    #     the toolset (per the claude-agent-sdk docs). With ``bypassPermissions`` below every tool is
+    #     already auto-approved, so leaving it unset is exactly "full toolset, no prompts".
+    #   * ``disallowed_tools`` unset ⇒ nothing is blocked. (The Law-3 world-touching boundary is NOT
+    #     enforced by blocking tools — it is enforced structurally: the sandbox holds no push/send
+    #     credentials, so Bash/Write can only touch the sandbox, and irreversible acts must be staged
+    #     as an ``offer`` the host applies behind a human click.)
+    # HONEST LIMIT ON "get more tools" — the founder-gated infra toggle: the agent's ability to
+    # actually ACQUIRE a tool it lacks (WebSearch/WebFetch, ``pip install X``, ``npx some-mcp``, the
+    # pre-wired Context7 above) needs outbound READ egress from the sandbox. Egress is default-DENY
+    # today (write egress stays blocked forever — that IS the credential boundary). So while egress is
+    # denied the workshop is "use the tools you have (the full native set, on the repo already cloned
+    # in) — but you can't reach the internet to fetch more". Flipping ON read-egress (a founder infra
+    # decision, writes still blocked) is the ONE toggle that turns "get more tools" from aspiration
+    # into fact; the prime is written to be honest about exactly this ("if you have internet, get more").
     options = ClaudeAgentOptions(
         cwd=REPO_DIR,
         permission_mode="bypassPermissions",   # the sandbox holds no push/send creds (Law 3)
@@ -324,19 +534,45 @@ async def main() -> None:
         # still bounded by ASK_TIMEOUT_S on the driver side; a runaway can't stall the meeting).
         max_turns=int(os.environ.get("PROXY_MAX_TURNS", "40") or "40"),
         mcp_servers=_mcp_servers(),
+        # ADAPTIVE thinking: Claude decides PER ASK whether — and how much — to think. A trivial ask
+        # ("mute yourself") skips thinking entirely (no TTFT hit), a hard code task thinks hard. FIXED
+        # for the meeting (adaptive is a mode, not a per-turn value; paired with the constant EFFORT
+        # below) so the CLI flags never change turn-to-turn and the resident-prime cache stays warm.
+        # display defaults to "omitted" — the reasoning is NOT streamed as text_delta, so it never
+        # reaches ``say_buf`` and is never spoken (the receive loop only flushes text_delta anyway;
+        # this keeps it out at the source). Sends ``--thinking adaptive`` (claude-agent-sdk ≥0.2.115).
+        thinking={"type": "adaptive"},
+        # One meeting-wide effort ceiling (``--effort``), FIXED so it never invalidates the cache.
+        effort=EFFORT,  # type: ignore[arg-type]  # constrained to _EFFORT_ALLOWED above
         # Stream the model's text deltas as it generates so the host can speak each sentence the
         # instant it closes (first audio at the first clause, not the whole answer). Available since
         # claude-agent-sdk 0.1.48; keeps the MCP tools + the CLAUDE.md prime fully intact.
         include_partial_messages=True,
+        # MARATHON CONDENSING SAFETY NET (SPEC §3): the whole transcript accumulates in this warm
+        # session's cached conversation (each wake inlines only the delta), so a very long meeting
+        # would eventually approach the context window. We do NOT hand-roll a condenser — the Claude
+        # Agent SDK's built-in AUTOCOMPACTION is exactly the spec's "quiet condensing of the oldest
+        # transcript ONLY if it grows huge": near the window it summarizes the OLDEST history and keeps
+        # recent turns verbatim. It is ON by default (``isAutoCompactEnabled``); we deliberately leave
+        # it enabled (no ``extra_args``/settings disable it) rather than duplicate it — simplest, and
+        # it preserves the resident-recall property (the summary stays in the same cached conversation).
     )
     async with ClaudeSDKClient(options=options) as client:
-        # Mark the host READY so the driver can tell the warm session came up (vs. a startup fault).
+        # Mark the host READY so the driver can tell the warm session came up (vs. a startup fault);
+        # this same breadcrumb is then kept fresh by the heartbeat as a liveness signal.
         try:
             pathlib.Path(WAKE_OUT).mkdir(parents=True, exist_ok=True)
-            (pathlib.Path(WAKE_OUT) / "_host.ready").write_text(str(time.time()), encoding="utf-8")
         except OSError:
             pass
-        await _serve(client)
+        _beat()
+        # Run the heartbeat CONCURRENTLY with serving so the breadcrumb's mtime keeps advancing while
+        # the host is alive — idle or mid-turn. If the process dies (OOM/SIGKILL) both tasks stop and
+        # the file goes stale, which the driver detects in seconds (fast recover vs. 15 min of silence).
+        heartbeat = asyncio.create_task(_heartbeat())
+        try:
+            await _serve(client)
+        finally:
+            heartbeat.cancel()
 
 
 if __name__ == "__main__":

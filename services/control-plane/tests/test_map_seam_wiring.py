@@ -8,7 +8,9 @@ Two proofs:
   configured — boot still succeeds either way.
 * With a FAKE provider + fake store on ``app.state``, the connect trigger (the function that reads
   ``map_provider``) actually invokes the pipeline's build + ``map_store.save`` — a repo_maps write
-  path is exercised, proving the wiring calls through instead of no-op'ing.
+  path is exercised, proving the wiring calls through instead of no-op'ing. The build is now the
+  DETERMINISTIC tree-sitter symbol map (no model call, D-032), so "calls through" is proven by the
+  tenant-scoped ``save`` of a real symbol map, NOT by a stream of the (deprecated) LLM provider.
 """
 from __future__ import annotations
 
@@ -82,9 +84,13 @@ def test_wire_map_seam_with_auth_assigns_both(monkeypatch: Any) -> None:
 
 
 class _RecordingProvider:
-    """A fake ``agentkit.Provider``: streams a canned index.md as a terminal TEXT chunk.
+    """A fake ``agentkit.Provider`` retained only for signature compatibility.
 
-    Records that it was actually STREAMED (proves the wiring called the model seam, not a no-op)."""
+    The map build is now the DETERMINISTIC tree-sitter symbol map
+    (:func:`premeeting.map_build.build_map` → :func:`premeeting.symbol_map.build_symbol_map`), built
+    with NO model call (D-032, and grounded — Law 1). So the wiring must call THROUGH to a real
+    ``map_store.save`` WITHOUT ever streaming this provider. ``streamed`` stays ``False`` on the
+    live path; if it ever flips, the build regressed back to the credit-blocked LLM prose loop."""
 
     def __init__(self) -> None:
         self.streamed = False
@@ -93,13 +99,7 @@ class _RecordingProvider:
         from libs.contracts import AgentChunk
 
         self.streamed = True
-        yield AgentChunk(
-            type="TEXT",
-            text=(
-                "## What this is\nx\n## Where things live\nx\n## Entry points\nx\n"
-                "## Key models\nx\n## Conventions\nx\n## Notes\nx\n"
-            ),
-        )
+        yield AgentChunk(type="TEXT", text="(deprecated LLM path — should not run)")
         yield AgentChunk(type="RESULT", metadata={"num_turns": 1, "total_cost_usd": 0.0})
 
 
@@ -124,7 +124,9 @@ def test_connect_trigger_calls_through_provider_and_store(monkeypatch: Any, tmp_
     # A real clone on disk so the REAL pipeline (clone → build → store → verify) runs — the store
     # is exercised because ``run_pipeline`` calls ``map_store.save`` on the built map text.
     (tmp_path / "README.md").write_text("# demo repo\nhello", encoding="utf-8")
-    (tmp_path / "main.py").write_text("print('hi')\n", encoding="utf-8")
+    (tmp_path / "main.py").write_text(
+        "def run() -> int:\n    return 1\n", encoding="utf-8"
+    )
 
     class _Cloner:
         def __init__(self, *a: Any, **k: Any) -> None:
@@ -171,8 +173,11 @@ def test_connect_trigger_calls_through_provider_and_store(monkeypatch: Any, tmp_
         map_store=map_store,        # the wiring the boot step assigns to app.state.map_store
     )
 
-    # The trigger ran the pipeline (not the None-provider no-op) — the model seam was streamed:
-    assert provider.streamed is True
+    # The trigger ran the pipeline (not the None-provider no-op) — a real repo_maps WRITE happened.
+    # The build is now DETERMINISTIC (the tree-sitter symbol map), so the model seam is NEVER
+    # streamed on the live path; the wiring calling through is proven by the tenant-scoped save,
+    # not by a stream call.
+    assert provider.streamed is False        # deterministic build — the LLM prose loop must not run
     assert result is not None
     # A repo_maps WRITE path was exercised — the fake store recorded exactly one tenant-scoped save:
     assert len(map_store.saved) == 1
@@ -180,4 +185,6 @@ def test_connect_trigger_calls_through_provider_and_store(monkeypatch: Any, tmp_
     assert saved["tenant_id"] == "tenant-xyz"
     assert saved["repo"] == "demo"
     assert saved["sha"] == "deadbeef"
-    assert "What this is" in saved["map_text"]   # the built map text, not a fabricated blank
+    # the built map text is the deterministic symbol map (real file:line, groundable), not a blank:
+    assert "# Symbol map" in saved["map_text"]
+    assert "main.py" in saved["map_text"]

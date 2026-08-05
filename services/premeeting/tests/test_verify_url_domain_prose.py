@@ -18,29 +18,27 @@ from premeeting.cloner import Cloner
 from premeeting.exclusions import ExclusionManager
 from premeeting.verify import _is_path_claim, _looks_like_path, verify_map
 
-# A realistic map that mentions the product, a framework, a URL, and a real cited path — the
-# shape of any real cal.com subscription map. The clone has a matching real ``packages/lib/x.ts``.
-_REALISTIC_MAP = """# Repo Map — cal.com @ abc
+# A realistic map that mentions the product, a framework, a URL, and a real cited path — the shape
+# of any real cal.com subscription map, in the CURRENT deterministic symbol-map format (the markers
+# ``# Symbol map`` / ``Where things live`` / ``Entry points`` / ``Ranked signatures``). It still
+# carries prose URLs/domains/a framework name and the real cited paths, so these tests exercise the
+# URL-vs-path grounding of ``verify_map`` exactly as before. The clone has a real ``packages/lib/x.ts``.
+_REALISTIC_MAP = """# Symbol map — cal.com @ abc
 
-## What this is
 cal.com is the scheduling app, built on Next.js. Homepage: //cal.com/docs and the source is at
 github.com/calcom/cal.com — see https://cal.com for the product.
 
-## Where things live
+## Where things live (top-level)
 - packages/ — the shared libraries
 - src/ — the app code
 
-## Entry points
-- packages/lib/x.ts — a shared helper
+## Entry points (highest-rank symbols)
+- `packages/lib/x.ts:1` — a shared helper
 
-## Key models / domain
-- src/models.py — the domain types
+## Ranked signatures (real file:line — cite these; open the file for the body)
+- `src/models.py:1` — the domain types
 
-## Conventions
-pytest + ruff; the framework is Next.js.
-
-## Notes
-Single monorepo. See github.com/calcom/cal.com for issues.
+pytest + ruff; the framework is Next.js. Single monorepo. See github.com/calcom/cal.com for issues.
 """
 
 
@@ -69,8 +67,8 @@ def test_genuinely_missing_nested_path_still_flags(make_git_repo: Any) -> None:
     """A fabricated nested path (``foo/bar.ts``) is still caught — genuine detection intact."""
     checkout, em = _clone_fixture(make_git_repo)
     bad = _REALISTIC_MAP.replace(
-        "- packages/lib/x.ts — a shared helper",
-        "- packages/lib/x.ts — a shared helper\n- foo/bar.ts — a fabricated file",
+        "- `packages/lib/x.ts:1` — a shared helper",
+        "- `packages/lib/x.ts:1` — a shared helper\n- foo/bar.ts — a fabricated file",
     )
     res = verify_map(bad, checkout, exclusions=em)
     assert not res.ready
@@ -133,8 +131,8 @@ def test_real_file_cited_by_imprecise_dir_is_grounded_not_hallucinated(make_git_
     checkout, em = _clone_fixture(make_git_repo)  # has packages/lib/x.ts, src/models.py, README.md
     # cite the REAL packages/lib/x.ts by an imprecise path (dropped the packages/ prefix) → grounded
     ok = _REALISTIC_MAP.replace(
-        "- packages/lib/x.ts — a shared helper",
-        "- lib/x.ts — a shared helper (cited without the packages/ prefix)",
+        "- `packages/lib/x.ts:1` — a shared helper",
+        "- `lib/x.ts:1` — a shared helper (cited without the packages/ prefix)",
     )
     res = verify_map(ok, checkout, exclusions=em)
     assert res.ready, res.reasons

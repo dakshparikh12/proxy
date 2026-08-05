@@ -13,7 +13,6 @@ from collections.abc import AsyncIterator
 from typing import Protocol, runtime_checkable
 
 from .media import AudioChunk, CanvasFrame
-from .signals import ChatMessage, RosterEvent
 
 
 @runtime_checkable
@@ -32,7 +31,7 @@ class OutputMediaSink(Protocol):
 
 @runtime_checkable
 class TransportProvider(Protocol):
-    """The meeting carrier (Recall.ai): join, roster/chat/status events, Output Media.
+    """The meeting carrier (Recall.ai): join, chat/dm, Output Media.
 
     One API spans Meet/Zoom/Teams — zero per-platform code lives above this seam.
     """
@@ -46,10 +45,6 @@ class TransportProvider(Protocol):
     async def post_chat(self, bot_id: str, message: str, *, pinned: bool = False) -> None: ...
 
     async def send_dm(self, bot_id: str, message: str, participant_id: str) -> None: ...
-
-    def roster_events(self, bot_id: str) -> AsyncIterator[RosterEvent]: ...
-
-    def chat_events(self, bot_id: str) -> AsyncIterator[ChatMessage]: ...
 
     def output_media(self, bot_id: str) -> OutputMediaSink: ...
 

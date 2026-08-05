@@ -35,14 +35,32 @@ def _say(content: str) -> list[dict[str, Any]]:
     return [{"content": content, "medium": "say", "to": ""}]
 
 
+class _FakeSpeak:
+    """Mirrors SpeakPipe's barge-in surface the reactive loop reads/drives: ``speaking`` (the cut
+    guard) and ``cut`` (the barge-in primitive). ``speaking`` is a mutable flag a test sets to stage
+    Proxy mid-utterance; ``cut`` records the stop and clears it, like the real pipe."""
+
+    def __init__(self, *, speaking: bool = False) -> None:
+        self.speaking = speaking
+        self.cuts = 0
+
+    async def cut(self) -> None:
+        self.cuts += 1
+        self.speaking = False
+
+
 class _FakeConnection:
     """Records what actually reached the room, mirroring MeetingConnection.sent / to_meeting —
     including the ``spoken`` log (voice lines only) the reactive loop reads for self-echo
-    suppression, recorded exactly as the real connection's ``_record_spoken`` does."""
+    suppression, and the barge-in surface (``speak``/``barge_in``/``begin_turn`` + ``cut_latched``)
+    it drives on a human talking over Proxy — recorded exactly as the real connection does."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, speaking: bool = False) -> None:
         self.sent: list[SimpleNamespace] = []
         self.spoken: list[tuple[float, str]] = []
+        self.speak = _FakeSpeak(speaking=speaking)
+        self.cut_latched = False
+        self.begin_turns = 0
 
     async def to_meeting(self, content: str, medium: str = "say", to: str | None = None) -> Any:
         rec = SimpleNamespace(medium=medium, ok=True, detail="", content=content)
@@ -50,6 +68,14 @@ class _FakeConnection:
         if medium in ("say", "speak", "voice") and content.strip():
             self.spoken.append((time.time(), content))
         return rec
+
+    async def barge_in(self) -> None:
+        self.cut_latched = True
+        await self.speak.cut()
+
+    def begin_turn(self) -> None:
+        self.cut_latched = False
+        self.begin_turns += 1
 
 
 class _FakeWorkroom:
@@ -68,6 +94,7 @@ class _FakeWorkroom:
     ) -> None:
         self.fed: list[str] = []
         self.asks: list[str] = []
+        self.deltas: list[str] = []   # the per-wake transcript delta each run_ask received
         self._result = result if result is not None else _result(text="ok", sent=_say("ok"))
         self._connection = connection
         self._on_run = on_run
@@ -76,8 +103,9 @@ class _FakeWorkroom:
     async def feed_transcript(self, md: str) -> None:
         self.fed.append(md)
 
-    async def run_ask(self, ask: str, *, recent: str = "") -> Any:
+    async def run_ask(self, ask: str, *, delta: str = "") -> Any:
         self.asks.append(ask)
+        self.deltas.append(delta)
         if self._raise_on_run:
             raise RuntimeError("run_ask blew up")
         if self._on_run is not None:
@@ -232,7 +260,7 @@ def test_overlapping_wakes_both_deliver_no_dropped_response() -> None:
             async def feed_transcript(self, md: str) -> None:
                 self.fed.append(md)
 
-            async def run_ask(self, ask: str, *, recent: str = "") -> Any:
+            async def run_ask(self, ask: str, *, delta: str = "") -> Any:
                 self.asks.append(ask)
                 await asyncio.sleep(0.05)  # let the two wakes overlap in flight
                 which = "first" if "first" in ask else "second"
@@ -271,7 +299,7 @@ def test_monitor_while_working_a_second_line_lands_while_the_first_wake_runs() -
                 if "second question" in md:
                     second_line_fed.set()
 
-            async def run_ask(self, ask: str, *, recent: str = "") -> Any:
+            async def run_ask(self, ask: str, *, delta: str = "") -> Any:
                 self.asks.append(ask)
                 if "first" in ask:
                     # Block until a later line has been fed WHILE this wake is in flight —
@@ -368,6 +396,169 @@ def test_error_with_a_recorded_intent_delivers_that_intent_not_an_apology() -> N
     asyncio.run(_run())
 
 
+def test_ask_reply_continue_an_unaddressed_answer_resumes_the_task() -> None:
+    """ASK → ANSWER → CONTINUE (the headline path): Proxy is addressed, asks the room a clarifying
+    question and delivers nothing else → the NEXT substantive human line, which does NOT name Proxy,
+    is treated as the answer and wakes Proxy to CONTINUE the same task with the prior Q + this A. The
+    normal name-gate would have IGNORED that reply; the pending-question latch is what carries it."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+
+        class _WR:
+            def __init__(self) -> None:
+                self.fed: list[str] = []
+                self.asks: list[str] = []
+
+            async def feed_transcript(self, md: str) -> None:
+                self.fed.append(md)
+
+            async def run_ask(self, ask: str, *, delta: str = "") -> Any:
+                self.asks.append(ask)
+                # turn 1 (the address) ends on a QUESTION; turn 2 (the continuation) delivers the work
+                if "Earlier you asked" in ask:  # the CONTINUATION prompt → deliver the real result
+                    return _result(sent=_say("Done — patched the cal.com double-booking bug."))
+                return _result(sent=_say("Which repo should I patch — cal.com or the fork?"))
+
+        wr = _WR()
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        # 1) a human addresses Proxy → Proxy asks a clarifying question and stops
+        await session.on_line("Bob", "proxy, fix the double-booking bug", ts=1.0)
+        await session.drain()
+        assert conn.sent[-1].content.endswith("?")            # Proxy asked the room
+        assert session._pending_question is not None          # ...and latched the pending question
+
+        # 2) a human REPLIES WITHOUT naming Proxy — normally ignored by the name-gate
+        assert __import__("control_plane.meeting_session", fromlist=["is_addressed"]).is_addressed(
+            "Ann", "cal.com please") is None
+        await session.on_line("Ann", "cal.com please", ts=5.0)
+        await session.drain()
+
+        # the reply woke Proxy as a CONTINUATION carrying BOTH the prior question and the answer:
+        assert len(wr.asks) == 2
+        cont = wr.asks[1]
+        assert "Earlier you asked" in cont and "which repo" in cont.lower()
+        assert "cal.com please" in cont and "Ann" in cont
+        # Proxy then delivered the real result, and the latch is cleared (task resumed):
+        assert conn.sent[-1].content == "Done — patched the cal.com double-booking bug."
+        assert session._pending_question is None
+
+    asyncio.run(_run())
+
+
+def test_continuation_does_not_fire_when_last_turn_ended_on_a_statement() -> None:
+    """The latch is set ONLY when Proxy ends its turn on a question. A completed answer (a statement)
+    latches nothing, so a following un-addressed line stays pure cross-talk (name-gate untouched)."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+        wr = _FakeWorkroom(result=_result(sent=_say("It lives at util.ts:9.")))  # a statement, no '?'
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        await session.on_line("Bob", "proxy, where's the helper?", ts=1.0)
+        await session.drain()
+        assert session._pending_question is None              # nothing to continue
+
+        await session.on_line("Ann", "great, thanks everyone", ts=3.0)  # ordinary cross-talk
+        await session.drain()
+        assert wr.asks == ["proxy, where's the helper?"]      # NOT re-woken by the un-addressed line
+
+    asyncio.run(_run())
+
+
+def test_continuation_ignores_blips_then_fires_on_the_real_reply() -> None:
+    """A sub-onset blip ('um') is not an answer: the pending question stays live for the REAL reply.
+    The latch is consumed once, by the first substantive human line."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+
+        class _WR(_FakeWorkroom):
+            async def run_ask(self, ask: str, *, delta: str = "") -> Any:
+                self.asks.append(ask)
+                if "Earlier you asked" in ask:
+                    return _result(sent=_say("shipped it"))
+                return _result(sent=_say("Postgres or SQLite for the store?"))
+
+        wr = _WR()
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        await session.on_line("Bob", "proxy, wire up persistence", ts=1.0)
+        await session.drain()
+        assert session._pending_question is not None
+
+        await session.on_line("Ann", "um", ts=2.0)            # a blip — not the answer
+        await session.drain()
+        assert len(wr.asks) == 1                              # did NOT continue on the blip
+        assert session._pending_question is not None          # latch still standing
+
+        await session.on_line("Ann", "use Postgres", ts=3.0)  # the real reply (a substantive line)
+        await session.drain()
+        assert len(wr.asks) == 2 and "Postgres" in wr.asks[1]
+        assert session._pending_question is None
+
+    asyncio.run(_run())
+
+
+def test_continuation_expires_and_does_not_hijack_a_much_later_line() -> None:
+    """A pending question is only live for a bounded window. A line arriving after the timeout is NOT
+    hijacked as an answer — the moment passed and the name-gate is back in sole control."""
+    from control_plane.meeting_session import _CONTINUE_TIMEOUT_S, MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+        wr = _FakeWorkroom(result=_result(sent=_say("Which environment — staging or prod?")))
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        await session.on_line("Bob", "proxy, run the deploy", ts=1.0)
+        await session.drain()
+        assert session._pending_question is not None
+
+        # a wholly unrelated line, well AFTER the window — must not be treated as the answer
+        await session.on_line("Ann", "anyway, lunch plans?", ts=1.0 + _CONTINUE_TIMEOUT_S + 10.0)
+        await session.drain()
+        assert len(wr.asks) == 1                              # not continued
+        assert session._pending_question is None              # expired latch cleared
+
+    asyncio.run(_run())
+
+
+def test_a_named_readdress_supersedes_a_pending_question() -> None:
+    """An explicit re-address always wins: it starts a fresh turn on the new line and clears any
+    pending question (the continuation branch is only for UN-addressed replies)."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+
+        class _WR(_FakeWorkroom):
+            async def run_ask(self, ask: str, *, delta: str = "") -> Any:
+                self.asks.append(ask)
+                if "changelog" in ask:
+                    return _result(sent=_say("Changelog drafted."))
+                return _result(sent=_say("Which milestone?"))
+
+        wr = _WR()
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        await session.on_line("Bob", "proxy, draft the release notes", ts=1.0)
+        await session.drain()
+        assert session._pending_question is not None
+
+        # a NAMED re-address on a new task — runs verbatim as its own wake, NOT a continuation:
+        await session.on_line("Bob", "proxy, actually just draft the changelog", ts=3.0)
+        await session.drain()
+        assert wr.asks[1] == "proxy, actually just draft the changelog"  # verbatim, not a continuation
+        assert "Earlier you asked" not in wr.asks[1]
+        assert session._pending_question is None
+
+    asyncio.run(_run())
+
+
 def test_render_transcript_windows_to_recent_lines_with_an_elision_header() -> None:
     """FW-2: the workroom feed is windowed to the last _TRANSCRIPT_WINDOW lines (O(1) per write, not
     O(N)); older lines are elided with an honest header rather than re-uploaded every line."""
@@ -387,6 +578,47 @@ def test_render_transcript_windows_to_recent_lines_with_an_elision_header() -> N
         assert "[5] Bob: line 5" not in rendered    # an early line is dropped (exact, ts-anchored)
         assert f"Bob: line {_TRANSCRIPT_WINDOW + 49}" in rendered  # the newest line is present
         assert rendered.count("] Bob:") == _TRANSCRIPT_WINDOW
+
+    asyncio.run(_run())
+
+
+def test_each_wake_inlines_only_the_transcript_delta_since_the_last_wake() -> None:
+    """ACCEPTANCE (SPEC §3): each wake's FRESH input is only the delta since the last wake — the new
+    lines only, never a re-sent recon window. The whole transcript thus accumulates in the warm
+    session's cache turn-over-turn; only the delta + the ask are fresh per wake. Here: lines flow, a
+    wake fires, MORE lines flow, a second wake fires — the second wake's delta must contain ONLY the
+    lines said after the first wake (the earlier ones are already resident from the first wake)."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+        wr = _FakeWorkroom(result=_result(text="", sent=[]))
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        # Pre-wake chatter, then the FIRST wake — its delta is the whole meeting-so-far.
+        await session.on_line("Ann", "the auth token lives in settings.py", ts=1.0)
+        await session.on_line("Bob", "and it rotates hourly", ts=2.0)
+        await session.on_line("Cy", "proxy, note that", ts=3.0)
+        await session.drain()
+
+        # More chatter, then a SECOND wake — its delta must be ONLY the lines since the first wake.
+        await session.on_line("Dee", "let's move to the roadmap", ts=4.0)
+        await session.on_line("Ann", "proxy, what was the auth token detail?", ts=5.0)
+        await session.drain()
+
+        assert len(wr.deltas) == 2
+        first, second = wr.deltas[0], wr.deltas[1]
+        # First wake: the whole meeting-so-far (the fact is delivered into the cache here, once).
+        assert "the auth token lives in settings.py" in first
+        assert "proxy, note that" in first
+        # Second wake: ONLY the delta since the first wake — the early fact is NOT re-sent (it's
+        # already resident in the cache from wake 1); only the new lines are fresh.
+        assert "the auth token lives in settings.py" not in second
+        assert "and it rotates hourly" not in second
+        assert "let's move to the roadmap" in second          # new since wake 1
+        assert "what was the auth token detail?" in second     # the addressing line, new
+        # No overlap: every line appears in exactly one wake's delta (accumulation, not re-window).
+        assert "let's move to the roadmap" not in first
 
     asyncio.run(_run())
 
@@ -552,5 +784,135 @@ def test_chat_is_never_echo_suppressed() -> None:
             "Ann", "@proxy the entry point is command main in core py", ts=2.0, is_chat=True)
         await session.drain()
         assert wr.asks == ["@proxy the entry point is command main in core py"]
+
+    asyncio.run(_run())
+
+
+def test_human_line_during_speech_triggers_a_barge_in_cut() -> None:
+    """Law 3: a HUMAN talking while Proxy is mid-utterance stops its speech at once — the reactive
+    loop calls ``connection.barge_in`` (which cuts the pipe). This holds whether or not the line is an
+    address: a human simply talking over Proxy silences it. The cut runs BEFORE the line is fed."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection(speaking=True)  # Proxy is audibly speaking
+        wr = _FakeWorkroom(result=_result(sent=[]))
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        # a human interjects while Proxy speaks (not even an address — just talking over it)
+        await session.on_line("Bob", "hold on, that's not right", ts=1.0)
+        await session.drain()
+
+        assert conn.speak.cuts == 1          # speech was cut
+        assert conn.cut_latched is True      # and the rest of the interrupted turn is latched out
+        assert wr.asks == []                 # this cross-talk line did not itself wake
+
+    asyncio.run(_run())
+
+
+def test_sub_onset_blip_during_speech_does_not_cut() -> None:
+    """The debounce (Law 3, honest): a sub-onset STT blip — a lone filler token — is NOT a real
+    interjection and must NOT cut Proxy mid-sentence. Proxy never flinches at noise."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection(speaking=True)
+        wr = _FakeWorkroom(result=_result(sent=[]))
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        await session.on_line("Bob", "um", ts=1.0)      # a single-token blip
+        await session.on_line("Bob", "  ", ts=1.1)       # pure whitespace — no tokens
+        await session.drain()
+
+        assert conn.speak.cuts == 0          # no cut on a blip
+        assert conn.cut_latched is False
+
+    asyncio.run(_run())
+
+
+def test_barge_in_only_fires_when_proxy_is_actually_speaking() -> None:
+    """No speech in flight ⇒ nothing to cut. A human line while Proxy is idle never calls the cut
+    (the pipe's ``speaking`` guard is False), so we don't cut on nothing."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection(speaking=False)  # Proxy is idle
+        wr = _FakeWorkroom(result=_result(sent=[]))
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        await session.on_line("Bob", "some substantial human sentence here", ts=1.0)
+        await session.drain()
+
+        assert conn.speak.cuts == 0
+
+    asyncio.run(_run())
+
+
+def test_proxy_self_echo_never_barges_in_on_itself() -> None:
+    """Proxy's own voice echoing back on a no-headphones mic (relabeled to Proxy by the echo guard)
+    must NOT trigger a self-barge-in — Proxy cutting its own speech would be a bug (§3.6)."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection(speaking=True)
+        # Proxy has said this; the echo returns mislabeled as a human but reproduces it verbatim.
+        conn.spoken.append((time.time(), "the entry point is command main in src click core py"))
+        wr = _FakeWorkroom(result=_result(sent=[]))
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        await session.on_line(
+            "Bob", "the entry point is command main in src click core py", ts=1.0)
+        await session.drain()
+
+        assert conn.speak.cuts == 0          # the echo is Proxy's own voice — no self-barge-in
+        assert conn.cut_latched is False
+
+    asyncio.run(_run())
+
+
+def test_a_new_wake_clears_the_cut_latch_so_its_speech_flows() -> None:
+    """After a barge-in latches out the interrupted turn, the NEXT wake's delivery begins with a clean
+    latch (``begin_turn``) so its spoken output is not wrongly suppressed."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection(speaking=True)
+        wr = _FakeWorkroom(result=_result(sent=_say("here is the fresh answer")))
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        # a human barges in (latch goes up)
+        await session.on_line("Bob", "wait, stop for a second", ts=1.0)
+        await session.drain()
+        assert conn.cut_latched is True
+
+        # now a real address wakes Proxy → the wake clears the latch before delivering its intent
+        await session.on_line("Bob", "proxy, what's the fix?", ts=2.0)
+        await session.drain()
+        assert conn.begin_turns >= 1
+        assert conn.cut_latched is False
+        assert conn.sent and conn.sent[-1].content == "here is the fresh answer"
+
+    asyncio.run(_run())
+
+
+def test_barge_in_cut_fault_never_crashes_the_meeting() -> None:
+    """§3.8 never-throw: if the barge-in cut itself raises, the drain still completes and the line is
+    still fed — the meeting survives a faulty cut."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection(speaking=True)
+
+        async def _boom() -> None:
+            raise RuntimeError("cut blew up")
+
+        conn.barge_in = _boom  # type: ignore[method-assign]
+        wr = _FakeWorkroom(result=_result(sent=[]))
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        await session.on_line("Bob", "this is a real interjection", ts=1.0)
+        await session.drain()  # must not raise
+
+        assert len(wr.fed) == 1  # the line was still fed despite the cut fault
 
     asyncio.run(_run())

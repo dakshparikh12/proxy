@@ -88,6 +88,27 @@ class Settings(BaseSettings):
         default="", validation_alias="CLAUDE_CODE_OAUTH_TOKEN"
     )
 
+    # -- GitHub App (platform credential) — the Part-2 clone-token minter -----
+    # The GitHub-App id + the path to its RS256 private-key .pem. Together they let the
+    # pre-meeting pass MINT a short-lived installation token (``premeeting.github_auth``)
+    # so a PRIVATE customer repo clones in the Part-2 comprehension sandbox. Not boot
+    # hard-gates: absent, the minter is simply not constructed and Part-2 clones
+    # unauthenticated (fine for a PUBLIC repo like cal.com; a private repo degrades to
+    # Part-1 alone — honest, never a fabricated map). Secrets flow from Secret Manager /
+    # the .env path; the key body is never hard-coded and never logged.
+    github_app_id: str = Field(default="", validation_alias="GITHUB_APP_ID")
+    github_app_private_key_path: str = Field(
+        default="", validation_alias="GITHUB_APP_PRIVATE_KEY_PATH"
+    )
+    # The GitHub-App INSTALLATION id the mint targets. Known only once the App install
+    # callback binds it; absent at an anonymous connect, so the minter has nothing to
+    # mint against and Part-2 clones unauthenticated (a PUBLIC repo still works; a
+    # private repo needs this from the install callback). An explicit override lets a
+    # single-tenant founder deployment pin its own installation id in .env.
+    github_app_installation_id: str = Field(
+        default="", validation_alias="GITHUB_APP_INSTALLATION_ID"
+    )
+
     # -- prod-gated ----------------------------------------------------------
     session_secret: str = Field(default="", validation_alias="SESSION_SECRET")
     gcp_project_id: str = Field(default="", validation_alias="GCP_PROJECT_ID")

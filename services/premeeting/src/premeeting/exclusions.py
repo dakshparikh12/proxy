@@ -37,6 +37,16 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"(?i)(?:secret|token|password|api[_-]?key|access[_-]?key|apikey)\w*"
         r"\s*[=:]\s*['\"]?([A-Za-z0-9/+=_\-]{8,})['\"]?"
     ),
+    # Inline credential in a connection URI (``scheme://USER:PASSWORD@host``) — a UNIVERSAL secret
+    # shape the name-anchored pattern above misses, because the variable name (``MONGODB_URL``,
+    # ``DATABASE_URL``) carries none of the ``secret|token|password`` keywords. The captured group is
+    # the WHOLE userinfo ``user:password`` (both halves are credential material — a DB username is not
+    # public), so collecting + redacting it scrubs the credential from the symbol map / read paths AND
+    # the verified comprehension prose, leaving ``scheme://[REDACTED]@host`` (host/db still legible).
+    # Found by the WS6 obscure-repo certification (a hard-coded ``mongodb://user:pass@host`` at
+    # models.py:1 was surfaced verbatim). Requires the ``:`` (a userinfo password) so a bare
+    # ``scheme://host`` (no credential) never matches.
+    re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://([^\s/@]+:[^\s/@]+)@"),
 )
 
 _REDACTION = "[REDACTED]"

@@ -2,127 +2,17 @@
 
 The boot-path proof (services/control-plane/tests/test_workroom_bootpath.py) exercises provision +
 run_ask + teardown end-to-end. These add focused unit coverage of the pure helpers the boot-path
-only touches on the happy path: the stream-json parser's edge handling, the prime's
-render_meeting_info shapes, the workroom transcript-sync + run_ask never-raise degrade, and the
-in-sandbox MCP server's _deliver (record vs relay, relay-fault fallback). All offline, no sandbox.
+only touches on the happy path: the prime's render_meeting_info shapes, the workroom transcript-sync
++ run_ask never-raise degrade (on the single warm delivery path), and the in-sandbox MCP server's
+_deliver (record vs relay, relay-fault fallback). All offline, no sandbox.
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import shlex
 from types import SimpleNamespace
 from typing import Any
-
-
-# ── _parse_stream: claude stream-json -> ordered tools + final text + cost ────────
-
-
-def test_parse_stream_extracts_tools_text_and_cost_in_order() -> None:
-    from in_meeting.workroom import _parse_stream
-
-    raw = "\n".join(
-        [
-            json.dumps({"type": "assistant",
-                        "message": {"content": [{"type": "tool_use", "name": "Grep"}]}}),
-            json.dumps({"type": "assistant",
-                        "message": {"content": [{"type": "tool_use", "name": "Read"},
-                                                {"type": "text", "text": "thinking"}]}}),
-            json.dumps({"type": "result", "result": "found it at a.py:3",
-                        "total_cost_usd": 0.05}),
-        ]
-    )
-    res = _parse_stream("where is it?", raw)
-    assert res.tools == ["Grep", "Read"]        # ordered, only tool_use blocks
-    assert res.text == "found it at a.py:3"
-    assert res.cost_usd == 0.05
-    assert res.turns == 2                          # two assistant events
-    assert res.ask == "where is it?"
-
-
-def test_parse_stream_skips_malformed_lines_and_flags_abnormal_termination() -> None:
-    """Non-JSON lines are skipped (not fatal). ABNORMAL TERMINATION: assistant turns ran but NO
-    ``result`` event arrived (crash/OOM) and NO intents were recorded -> an honest ``error`` is set
-    so the session degrades instead of going silent on a task that needed a response."""
-    from in_meeting.workroom import _parse_stream
-
-    raw = "\n".join(
-        [
-            "not json at all",
-            json.dumps({"type": "assistant",
-                        "message": {"content": [{"type": "tool_use", "name": "Bash"}]}}),
-            "{ half a line",
-        ]
-    )
-    res = _parse_stream("q", raw)
-    assert res.tools == ["Bash"]
-    assert res.text == ""
-    assert res.cost_usd == 0.0
-    assert res.error == "turn did not complete"   # crashed mid-turn with nothing delivered
-    assert res.sent == []
-
-    # a wholly empty stream (no assistant turns at all) is a clean empty result, NOT an error:
-    empty = _parse_stream("q", "")
-    assert empty.tools == [] and empty.text == "" and empty.cost_usd == 0.0
-    assert empty.error is None
-
-
-def test_parse_stream_does_not_salvage_internal_prose_on_abnormal_exit() -> None:
-    """BUG-7 (soft Law 2): an abnormally-terminated turn (assistant prose but NO ``result`` event)
-    must NOT recover its last assistant prose into ``text`` — that prose is internal scratchpad the
-    agent did NOT choose to say to the room, so surfacing it would put words in Proxy's mouth. ``text``
-    stays empty; ``error`` is still flagged so the session speaks a bare honest apology instead."""
-    from in_meeting.workroom import _parse_stream
-
-    raw = "\n".join(
-        [
-            json.dumps({"type": "assistant",
-                        "message": {"content": [{"type": "text", "text": "Drafting the fix..."}]}}),
-            json.dumps({"type": "assistant",
-                        "message": {"content": [{"type": "tool_use", "name": "Edit"}]}}),
-            json.dumps({"type": "assistant",
-                        "message": {"content": [{"type": "text",
-                                                 "text": "Wrote the migration; validating on Postgres"}]}}),
-            # (no result event — killed at the timeout ceiling)
-        ]
-    )
-    res = _parse_stream("implement the fix", raw)
-    assert res.text == ""                              # internal prose is NOT spoken to the room
-    assert res.error == "turn did not complete"        # still honestly incomplete → bare apology
-    assert res.tools == ["Edit"]
-
-
-def test_parse_stream_no_result_but_recorded_intents_is_not_an_error() -> None:
-    """An abnormal-looking stream (assistant turns, no ``result``) is NOT flagged an error when the
-    agent DID record ``to_meeting`` intents — those intents carry the turn, so the session replays
-    them rather than degrading."""
-    from in_meeting.workroom import _parse_stream
-
-    raw = json.dumps({"type": "assistant",
-                      "message": {"content": [{"type": "tool_use", "name": "to_meeting"}]}})
-    intents = json.dumps({"ts": 1.0, "content": "here you go", "medium": "chat", "to": ""})
-    res = _parse_stream("q", raw, intents)
-    assert res.error is None
-    assert res.sent == [{"content": "here you go", "medium": "chat", "to": ""}]
-
-
-def test_parse_stream_folds_in_recorded_intents_and_skips_relay_errors() -> None:
-    """A clean turn's recorded intents are parsed onto ``result.sent`` (the agent's OWN channel
-    choices in the no-relay path); malformed / relay-error lines are skipped (best-effort record)."""
-    from in_meeting.workroom import _parse_stream
-
-    raw = json.dumps({"type": "result", "result": "done", "total_cost_usd": 0.0})
-    intents = "\n".join([
-        json.dumps({"ts": 1.0, "content": "first", "medium": "say", "to": ""}),
-        "not json",
-        json.dumps({"ts": 2.0, "content": "dropped", "medium": "chat", "relay_error": "boom"}),
-        json.dumps({"ts": 3.0, "content": "dm hi", "medium": "dm", "to": "u1"}),
-    ])
-    res = _parse_stream("q", raw, intents)
-    assert res.text == "done"
-    assert res.sent == [
-        {"content": "first", "medium": "say", "to": ""},
-        {"content": "dm hi", "medium": "dm", "to": "u1"},
-    ]
 
 
 # ── render_meeting_info: who's-in-the-room, honest when empty ──────────────────────
@@ -167,6 +57,31 @@ def test_render_meeting_info_surfaces_participant_ids_for_dm() -> None:
     assert "participant id" in names_only.lower()
 
 
+# ── compose_resident_prime: the injection guardrail is present + LAST ──────────────
+
+
+def test_resident_prime_carries_the_shared_injection_guardrail_last() -> None:
+    """SECURITY (Hard Rule: prompt safety / SPEC §3.10). The CLAUDE.md seeded into the warm session
+    MUST carry the SHARED injection guardrail — transcript content (which now accumulates resident in
+    the conversation) is untrusted DATA, never instructions — and it must be the strict LAST word so
+    nothing after it (in the prime or injected via transcript data) can lift it. The body is the ONE
+    shared source (``agentkit``), never a per-service copy."""
+    from agentkit import INJECTION_GUARDRAIL_MARK, injection_guardrail_suffix
+    from in_meeting.workroom import compose_resident_prime
+
+    # With an understanding block: the guardrail is present and appears AFTER the understanding.
+    composed = compose_resident_prime("BEHAVIORAL PRIME", "the map with real file:line facts")
+    assert INJECTION_GUARDRAIL_MARK in composed
+    assert composed.rstrip().endswith(injection_guardrail_suffix())   # strict LAST word
+    assert composed.index("the map with real") < composed.index(INJECTION_GUARDRAIL_MARK)
+
+    # Even with NO understanding block (empty map) the guardrail is STILL present and last — it is
+    # never conditional on the map (a security invariant, not a nicety).
+    bare = compose_resident_prime("BEHAVIORAL PRIME", "")
+    assert bare.rstrip().endswith(injection_guardrail_suffix())
+    assert "BEHAVIORAL PRIME" in bare
+
+
 # ── Workroom.feed_transcript / run_ask: never-raise honest degrade ────────────────
 
 
@@ -198,9 +113,11 @@ def test_feed_transcript_never_raises_on_a_write_fault() -> None:
     asyncio.run(_run())
 
 
-def test_run_ask_returns_an_honest_error_result_when_the_command_faults() -> None:
-    """run_ask never raises — a sandbox command fault becomes WorkroomResult.error (the session
-    then speaks an honest 'ran into a problem' line), never an exception into the loop."""
+def test_run_ask_degrades_honestly_when_the_session_never_comes_up() -> None:
+    """run_ask never raises. When every sandbox command faults, the warm host can't launch, the
+    restart-and-retry can't heal it, and the turn honest-degrades to a WorkroomResult.error (the
+    session then speaks a bare 'ran into a problem' line) — never an exception into the loop."""
+    import in_meeting.workroom as wm
     from in_meeting.workroom import Workroom
 
     class _CmdBoomSandbox:
@@ -213,7 +130,7 @@ def test_run_ask_returns_an_honest_error_result_when_the_command_faults() -> Non
                 return None
 
             async def read(self, *a: Any, **k: Any) -> str:
-                return ""
+                raise FileNotFoundError("nothing")
 
         def __init__(self) -> None:
             self.commands = self._Cmds()
@@ -221,95 +138,164 @@ def test_run_ask_returns_an_honest_error_result_when_the_command_faults() -> Non
             self.sandbox_id = "s"
 
     async def _run() -> None:
-        wr = Workroom(sandbox=_CmdBoomSandbox(), call=_passthru_call, token="t")
+        wm._WARM_READY_TIMEOUT_S = 0.2   # keep both readiness waits fast
+        wr = Workroom(sandbox=_CmdBoomSandbox(), call=_passthru_call, token="t", warm=True)
         res = await wr.run_ask("do it")
-        assert res.error is not None and "timeout" in res.error
+        assert res.error == "workroom session unavailable"   # honest degrade, no crash, no fake reply
         assert res.text == ""
         assert res.ask == "do it"
 
     asyncio.run(_run())
 
 
-def test_run_ask_missing_intent_file_is_clean_silence_not_an_error() -> None:
-    """When the agent chooses SILENCE (declines a false wake / says nothing) it never calls
-    to_meeting, so $PROXY_MEETING_OUT is never created and its read RAISES. That must be treated as
-    'no intents' (clean silence), NOT a run_ask error — otherwise a correct silence surfaces a
-    spurious 'I hit a problem' degrade into a room Proxy stayed out of."""
-    from in_meeting.workroom import Workroom
+def test_run_ask_missing_result_file_is_clean_silence_not_an_error() -> None:
+    """When the agent chooses SILENCE (declines a false wake / says nothing) the host still writes a
+    clean per-turn record with empty text + no intents. That is honored as clean silence, NOT a
+    run_ask error — otherwise a correct silence surfaces a spurious 'I hit a problem' degrade into a
+    room Proxy stayed out of. The warm host's own record carries the silence verbatim."""
+    from in_meeting.workroom import HOST_READY_FILE, WAKE_IN, WAKE_OUT, Workroom
 
-    class _SilentSandbox:
-        class _Cmds:
-            async def run(self, *a: Any, **k: Any) -> Any:
-                return SimpleNamespace(exit_code=0, stdout="DONE", stderr="")
+    silent_record = {"tools": [], "text": "", "turns": 1, "cost_usd": 0.01,
+                     "error": None, "sent": []}
 
-        class _Files:
-            async def write(self, *a: Any, **k: Any) -> None:
-                return None
-
-            async def read(self, path: str) -> str:
-                if path.endswith("ask.jsonl"):
-                    # a clean turn: assistant declined in prose, then a normal result event
-                    return "\n".join([
-                        json.dumps({"type": "assistant",
-                                    "message": {"content": [{"type": "text",
-                                                             "text": "Not addressed — staying silent."}]}}),
-                        json.dumps({"type": "result", "result": "", "total_cost_usd": 0.01}),
-                    ])
-                raise FileNotFoundError("path '/tmp/to_meeting.jsonl' does not exist")
-
+    class _SilentWarmSandbox:
         def __init__(self) -> None:
-            self.commands = self._Cmds()
-            self.files = self._Files()
+            self._store: dict[str, str] = {HOST_READY_FILE: "1"}
             self.sandbox_id = "s"
+            outer = self
+
+            class _Files:
+                async def write(self, path: str, content: str) -> None:
+                    outer._store[path] = content
+
+                async def read(self, path: str) -> str:
+                    if path not in outer._store:
+                        raise FileNotFoundError(path)
+                    return outer._store[path]
+
+            class _Cmds:
+                async def run(self, cmd: str, timeout: int | None = None,
+                              envs: dict[str, str] | None = None,
+                              background: bool = False) -> Any:
+                    if ">>" in cmd and WAKE_IN in cmd:
+                        argv = shlex.split(cmd[cmd.index("printf"):cmd.index(" >>")])
+                        req = json.loads(argv[-1])
+                        outer._store[f"{WAKE_OUT}/{req['id']}.json"] = json.dumps(silent_record)
+                    return SimpleNamespace(exit_code=0, stdout="DONE", stderr="")
+
+            self.files = _Files()
+            self.commands = _Cmds()
 
     async def _run() -> None:
-        wr = Workroom(sandbox=_SilentSandbox(), call=_passthru_call, token="t")
+        wr = Workroom(sandbox=_SilentWarmSandbox(), call=_passthru_call, token="t", warm=True)
         res = await wr.run_ask("our proxy server keeps timing out")
-        assert res.error is None      # a missing intent file is silence, NOT an error
+        assert res.error is None      # a clean silent record is silence, NOT an error
         assert res.sent == []         # no channel choices → the session stays quiet
         assert res.text == ""
 
     asyncio.run(_run())
 
 
-def test_run_ask_hands_the_relay_wiring_as_envs(monkeypatch) -> None:
-    """run_ask launches native claude with the meeting MCP config and the relay envs
-    (RELAY/TOKEN/OUT + the subscription auth) so a live turn's to_meeting reaches the host."""
-    from in_meeting.workroom import MCP_CONFIG_FILE, TO_MEETING_OUT, Workroom
+def test_run_ask_absorbs_a_transport_cancel_and_never_crashes_the_meeting() -> None:
+    """A wake's own E2B I/O can raise a bare ``CancelledError`` when the HTTP/2 connection is reset /
+    GOAWAYs under load (the E2B/httpx/anyio cancel-scope) even though the meeting is NOT ending —
+    observed on real E2B (WS6 long-session: 2 such cancels across ~26 wakes). run_ask promises to
+    NEVER raise, so it absorbs a spurious transport cancel into an honest no-reply result rather than
+    crashing the meeting driver. Only a GENUINE task-drain cancel is re-raised (covered below)."""
+    import in_meeting.workroom as wm
+    from in_meeting.workroom import Workroom
+
+    async def _boom(_self: Any, _ask: str, _prompt: str) -> Any:
+        raise asyncio.CancelledError("http2 stream reset under load")  # transport, not a drain
+
+    async def _run() -> None:
+        wr = Workroom(sandbox=SimpleNamespace(sandbox_id="s"), call=_passthru_call, token="t",
+                      warm=True)
+        orig = Workroom._run_ask_once
+        Workroom._run_ask_once = _boom  # type: ignore[method-assign]  # simulate a transport cancel escaping the warm turn
+        try:
+            res = await wr.run_ask("do it")        # MUST NOT raise
+        finally:
+            Workroom._run_ask_once = orig  # type: ignore[method-assign]
+        assert res.error == "workroom transport interrupted this turn"
+        assert res.text == "" and res.ask == "do it"
+        # sanity: the guard reads cancelling()==0 as spurious (no genuine drain pending here)
+        assert wm._poll_cancel_is_spurious() is True
+
+    asyncio.run(_run())
+
+
+def test_run_ask_honors_a_genuine_meeting_end_drain() -> None:
+    """A GENUINE caller cancellation (meeting-end drain → the run_ask task is cancelled) is NOT
+    swallowed — it propagates so teardown stays prompt (Law 3). Distinguished from a transport blip by
+    ``current_task().cancelling() > 0`` (a real cancel pending on THIS task)."""
+    from in_meeting.workroom import Workroom
+
+    started = asyncio.Event()
+
+    async def _slow(_self: Any, _ask: str, _prompt: str) -> Any:
+        started.set()
+        await asyncio.sleep(10)   # will be interrupted by the genuine .cancel()
+
+    async def _run() -> None:
+        wr = Workroom(sandbox=SimpleNamespace(sandbox_id="s"), call=_passthru_call, token="t",
+                      warm=True)
+        orig = Workroom._run_ask_once
+        Workroom._run_ask_once = _slow  # type: ignore[method-assign]
+        try:
+            task = asyncio.create_task(wr.run_ask("do it"))
+            await started.wait()
+            task.cancel()
+            raised = False
+            try:
+                await task
+            except asyncio.CancelledError:
+                raised = True
+            assert raised   # the genuine drain propagated, not absorbed into a fake result
+        finally:
+            Workroom._run_ask_once = orig  # type: ignore[method-assign]
+
+    asyncio.run(_run())
+
+
+def test_start_session_host_hands_the_relay_wiring_as_envs() -> None:
+    """The warm session host inherits the meeting relay wiring + the subscription auth (RELAY/TOKEN/
+    OUT + CLAUDE_CODE_OAUTH_TOKEN + the wake_in/out paths) at launch, so a live turn's to_meeting
+    reaches the host. This is the single place the relay envs flow now (the cold ``claude -p`` env
+    hand-off is gone)."""
+    from in_meeting.workroom import (
+        MCP_SERVER_FILE,
+        TO_MEETING_OUT,
+        WAKE_IN,
+        WAKE_OUT,
+        Workroom,
+        _start_session_host,
+    )
 
     class _RecordSandbox:
-        class _Files:
-            def __init__(self, store: dict[str, str]) -> None:
-                self._store = store
-
-            async def write(self, path: str, content: str) -> None:
-                self._store[path] = content
-
-            async def read(self, path: str) -> str:
-                # the ask stream has a result event; the to_meeting record is empty (no relay
-                # intents recorded in this env-wiring check) — so only the stream feeds the parser.
-                if path.endswith("ask.jsonl"):
-                    return json.dumps({"type": "result", "result": "ok", "total_cost_usd": 0.0})
-                return ""
-
         def __init__(self) -> None:
             self._store: dict[str, str] = {}
-            self.cmds: list[str] = []
-            self.envs: list[dict[str, str]] = []
-            self.files = self._Files(self._store)
-            self.sandbox_id = "s"
+            self.launch_envs: dict[str, str] | None = None
+            outer = self
+
+            class _Files:
+                async def write(self, path: str, content: str) -> None:
+                    outer._store[path] = content
+
+                async def read(self, path: str) -> str:
+                    return outer._store.get(path, "")
 
             class _Cmds:
-                def __init__(self, outer: Any) -> None:
-                    self._outer = outer
-
                 async def run(self, cmd: str, timeout: int | None = None,
-                              envs: dict[str, str] | None = None) -> Any:
-                    self._outer.cmds.append(cmd)
-                    self._outer.envs.append(dict(envs or {}))
+                              envs: dict[str, str] | None = None,
+                              background: bool = False) -> Any:
+                    if background:                       # the detached session-host launch
+                        outer.launch_envs = dict(envs or {})
                     return SimpleNamespace(exit_code=0, stdout="DONE", stderr="")
 
-            self.commands = _Cmds(self)
+            self.files = _Files()
+            self.commands = _Cmds()
+            self.sandbox_id = "s"
 
     async def _run() -> None:
         sandbox = _RecordSandbox()
@@ -317,61 +303,16 @@ def test_run_ask_hands_the_relay_wiring_as_envs(monkeypatch) -> None:
             sandbox=sandbox, call=_passthru_call, token="sk-oauth",
             relay_url="https://host/meetings/m/relay", relay_token="bearer-xyz",
         )
-        res = await wr.run_ask("the ask")
-        assert res.text == "ok"
-        ask_cmd = next(c for c in sandbox.cmds if "claude -p" in c)
-        assert f"--mcp-config {MCP_CONFIG_FILE}" in ask_cmd
-        envs = sandbox.envs[sandbox.cmds.index(ask_cmd)]
+        assert await _start_session_host(wr) is True
+        envs = sandbox.launch_envs or {}
         assert envs["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-oauth"
         assert envs["PROXY_MEETING_RELAY"] == "https://host/meetings/m/relay"
         assert envs["PROXY_MEETING_TOKEN"] == "bearer-xyz"
         assert envs["PROXY_MEETING_OUT"] == TO_MEETING_OUT
-
-    asyncio.run(_run())
-
-
-def test_cold_command_resets_to_meeting_out_before_the_run() -> None:
-    """BUG 5 (cold double-send): the in-sandbox MCP server only APPENDS to TO_MEETING_OUT, so
-    without a per-turn reset cold wake N would re-read wakes 1..N-1's intents and re-deliver them.
-    The cold command must ``rm -f`` the intent log FIRST — so ``sent`` is exactly THIS turn's
-    intents (mirrors the warm host's per-turn reset)."""
-    from in_meeting.workroom import TO_MEETING_OUT, Workroom
-
-    class _RecordSandbox:
-        class _Files:
-            async def write(self, *a: Any, **k: Any) -> None:
-                return None
-
-            async def read(self, path: str) -> str:
-                if path.endswith("ask.jsonl"):
-                    return json.dumps({"type": "result", "result": "ok", "total_cost_usd": 0.0})
-                return ""
-
-        def __init__(self) -> None:
-            self.files = self._Files()
-            self.sandbox_id = "s"
-            self.cmds: list[str] = []
-
-            class _Cmds:
-                def __init__(self, outer: Any) -> None:
-                    self._outer = outer
-
-                async def run(self, cmd: str, timeout: int | None = None,
-                              envs: dict[str, str] | None = None) -> Any:
-                    self._outer.cmds.append(cmd)
-                    return SimpleNamespace(exit_code=0, stdout="DONE", stderr="")
-
-            self.commands = _Cmds(self)
-
-    async def _run() -> None:
-        sandbox = _RecordSandbox()
-        wr = Workroom(sandbox=sandbox, call=_passthru_call, token="t")  # warm=False → cold path
-        await wr.run_ask("the ask")
-        ask_cmd = next(c for c in sandbox.cmds if "claude -p" in c)
-        reset = f"rm -f {TO_MEETING_OUT}"
-        # the reset is present AND lands BEFORE the claude -p run (so this turn starts with a clean log):
-        assert reset in ask_cmd
-        assert ask_cmd.index(reset) < ask_cmd.index("claude -p")
+        # the host also gets the wake-protocol + MCP-server wiring it needs to serve turns:
+        assert envs["PROXY_MCP_SERVER"] == MCP_SERVER_FILE
+        assert envs["PROXY_WAKE_IN"] == WAKE_IN
+        assert envs["PROXY_WAKE_OUT"] == WAKE_OUT
 
     asyncio.run(_run())
 

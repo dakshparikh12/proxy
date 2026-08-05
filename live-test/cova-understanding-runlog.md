@@ -1,0 +1,11 @@
+# cova understanding — run log (v2, comprehension-first)
+- repo: https://github.com/pgoel813/cova (branch main)
+- built via: premeeting.map_build.build_understanding_map (revised comprehension-first pipeline)
+- local clone (Part 1 + verify): /tmp/cova_clone
+- navigation aid (trimmed Part 1): 2080 chars (~520 tokens)
+- artifact size: 54109 chars (~13527 tokens)
+- comprehension landed (Part 2 ok): True   degraded: False
+- shape: has_comprehension=True has_nav_aid=True has_ranked_signatures_dump=False
+- secret-leak scan: PASS (no collected secret value in artifact)
+- wall-clock: 803.2s across 1 attempt(s)
+- artifact path: /Users/daksh/Desktop/proxy/live-test/cova-understanding.md

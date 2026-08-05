@@ -1,8 +1,10 @@
 """pipeline.py + readiness.py + refresh.py — the orchestrated real path (PM-READY-01/REFRESH-01).
 
-Real git clone of a fixture repo + real Postgres map store + a FAKE model provider (D-032). The
-pipeline stages run for real; only the model seam is faked. Skips the store-backed assertions
-cleanly when no scratch DSN is set.
+Real git clone of a fixture repo + real Postgres map store. The map that gets stored is now the
+DETERMINISTIC, GROUNDABLE symbol map (:func:`premeeting.symbol_map.build_symbol_map`), so the
+pipeline needs no model at map-build time — a ``provider`` is still threaded (signature parity with
+the deprecated LLM loop) but is never streamed. The pipeline stages run for real. Skips the
+store-backed assertions cleanly when no scratch DSN is set.
 """
 from __future__ import annotations
 
@@ -73,9 +75,21 @@ class RecordingListener:
 
 
 def _fixture_files() -> dict[str, str]:
+    # Cross-referenced symbols so the ranking graph forms → a real, groundable symbol map.
     return {
-        "src/server.py": "def main(): ...\n",
-        "src/models.py": "class Thing: ...\n",
+        "src/server.py": (
+            "class BaseCommand:\n"
+            "    def invoke(self, ctx):\n"
+            "        return process(ctx)\n"
+            "\n"
+            "def process(ctx):\n"
+            "    return BaseCommand().invoke(ctx)\n"
+        ),
+        "src/models.py": (
+            "from server import process, BaseCommand\n"
+            "def helper():\n"
+            "    return process(BaseCommand())\n"
+        ),
         "tests/test_x.py": "def test_x(): ...\n",
         "README.md": "# fixture\n",
     }
@@ -93,7 +107,12 @@ async def test_pm_ready_01_stages_and_ready(make_git_repo: Any) -> None:
     # The REAL staged progression, in order, ending ready (map-build = the 'indexing' state).
     assert listener.states == ["connecting", "cloning", "indexing", "ready"]
     assert result.ready and result.status == "ready"
-    assert result.map_text.startswith("# Repo Map")
+    # The STORED map is the deterministic, groundable symbol map — real file:line + ranked
+    # signatures, NOT the deprecated prose shape.
+    assert result.map_text.startswith("# Symbol map")
+    assert "src/server.py:" in result.map_text  # real, groundable file:line
+    assert "Entry points" in result.map_text and "Ranked signatures" in result.map_text
+    assert "## What this is" not in result.map_text  # not the old prose map
     # No 'mapping' state was ever emitted.
     assert "mapping" not in listener.states
     sig = readiness.signal_from_result(result)
@@ -101,26 +120,38 @@ async def test_pm_ready_01_stages_and_ready(make_git_repo: Any) -> None:
 
 
 @pytest.mark.asyncio
-async def test_pm_ready_01_not_ready_names_gap_on_hallucination(make_git_repo: Any) -> None:
+async def test_pm_ready_01_map_is_groundable_never_hallucinated(make_git_repo: Any) -> None:
+    """The deterministic symbol map cannot fabricate a path (unlike the deprecated LLM map): every
+    file/dir it names resolves in the clone, so verify passes clean — that is the whole point of the
+    swap (Law 1). The verify gate's hallucination-NAMING behavior itself is covered by
+    ``test_pm_verify.py::test_pm_verify_01_fabricated_path_fails``."""
+    src, _sha = make_git_repo(_fixture_files())
+    result = await pipeline.run_pipeline(
+        tenant_id="tenant-a", repo_url=src.as_uri(), provider=FaithfulFakeProvider()
+    )
+    assert result.ready, result.reasons
+    sig = readiness.signal_from_result(result)
+    assert sig.status == "ready" and sig.gaps == []
+
+
+@pytest.mark.asyncio
+async def test_pm_ready_01_store_fault_is_honest_not_ready_named(make_git_repo: Any) -> None:
+    """A store fault → honest ``not_ready`` with the gap NAMED, propagated through the readiness
+    signal (the gap-propagation contract, independent of map shape)."""
     src, _sha = make_git_repo(_fixture_files())
 
-    class HallucinatingProvider:
-        name = "claude"
-
-        async def stream(self, prompt: str, query: ProviderQuery) -> AsyncIterator[AgentChunk]:
-            bad = _FAITHFUL_MAP_TMPL.format(repo="fixture-repo", sha="HEAD").replace(
-                "src/server.py", "src/GHOST.py"
-            )
-            yield AgentChunk(type="TEXT", text=bad, metadata={"msg_id": "m"})
-            yield AgentChunk(type="RESULT", metadata={"num_turns": 1})
+    class FailingStore:
+        async def save(self, **_kw: Any) -> None:
+            raise RuntimeError("db down")
 
     result = await pipeline.run_pipeline(
-        tenant_id="tenant-a", repo_url=src.as_uri(), provider=HallucinatingProvider()
+        tenant_id="tenant-a", repo_url=src.as_uri(), provider=FaithfulFakeProvider(),
+        map_store=FailingStore(),
     )
     assert not result.ready
     sig = readiness.signal_from_result(result)
     assert sig.status == "not_ready"
-    assert any("not in the clone" in g for g in sig.gaps)  # the gap is NAMED (Law 1)
+    assert any(g.startswith("store:") for g in sig.gaps)  # the gap is NAMED (Law 2)
 
 
 @pytest.mark.asyncio

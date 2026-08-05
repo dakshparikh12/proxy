@@ -2,9 +2,16 @@
 
 The map is trustworthy ONLY if every claim in it is real. This gate is deterministic (no model)
 and fail-closed: it emits ``ready`` ONLY on a full pass, and any failure yields ``not_ready``
-NAMING the gap (Law 1/2 — never a silent pass). The five checks:
+NAMING the gap (Law 1/2 — never a silent pass). The stored artifact is EITHER the comprehension-first
+resident doc (the qualitative comprehension on top + the compact ``# Navigation map`` beneath) OR,
+on an honest degrade, the deterministic symbol map alone
+(:func:`premeeting.symbol_map.build_symbol_map`). The shape check accepts whichever marker set is
+present — the navigation markers (``# Navigation map`` / ``Where things live`` / ``Entry points``)
+or the symbol-map markers (``# Symbol map`` / … / ``Ranked signatures``) — NOT the old six-section
+prose shape. The five checks:
 
-  1. non-empty + has ALL six required sections (a shell is not a map);
+  1. non-empty + carries the symbol-map markers (a shell is not a map) — an honest "no parseable
+     source symbols" map (a repo with no parseable code) passes: it makes no ungrounded claim;
   2. every file/dir PATH it names EXISTS in the clone — no hallucinated path (Law 1, PM-VERIFY-01);
   3. every top-level TRACKED directory is covered by the map (PM-VERIFY-02);
   4. no secret value / secret-path leaks into the map (PM-VERIFY-03);
@@ -18,7 +25,7 @@ from pathlib import Path
 
 from .exclusions import ExclusionManager
 from .gitio import list_tracked_files
-from .map_build import REQUIRED_SECTIONS
+from .symbol_map import REQUIRED_MAP_MARKERS, REQUIRED_NAV_MARKERS
 
 # A "path-shaped token" in the map: a slash-bearing or dotted-extension run, or a bare top-level
 # name mentioned as a path. We extract candidate paths conservatively (only tokens that LOOK like
@@ -188,11 +195,22 @@ def verify_map(
     always yields the same verdict."""
     reasons: list[str] = []
 
-    # (1) non-empty + all six sections.
+    # (1) non-empty + carries the symbol-map markers. An honest "no parseable source symbols" map
+    # (a repo with no parseable code) is a clean pass — it makes no groundable claim to check.
     if not map_text or not map_text.strip():
         return VerifyResult(ready=False, reasons=["map is empty"])
-    missing = [s for s in REQUIRED_SECTIONS if f"## {s}" not in map_text]
-    if missing:
+    if "no parseable source symbols" in map_text:
+        return VerifyResult(ready=True)
+    # SHAPE: the stored artifact is EITHER the deterministic symbol map (degrade fallback: Part 1
+    # alone, ``# Symbol map`` … ``Ranked signatures``) OR the comprehension-first resident doc (the
+    # qualitative comprehension on top + the compact ``# Navigation map`` beneath). Accept whichever
+    # shape carries all its markers; only if NEITHER does is the artifact a shell (fail-closed).
+    missing_symbol = [m for m in REQUIRED_MAP_MARKERS if m not in map_text]
+    missing_nav = [m for m in REQUIRED_NAV_MARKERS if m not in map_text]
+    if missing_symbol and missing_nav:
+        # Neither shape is complete → a shell. Name the gaps of the shape the artifact is CLOSER to
+        # (the one missing fewer markers) so the reason is actionable; tie → the symbol-map shape.
+        missing = missing_symbol if len(missing_symbol) <= len(missing_nav) else missing_nav
         reasons.append(f"missing sections: {', '.join(missing)}")
 
     named = extract_named_paths(map_text)
