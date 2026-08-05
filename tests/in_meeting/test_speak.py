@@ -139,7 +139,10 @@ async def test_tail_flush_after_quiet_window() -> None:
 @pytest.mark.asyncio
 async def test_speaking_state_wraps_utterance_not_chunks() -> None:
     calls: list[str] = []
-    script = {"One.": [b"\x11\x11", b"\x22\x22"], "Two.": [b"\x33\x33"]}
+    # BATCHING CONTRACT: sentences queued together ride as ONE synth unit (one prosody
+    # arc — the live finding: per-sentence synthesis sounded disjointed). Both sentences
+    # land in the queue before the worker runs, so the synth sees the joined utterance.
+    script = {"One. Two.": [b"\x11\x11", b"\x22\x22", b"\x33\x33"]}
     channel = _RecordingChannel()
     pipe = build_speak_sink(synthesize=_scripted_synth(script, calls), channel=channel, flush_after_s=_NEVER)
 
@@ -178,7 +181,11 @@ async def test_ordering_under_slow_synth() -> None:
     channel = _RecordingChannel()
     pipe = build_speak_sink(synthesize=synthesize, channel=channel, flush_after_s=_NEVER)
 
-    await pipe.say("First one. Second one.")  # both queued at once
+    # Stagger the deltas (the real streaming shape): sentence 1 is in-flight when
+    # sentence 2 arrives, so they are two synth units and FIFO order must hold.
+    await pipe.say("First one. ")
+    await asyncio.sleep(0.005)  # the worker picks up sentence 1 (slow synth)
+    await pipe.say("Second one.")
     await pipe.flush()
 
     assert calls == ["First one.", "Second one."]
@@ -204,10 +211,12 @@ async def test_synth_failure_never_throws_and_pipe_survives() -> None:
     channel = _RecordingChannel()
     pipe = build_speak_sink(synthesize=synthesize, channel=channel, flush_after_s=_NEVER)
 
-    await pipe.say("Boom. Fine.")  # neither say() nor the pipe may raise
+    await pipe.say("Boom. ")  # neither say() nor the pipe may raise
+    await asyncio.sleep(0.005)  # the worker takes the failing unit alone
+    await pipe.say("Fine.")
     await pipe.flush()
 
-    assert calls == ["Boom.", "Fine."]  # the later sentence still synthesized
+    assert calls == ["Boom.", "Fine."]  # the later unit still synthesized
     assert channel.audio == [b"\x0f\x0f"]  # honest no-audio for the failed one
     assert pipe.last_error is boom
 
@@ -231,8 +240,9 @@ async def test_cut_drops_buffer_and_queue() -> None:
     channel = _RecordingChannel()
     pipe = build_speak_sink(synthesize=synthesize, channel=channel, flush_after_s=_NEVER)
 
-    await pipe.say("Sentence one. Sentence two. trailing tail")
-    await asyncio.sleep(0.02)  # worker is in-flight on sentence one
+    await pipe.say("Sentence one. ")
+    await asyncio.sleep(0.02)  # worker is in-flight (held) on sentence one
+    await pipe.say("Sentence two. trailing tail")  # queues + buffers behind it
     await pipe.cut()
 
     await pipe.say("Fresh.")
@@ -426,3 +436,45 @@ async def test_cut_while_audibly_speaking_sends_speaking_false() -> None:
     assert channel.calls[-1] == ("speaking", False)
     speaking = [payload for kind, payload in channel.calls if kind == "speaking"]
     assert speaking == [True, False]  # exactly one drop, no flicker
+
+
+# ---------------------------------------------------------------------------
+# 8. Batching: sentences that accumulate while a unit synthesizes ride as ONE
+#    joined utterance (one prosody arc — the live disjointed-cadence finding).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sentences_queued_together_batch_into_one_synth_unit() -> None:
+    calls: list[str] = []
+    script = {"A. B. C.": [b"\x01\x01"]}
+    channel = _RecordingChannel()
+    pipe = build_speak_sink(synthesize=_scripted_synth(script, calls), channel=channel, flush_after_s=_NEVER)
+
+    await pipe.say("A. B. C.")  # all three queue before the worker runs
+    await pipe.flush()
+
+    assert calls == ["A. B. C."]  # ONE synth unit, not three
+    assert channel.audio == [b"\x01\x01"]
+
+
+# ---------------------------------------------------------------------------
+# 9. Audibility: speaking stays True while the ROOM is still playing what we
+#    wrote (synthesis outruns playback), and cut() resets the horizon.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_speaking_reflects_audible_playback_not_write_activity() -> None:
+    calls: list[str] = []
+    # 44100 Hz s16le mono: 44100 samples = 88200 bytes = exactly 1.0s of audio.
+    script = {"Long.": [b"\x00" * 88_200]}
+    channel = _RecordingChannel()
+    pipe = build_speak_sink(synthesize=_scripted_synth(script, calls), channel=channel, flush_after_s=_NEVER)
+
+    await pipe.say("Long.")
+    await pipe.flush()  # writes complete near-instantly; the room plays ~1s
+
+    assert pipe.speaking is True  # audible horizon holds the gate for barge-in
+    await pipe.cut()  # the page dumps its buffers on the cut frame
+    assert pipe.speaking is False  # horizon reset — idle for the next turn
