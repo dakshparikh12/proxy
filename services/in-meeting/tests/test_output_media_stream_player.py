@@ -166,4 +166,52 @@ def test_page_js_registers_the_worklet_and_streams_via_a_fifo() -> None:
     assert "postMessage({ type: \"cut\" }" in page
     # sample-rate handled ONCE: ask for 44100, resample-at-append only if the ctx differs:
     assert "{ sampleRate: SAMPLE_RATE }" in page
-    assert "resampleTo(floats, SAMPLE_RATE, CTX_RATE)" in page
+    assert "resampleStream(floats, SAMPLE_RATE, CTX_RATE)" in page
+
+
+def _resample_stream_mirror():
+    """Python mirror of the page's STATEFUL streaming resampler (phase + tail carried)."""
+    state = {"frac": 0.0, "tail": 0.0, "has": False}
+
+    def resample(chunk: list[float], from_rate: int, to_rate: int) -> list[float]:
+        if from_rate == to_rate:
+            return list(chunk)
+        step = from_rate / to_rate
+        inp = ([state["tail"]] if state["has"] else []) + list(chunk)
+        out: list[float] = []
+        pos = state["frac"]
+        while pos <= len(inp) - 1:
+            i0 = int(pos)
+            i1 = min(i0 + 1, len(inp) - 1)
+            frac = pos - i0
+            out.append(inp[i0] * (1 - frac) + inp[i1] * frac)
+            pos += step
+        state["tail"] = inp[-1]
+        state["has"] = True
+        state["frac"] = pos - (len(inp) - 1)
+        return out
+
+    return resample
+
+
+def test_chunked_streaming_resample_equals_whole_buffer_resample() -> None:
+    """THE live-chop regression: resampling per-chunk with phase restarting at 0 created a
+    discontinuity every 120ms in Recall's 48k browser. The stateful streaming resampler must
+    produce (near-)identical output to resampling the whole utterance at once."""
+    import math
+
+    sine = [math.sin(2 * math.pi * 440 * i / 44100) for i in range(44100)]  # 1s @ 440Hz
+    # whole-buffer reference (one stateful pass over the full signal)
+    whole = _resample_stream_mirror()(sine, 44100, 48000)
+    # chunked pass: 120ms chunks through ONE stateful resampler
+    chunked_fn = _resample_stream_mirror()
+    chunk_n = int(0.120 * 44100)
+    chunked: list[float] = []
+    for i in range(0, len(sine), chunk_n):
+        chunked.extend(chunked_fn(sine[i : i + chunk_n], 44100, 48000))
+    assert abs(len(whole) - len(chunked)) <= 2  # same output length (± edge sample)
+    for a, b in zip(whole, chunked, strict=False):
+        assert abs(a - b) < 1e-6  # sample-identical (float-accumulation tolerance): no phase reset, no boundary clamp
+    # and the output is smooth at every former chunk boundary (no repeated/flat samples)
+    for i in range(1, len(chunked) - 1):
+        assert not (chunked[i] == chunked[i - 1] == chunked[i + 1] != 0.0)

@@ -647,21 +647,34 @@ async function startWorklet() {
 }
 const workletReady = startWorklet();
 
-// Linear-interpolation resample ONCE at append (only used if CTX_RATE !== 44100). This is
-// the single, whole-utterance-consistent resample — never the per-chunk seam we removed.
-function resampleTo(floats, fromRate, toRate) {
+// STREAMING resample (only used if CTX_RATE !== 44100 — e.g. Recall's headless Chrome refuses
+// a 44.1k context and reports 48k). THE live-chop root cause was resampling each ~120ms chunk
+// INDEPENDENTLY: phase restarted at 0 and the edge sample clamped at every chunk boundary — a
+// discontinuity 8x/second that no transport fix could cure. This resampler is STATEFUL: it
+// carries the fractional read position AND the previous chunk's tail sample across calls, so the
+// output is mathematically identical to resampling the whole concatenated utterance at once.
+// State resets on cut (a new utterance legitimately starts fresh).
+const resampleState = { frac: 0, tail: 0, hasTail: false };
+function resampleStream(floats, fromRate, toRate) {
   if (fromRate === toRate) { return floats; }
-  const ratio = toRate / fromRate;
-  const outLen = Math.max(1, Math.round(floats.length * ratio));
-  const out = new Float32Array(outLen);
-  for (let i = 0; i < outLen; i++) {
-    const pos = i / ratio;
+  const step = fromRate / toRate;  // input samples advanced per output sample
+  const lead = resampleState.hasTail ? 1 : 0;
+  const inp = new Float32Array(lead + floats.length);
+  if (lead) { inp[0] = resampleState.tail; }
+  inp.set(floats, lead);
+  const out = [];
+  let pos = resampleState.frac;  // fractional position into inp (bridges the chunk boundary)
+  while (pos <= inp.length - 1) {
     const i0 = Math.floor(pos);
-    const i1 = Math.min(i0 + 1, floats.length - 1);
+    const i1 = Math.min(i0 + 1, inp.length - 1);
     const frac = pos - i0;
-    out[i] = floats[i0] * (1 - frac) + floats[i1] * frac;
+    out.push(inp[i0] * (1 - frac) + inp[i1] * frac);
+    pos += step;
   }
-  return out;
+  resampleState.tail = inp[inp.length - 1];
+  resampleState.hasTail = true;
+  resampleState.frac = pos - (inp.length - 1);  // carry the remainder past the new tail
+  return Float32Array.from(out);
 }
 
 function appendChunk(arrayBuffer) {
@@ -670,7 +683,8 @@ function appendChunk(arrayBuffer) {
   const int16 = new Int16Array(arrayBuffer, 0, sampleCount);
   let floats = new Float32Array(sampleCount);
   for (let i = 0; i < sampleCount; i++) { floats[i] = int16[i] / 32768; }
-  floats = resampleTo(floats, SAMPLE_RATE, CTX_RATE);
+  floats = resampleStream(floats, SAMPLE_RATE, CTX_RATE);
+  if (floats.length === 0) { return; }
   workletReady.then(() => {
     if (workletNode) { workletNode.port.postMessage({ type: "samples", samples: floats }); }
   });
@@ -679,6 +693,8 @@ function appendChunk(arrayBuffer) {
 function cutPlayback() {
   // Barge-in (Law 3): a human talked over Proxy. Clear the FIFO instantly so the interrupted
   // turn's remaining buffered samples never play on top of the human. The worklet re-primes.
+  // The streaming-resampler state resets too: the next utterance starts a fresh phase.
+  resampleState.frac = 0; resampleState.tail = 0; resampleState.hasTail = false;
   workletReady.then(() => {
     if (workletNode) { workletNode.port.postMessage({ type: "cut" }); }
   });
