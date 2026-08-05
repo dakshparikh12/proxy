@@ -1,0 +1,92 @@
+{
+ "data": {
+  "bot": {
+   "id": "55a7cf93-cbaf-4079-96a0-eefce7f48ade",
+   "metadata": {}
+  },
+  "data": {
+   "words": [
+    {
+     "text": "Hey",
+     "end_timestamp": {
+      "absolute": "2026-08-05T09:40:33.652Z",
+      "relative": 179.51528930664062
+     },
+     "start_timestamp": {
+      "absolute": "2026-08-05T09:40:33.323Z",
+      "relative": 179.18629455566406
+     }
+    },
+    {
+     "text": "Proxy,",
+     "end_timestamp": {
+      "absolute": "2026-08-05T09:40:34.332Z",
+      "relative": 180.19529724121097
+     },
+     "start_timestamp": {
+      "absolute": "2026-08-05T09:40:33.673Z",
+      "relative": 179.5363006591797
+     }
+    },
+    {
+     "text": "how",
+     "end_timestamp": {
+      "absolute": "2026-08-05T09:40:34.682Z",
+      "relative": 180.5452880859375
+     },
+     "start_timestamp": {
+      "absolute": "2026-08-05T09:40:34.353Z",
+      "relative": 180.21629333496097
+     }
+    },
+    {
+     "text": "are",
+     "end_timestamp": {
+      "absolute": "2026-08-05T09:40:35.032Z",
+      "relative": 180.89529418945312
+     },
+     "start_timestamp": {
+      "absolute": "2026-08-05T09:40:34.703Z",
+      "relative": 180.56629943847656
+     }
+    },
+    {
+     "text": "you?",
+     "end_timestamp": {
+      "absolute": "2026-08-05T09:40:35.492Z",
+      "relative": 181.3553009033203
+     },
+     "start_timestamp": {
+      "absolute": "2026-08-05T09:40:35.053Z",
+      "relative": 180.91629028320312
+     }
+    }
+   ],
+   "participant": {
+    "id": 100,
+    "name": "Daksh Amit Parikh",
+    "is_host": true,
+    "platform": "desktop",
+    "extra_data": {
+     "google_meet": {
+      "static_participant_id": "xUIEKrNJJvcpzLhg5jmbLY2hFdI1lwIAmLIOCCWNJ_8="
+     }
+    }
+   },
+   "language_code": "en"
+  },
+  "recording": {
+   "id": "6076abdd-d9b9-4e3c-95cb-33701010faf6",
+   "metadata": {}
+  },
+  "transcript": {
+   "id": "5fd9d981-3836-4f3a-b4de-436c8a0b3063",
+   "metadata": {}
+  },
+  "realtime_endpoint": {
+   "id": "4bb0a954-dad3-4dfb-b13f-922168740699",
+   "metadata": {}
+  }
+ },
+ "event": "transcript.data"
+}

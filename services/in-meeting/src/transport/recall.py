@@ -139,6 +139,7 @@ class RecallTransport:
         api_key: str,
         webhook_url: str = "",
         output_media_url: str = "",
+        bot_name: str = "Proxy",
     ) -> None:
         # ``api_key`` is sourced from Secret Manager by the caller and never logged
         # (AC-XCUT-02); stored only to pass into signed round-trips via the seam.
@@ -152,6 +153,10 @@ class RecallTransport:
         self._api_key = api_key
         self._webhook_url = webhook_url
         self._output_media_url = output_media_url
+        # The name Recall shows in the room AND labels this bot's transcribed speech with.
+        # Proxy's own bot keeps the default (the self-wake guard filters PROXY_SPEAKER ==
+        # "Proxy"); a test replica passes its human name so attribution reads correctly.
+        self._bot_name = bot_name
         # The region-resolved API base (``RECALL_REGION``): captured at construction —
         # every ``_api`` round-trip (and every output-media sink bound to it) rides
         # the workspace's own region host; unset env keeps the global default.
@@ -189,7 +194,7 @@ class RecallTransport:
         none (and never ships an empty-string URL, which Recall's schema rejects).
         ``output_media`` likewise appears only when a surface URL is configured.
         """
-        body: dict[str, Any] = {"meeting_url": meeting_link, "bot_name": "Proxy"}
+        body: dict[str, Any] = {"meeting_url": meeting_link, "bot_name": self._bot_name}
         if self._webhook_url:
             body["recording_config"] = {
                 "transcript": {"provider": {"assembly_ai_v3_streaming": {}}},

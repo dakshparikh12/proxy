@@ -79,20 +79,40 @@ def _bot_id(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _has_utterance(body: dict[str, Any]) -> bool:
+    """True iff this level actually CARRIES an utterance (words / a text STRING / a talker).
+
+    The predicate is strict about types on purpose: Recall's real envelope has a key literally
+    named ``transcript`` at the OUTER ``data`` level whose value is a metadata OBJECT (the
+    recording's transcript resource — ``{"id": ...}``), not text. A naive "key exists" check
+    stops the unwrap there, finds no words one level early, and silently drops EVERY live
+    utterance (the exact live failure: Proxy heard perfectly, fed nothing). Only a non-empty
+    ``words`` (str/list), a non-empty text STRING, or a ``participant`` object counts."""
+    words = body.get("words")
+    if isinstance(words, str | list) and words:
+        return True
+    for key in ("text", "transcript"):
+        val = body.get(key)
+        if isinstance(val, str) and val.strip():
+            return True
+    return isinstance(body.get("participant"), dict)
+
+
 def _transcript_body(payload: dict[str, Any]) -> dict[str, Any]:
     """Descend to the dict that actually carries the transcript fields.
 
     Recall nests the real-time transcript under ``data`` — and for the ``assembly_ai_v3_streaming``
     provider, under ``data.data`` (the ``words`` array + ``participant`` sit there, NOT at the first
-    ``data`` level). Unwrap nested ``data`` envelopes (bounded) until we reach the level that has
-    ``words``/``text``/``transcript`` (or ``participant``); a flat body is returned as-is. This is
-    what lets the REAL Recall payload parse, not only the flat unit-stub shape — without it every
-    live transcript is dropped and Proxy never wakes (verified against Recall's documented payload)."""
+    ``data`` level, which carries envelope metadata incl. a ``transcript`` resource OBJECT). Unwrap
+    nested ``data`` envelopes (bounded) until a level truly carries an utterance
+    (:func:`_has_utterance` — type-strict, so the metadata level can't false-stop the descent);
+    a flat body is returned as-is. Pinned against the VERBATIM live envelope (see the
+    meeting-in-a-box test) — without this every live transcript is dropped and Proxy never wakes."""
     body: Any = payload
     for _ in range(3):  # bounded unwrap of nested ``data`` envelopes
         if not isinstance(body, dict):
             break
-        if any(k in body for k in ("words", "text", "transcript")) or "participant" in body:
+        if _has_utterance(body):
             return body
         nxt = body.get("data")
         if not isinstance(nxt, dict):

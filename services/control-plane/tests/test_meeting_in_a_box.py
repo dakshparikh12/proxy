@@ -29,30 +29,33 @@ trip, and Recall's actual audio ingestion of the channel's PCM.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import shlex
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-# The REAL-SHAPE Recall realtime transcript envelope (docs.recall.ai "Real-Time Event Payloads",
-# assembly_ai_v3_streaming): the bot is a NESTED object at data.bot.id, and the words + participant
-# sit under data.data (NOT the first data level). This is the exact shape that broke live — if the
-# chain can't parse THIS, Proxy never wakes.
+# The Recall realtime transcript envelope — the VERBATIM live delivery captured from a real Google
+# Meet (fixtures/real_recall_transcript_envelope.json), so every metadata key Recall actually sends
+# rides along. THE regression this pins: the outer ``data`` level carries a ``transcript`` metadata
+# OBJECT (the recording's transcript resource, not text); a key-existence check in the body unwrap
+# stopped there, found no words one level early, and silently dropped EVERY live utterance (the
+# exact live failure: Proxy heard perfectly, fed nothing). A synthetic minimal payload missed this;
+# the verbatim envelope cannot.
+_REAL_ENVELOPE: dict[str, Any] = json.loads(
+    (Path(__file__).parent / "fixtures" / "real_recall_transcript_envelope.json").read_text()
+)
+
+
 def _transcript_webhook(bot_id: str, words: str, speaker: str, ts: float) -> dict[str, Any]:
-    return {
-        "event": "transcript.data",
-        "data": {
-            "bot": {"id": bot_id},
-            "data": {
-                "words": [
-                    {"text": w, "start_timestamp": {"relative": ts}}
-                    for w in words.split()
-                ],
-                "participant": {"id": "p-1", "name": speaker},
-            },
-        },
-    }
+    payload = copy.deepcopy(_REAL_ENVELOPE)
+    payload["data"]["bot"]["id"] = bot_id
+    payload["data"]["data"]["words"] = [
+        {"text": w, "start_timestamp": {"relative": ts}} for w in words.split()
+    ]
+    payload["data"]["data"]["participant"]["name"] = speaker
+    return payload
 
 
 # The record the FAKE session host writes into WAKE_OUT/<id>.json — exactly the shape session_host.py
