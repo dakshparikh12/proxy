@@ -182,6 +182,20 @@ def install_dev_smoke_routes(app: "FastAPI") -> None:
                 status_code=502,
             )
 
+        # PRE-WARM AT INVITE (Bug 4): fire the provision NOW — a synthetic ``bot.joining_call``
+        # liveness payload with the REAL bot id — so the E2B workroom + warm session are ready
+        # while the bot is still knocking/in the waiting room, and the FIRST utterance pays zero
+        # provision penalty. Fire-and-forget (launch spawns a background task); the atomic claim
+        # keeps the later transcript-liveness fallback a no-op (never a double provision).
+        launch = getattr(request.app.state, "provision_launch", None)
+        if launch is not None and invited.recall_bot_id:
+            await launch(
+                {
+                    "event": "bot.joining_call",
+                    "data": {"bot_id": str(invited.recall_bot_id)},
+                }
+            )
+
         return JSONResponse(
             {
                 "meeting_id": str(invited.id),

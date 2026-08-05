@@ -209,7 +209,15 @@ class SpeakPipe:
 
     async def cut(self) -> None:
         """Barge-in primitive: drop buffered text, queued sentences, and the
-        in-flight synth NOW. Detection lives in the barge-in reflex, not here."""
+        in-flight synth NOW. Detection lives in the barge-in reflex, not here.
+
+        Dropping the host-side state is not enough: the PAGE has already SCHEDULED
+        seconds of WebAudio from PCM we streamed, so the room keeps hearing the
+        interrupted turn unless the cut PROPAGATES into the page. We therefore fire
+        the channel's ``cut`` too (drop wire-buffered PCM + send the page a cut
+        control frame so it stops every scheduled source). Duck-typed so a plain
+        recorder fake without ``cut`` still works (only ``set_speaking``/``write_audio``
+        are required by ``AudioOut``)."""
         self._cancel_tail_timer()
         self._buffer = ""
         self._queue.clear()
@@ -218,6 +226,9 @@ class SpeakPipe:
         if worker is not None and not worker.done():
             worker.cancel()
             await asyncio.gather(worker, return_exceptions=True)
+        channel_cut = getattr(self._channel, "cut", None)
+        if callable(channel_cut):
+            await channel_cut()  # drop wire-buffered PCM + tell the page to stop playback NOW
         if self._speaking:
             self._speaking = False
             await self._channel.set_speaking(False)

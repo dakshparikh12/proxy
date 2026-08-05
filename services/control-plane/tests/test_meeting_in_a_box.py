@@ -499,6 +499,17 @@ def test_meeting_in_a_box_partial_barges_in_and_cuts_the_pipe(monkeypatch, tmp_p
 
         assert runtime.connection.speak.speaking is False, "the partial cut the active speech"
         assert runtime.connection.cut_latched is True, "the barge-in latch is up"
+        # ISSUE 2, end to end: the cut PROPAGATED to the page. The real output-media channel for this
+        # meeting must carry a ``{"type":"cut"}`` control frame (the page reads it and stops every
+        # scheduled WebAudio source) AND no residual PCM survives — without this the room kept hearing
+        # seconds of already-scheduled audio after the host stopped. This is the on-the-wire proof.
+        channel = output_media.channel_for(meeting_id)
+        wire = list(channel._frames)
+        cut_frames = [
+            f for f in wire if isinstance(f, str) and json.loads(f).get("type") == "cut"
+        ]
+        assert cut_frames, "a cut control frame reached the output-media channel (the page clears)"
+        assert [f for f in wire if isinstance(f, bytes)] == [], "no residual PCM survives the cut"
         # The partial neither woke nor fed a transcript line (barge-in only).
         assert len(runtime.session.results) == 1, "the partial did NOT wake a new turn"
 

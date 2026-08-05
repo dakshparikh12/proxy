@@ -82,6 +82,25 @@ def test_resident_prime_carries_the_shared_injection_guardrail_last() -> None:
     assert "BEHAVIORAL PRIME" in bare
 
 
+def test_prime_carries_the_conciseness_and_interruption_principles() -> None:
+    """ISSUE 3 + ISSUE 2b (behavior principles, NOT code caps — Law 4). The prime must instruct
+    concise, meeting-cadence spoken replies (the live failure was verbose multi-sentence answers to
+    simple asks) and must tell Proxy that after being interrupted it addresses the interruption
+    first. These are prose principles the agent composes against — there is no length cap anywhere in
+    code (asserted by the absence of a hard limit here; the signal is the guidance text)."""
+    from in_meeting.prime import WORKROOM_PRIME
+
+    low = WORKROOM_PRIME.lower()
+    # Conciseness: short spoken replies, a default range, at meeting cadence, clarify = one line.
+    assert "short" in low
+    assert "one to three" in low
+    assert "cadence" in low
+    assert "clarifying question is one line" in low
+    # After an interruption, address what was said first.
+    assert "talks over you" in low
+    assert "address what they just said first" in low
+
+
 # ── Workroom.feed_transcript / run_ask: never-raise honest degrade ────────────────
 
 

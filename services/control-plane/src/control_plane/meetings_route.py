@@ -177,6 +177,19 @@ def install_meetings_route(
                 {"error": "Proxy could not join the meeting"}, status_code=502
             )
 
+        # PRE-WARM AT INVITE (Bug 4): fire the provision NOW — a synthetic ``bot.joining_call``
+        # liveness payload with the REAL bot id — so the workroom + warm session are ready while
+        # the bot is still knocking. Fire-and-forget; the atomic claim keeps the transcript-
+        # liveness fallback idempotent (never a double provision).
+        launch = getattr(request.app.state, "provision_launch", None)
+        if launch is not None and invited.recall_bot_id:
+            await launch(
+                {
+                    "event": "bot.joining_call",
+                    "data": {"bot_id": str(invited.recall_bot_id)},
+                }
+            )
+
         return JSONResponse(
             {"meeting_id": str(invited.id), "bot_id": invited.recall_bot_id},
             status_code=201,

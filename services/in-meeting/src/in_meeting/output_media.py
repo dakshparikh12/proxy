@@ -134,6 +134,22 @@ class OutputMediaChannel:
         self._frames.append(json.dumps({"speaking": speaking}))
         self._notify()
 
+    async def cut(self) -> None:
+        """Barge-in propagation (Law 3): a human talked over Proxy — stop the room's audio NOW.
+
+        The host-side ``SpeakPipe.cut`` already drops buffered text / queued sentences / the in-flight
+        synth, but the PAGE has ALREADY scheduled seconds of WebAudio (``source.start(nextStartTime)``),
+        so without this it keeps playing over the human. This drops any PCM still buffered on the wire
+        AND enqueues a ``{"type":"cut"}`` control frame the page acts on immediately: stop every
+        scheduled source and reset its playback cursor. State frames stay ordered around it (the cut
+        rides right where it was issued). Idempotent and never-throw."""
+        # Drop buffered PCM (bytes) that hasn't reached the page yet; keep ordered state (str) frames.
+        self._frames = deque(
+            (f for f in self._frames if not isinstance(f, bytes)), maxlen=self._frames.maxlen
+        )
+        self._frames.append(json.dumps({"type": "cut"}))
+        self._notify()
+
     async def set_screen(self, url: str) -> str:
         """Point the Output-Media surface at ``url`` (the agent's ``screen`` medium). Returns ``url``.
 
@@ -277,7 +293,20 @@ const orb = document.getElementById("orb");
 // browser that starts the context suspended.
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
 audioCtx.resume();
+// Small jitter/lead-in buffer (seconds): the FIRST chunk of a fresh utterance is
+// scheduled this far AHEAD of now, not at now. Cartesia streams a sentence at a
+// time with network jitter between /tts/bytes calls, so scheduling right at
+// currentTime made the first samples race the audio thread and clip the leading
+// word ("So for the demo plan" heard as "plan."). ~150ms is inaudible as latency
+// but absorbs the arrival jitter so no word onset is ever dropped or choppy.
+const JITTER_LEAD_S = 0.15;
+// nextStartTime is the rolling playback cursor: every chunk is scheduled at
+// max(cursor, now+lead) and the cursor advances by the chunk's exact duration, so
+// chunks butt seamlessly with no inter-chunk gap and no cross-sentence discontinuity.
 let nextStartTime = 0;
+// Every scheduled-but-not-yet-finished source, so a barge-in cut can stop them all
+// at once (WebAudio has no global "stop everything"). Sources self-remove on end.
+let liveSources = [];
 
 function playChunk(arrayBuffer) {
   const sampleCount = Math.floor(arrayBuffer.byteLength / 2);
@@ -292,11 +321,32 @@ function playChunk(arrayBuffer) {
   const source = audioCtx.createBufferSource();
   source.buffer = buffer;
   source.connect(audioCtx.destination);
-  // Gapless: schedule back-to-back on a rolling clock, never in the past.
-  const now = audioCtx.currentTime;
-  if (nextStartTime < now) { nextStartTime = now; }
+  // Gapless + jitter-safe: schedule on the rolling cursor, but never earlier than
+  // now+lead — that floor gives the first chunk of an utterance its lead-in and
+  // re-arms the lead-in after any underrun (a gap between sentences), so the next
+  // sentence's first word isn't clipped either.
+  const floor = audioCtx.currentTime + JITTER_LEAD_S;
+  if (nextStartTime < floor) { nextStartTime = floor; }
   source.start(nextStartTime);
   nextStartTime += buffer.duration;
+  liveSources.push(source);
+  source.onended = () => {
+    const i = liveSources.indexOf(source);
+    if (i !== -1) { liveSources.splice(i, 1); }
+  };
+}
+
+function cutPlayback() {
+  // Barge-in (Law 3): a human talked over Proxy. Stop and discard ALL scheduled/
+  // playing audio immediately and reset the cursor so the interrupted turn's
+  // remaining, already-buffered samples never play on top of the human.
+  const sources = liveSources;
+  liveSources = [];
+  for (const s of sources) {
+    try { s.onended = null; s.stop(); } catch (err) { /* already stopped/ended */ }
+    try { s.disconnect(); } catch (err) { /* already disconnected */ }
+  }
+  nextStartTime = 0;
 }
 
 function connect() {
@@ -307,6 +357,11 @@ function connect() {
     if (typeof event.data === "string") {
       let msg;
       try { msg = JSON.parse(event.data); } catch (err) { return; }
+      if (msg && msg.type === "cut") {
+        cutPlayback();
+        orb.classList.remove("speaking");
+        return;
+      }
       if (msg && typeof msg.speaking === "boolean") {
         orb.classList.toggle("speaking", msg.speaking);
       }
