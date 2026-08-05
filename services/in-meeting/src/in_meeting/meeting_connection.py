@@ -116,6 +116,15 @@ class MeetingConnection:
         turn starts clean (physics, not a decision — Law 4)."""
         self.cut_latched = False
 
+    def audible_until(self) -> float:
+        """The ``time.monotonic()`` horizon until which the ROOM is still audibly hearing Proxy's
+        speech — 0.0 if not speaking / unknown. This is the SpeakPipe's own audible-end estimate
+        (synth outruns playback, so the write-state goes idle while the page still has seconds of
+        scheduled audio); the reactive loop anchors the follow-up window PAST this so the human's
+        reply — which lands one beat AFTER the audio finishes — still falls inside the window
+        (physics, not a decision — Law 4). Duck-typed: a speak sink without the horizon yields 0.0."""
+        return float(getattr(self.speak, "_audible_until", 0.0) or 0.0)
+
     async def to_meeting(
         self, content: str = "", medium: str = "say", to: str | None = None
     ) -> MeetingSend:

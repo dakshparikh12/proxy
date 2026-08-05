@@ -1,0 +1,6 @@
+13:00:25 | queued: 93.8 | ttft: 3.28 | spoke: 8.4 | tools: []
+   I'm Proxy, your AI teammate embedded in this meeting with full knowledge of the Cova codebase — I can answer questions, debug live, write and offer co
+12:59:26 | queued: 140.9 | ttft: 2.81 | spoke: 7.28 | tools: []
+   Cova is an AI interior design app where you photograph your real room, take a style quiz, and get back a photorealistic redesign of that exact space —
+12:58:31 | queued: 108.8 | ttft: 5.03 | spoke: 6.65 | tools: []
+   Hey Daksh, loud and clear — I'm here!

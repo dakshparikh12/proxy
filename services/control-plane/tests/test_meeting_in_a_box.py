@@ -369,6 +369,13 @@ def test_meeting_in_a_box_full_chain(monkeypatch, tmp_path) -> None:
         # under the name-gate, end to end. (The first turn opened the short follow-up window (F1); this
         # cross-talk arrives well AFTER it closes, so only the name-gate can wake it — and it can't.)
         from control_plane.meeting_session import _FOLLOW_UP_WINDOW_S
+        # The follow-up window (F1) is now WALL-clock (anchored past the room's audible horizon), not
+        # meeting-clock ts — so advance a controllable wall clock past it to expire it (the first turn
+        # opened it; this cross-talk must land AFTER it closes). ``now_fn`` is the session's injectable
+        # wall clock (``time.monotonic`` in production); pin it here so real time can jump the window.
+        import time as _time
+        _wall = _time.monotonic() + _FOLLOW_UP_WINDOW_S + 30.0
+        runtime.session.now_fn = lambda: _wall
         late_ts = 1.0 + _FOLLOW_UP_WINDOW_S + 30.0
         cross = _transcript_webhook(bot_id, "great lets move on to the next agenda item", "Riya", late_ts)
         db.land(cross)

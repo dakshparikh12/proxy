@@ -184,11 +184,24 @@ class MeetingSession:
     #: substantive human line is treated as the answer and wakes Proxy to CONTINUE the same task even
     #: without a name mention. Set in :meth:`_handle`, consumed/cleared in :meth:`on_line`.
     _pending_question: tuple[str, float] | None = None
-    #: FOLLOW-UP WINDOW (F1): the meeting-clock ts UNTIL which a substantive human line is routed to
-    #: the model's judgment without a name mention. Opened by a delivered turn AND by a barge-in;
-    #: refreshed by an in-window delivery; expires on timeout or a new explicit address. ``0.0`` =
-    #: closed. Set via :meth:`_open_follow_up_window`, read/expired in :meth:`on_line`.
+    #: FOLLOW-UP WINDOW (F1): the ``time.monotonic()`` (WALL-CLOCK) instant UNTIL which a substantive
+    #: human line is routed to the model's judgment without a name mention. Opened by a delivered turn
+    #: AND by a barge-in; refreshed by an in-window delivery; expires on timeout or a new explicit
+    #: address. ``0.0`` = closed. Anchored PAST the connection's audible horizon (:meth:`audible_until`)
+    #: so the window covers ``[audio-end, audio-end + _FOLLOW_UP_WINDOW_S]`` — the founder replies one
+    #: beat AFTER the audio finishes (the room hears the answer for seconds after the record lands), not
+    #: when the record lands. WALL-CLOCK because the audible horizon is wall-clock and a woken turn's
+    #: ``run_ask`` blocks tens of seconds of wall time before it can open the window — the meeting-clock
+    #: transcript ts is the wrong clock for "how long ago did the audio end". Set via
+    #: :meth:`_open_follow_up_window`, read/expired in :meth:`on_line` (both in monotonic time).
     _follow_up_until: float = 0.0
+    #: The WALL clock the follow-up window is measured on — ``time.monotonic`` in production; a test
+    #: injects a controllable clock so it can advance real time past the window without sleeping. The
+    #: connection's audible horizon (:meth:`MeetingConnection.audible_until`) is on this same clock, so
+    #: anchoring the window past it is a like-for-like comparison. NOT the meeting-transcript ``ts``
+    #: (that clock advances only as lines arrive; a woken turn's ``run_ask`` blocks tens of seconds of
+    #: WALL time before it can open the window, so ts is the wrong clock for the audio-end anchor).
+    now_fn: Any = time.monotonic
 
     async def on_line(
         self, speaker: str, text: str, *, ts: float = 0.0, is_chat: bool = False
@@ -225,7 +238,7 @@ class MeetingSession:
                     # cut so the interrupting line — and the next lines within the window — reach the
                     # model's judgment without a name mention (the founder's own line, "wait, hold on…",
                     # is almost always still to Proxy). The [SILENT] verdict stays the over-fire guard.
-                    self._open_follow_up_window(ts)
+                    self._open_follow_up_window()
             except Exception:  # noqa: BLE001 — a barge-in fault never crashes the meeting
                 logger.exception("barge-in cut failed (meeting continues)")
         self._lines.append((ts, speaker, text))
@@ -260,7 +273,7 @@ class MeetingSession:
         # with the NORMAL prompt (the line verbatim) — the model proves it stays [SILENT] when the
         # line isn't for it, so this only routes judgment, it never forces a response. Expires
         # silently on timeout; a delivered in-window turn re-opens it (handled in _handle).
-        if self._in_follow_up_window(speaker, text, is_chat=is_chat, now=ts):
+        if self._in_follow_up_window(speaker, text, is_chat=is_chat):
             self._spawn(self._handle(text, self._take_delta()))
 
     async def catch_up(
@@ -354,29 +367,43 @@ class MeetingSession:
             "Continue the task now with this answer, and deliver the result in this turn."
         )
 
-    def _open_follow_up_window(self, now: float | None = None) -> None:
-        """Open (or refresh) the SHORT follow-up window (F1) from ``now`` (the meeting clock).
+    def _open_follow_up_window(self) -> None:
+        """Open (or refresh) the SHORT follow-up window (F1), anchored PAST the audible horizon.
 
         Called when a turn DELIVERED and when a barge-in fired — both mean the exchange is live, so
-        the human's next lines should reach the model's judgment name-free. ``now`` defaults to the
-        last ingested line's ts (the same clock the window's expiry is measured against). Refreshing
-        (each in-window delivery re-opens it) keeps a back-and-forth going without a name each turn."""
-        base = now if now is not None else (self._lines[-1][0] if self._lines else 0.0)
+        the human's next lines should reach the model's judgment name-free. The window is measured in
+        ``time.monotonic()`` (WALL clock) from ``max(now, the room's audible-end horizon)`` so it
+        covers ``[audio-end, audio-end + _FOLLOW_UP_WINDOW_S]``: the answer keeps PLAYING for seconds
+        after the wake record lands (synth outruns playback), and the founder replies just after it
+        finishes — anchoring to when the RECORD landed (the old bug) closed the window before the room
+        had even stopped hearing Proxy. On a barge-in the horizon is ~0 (the cut dumped the audio), so
+        it anchors to now — correct. Refreshing (each in-window delivery re-opens it) keeps a
+        back-and-forth going without a name each turn (physics, not a decision — Law 4)."""
+        now = float(self.now_fn())
+        audible = 0.0
+        au = getattr(self.connection, "audible_until", None)
+        if callable(au):
+            try:
+                audible = float(au() or 0.0)
+            except Exception:  # noqa: BLE001 — a horizon read never breaks the window; anchor to now
+                audible = 0.0
+        base = audible if audible > now else now
         self._follow_up_until = base + _FOLLOW_UP_WINDOW_S
 
     def _in_follow_up_window(
-        self, speaker: str, text: str, *, is_chat: bool, now: float
+        self, speaker: str, text: str, *, is_chat: bool
     ) -> bool:
         """True iff a follow-up window is live and ``text`` is a real human line to route (F1).
 
         Guarded hard so ordinary cross-talk after Proxy stops is NOT routed en masse: the window must
-        be OPEN (un-expired at ``now``), the line must be from a real human (never Proxy's own / its
+        be OPEN (un-expired NOW, in ``time.monotonic()`` — the same wall clock the window was anchored
+        to past the audible horizon), the line must be from a real human (never Proxy's own / its
         relabeled echo), and it must carry at least ``_FOLLOW_UP_MIN_TOKENS`` (a real line, not a
         blip). Expires the window on timeout so a much-later line is never routed. Chat is included:
         a founder typing a follow-up mid-exchange is as valid as speaking one."""
         if self._follow_up_until <= 0.0:
             return False
-        if now > self._follow_up_until:
+        if float(self.now_fn()) > self._follow_up_until:
             self._follow_up_until = 0.0  # the window passed — name-gate back in sole control
             return False
         if speaker == self.proxy_speaker or len(_echo_tokens(text)) < _FOLLOW_UP_MIN_TOKENS:
@@ -485,11 +512,24 @@ class MeetingSession:
             #    question detector only latches on a trailing '?'; a silent turn's note rarely ends
             #    that way, and even a false latch is bounded by the min-token + expiry guards.
             self._note_pending_question(str(getattr(result, "text", "") or ""))
-            # FOLLOW-UP WINDOW (F1): RELAY mode delivered iff its live to_meeting POSTs grew the
-            # connection's ``sent`` during this turn. Only THEN open the window — a true silent turn
-            # (cross-talk, zero delivery) must NOT open it (else every incidental "proxy" mention
-            # would route the next lines). This is the delivered-signal for the no-local-record path.
-            if len(getattr(self.connection, "sent", ()) or ()) > sent_before:
+            # FOLLOW-UP WINDOW (F1): did RELAY mode actually reach the room this turn? The delivered-
+            # signal must be ROBUST — the live-run bug was that it never fired even though Proxy spoke.
+            # Two independent signals, EITHER of which proves a real delivery (a true silent/cross-talk
+            # turn has NEITHER, so the window stays closed and incidental "proxy" mentions don't route):
+            #   * ``result.deliver_at > 0`` / ``result.ttft > 0`` — the warm host records these ONLY
+            #     when the agent actually spoke or called ``to_meeting`` this turn (deliver_at = time to
+            #     the first spoken sentence / to_meeting call; ttft = first streamed text token). This
+            #     is the PRIMARY signal: it comes back IN the result, so it can't race the sandbox's
+            #     async relay POSTs (which may land on ``connection.sent`` AFTER run_ask returns — the
+            #     old count check's blind spot that made the window silently never open live).
+            #   * ``len(connection.sent) > sent_before`` — the POSTs did land in time. Kept as a
+            #     belt-and-braces confirm for the no-stream delivery (e.g. a chat-only turn).
+            delivered = (
+                float(getattr(result, "deliver_at", 0.0) or 0.0) > 0.0
+                or float(getattr(result, "ttft", 0.0) or 0.0) > 0.0
+                or len(getattr(self.connection, "sent", ()) or ()) > sent_before
+            )
+            if delivered:
                 self._open_follow_up_window()
             # else: a clean turn with zero intents — the agent chose silence (cross-talk). Stay quiet.
         except Exception:  # noqa: BLE001 — a wake failure never crashes the meeting (§3.8)

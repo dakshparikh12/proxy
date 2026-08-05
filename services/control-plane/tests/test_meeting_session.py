@@ -23,10 +23,30 @@ from typing import Any
 
 
 def _result(*, text: str = "", error: str | None = None,
-            sent: list[dict[str, Any]] | None = None) -> SimpleNamespace:
-    """A stand-in WorkroomResult carrying the fields _handle reads: text, error, and the agent's
-    OWN recorded ``to_meeting`` intents (``sent``). ``sent`` defaults to [] (no recorded intents)."""
-    return SimpleNamespace(text=text, error=error, sent=list(sent or []))
+            sent: list[dict[str, Any]] | None = None,
+            deliver_at: float = 0.0, ttft: float = 0.0) -> SimpleNamespace:
+    """A stand-in WorkroomResult carrying the fields _handle reads: text, error, the agent's OWN
+    recorded ``to_meeting`` intents (``sent``), and the relay-mode delivery signals ``deliver_at`` /
+    ``ttft`` (set by the warm host ONLY when the agent actually spoke/called to_meeting — the robust
+    signal the follow-up window opens off, since relay POSTs land on ``connection.sent`` asynchronously
+    and may not have grown by the time run_ask returns). ``sent`` defaults to [] (no recorded intents)."""
+    return SimpleNamespace(text=text, error=error, sent=list(sent or []),
+                           deliver_at=deliver_at, ttft=ttft)
+
+
+class _Clock:
+    """A controllable wall clock the follow-up window is measured on (``MeetingSession.now_fn``), so
+    a test can advance real time past the short window without sleeping. ``advance`` moves it; calling
+    it returns the current value — the exact ``time.monotonic`` shape the production default uses."""
+
+    def __init__(self, t: float = 1000.0) -> None:
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
+
+    def advance(self, dt: float) -> None:
+        self.t += dt
 
 
 def _say(content: str) -> list[dict[str, Any]]:
@@ -55,12 +75,18 @@ class _FakeConnection:
     suppression, and the barge-in surface (``speak``/``barge_in``/``begin_turn`` + ``cut_latched``)
     it drives on a human talking over Proxy — recorded exactly as the real connection does."""
 
-    def __init__(self, *, speaking: bool = False) -> None:
+    def __init__(self, *, speaking: bool = False, audible_horizon: float = 0.0) -> None:
         self.sent: list[SimpleNamespace] = []
         self.spoken: list[tuple[float, str]] = []
         self.speak = _FakeSpeak(speaking=speaking)
         self.cut_latched = False
         self.begin_turns = 0
+        #: The room's audible-end horizon (on the session's ``now_fn`` clock) the follow-up window
+        #: anchors past — mirrors ``MeetingConnection.audible_until``. 0.0 ⇒ not speaking / unknown.
+        self._audible_horizon = audible_horizon
+
+    def audible_until(self) -> float:
+        return self._audible_horizon
 
     async def to_meeting(self, content: str, medium: str = "say", to: str | None = None) -> Any:
         rec = SimpleNamespace(medium=medium, ok=True, detail="", content=content)
@@ -461,14 +487,18 @@ def test_continuation_does_not_fire_when_last_turn_ended_on_a_statement() -> Non
     async def _run() -> None:
         conn = _FakeConnection()
         wr = _FakeWorkroom(result=_result(sent=_say("It lives at util.ts:9.")))  # a statement, no '?'
-        session = MeetingSession(workroom=wr, connection=conn)
+        clock = _Clock()
+        session = MeetingSession(workroom=wr, connection=conn, now_fn=clock)
 
         await session.on_line("Bob", "proxy, where's the helper?", ts=1.0)
         await session.drain()
         assert session._pending_question is None              # nothing to continue (a statement)
 
-        # ordinary cross-talk AFTER the follow-up window closed → no continuation, no wake:
-        await session.on_line("Ann", "great, thanks everyone", ts=1.0 + _FOLLOW_UP_WINDOW_S + 5.0)
+        # ordinary cross-talk AFTER the follow-up window closed (wall clock advanced past it) → no
+        # continuation, no wake. The window is WALL-clock now (anchored past the audio horizon), so
+        # the test advances real time rather than the meeting-transcript ts.
+        clock.advance(_FOLLOW_UP_WINDOW_S + 5.0)
+        await session.on_line("Ann", "great, thanks everyone", ts=2.0)
         await session.drain()
         assert wr.asks == ["proxy, where's the helper?"]      # NOT re-woken by the un-addressed line
 
@@ -513,18 +543,26 @@ def test_continuation_ignores_blips_then_fires_on_the_real_reply() -> None:
 def test_continuation_expires_and_does_not_hijack_a_much_later_line() -> None:
     """A pending question is only live for a bounded window. A line arriving after the timeout is NOT
     hijacked as an answer — the moment passed and the name-gate is back in sole control."""
-    from control_plane.meeting_session import _CONTINUE_TIMEOUT_S, MeetingSession
+    from control_plane.meeting_session import (
+        _CONTINUE_TIMEOUT_S,
+        _FOLLOW_UP_WINDOW_S,
+        MeetingSession,
+    )
 
     async def _run() -> None:
         conn = _FakeConnection()
         wr = _FakeWorkroom(result=_result(sent=_say("Which environment — staging or prod?")))
-        session = MeetingSession(workroom=wr, connection=conn)
+        clock = _Clock()
+        session = MeetingSession(workroom=wr, connection=conn, now_fn=clock)
 
         await session.on_line("Bob", "proxy, run the deploy", ts=1.0)
         await session.drain()
         assert session._pending_question is not None
 
-        # a wholly unrelated line, well AFTER the window — must not be treated as the answer
+        # a wholly unrelated line, well AFTER both windows — must not be treated as the answer. The
+        # continuation latch expires on the meeting-clock ts; the (question-turn) follow-up window
+        # expires on the WALL clock, so advance both past their windows to isolate the no-hijack.
+        clock.advance(_FOLLOW_UP_WINDOW_S + 10.0)
         await session.on_line("Ann", "anyway, lunch plans?", ts=1.0 + _CONTINUE_TIMEOUT_S + 10.0)
         await session.drain()
         assert len(wr.asks) == 1                              # not continued
@@ -590,7 +628,7 @@ def test_follow_up_window_routes_an_unaddressed_line_after_a_delivered_turn() ->
         # a follow-up that does NOT name Proxy, inside the window → routed to judgment (a wake ran)
         assert __import__("control_plane.meeting_session", fromlist=["is_addressed"]).is_addressed(
             "Bob", "cool, the audio was choppy last time") is None
-        await session.on_line("Bob", "cool, the audio was choppy last time", ts=5.0)
+        await session.on_line("Bob", "cool, the audio was choppy last time", ts=2.0)
         await session.drain()
         assert len(wr.asks) == 2, "the in-window line woke the model's judgment (no name needed)"
         assert wr.asks[1] == "cool, the audio was choppy last time", "routed verbatim (normal prompt)"
@@ -606,14 +644,16 @@ def test_follow_up_window_expires_and_an_unaddressed_line_after_it_does_not_wake
     async def _run() -> None:
         conn = _FakeConnection()
         wr = _FakeWorkroom(result=_result(sent=_say("The build is green on main.")))
-        session = MeetingSession(workroom=wr, connection=conn)
+        clock = _Clock()
+        session = MeetingSession(workroom=wr, connection=conn, now_fn=clock)
 
         await session.on_line("Bob", "proxy, is the build green?", ts=1.0)
         await session.drain()
         assert session._follow_up_until > 0.0
 
-        # well after the window closes → not routed, no wake:
-        await session.on_line("Bob", "anyway lets grab lunch", ts=1.0 + _FOLLOW_UP_WINDOW_S + 5.0)
+        # advance WALL time past the window, then an un-addressed line → not routed, no wake:
+        clock.advance(_FOLLOW_UP_WINDOW_S + 5.0)
+        await session.on_line("Bob", "anyway lets grab lunch", ts=2.0)
         await session.drain()
         assert len(wr.asks) == 1, "a line after the window expired did NOT wake"
         assert session._follow_up_until == 0.0, "the expired window was cleared"
@@ -670,6 +710,79 @@ def test_barge_in_opens_the_follow_up_window_so_the_interrupting_line_reaches_ju
         assert session._follow_up_until > 0.0, "the barge-in opened the follow-up window"
         # the interrupting line itself reached the model's judgment (routed as a wake, no name):
         assert wr.asks == ["wait hold on that is not right"], "the interrupting line reached judgment"
+
+    asyncio.run(_run())
+
+
+def test_relay_mode_delivered_turn_opens_the_follow_up_window() -> None:
+    """F1 live-path REGRESSION (the founder run): in RELAY mode the in-sandbox MCP POSTs each spoken
+    sentence live, so ``result.sent`` is EMPTY (nothing recorded locally to replay) — yet the room
+    DID hear the answer. The old window gate keyed ONLY on ``len(connection.sent) > sent_before``,
+    which races the sandbox's async relay POSTs (they can land AFTER run_ask returns), so live the
+    window NEVER opened and the founder's un-addressed follow-up ('Introduce yourself…') got no reply.
+
+    The fix opens the window off the ROBUST in-result delivery signal (``deliver_at``/``ttft`` — set
+    by the warm host only when the agent actually spoke this turn). Here we fake the EXACT relay-mode
+    result shape live produces (sent=[], deliver_at>0, ttft>0, and NO connection.sent growth) and
+    assert the window opens and the next un-addressed line is routed."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+        # RELAY-mode shape EXACTLY as the live wake record showed: nothing recorded locally
+        # (sent=[]), the connection's sent counter did NOT grow this turn (the POSTs are async /
+        # elsewhere), but the agent DID deliver — deliver_at + ttft are > 0.
+        wr = _FakeWorkroom(result=_result(text="Cova is an AI interior design app.",
+                                          sent=[], deliver_at=7.28, ttft=2.81))
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        await session.on_line("Bob", "proxy, what is cova?", ts=58.0)
+        await session.drain()
+        assert conn.sent == [], "relay mode records nothing locally — the session replays nothing"
+        assert session._follow_up_until > 0.0, "the relay-mode delivery opened the window (deliver_at)"
+
+        # the founder's un-addressed follow-up, inside the window → routed to judgment (a wake ran):
+        assert __import__("control_plane.meeting_session", fromlist=["is_addressed"]).is_addressed(
+            "Bob", "Introduce yourself in exactly one sentence") is None
+        await session.on_line("Bob", "Introduce yourself in exactly one sentence", ts=106.0)
+        await session.drain()
+        assert len(wr.asks) == 2, "the relay-mode window routed the un-addressed follow-up (the live bug)"
+        assert wr.asks[1] == "Introduce yourself in exactly one sentence"
+
+    asyncio.run(_run())
+
+
+def test_follow_up_window_is_anchored_past_the_audible_horizon() -> None:
+    """F1: the answer keeps PLAYING for seconds after the wake record lands (synth outruns playback),
+    and the founder replies just AFTER it finishes. So the window must cover [audio-end, audio-end +
+    _FOLLOW_UP_WINDOW_S] — anchored past the connection's audible horizon, NOT from when the record
+    landed. Here the horizon is well in the future (a long answer still playing); a follow-up that
+    arrives AFTER the record-land instant but BEFORE audio-end + window must still be inside the
+    window — which is only true if the anchor is the horizon, not 'now'."""
+    from control_plane.meeting_session import _FOLLOW_UP_WINDOW_S, MeetingSession
+
+    async def _run() -> None:
+        clock = _Clock(t=1000.0)
+        # The room will still be audibly playing until 1000 + 18s (an ~18s answer whose PCM the
+        # synth returned instantly): the record lands at t=1000 but audio-end is at t=1018.
+        conn = _FakeConnection(audible_horizon=1018.0)
+        wr = _FakeWorkroom(result=_result(sent=_say("A long grounded answer.")))
+        session = MeetingSession(workroom=wr, connection=conn, now_fn=clock)
+
+        await session.on_line("Bob", "proxy, walk me through the pipeline", ts=1.0)
+        await session.drain()
+        # The window must extend to audio-end (1018) + the window width — NOT to now (1000) + width.
+        assert session._follow_up_until == 1018.0 + _FOLLOW_UP_WINDOW_S, "anchored past the horizon"
+
+        # A follow-up that lands AFTER the naive now+window (1000+15=1015) but before audio-end+window
+        # (1018+15=1033) must STILL be inside — proving the horizon anchor (the old now-anchor would
+        # have already closed it, exactly the founder's 'replied one second after it finished' miss).
+        clock.advance(20.0)  # t=1020: past now+window, inside horizon+window
+        assert __import__("control_plane.meeting_session", fromlist=["is_addressed"]).is_addressed(
+            "Bob", "nice, how are you doing today") is None
+        await session.on_line("Bob", "nice, how are you doing today", ts=2.0)
+        await session.drain()
+        assert len(wr.asks) == 2, "the follow-up just after audio-end was still inside the window"
 
     asyncio.run(_run())
 

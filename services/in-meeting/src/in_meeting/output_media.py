@@ -30,11 +30,20 @@ Wire-in hooks (this module only builds + exports; nothing here self-mounts):
       await channel.write_audio(pcm_chunk)   # per chunk, in order
       await channel.set_speaking(False)
 
-Backpressure contract: the outbound buffer is BOUNDED (``MAX_BUFFERED_FRAMES``).
-On overflow the OLDEST frame is dropped — live audio must never stall the speak
-path, and a dead page must never grow memory unboundedly. A page that attaches
-late receives the retained tail. A page disconnect keeps the channel (the page
-may reconnect); ``close_channel`` is the deliberate end-of-meeting teardown.
+Backpressure contract: the outbound PCM buffer is BOUNDED (``MAX_BUFFERED_FRAMES``)
+but speech is NEVER silently dropped. When a page is attached and draining, a full
+buffer makes ``write_audio`` AWAIT until the pump frees a slot — real backpressure,
+so the speak path (whose ``_write`` is async) throttles to the wire's drain rate
+instead of bursting a whole sentence in and overflowing (the live-run choppiness:
+a whole sentence's PCM was dumped in one un-awaited loop, the deque overflowed
+drop-oldest, and mid-sentence audio the page never saw was silently discarded).
+Only when NO page is attached to make progress does the buffer fall back to a
+bounded drop-oldest — with an HONEST overflow log (never a silent loss), and only
+because a page that never comes cannot be waited on forever without stalling the
+whole meeting loop. A page that attaches late receives the retained tail. A page
+disconnect keeps the channel (the page may reconnect); ``close_channel`` is the
+deliberate end-of-meeting teardown. State frames (speaking/screen/cut) NEVER block
+— they are small ordered control, and a cut must reach the page even mid-backpressure.
 
 Dependency note: ``fastapi``/``starlette`` are resolved from the workspace venv
 (already a member dependency elsewhere); declaring them in this package's own
@@ -45,12 +54,15 @@ from __future__ import annotations
 import asyncio
 import html as _html
 import json
+import logging
 from collections import deque
 from dataclasses import dataclass
 from typing import Final
 
 from fastapi import APIRouter, WebSocket
 from fastapi.responses import HTMLResponse
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "MAX_BUFFERED_FRAMES",
@@ -63,13 +75,19 @@ __all__ = [
     "router",
 ]
 
-#: Cap on buffered outbound frames per meeting. At ~100 ms of 44.1 kHz s16le per
-#: chunk, 256 frames is ~25 s of audio — ample for a page reconnect window,
-#: bounded against a page that never comes back.
+#: Backpressure threshold on buffered outbound PCM frames per meeting. At 120 ms of
+#: 44.1 kHz s16le per chunk (``tts_chunk_ms``), 256 frames is ~30 s of audio. This is
+#: NO LONGER a silent drop line: while a page drains, ``write_audio`` AWAITS here rather
+#: than discarding, so a whole-sentence burst throttles to the wire (the live choppiness
+#: was drop-oldest overflow eating mid-sentence PCM). It is generous headroom so a normal
+#: sentence never blocks; a sustained overrun blocks the (async) producer, which is correct.
 MAX_BUFFERED_FRAMES: Final[int] = 256
 
-#: The PCM sample rate the page's audio pipeline is built around (s16le, mono).
-SAMPLE_RATE_HZ: Final[int] = 16_000
+#: The PCM sample rate the page's audio pipeline rides (s16le, mono). The synth + the wire
+#: + the page are all 44.1 kHz (``transport.tts.SAMPLE_RATE_HZ``); this mirrors that so the
+#: buffer-duration reasoning above is sound (the prior 16 kHz here was stale — the page JS
+#: hard-codes 44100 and the framing is 120 ms of 44.1 kHz).
+SAMPLE_RATE_HZ: Final[int] = 44_100
 
 #: Cap on a single ``screen_html`` content frame. The agent shows self-contained artifacts
 #: (a rendered doc/mockup/diff) — 256 KiB is a generous page while bounding the wire + the
@@ -143,7 +161,19 @@ class OutputMediaChannel:
 
     def __init__(self, meeting_id: str, maxsize: int = MAX_BUFFERED_FRAMES) -> None:
         self.meeting_id = meeting_id
-        self._frames: deque[bytes | str] = deque(maxlen=maxsize)
+        #: The outbound buffer is UNBOUNDED at the deque level; the bound is enforced by
+        #: BACKPRESSURE in ``write_audio`` (await while a draining page has ``_maxsize`` PCM
+        #: frames queued) — so speech is never silently dropped. A plain ``deque`` (no maxlen)
+        #: guarantees no drop-oldest can eat a frame while the producer is throttled.
+        self._frames: deque[bytes | str] = deque()
+        self._maxsize = max(1, maxsize)
+        #: Count of PCM (bytes) frames currently buffered — the backpressure quantity (state
+        #: ``str`` frames are tiny control and never counted / never blocked).
+        self._pcm_buffered = 0
+        #: Set whenever the buffered PCM drops BELOW ``_maxsize`` (the pump drained, or a
+        #: cut/mute/close cleared it) — the signal a blocked ``write_audio`` waits on. Starts
+        #: set (empty buffer = space available). Lives on the consumer loop.
+        self._space: asyncio.Event | None = None
         self._attachment: object | None = None
         self._consumer_loop: asyncio.AbstractEventLoop | None = None
         self._wake: asyncio.Event | None = None
@@ -161,14 +191,67 @@ class OutputMediaChannel:
     # -- the speak-path surface ---------------------------------------------
 
     async def write_audio(self, pcm: bytes) -> None:
-        """Enqueue one raw PCM chunk (s16le, 44.1 kHz, mono) for the page.
+        """Enqueue one raw PCM chunk (s16le, 44.1 kHz, mono) for the page, with BACKPRESSURE.
 
         While muted (C5) the enqueue is DROPPED — no PCM plays into the room until unmute
-        lifts the flag (Law 3, human control is absolute)."""
+        lifts the flag (Law 3, human control is absolute).
+
+        Backpressure (the choppiness fix): if a page is attached and draining but the buffer
+        already holds ``_maxsize`` PCM frames, AWAIT until the pump frees a slot rather than
+        appending (which, drop-oldest, silently ate mid-sentence audio in the live run). The
+        speak path's ``_write`` is async, so this simply throttles the whole-sentence burst to
+        the wire's drain rate — speech is never lost. A cut/mute/close releases the wait at once
+        (it clears the PCM and sets ``_space``), so a barge-in never deadlocks behind a full
+        buffer. When NO page is draining (nothing can free a slot), we do NOT block the meeting
+        loop forever — we append and, past the cap, drop the oldest PCM with an HONEST log (a
+        page that never connects cannot be waited on; the loss is recorded, never silent)."""
         if self._muted:
             return
+        # Backpressure only when a page is attached AND its wait-event lives on THIS loop (the
+        # producer and the pump share the loop in the control-plane). Otherwise fall through to
+        # the bounded-with-honest-log path (no consumer to make progress → never block forever).
+        if self._space is not None and self._attachment is not None and self._on_consumer_loop():
+            while (
+                self._pcm_buffered >= self._maxsize
+                and not self._muted
+                and not self._closed
+                and self._attachment is not None
+                and self._space is not None
+            ):
+                space = self._space  # re-read each iter: a re-attach swaps the event
+                space.clear()
+                await space.wait()
+            if self._muted or self._closed:
+                return  # mute/close won the race while we waited — drop this chunk honestly
+        elif self._pcm_buffered >= self._maxsize:
+            # No draining page to free a slot: bound the buffer so a dead page can't grow memory
+            # unboundedly, but NEVER silently — drop the oldest PCM and log it honestly (Law 2).
+            self._drop_oldest_pcm()
+            logger.warning(
+                "output-media buffer full with no draining page (meeting=%s) — dropped oldest "
+                "PCM frame (%d buffered); audio will have a gap until a page attaches",
+                self.meeting_id, self._pcm_buffered,
+            )
         self._frames.append(pcm)
+        self._pcm_buffered += 1
         self._notify()
+
+    def _on_consumer_loop(self) -> bool:
+        """True iff the currently-running loop is the attached page's consumer loop — the only
+        loop on which awaiting ``_space`` makes progress (the pump sets it there)."""
+        try:
+            return asyncio.get_running_loop() is self._consumer_loop
+        except RuntimeError:
+            return False
+
+    def _drop_oldest_pcm(self) -> None:
+        """Drop the single oldest buffered PCM (bytes) frame, keeping ordered state frames. Used
+        ONLY on the no-draining-page fallback (logged honestly by the caller)."""
+        for i, f in enumerate(self._frames):
+            if isinstance(f, bytes):
+                del self._frames[i]
+                self._pcm_buffered = max(0, self._pcm_buffered - 1)
+                return
 
     def mute(self) -> None:
         """Silence the conversational audio on this channel (C5): suppress every further
@@ -176,9 +259,9 @@ class OutputMediaChannel:
         frames (speaking/screen) are kept so the page stays in sync. Idempotent."""
         self._muted = True
         # Drop only the buffered PCM (bytes); keep ordered state messages (str) intact.
-        self._frames = deque(
-            (f for f in self._frames if not isinstance(f, bytes)), maxlen=self._frames.maxlen
-        )
+        self._frames = deque(f for f in self._frames if not isinstance(f, bytes))
+        self._pcm_buffered = 0
+        self._release_space()  # a writer blocked on backpressure must unblock (then drop, muted)
 
     def unmute(self) -> None:
         """Lift the mute (C5): later ``write_audio`` enqueues ride again. Idempotent."""
@@ -203,9 +286,9 @@ class OutputMediaChannel:
         scheduled source and reset its playback cursor. State frames stay ordered around it (the cut
         rides right where it was issued). Idempotent and never-throw."""
         # Drop buffered PCM (bytes) that hasn't reached the page yet; keep ordered state (str) frames.
-        self._frames = deque(
-            (f for f in self._frames if not isinstance(f, bytes)), maxlen=self._frames.maxlen
-        )
+        self._frames = deque(f for f in self._frames if not isinstance(f, bytes))
+        self._pcm_buffered = 0
+        self._release_space()  # a writer blocked on backpressure must unblock so the cut lands
         self._frames.append(json.dumps({"type": "cut"}))
         self._notify()
 
@@ -275,6 +358,26 @@ class OutputMediaChannel:
             # frames stay buffered for a reconnect.
             pass
 
+    def _release_space(self) -> None:
+        """Signal a ``write_audio`` blocked on backpressure that a slot is free (the pump drained,
+        or a cut/mute/close cleared the PCM). Set on the consumer loop when we can (cross-loop-safe
+        via ``call_soon_threadsafe``); a direct set when already on that loop or none is known."""
+        space = self._space
+        if space is None:
+            return
+        loop = self._consumer_loop
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if loop is None or running is loop:
+            space.set()
+            return
+        try:
+            loop.call_soon_threadsafe(space.set)
+        except RuntimeError:
+            space.set()
+
     def _attach(self) -> object:
         """Attach the calling WS handler as THE page; latest attach wins."""
         superseded = self._wake
@@ -284,6 +387,12 @@ class OutputMediaChannel:
         wake = asyncio.Event()
         wake.set()  # deliver anything already buffered immediately
         self._wake = wake
+        # The backpressure event lives on THIS (consumer) loop; start it set (a writer only waits
+        # once the buffer is genuinely full, and the pump keeps it set while there is headroom).
+        space = asyncio.Event()
+        if self._pcm_buffered < self._maxsize:
+            space.set()
+        self._space = space
         if superseded is not None:
             superseded.set()  # release a stale pump so it can notice and exit
         return token
@@ -292,21 +401,34 @@ class OutputMediaChannel:
         """Detach, but only if `token` is still the current attachment."""
         if self._attachment is token:
             self._attachment = None
+            # Release any backpressured writer BEFORE tearing down the consumer refs: with no page
+            # draining, a blocked writer must fall through to the bounded-with-log path, not hang.
+            self._release_space()
             self._consumer_loop = None
             self._wake = None
+            self._space = None
 
     def _close(self) -> None:
         self._closed = True
         self._frames.clear()
+        self._pcm_buffered = 0
         wake = self._wake
         if wake is not None:
             wake.set()
+        self._release_space()  # unblock a writer awaiting backpressure so it exits (closed → drop)
 
     async def _pump(self, token: object, websocket: WebSocket) -> None:
         """Drain frames to the attached page until superseded, closed, or dead."""
         while self._attachment is token and not self._closed:
             while self._frames and self._attachment is token and not self._closed:
                 frame = self._frames.popleft()
+                is_pcm = isinstance(frame, bytes)
+                if is_pcm:
+                    # A PCM slot just freed — decrement and release any backpressured writer BEFORE
+                    # the (awaiting) send, so the producer refills the wire while this frame ships.
+                    self._pcm_buffered = max(0, self._pcm_buffered - 1)
+                    if self._pcm_buffered < self._maxsize:
+                        self._release_space()
                 try:
                     if isinstance(frame, bytes):
                         await websocket.send_bytes(frame)
@@ -316,6 +438,8 @@ class OutputMediaChannel:
                     # Send failed (or the handler was cancelled) mid-frame:
                     # put the frame back so a reconnecting page still gets it.
                     self._frames.appendleft(frame)
+                    if is_pcm:
+                        self._pcm_buffered += 1
                     raise
             wake = self._wake
             if wake is None or self._attachment is not token or self._closed:

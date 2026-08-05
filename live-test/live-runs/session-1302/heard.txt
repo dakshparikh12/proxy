@@ -1,0 +1,5 @@
+[12.0] Daksh Amit Parikh: Hey, Proxy, you with me? Just say, just say hi so I know the audio is landing.
+[58.0] Daksh Amit Parikh: Hey Proxy, the audio was choppy last time. Say a full 2 or 3 sentences so I can hear if it's clean now. Tell me what you already know about Kova.
+[106.0] Daksh Amit Parikh: Introduce yourself in exactly one sentence, who you are and what you can do here.
+[124.0] Daksh Amit Parikh: Hey Proxy, introduce yourself in exactly one sentence, who you are and what you can do here.
+[154.0] Daksh Amit Parikh: Nice. How are you doing today? Are you caffeinated?
