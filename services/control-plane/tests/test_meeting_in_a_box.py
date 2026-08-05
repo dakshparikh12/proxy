@@ -518,3 +518,51 @@ def test_meeting_in_a_box_partial_barges_in_and_cuts_the_pipe(monkeypatch, tmp_p
     finally:
         from in_meeting import output_media as _om
         _om.close_channel(meeting_id)
+
+
+def test_meeting_in_a_box_screen_send_lands_a_render_frame(monkeypatch, tmp_path) -> None:
+    """SCREEN, end to end in the box: the agent choosing medium='screen' with produced CONTENT drives
+    the REAL screen sink, which lands a ``{"screen_html": ...}`` render frame on the real output-media
+    channel (the page swaps the orb for a srcdoc iframe) and the connection records an HONEST outcome —
+    proof the capability is real, not a silently-dropped frame reported as success (Law 2)."""
+    FakeSandbox.created_kwargs.clear()
+    from control_plane.meeting_runtime import MeetingRuntimeRegistry
+    from control_plane.provisioner import make_provision_launcher
+    from in_meeting import output_media
+
+    bot_id, meeting_id = "bot-screen-1", "m-box-screen"
+    db = FakeDB()
+    _wire_fakes(monkeypatch, db, bot_id=bot_id, meeting_id=meeting_id)
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://proxy.example.com")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-oauth-test")
+    monkeypatch.setenv("PROXY_WARM_PROVISION_WAIT_S", "5")
+    monkeypatch.setenv("PROXY_WARM_READY_TIMEOUT_S", "5")
+
+    async def _run() -> None:
+        registry = MeetingRuntimeRegistry(db)
+        launch = make_provision_launcher(db, registry, timeout_s=30.0)
+        runtime = await _provision_live(db, registry, launch, bot_id=bot_id, meeting_id=meeting_id)
+        assert runtime is not None, "meeting is live"
+
+        # The agent shows a produced artifact on screen (content, not a URL) via the real connection.
+        send = await runtime.connection.to_meeting(
+            "<h1>Migration plan</h1><p>Three phases, rolled out weekly.</p>", medium="screen"
+        )
+        assert send.ok is True and send.medium == "screen"
+        assert "showing" in send.detail.lower(), "honest outcome, not a fabricated success"
+
+        # A real screen_html render frame reached the real output-media channel for THIS meeting.
+        channel = output_media.channel_for(meeting_id)
+        html_frames = [
+            json.loads(f)["screen_html"]
+            for f in channel._frames
+            if isinstance(f, str) and "screen_html" in f
+        ]
+        assert html_frames, "a screen_html render frame reached the channel (the page renders it)"
+        assert "Migration plan" in html_frames[0]
+
+    try:
+        asyncio.run(_run())
+    finally:
+        from in_meeting import output_media as _om
+        _om.close_channel(meeting_id)

@@ -56,6 +56,12 @@
 6. **Exactly ONE consent line** in chat; Proxy in the participant list; orb visible.
 7. **Stopwatch + scratch log.** Felt latency (ask-end → audio-start) per beat; a one-line deviation note per beat. **Note wall-clock at admit** — Beat 97 (time-check) needs a real elapsed reference to grade the answer.
 8. **Standing-instruction watch.** Two standing instructions get planted mid-run (Part 3: "flag billing/Stripe"; a soft "keep us to ~30 min") — they must NOT wake Proxy when spoken, and must fire LATER only on the real trigger. Keep them on the scratch log so you can grade the delayed payoff (Beats 84, 97).
+9. **`PUBLIC_BASE_URL` exported on the server.** The offer/approve links (Beats 47, 54, 66, 94) are built from `PUBLIC_BASE_URL` — it must be exported on the control-plane process (matching the live tunnel), or the approve links come out malformed/localhost. Confirm it's set before admit.
+10. **Founder logged in as the meeting OWNER.** Approve-clicks on the staged offers only apply if the founder is authenticated as the meeting owner. Log in before the run so an approve click (operator-side) would actually take.
+11. **Clear the prior run's wake output.** `rm -rf live-test/live-runs/smoke/wake_out/*` before the run so the trace monitor shows ONLY this run's wake records (stale wake_out files corrupt the read-count/queued_ms grading).
+12. **No ghost Proxy bot in the meeting.** Before admitting, check the participant list for a leftover Proxy bot from a prior run — a ghost bot double-answers and pollutes echo-suppression. Remove any before admitting the fresh one.
+13. **Screen beats: PIN Proxy's tile.** Screen is content-first — the bot renders content on its camera tile (orb → rendered content via `srcdoc`). Before Beats 29/30/59/60/61, pin/enlarge Proxy's tile so the rendered content is visible; an un-pinned tile looks like "nothing happened" even on a clean pass. External URLs may refuse to embed — content-first (raw HTML/text) is the reliable path.
+14. **DM on Google Meet is PUBLIC (Recall limitation).** There is no per-person private DM channel over Meet — a "DM" lands in the public chat. Beat 28 expects the honest degrade ("everyone can see this in generic mode"), NOT a real private send; grade the honest degrade as the pass.
 
 ### Symptom → cause quick table (so tomorrow is replay-not-debug)
 | Symptom | Most-likely cause (from battery-1 + design) | First check |
@@ -79,6 +85,7 @@
 - A **right result for the wrong reason** (re-read a file it should have recalled) is a soft fail worth fixing.
 - **"Verified" only ever means run-on-real-data-and-green.** "Compiles" is not verified.
 - **Regression beats (tagged ⟲REG)** re-exercise a live bug from `live-runs/battery-1/LEDGER.md`; a fail there is a hard STOP — the fix regressed.
+- **Barge-in felt latency ≈ 0.7–1.9s — "cuts within ~a second", NOT instantaneous.** The cut itself is instant once the signal lands; the ~1s is network-dominated round-trip. A one-word interjection needs a second token to register, so "stop stop" cuts fastest. Grade the cut as PASS if it lands within ~a second AND the page goes silent (buffer cleared); only a cut that never fires, or audio that keeps draining after the cut, is a fail. (Applies to Beats 34, 62, 90, 95.)
 
 ---
 
@@ -250,18 +257,18 @@
 
 **Beat 28 — DM (he's the only human)**
 - **SAY:** "DM me the Amazon affiliate URL format — just to me, don't clutter the room."
-- **EXPECT:** SHAPE: a brief private answer — Amazon `buildAffiliateUrl` appends `?tag=cova03-20`, ASIN-extracting, the only ACTIVE program. ROUTING: **DM to Daksh**; OR, if per-person DM isn't supported in this transport, an honest "everyone can see this in generic mode" degrade — never a faked private send.
-- **VERIFY:** DM channel used to Daksh only, OR an honest capability-degrade in `sent`; no silent broadcast to the room pretending to be a DM; read count ≤ 1.
+- **EXPECT:** SHAPE: a brief private answer — Amazon `buildAffiliateUrl` appends `?tag=cova03-20`, ASIN-extracting, the only ACTIVE program. ROUTING: **on Google Meet there is NO per-person private DM (Recall limitation — a "DM" lands in the public chat)**, so the honest-degrade IS the expected pass: it names that everyone can see this / it's in generic mode, never a faked private send. (A true private DM would only be possible on a transport that supports it.)
+- **VERIFY:** an honest capability-degrade in `sent` naming that the message is public on Meet, OR a real DM channel if the transport supported one; **no silent broadcast to the room pretending to be a private DM**; read count ≤ 1.
 
-**Beat 29 — screen: README (⟲REG screen flaky)**
+**Beat 29 — screen: README (⟲REG screen flaky · content-first)**
 - **SAY:** "Show me cova's README on the screen."
-- **EXPECT:** SHAPE: a one-line spoken "here it is on screen." ROUTING: a well-formed **screen-share** of the README artifact — NOT read aloud.
-- **VERIFY (watch closely):** a **screen-frame** is actually emitted; log the exact URL/artifact passed to the screen tool (correct README path/content); if screen fails, an honest degrade in `sent` ("couldn't get it on screen — here's the gist / in chat instead"), never a fake "it's up."
+- **EXPECT:** SHAPE: a one-line spoken "here it is on screen — pin my tile to read it." ROUTING: **the bot's camera tile switches from the orb to the rendered README content** (the agent passes the raw README text/HTML, rendered via `srcdoc` on its camera page) — pin/enlarge Proxy's tile to see it; NOT read aloud.
+- **VERIFY (watch closely):** a **`screen`/`screen_html` frame** appears in the trace carrying the README content (log what was passed to the screen tool — it should be the README text/HTML, not an external URL); the camera tile visibly switches from orb to the rendered content; if it fails, an honest degrade in `sent` ("couldn't get it on screen — here's the gist / in chat instead"), never a fake "it's up."
 
-**Beat 30 — screen: a config file (second artifact)**
+**Beat 30 — screen: a config file (second artifact · content-first)**
 - **SAY:** "Now throw `lib/render-config.ts` up on screen — I want to eyeball the actual constants."
-- **EXPECT:** SHAPE: a one-line spoken cue. ROUTING: a second **screen-share** of the token/cache/quality constants — not read aloud, not the whole file if large.
-- **VERIFY:** **read count ≤ 1** (fetch the file); a second screen-frame emitted with the right file logged; constants visible on frame; spoken part is one line.
+- **EXPECT:** SHAPE: a one-line spoken cue ("up on screen — pin my tile"). ROUTING: **the bot's camera tile switches from the orb to the rendered file content** (the token/cache/quality constants passed as raw text/HTML via `srcdoc`) — pin/enlarge Proxy's tile to see it; not read aloud, not the whole file if large.
+- **VERIFY:** **read count ≤ 1** (fetch the file); a second **`screen`/`screen_html` frame** in the trace carrying the constants content (log what was passed); the camera tile switches to the rendered content with the constants visible; spoken part is one line.
 
 **Beat 31 — mute**
 - **SAY:** "Mute yourself for a second — I need to think out loud."
@@ -278,7 +285,7 @@
 - **EXPECT:** SHAPE: a short natural answer (1–2 sentences), audible again. ROUTING: voice. No backlog of the muted line firing now.
 - **VERIFY:** mute cleared; audio resumes on this turn; the Beat-32 muted line did NOT get answered retroactively (no reference to it in `sent`).
 
-> **CHECKPOINT 5:** Chat complete + correct channel? DM to-me-only or honest degrade (no fake private)? **BOTH screen frames actually emitted with the right artifacts** (log exactly what was passed — this is the flaky one)? mute stopped audio, stayed silent while muted (no queued turn), unmute resumed with no retroactive answer? **GO / fix + replay.**
+> **CHECKPOINT 5:** Chat complete + correct channel? DM = honest "public on Meet" degrade (no per-person DM on Meet — Recall limitation; a fake private send is a fail)? **BOTH screen frames actually emitted with the right content** (content-first: the camera tile switches from orb to the rendered README / config content — PIN Proxy's tile to confirm; log exactly what was passed to the screen tool — this is the flaky one)? mute stopped audio, stayed silent while muted (no queued turn), unmute resumed with no retroactive answer? **GO / fix + replay.**
 
 ---
 
@@ -288,7 +295,7 @@
 **Beat 34 — long ask, then barge-in**
 - **SAY (start):** "Walk me through cova's whole architecture end to end — take your time, all the runtimes, the data model, everything."
 - **THEN (talk over it ~a few seconds in):** "—wait, hold on, stop — I don't need all that."
-- **EXPECT:** SHAPE: speech **cuts within ~a second** of him talking (cut-on-audibility); page goes quiet (buffer cleared, not draining); no trailing word-fragments; then a brief "got it — what do you want instead?". ROUTING: voice.
+- **EXPECT:** SHAPE: speech **cuts within ~a second — not instantaneous** (felt latency ≈ 0.7–1.9s, network-dominated; the cut itself is instant once the signal lands; a one-word interjection needs a 2nd token, so "stop stop" cuts fastest); page goes quiet (buffer cleared, not draining); no trailing word-fragments; then a brief "got it — what do you want instead?". ROUTING: voice.
 - **VERIFY:** a **cut frame** fires fast after audible speech; **the page stops + clears its buffer** (founder #2 — no draining audio); in-flight audio drops; the cut-off half-sentence is NOT recorded to the `spoken` echo-suppression history; next turn starts clean.
 
 **Beat 35 — clean recovery**
@@ -337,8 +344,8 @@
 
 **Beat 41 — mid-task live status (GAP-D · "what are you doing right now")**
 - **SAY (while it's still working on the note):** "Quick — what are you actually working on right now?"
-- **EXPECT:** SHAPE: a brief honest in-flight status of the RUNNING task ("still on the redesign-guard note — reading the empty-room gate before the Modal POST"), without dropping it. ROUTING: voice; concise.
-- **VERIFY:** the status names the ACTUAL in-flight task (matches what the tool trace shows it doing); the task is NOT dropped or restarted (it resumes and still delivers at Beat 40's completion); **read count = 0** (status from live task state, not a re-derivation); concise.
+- **EXPECT:** SHAPE: the status ask **QUEUES behind the running turn** (single-flight warm session) and is answered right AFTER the note completes — a brief honest in-flight status ("that was still the redesign-guard note — I was reading the empty-room gate before the Modal POST"). It does NOT interrupt or run concurrently with the note. ROUTING: voice; concise.
+- **VERIFY:** the status names the ACTUAL task that was in flight (matches the tool trace); the note is NOT dropped or restarted (it delivers at Beat 40's completion, THEN this answers); the second wake's **queued_ms ≈ the remaining task time** at the moment of asking (this is the documented single-flight bound, not a bug); **read count = 0** (status from task state, not a re-derivation); concise. **[KNOWN-LIMIT: single-flight warm session — true concurrent turns + running-turn interrupt are on the optimization list.]**
 
 **Beat 42 — keep talking WHILE it works (thinking aloud)**
 - **SAY (while it's working):** "…for what it's worth I'd bail with a typed error before the POST… and honestly we should log how often it fires on stage so we know…"
@@ -365,7 +372,7 @@
 - **EXPECT:** SHAPE: a crisp one-liner — **30 days, `CACHE_TTL_DAYS` = 30** (from Beat 18, many beats ago). ROUTING: voice.
 - **VERIFY:** **read count = 0**; the number correct, recalled from the early plant (not re-derived from a file).
 
-> **CHECKPOINT 8:** Opener on FIRST tool call (not on mere addressing — regression held)? mid-task status (41) accurate + task not dropped? notes kept appending during the work (feed never blocked)? present-back at completion in chat? catch-up (44) a right-sized narrative, DISTINCT from the itemized session-recall (45)? all recalls (chatter/session/F2) **read count = 0** and accurate, none conflated? **GO / fix + replay.**
+> **CHECKPOINT 8:** Opener on FIRST tool call (not on mere addressing — regression held)? mid-task status (41) QUEUED behind the note then answered accurately (single-flight — queued_ms ≈ remaining task time, task not dropped)? notes kept appending during the work (feed never blocked)? present-back at completion in chat? catch-up (44) a right-sized narrative, DISTINCT from the itemized session-recall (45)? all recalls (chatter/session/F2) **read count = 0** and accurate, none conflated? **GO / fix + replay.**
 
 ---
 
@@ -429,17 +436,17 @@
 - **EXPECT:** SHAPE: adjusts the SAME test file — drops the happy-path test, keeps + tightens the two edge tests; re-runs. ROUTING: offer card updated in chat.
 - **VERIFY:** the same artifact evolves (**read count = 0** on the module); happy-path removed, two edge tests remain; re-verified; offer updated (not a new card).
 
-**Beat 57 — two-part ask: one quick, one long (quick answered now, long backgrounded)**
+**Beat 57 — two-part ask in ONE turn: quick part first, then the long part**
 - **SAY:** "Two things at once — quick one: what test runner does cova use? And the longer one: while you answer that, start sketching a refactor plan for splitting `flux.ts` since it's 1700 lines. Take your time on the second."
-- **EXPECT:** SHAPE: the quick part answered IMMEDIATELY from cache (Vitest for unit, Playwright for e2e/smoke) — a one-liner; the long part (the `flux.ts` refactor sketch) kicked off in the background with an opener, delivered later. ROUTING: quick answer voice now; long part opener now + present-back later. Neither dropped.
-- **VERIFY:** quick answer immediate + **read count = 0** (queued_ms≈0, feels instant); long part gets an opener on its first tool call and proceeds in background; the quick answer does NOT wait on the long one (two distinct wake records).
+- **EXPECT:** SHAPE: **ONE turn** that handles both — it answers the quick part FIRST, streamed early ("Vitest for unit, Playwright for e2e/smoke"), THEN continues into the `flux.ts` refactor sketch in the same turn. Single-flight means these are not two concurrent turns; the quick answer just lands early in the stream. ROUTING: voice for the quick answer (early), then the sketch (delivered as it completes). Neither dropped.
+- **VERIFY:** **one wake record** covering both asks; the quick answer appears EARLY in that turn's stream + **read count = 0** for it (feels instant); the long sketch continues in the same turn and delivers; correct test runner. **[KNOWN-LIMIT: single-flight warm session — true concurrent turns + running-turn interrupt are on the optimization list.]**
 
-**Beat 58 — cancel the backgrounded task cleanly (GAP-F · covers M-cancel)**
+**Beat 58 — cancel the flux.ts sketch cleanly (GAP-F · covers M-cancel)**
 - **SAY:** "Actually kill that flux.ts refactor sketch — never mind it, don't finish it."
-- **EXPECT:** SHAPE: abandons the backgrounded sketch cleanly; a brief confirmation ("dropped it"). ROUTING: voice. Does NOT later deliver the cancelled artifact.
-- **VERIFY:** the task is removed from the run set (no later present-back of the flux.ts sketch anywhere in the run); a brief confirmation in `sent`; other in-flight work unaffected (the lora tests offer still stands).
+- **EXPECT:** SHAPE: single-flight means the cancel does NOT stop the running turn mid-flight; instead it is **acknowledged when the in-flight turn returns** ("got it — dropped the flux.ts sketch"), and the sketch is **NEVER presented back afterwards**. ROUTING: voice. A brief confirmation once the turn lands.
+- **VERIFY:** the flux.ts sketch is never presented back anywhere later in the run (dropped from the run set); a brief confirmation in `sent` once the in-flight turn returns; other work unaffected (the lora tests offer still stands). **[KNOWN-LIMIT: single-flight warm session — true concurrent turns + running-turn interrupt are on the optimization list.]**
 
-> **CHECKPOINT 10:** Tests targeted the real contract + actually ran green? self-correction (56) evolved the SAME file with **read count = 0**? two-part ask (57) split correctly — quick answered instantly + zero-read, long backgrounded, neither dropped? the cancel (58) actually dropped the task (nothing delivered later) without disturbing the lora-tests offer? **GO / fix + replay.**
+> **CHECKPOINT 10:** Tests targeted the real contract + actually ran green? self-correction (56) evolved the SAME file with **read count = 0**? two-part ask (57) handled in ONE turn — quick answer streamed early + zero-read, then the long sketch continues (single-flight, one wake record), neither dropped? the cancel (58) is acknowledged when the in-flight turn returns, and the sketch is never presented back afterwards, without disturbing the lora-tests offer? **GO / fix + replay.**
 
 ---
 
@@ -448,26 +455,26 @@
 
 **Beat 59 — make a UI mock-up (HTML artifact)**
 - **SAY:** "Make me a quick HTML mock-up of a more premium fingerprint-reveal screen — the radar chart, the palette swatches, the style name, dark luxury vibe like cova's real UI. Build it, then show it on screen."
-- **EXPECT:** SHAPE: an opener, then it BUILDS a real self-contained HTML/CSS artifact grounded in cova's actual look (deep navy + gold, EB Garamond/Playfair headings, the step-4 reveal surface — radar, palette, name). ROUTING: writes it in the sandbox, then **screen-shares** the rendered result — not read aloud; a one-line "it's up" aloud.
-- **VERIFY:** opener on the first tool call; a real artifact FILE created in the sandbox (tool trace shows the write); a **screen-frame emitted** showing the rendered mock-up (log what was passed to the screen tool); grounded in cova's real design tokens, not a generic template.
+- **EXPECT:** SHAPE: an opener, then it BUILDS a real self-contained HTML/CSS artifact grounded in cova's actual look (deep navy + gold, EB Garamond/Playfair headings, the step-4 reveal surface — radar, palette, name). ROUTING: writes it in the sandbox, then **the bot's camera tile switches from the orb to the rendered mock-up** (the raw HTML passed and rendered via `srcdoc` on its camera page) — pin/enlarge Proxy's tile to see it; not read aloud; a one-line "it's up — pin my tile" aloud.
+- **VERIFY:** opener on the first tool call; a real artifact FILE created in the sandbox (tool trace shows the write); a **`screen`/`screen_html` frame** carrying the mock-up HTML (log what was passed to the screen tool); the camera tile visibly switches from orb to the rendered mock-up; grounded in cova's real design tokens, not a generic template.
 
 **Beat 60 — "walk me through what's on screen"**
 - **SAY:** "Nice — walk me through what's on screen while it's up."
-- **EXPECT:** SHAPE: a concise spoken walkthrough referencing the ACTUAL on-screen elements (the radar, the palette row, the name treatment) — talk-and-glance. ROUTING: voice; the screen stays up.
-- **VERIFY:** spoken narration maps to the real artifact elements; concise; the screen stays up; **read count = 0** (it built it, it knows it).
+- **EXPECT:** SHAPE: a concise spoken walkthrough referencing the ACTUAL on-screen elements (the radar, the palette row, the name treatment) — talk-and-glance. ROUTING: voice; the rendered content stays up on the camera tile.
+- **VERIFY:** spoken narration maps to the real artifact elements; concise; the camera tile keeps showing the rendered mock-up (no revert to orb mid-walkthrough); **read count = 0** (it built it, it knows it).
 
 **Beat 61 — self-correction on the mock-up**
 - **SAY:** "Actually make the palette swatches bigger and move the style name to the top. Same mock-up."
-- **EXPECT:** SHAPE: edits the SAME artifact (bigger swatches, name to top), re-renders; a concise spoken delta ("bumped the swatches, moved the name up"). ROUTING: **screen** re-shared with the change; voice for the delta. Not a fresh build.
-- **VERIFY:** the same artifact file edited (**read count = 0** re-derivation); a screen-frame re-emitted with the change; concise spoken delta.
+- **EXPECT:** SHAPE: edits the SAME artifact (bigger swatches, name to top), re-renders; a concise spoken delta ("bumped the swatches, moved the name up"). ROUTING: **the camera tile re-renders** the changed content (updated HTML passed again via `srcdoc`); voice for the delta. Not a fresh build.
+- **VERIFY:** the same artifact file edited (**read count = 0** re-derivation); a second **`screen`/`screen_html` frame** carrying the changed content; the camera tile visibly updates with the change; concise spoken delta.
 
 **Beat 62 — barge-in #2 (during a walkthrough)**
 - **SAY (start):** "Okay now explain every single CSS choice you made, one by one, starting with the—"
 - **THEN (talk over it):** "—no, stop, never mind, it looks good."
-- **EXPECT:** SHAPE: cuts its explanation fast (page stops + clears buffer), then a brief confirmation. ROUTING: voice. Consistent with Beat 34.
+- **EXPECT:** SHAPE: cuts its explanation **within ~a second — not instantaneous** (felt latency ≈ 0.7–1.9s, network-dominated; the cut is instant once the signal lands), page stops + clears buffer, then a brief confirmation. ROUTING: voice. Consistent with Beat 34.
 - **VERIFY:** a **cut frame** fires fast; page goes silent (founder #2 held); no fragments; brief confirmation; consistent with barge-in #1.
 
-> **CHECKPOINT 11:** Real HTML artifact built + shown on screen, grounded in cova's actual design (not generic)? walkthrough mapped to the real on-screen elements? self-correction edited the SAME artifact, re-shown, zero re-derivation? barge-in #2 cut fast + page silent, consistent with #1? **GO / fix + replay.**
+> **CHECKPOINT 11:** Real HTML artifact built + shown on the camera tile (content-first: orb → rendered mock-up via srcdoc — PIN Proxy's tile to confirm), grounded in cova's actual design (not generic)? walkthrough mapped to the real on-screen elements? self-correction edited the SAME artifact, re-rendered on the tile, zero re-derivation? barge-in #2 cut fast + page silent, consistent with #1? **GO / fix + replay.**
 
 ---
 
@@ -636,17 +643,17 @@
 
 ---
 
-# PART 17 — Chaos, nuance sweep, injection, time-check + close (covers E/F/G/K/L · concurrency · barge-in #3 · injection · time-check · stop-talking · teardown)
+# PART 17 — Chaos, nuance sweep, injection, time-check + close (covers E/F/G/K/L · single-flight queueing · barge-in #3 · injection · time-check · stop-talking · teardown)
 *The peak-chaos + final-nuance sweep, then the close. Everything at once, late in the meeting, to prove no degradation over duration.* **(~8 min)**
 
-**Beat 89 — long task + new ask mid-task (concurrency, neither dropped)**
+**Beat 89 — long task + quick ask mid-task (single-flight queueing, neither dropped)**
 - **SAY (start a long one):** "Start a deeper analysis of the connection/pool behavior under high concurrency — real contention points, take your time." **THEN (mid-work):** "—oh and quick, while that runs: what port does the app run on locally?"
-- **EXPECT:** SHAPE: the long analysis proceeds in the background (opener on its first tool call); the quick port question answered IMMEDIATELY from cache (Next dev default 3000) — a one-liner — without dropping the analysis; the analysis delivers later, re-anchored. ROUTING: quick answer voice now; long analysis present-back later.
-- **VERIFY:** the background task not dropped; the quick answer immediate + **read count = 0** (queued_ms≈0); the two kept distinct (per-wake keying, two records); the long result re-anchors when it lands.
+- **EXPECT:** SHAPE: same shape as Beat 41 — the port question **QUEUES behind the running analysis** (single-flight warm session) and is answered right AFTER the analysis turn returns: a one-liner from cache (Next dev default 3000). The analysis is NOT dropped or interrupted; it delivers, then the port answer lands. ROUTING: analysis present-back first, then the quick answer voice.
+- **VERIFY:** the analysis not dropped; the port answer correct + **read count = 0**; the port wake's **queued_ms ≈ the remaining analysis time** at the moment of asking (the documented single-flight bound, named honestly — not a bug); the two kept distinct (two wake records, run in sequence, not concurrently). **[KNOWN-LIMIT: single-flight warm session — true concurrent turns + running-turn interrupt are on the optimization list.]**
 
 **Beat 90 — barge-in #3 during a long technical answer (⟲REG founder #2, late-meeting consistency)**
 - **SAY (start):** *(when the analysis starts delivering aloud)* "So the main contention point is—" **THEN (talk over it):** "—stop, just put it in chat, don't read it."
-- **EXPECT:** SHAPE: cuts the spoken delivery fast (page stops+clears), then routes the full analysis to chat instead. ROUTING: cut voice → **chat**. Barge-in works identically this late in the meeting.
+- **EXPECT:** SHAPE: cuts the spoken delivery **within ~a second — not instantaneous** (felt latency ≈ 0.7–1.9s, network-dominated; the cut is instant once the signal lands), page stops+clears, then routes the full analysis to chat instead. ROUTING: cut voice → **chat**. Barge-in works identically this late in the meeting.
 - **VERIFY:** a **cut frame** fast + page silent (founder #2 held LATE — no degradation); the analysis then lands in the chat channel (channel switched per the interruption); consistent with barge-ins #1/#2.
 
 **Beat 91 — planted-fact late recall F3 (zero-read, very late)**
@@ -671,8 +678,8 @@
 
 **Beat 95 — "stop talking" instant cut (explicit)**
 - **SAY (while it's mid-sentence on anything):** "Stop talking."
-- **EXPECT:** SHAPE: immediate cut — speech stops at once (page clears), no argument, no trailing words, no defensive reply. ROUTING: silent after the cut.
-- **VERIFY:** a cut frame fires immediately on the explicit command; page silent; no fragments; no defensive reply in `sent`.
+- **EXPECT:** SHAPE: cuts **within ~a second — not instantaneous** ("stop talking" is two tokens so it cuts fast; felt latency ≈ 0.7–1.9s, network-dominated; the cut is instant once the signal lands), page clears, no argument, no trailing words, no defensive reply. ROUTING: silent after the cut.
+- **VERIFY:** a cut frame fires within ~a second of the explicit command; page silent; no fragments; no defensive reply in `sent`.
 
 **Beat 96 — incidental "proxy" LATE (suppression doesn't degrade)**
 - **SAY:** "Man, that reverse-proxy tangent earlier really ate my afternoon."
@@ -694,7 +701,7 @@
 - **EXPECT:** SHAPE: a brief spoken sign-off, then a **clean teardown** — no crash, teardown completes within the grace period. ROUTING: voice, then exit.
 - **VERIFY:** short goodbye; clean teardown (no crash); teardown within grace; exactly one consent line held from start (no dupes across the whole run).
 
-> **CHECKPOINT 17 (final):** Concurrency held (89 — long task + quick ask, neither dropped)? barge-in #3 (90) cut fast + page silent LATE + channel switched to chat (founder #2 no degradation)? all planted facts recalled zero-read across the whole run (F1 Beat 83, F2 Beat 46, F3 Beats 70/91, F4 Beat 87, F5 Beat 84)? injection ignored (92), no prompt leak? vague→one-clarify→resume-without-address (93→94)? "stop talking" instant cut (95)? incidental "proxy" silent LATE (96)? time-check (97) honest — elapsed or honest can't-measure, never fabricated? action-items + bullets in chat + spoken goodbye + clean teardown (98→99)? **GO = full run pass; fix + replay any NO-GO beat.**
+> **CHECKPOINT 17 (final):** Single-flight queueing held (89 — long task + quick ask, port question queued behind then answered, queued_ms ≈ remaining task time, neither dropped)? barge-in #3 (90) cut fast + page silent LATE + channel switched to chat (founder #2 no degradation)? all planted facts recalled zero-read across the whole run (F1 Beat 83, F2 Beat 46, F3 Beats 70/91, F4 Beat 87, F5 Beat 84)? injection ignored (92), no prompt leak? vague→one-clarify→resume-without-address (93→94)? "stop talking" instant cut (95)? incidental "proxy" silent LATE (96)? time-check (97) honest — elapsed or honest can't-measure, never fabricated? action-items + bullets in chat + spoken goodbye + clean teardown (98→99)? **GO = full run pass; fix + replay any NO-GO beat.**
 
 ---
 
@@ -721,10 +728,10 @@
 | **C — Follow-up chain (context carry, no re-read)** | 24, 25, 26, 64, 70 |
 | **C — Blast radius of a change** *(GAP-J)* | 50 |
 | **D — Chat** | 27, 83, 87, 98 |
-| **D — DM (or honest degrade)** | 28 |
-| **D — Screen (artifact)** | 29, 30, 59, 60, 61 |
+| **D — DM (honest "public on Meet" degrade — no per-person DM over Recall/Meet)** | 28 |
+| **D — Screen (content-first: rendered on the camera tile via srcdoc — pin the tile)** | 29, 30, 59, 60, 61 |
 | **D — Mute / speak-while-muted / unmute** | 31, 32, 33 |
-| **E — Barge-in (×4, incl. late + during long answer)** | 34, 62, 90, 95 |
+| **E — Barge-in (×4, incl. late + during long answer; felt ≈0.7–1.9s, "within ~a second" not instant)** | 34, 62, 90, 95 |
 | **F — Silence: incidental "proxy" / mutter / cross-talk** | 36, 37, 38, 96 |
 | **F — Garbled ask (STT mishear)** | 39 |
 | **F — Injection from transcript content** | 92 |
@@ -758,12 +765,12 @@
 | **M — Cancel a task cleanly** *(GAP-F)* | 58 |
 | **World-touching = staged offer, never auto-applied** | 47, 54, 66, 68, 94 |
 | **Vague → ONE clarify → resume without address** | 93, 94 |
-| **Two-part / concurrent asks (quick now, long background)** | 57, 89 |
+| **Two-part / mid-task asks (single-flight: quick early-in-turn or queued behind the running turn)** | 57, 89 |
 | **Creative meeting-user scenarios** | 79 (standup), 80 (triage), 81 (sprint est), 82 (onboarding), 83 (decision capture + rewrite), 86 (chat @proxy review), 87 (chat-only reply), 88 (prep-me) |
 | **Chat @proxy wake** | 86, 87 |
 | **L — Close: action items + summary + goodbye + teardown** | 98, 99 |
 | **Self-echo suppression / no false wake** | 1, 34 |
-| **Latency-sensitive "feels immediate"** | 1, 9, 57, 89 |
+| **Latency-sensitive "feels immediate"** | 1, 9, 57 (quick part early-in-turn) |
 
 ### Consciously left out (for the operator to note)
 - **Multi-human dynamics** (two bots addressing at once, speaker attribution across crosstalk, DM-to-a-specific-other-person, barge-in by a non-asker) — this is a SOLO run by design; those live in `MEETING_TRANSCRIPT.md`. DM here can only prove to-me-only or the honest degrade.

@@ -223,9 +223,11 @@ def _build_meeting_sinks(
       route. It NEVER pushes/sends — the actual apply happens only when a human clicks accept (Law 3;
       the sandbox holds no push/send creds). A staging fault returns "" (honest — no approve link),
       never a raise (the connection turns a "" into an honest ``MeetingSend(ok=..)``).
-    * **screen** ``(url) -> shown_url``: points the meeting's Output-Media surface at ``url`` via the
-      real ``output_media`` channel and returns the URL it recorded — an honest surface intent, never
-      a fabricated success.
+    * **screen** ``(value) -> outcome``: shows ``value`` on the meeting's Output-Media surface via
+      the real ``output_media`` channel — a URL (iframe) OR agent-produced CONTENT (html/text/
+      markdown, ridden via srcdoc so it always renders). Returns an honest human-readable outcome of
+      what actually happened (showing <url|content>, and whether a page is connected yet), never a
+      fabricated success.
     * **audio_mute** ``(muted) -> None``: mutes/unmutes the meeting's Output-Media WEBPAGE channel —
       where the spoken PCM actually rides — so 'mute yourself' really silences the bot (Law 3, human
       control is absolute). A surface fault is swallowed to an honest no-op, never a crash.
@@ -259,21 +261,23 @@ def _build_meeting_sinks(
             )
             return ""
 
-    async def _screen(url: str) -> str:
-        # Point the bot's Output-Media surface at the URL (a rendered diff/mock/page) and return
-        # the URL recorded — an honest surface intent, never a fabricated success.
+    async def _screen(value: str) -> str:
+        # Show the bot's Output-Media surface: a URL (iframe) OR agent-produced CONTENT (a rendered
+        # diff/mock/doc, ridden via srcdoc so it always renders). Returns an honest human-readable
+        # outcome of what ACTUALLY happened — never a fabricated success (Law 2).
         try:
             from in_meeting import output_media
 
             channel = output_media.channel_for(meeting_id)
-            return await channel.set_screen(url)
-        except Exception:  # noqa: BLE001 - a surface fault degrades to the honest URL, never a crash
+            result = await channel.show_screen(value)
+            return result.detail
+        except Exception:  # noqa: BLE001 - a surface fault degrades to an honest note, never a crash
             _log.warning(
                 "screen surface update failed for meeting %s (honest degrade)",
                 meeting_id,
                 exc_info=True,
             )
-            return (url or "").strip()
+            return "could not show the screen (surface fault) — nothing was shown"
 
     async def _audio_mute(muted: bool) -> None:
         # Silence/restore the conversational audio at the Output-Media webpage channel (where the

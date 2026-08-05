@@ -43,8 +43,10 @@ metadata is a tracked, consolidated cleanup.
 from __future__ import annotations
 
 import asyncio
+import html as _html
 import json
 from collections import deque
+from dataclasses import dataclass
 from typing import Final
 
 from fastapi import APIRouter, WebSocket
@@ -52,7 +54,9 @@ from fastapi.responses import HTMLResponse
 
 __all__ = [
     "MAX_BUFFERED_FRAMES",
+    "MAX_SCREEN_HTML_BYTES",
     "OutputMediaChannel",
+    "ScreenResult",
     "build_output_media_router",
     "channel_for",
     "close_channel",
@@ -66,6 +70,61 @@ MAX_BUFFERED_FRAMES: Final[int] = 256
 
 #: The PCM sample rate the page's audio pipeline is built around (s16le, mono).
 SAMPLE_RATE_HZ: Final[int] = 16_000
+
+#: Cap on a single ``screen_html`` content frame. The agent shows self-contained artifacts
+#: (a rendered doc/mockup/diff) — 256 KiB is a generous page while bounding the wire + the
+#: page's srcdoc against a runaway paste. Beyond it, ``show_screen`` returns an honest error
+#: rather than truncating (a silent half-page would violate Law 2).
+MAX_SCREEN_HTML_BYTES: Final[int] = 256 * 1024
+
+
+@dataclass(frozen=True, slots=True)
+class ScreenResult:
+    """The honest outcome of a ``show_screen`` call — what ACTUALLY happened (Law 2).
+
+    ``rendered`` is True only when a render frame was enqueued to the channel; ``kind`` is
+    ``"url"`` | ``"content"`` | ``"clear"`` on success, ``"error"`` on refusal. ``detail`` is a
+    human-readable line the sink/connection surface verbatim (it also states when no page is
+    currently connected — the frame still delivers on reconnect)."""
+
+    rendered: bool
+    kind: str
+    detail: str
+
+
+def _looks_like_url(value: str) -> bool:
+    """A bare http(s) URL (a surface to point an iframe at) vs. content to render via srcdoc."""
+    v = value.lstrip().lower()
+    return v.startswith("http://") or v.startswith("https://")
+
+
+def _wrap_content_html(content: str) -> str:
+    """Wrap agent-produced content as a self-contained, always-renders HTML document.
+
+    If it already looks like a full HTML document, ride it as-is; otherwise wrap bare text /
+    markdown-ish content in a tiny readable shell (dark bg, padded, monospace-friendly,
+    whitespace preserved) so a plan/diff/answer is presentation-ready without any build step."""
+    lowered = content.lstrip().lower()
+    if lowered.startswith("<!doctype") or lowered.startswith("<html"):
+        return content
+    body: str
+    if "<" in content and ">" in content:
+        # Content already carries HTML tags (e.g. "<h1>..</h1>") — render it as markup.
+        body = content
+    else:
+        # Bare text/markdown: escape and preserve whitespace so it reads as written.
+        body = f"<pre>{_html.escape(content)}</pre>"
+    return (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        "<style>"
+        "html,body{margin:0;background:#0b0f14;color:#e6edf3;"
+        "font:15px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;}"
+        "body{padding:4vmin 5vmin;box-sizing:border-box;}"
+        "pre{white-space:pre-wrap;word-wrap:break-word;margin:0;}"
+        "h1,h2,h3{color:#9ecbff;} a{color:#6cb6ff;} "
+        "table{border-collapse:collapse;} td,th{border:1px solid #30363d;padding:.3em .6em;}"
+        "</style></head><body>" + body + "</body></html>"
+    )
 
 
 class OutputMediaChannel:
@@ -150,22 +209,52 @@ class OutputMediaChannel:
         self._frames.append(json.dumps({"type": "cut"}))
         self._notify()
 
-    async def set_screen(self, url: str) -> str:
-        """Point the Output-Media surface at ``url`` (the agent's ``screen`` medium). Returns ``url``.
+    async def show_screen(self, value: str) -> ScreenResult:
+        """Show ``value`` on the Output-Media surface (the agent's ``screen`` medium), honestly.
 
-        Records the chosen URL as the current shown surface and enqueues a ``{"screen": url}`` state
-        message so an attached page can swap its view to it (an empty ``url`` returns to the orb).
-        This is the honest, real surface intent — NOT a fabricated success: it returns the exact URL
-        it recorded, and the state message reaches the live page like the speaking-pulse signal does.
+        ``value`` is either a URL (http/https — pointed at via a sandboxed iframe) or CONTENT
+        (raw HTML / text / markdown — wrapped into a self-contained document and rendered via
+        iframe ``srcdoc``, which always renders: no X-Frame-Options / CSP risk). Empty ⇒ back to
+        the orb. Content is preferred because external sites often refuse to be embedded.
+
+        Returns a :class:`ScreenResult` describing what ACTUALLY happened — a render frame is
+        enqueued only on success, and the detail states when no page is currently attached (the
+        frame still delivers on reconnect). This is never a fabricated success (Law 2).
         """
-        clean = (url or "").strip()
-        self._screen_url = clean
-        self._frames.append(json.dumps({"screen": clean}))
+        clean = (value or "").strip()
+        page_note = "" if self.connected() else " (no page connected yet — delivers on reconnect)"
+
+        if not clean:
+            self._screen_url = ""
+            self._frames.append(json.dumps({"screen": ""}))
+            self._notify()
+            return ScreenResult(True, "clear", f"cleared the screen — back to the orb{page_note}")
+
+        if _looks_like_url(clean):
+            self._screen_url = clean
+            self._frames.append(json.dumps({"screen": clean}))
+            self._notify()
+            return ScreenResult(True, "url", f"showing {clean}{page_note}")
+
+        # CONTENT (the preferred, always-renders path): wrap and ride srcdoc.
+        doc = _wrap_content_html(clean)
+        size = len(doc.encode("utf-8"))
+        if size > MAX_SCREEN_HTML_BYTES:
+            return ScreenResult(
+                False,
+                "error",
+                f"content too large to show ({size} bytes exceeds the "
+                f"{MAX_SCREEN_HTML_BYTES}-byte screen limit) — nothing was shown",
+            )
+        self._screen_url = ""  # content mode is not a URL surface
+        self._frames.append(json.dumps({"screen_html": doc}))
         self._notify()
-        return clean
+        preview = clean[:60].replace("\n", " ")
+        return ScreenResult(True, "content", f"showing content ({size} bytes): {preview!r}{page_note}")
 
     def screen_url(self) -> str:
-        """The URL currently shown on this meeting's Output-Media surface ("" ⇒ the orb)."""
+        """The URL currently shown on this meeting's Output-Media surface ("" ⇒ the orb, or
+        content mode which is not a URL surface)."""
         return self._screen_url
 
     def connected(self) -> bool:
@@ -280,15 +369,50 @@ _PAGE_TEMPLATE: Final[str] = """<!DOCTYPE html>
     0%, 100% { transform: scale(1); box-shadow: 0 0 8vmin rgba(90, 150, 240, 0.35); }
     50% { transform: scale(1.06); box-shadow: 0 0 12vmin rgba(120, 175, 255, 0.55); }
   }
+  /* The screen surface: a full-viewport iframe that replaces the orb while active. */
+  #screen {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    border: 0; background: #0b0f14; display: none;
+  }
+  #screen.active { display: block; }
+  #stage.hidden { display: none; }
 </style>
 </head>
 <body>
 <div id="stage"><div id="orb"></div></div>
+<iframe id="screen" sandbox="allow-scripts allow-same-origin"></iframe>
 <script>
 "use strict";
 const WS_PATH = __WS_PATH__;
 const SAMPLE_RATE = 44100;
 const orb = document.getElementById("orb");
+const stage = document.getElementById("stage");
+const screen = document.getElementById("screen");
+
+// The screen surface (the agent's 'screen' medium). A URL points the iframe at a page; raw
+// html rides srcdoc (self-contained, always renders — no X-Frame-Options blank). An empty
+// value (or null) returns to the orb. The orb code is untouched — screen just replaces it
+// visually while active.
+function showScreenUrl(url) {
+  if (!url) { clearScreen(); return; }
+  screen.removeAttribute("srcdoc");
+  screen.src = url;
+  screen.classList.add("active");
+  stage.classList.add("hidden");
+}
+function showScreenHtml(html) {
+  if (!html) { clearScreen(); return; }
+  screen.removeAttribute("src");
+  screen.srcdoc = html;
+  screen.classList.add("active");
+  stage.classList.add("hidden");
+}
+function clearScreen() {
+  screen.classList.remove("active");
+  screen.removeAttribute("src");
+  screen.removeAttribute("srcdoc");
+  stage.classList.remove("hidden");
+}
 // Recall's headless browser allows autoplay; resume() also covers any
 // browser that starts the context suspended.
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -364,6 +488,11 @@ function connect() {
       }
       if (msg && typeof msg.speaking === "boolean") {
         orb.classList.toggle("speaking", msg.speaking);
+      }
+      if (msg && "screen_html" in msg) {
+        showScreenHtml(msg.screen_html);
+      } else if (msg && "screen" in msg) {
+        showScreenUrl(msg.screen);
       }
       return;
     }

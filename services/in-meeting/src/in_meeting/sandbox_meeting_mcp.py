@@ -68,7 +68,10 @@ def main() -> None:
         ONLY for the other channels:
 
         medium: 'chat' (post in the meeting chat) | 'dm' (a private message, needs `to`) | 'screen'
-        (show a URL/view) | 'offer' (stage a world-touching change for a human's one-click approval) |
+        (show something on the meeting surface — pass a URL OR raw HTML/text content; PREFER content
+        you produce, e.g. a rendered doc/mockup/diff, because external sites often refuse to embed
+        (X-Frame-Options/CSP) and would show blank. Keep it presentation-ready; pass "" to clear back
+        to the orb) | 'offer' (stage a world-touching change for a human's one-click approval) |
         'mute' | 'unmute'. Use your judgment like a great teammate.
         """
         return _deliver(content, (medium or "chat").strip().lower(), to)

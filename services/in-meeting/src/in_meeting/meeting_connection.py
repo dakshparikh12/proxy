@@ -50,7 +50,9 @@ class RoomSink(Protocol):
 
 #: Stage a world-touching artifact for a human click; returns an approve URL (or "" if unavailable).
 OfferSink = Callable[[str, str], Awaitable[str]]
-#: Point the bot's Output-Media surface at a URL (a rendered diff/mock/page). Returns the shown URL.
+#: Show something on the bot's Output-Media surface: a URL (iframe) OR agent-produced CONTENT
+#: (html/text/markdown, ridden via srcdoc so it always renders). Returns an honest human-readable
+#: outcome of what actually happened (showing <url|content>) — never a fabricated success (Law 2).
 ScreenSink = Callable[[str], Awaitable[str]]
 #: Mute/unmute the meeting's conversational audio at the Output-Media webpage channel (where the
 #: spoken PCM actually rides). ``True`` mutes, ``False`` unmutes. Law 3 — human control is absolute.
@@ -174,8 +176,10 @@ class MeetingConnection:
         if m in ("screen", "show", "share"):
             if self.screen is None:
                 return MeetingSend("screen", False, "screen surface not available")
-            url = await self.screen(content)
-            return MeetingSend("screen", True, url)
+            # The sink returns an honest human-readable outcome (showing <url|content>, or an
+            # honest failure like oversize/fault). Surface it verbatim — never a fabricated success.
+            outcome = await self.screen(content)
+            return MeetingSend("screen", True, outcome)
         if m in ("offer", "propose", "draft", "approve"):
             if self.offer is None:
                 return MeetingSend("offer", False, "offer path not available")
@@ -196,14 +200,21 @@ TO_MEETING_TOOL: dict[str, Any] = {
     "description": (
         "Send something to the live meeting. You decide what to convey and how. "
         "medium: 'say' (out loud, the default) | 'chat' | 'dm' (needs `to`) | 'screen' (show a "
-        "URL/view) | 'offer' (stage a world-touching change/message for a human's one-click "
+        "URL OR raw HTML/text content — PREFER content you produce, since external sites may "
+        "refuse to embed) | 'offer' (stage a world-touching change/message for a human's one-click "
         "approval) | 'mute' | 'unmute'. Use your judgment like a great teammate; stay silent by "
         "simply not calling this."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "content": {"type": "string", "description": "What to convey (or a URL for 'screen')."},
+            "content": {
+                "type": "string",
+                "description": (
+                    "What to convey. For 'screen': a URL, OR raw HTML/text content to render "
+                    "directly (preferred — external sites may refuse to embed)."
+                ),
+            },
             "medium": {"type": "string", "description": "How to convey it; defaults to 'say'."},
             "to": {"type": "string", "description": "Recipient participant id for 'dm'."},
         },

@@ -150,8 +150,9 @@ def test_offer_stages_a_draft_returns_approve_url_and_posts_to_chat(monkeypatch:
 
 
 def test_screen_points_output_media_surface_and_returns_url() -> None:
-    """medium='screen' → points the Output-Media surface at the URL and returns ok=True with it —
-    an honest surface intent recorded on the real channel, never a fake success."""
+    """medium='screen' with a URL → a real render frame lands on the Output-Media channel and the
+    send returns ok=True with an HONEST outcome detail (showing <url>) — never a fabricated success.
+    """
     from in_meeting import output_media
 
     url = "https://proxy.example.com/render/diff/xyz"
@@ -161,7 +162,9 @@ def test_screen_points_output_media_surface_and_returns_url() -> None:
         send = await connection.to_meeting(url, medium="screen")
         assert send.ok is True
         assert send.medium == "screen"
-        assert send.detail == url
+        # honest human-readable outcome, not the bare fabricated url:
+        assert "showing" in send.detail.lower()
+        assert url in send.detail
         # the REAL output-media channel recorded the shown surface (the honest intent):
         assert output_media.channel_for("m-screen-1").screen_url() == url
 

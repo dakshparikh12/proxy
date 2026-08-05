@@ -42,11 +42,21 @@ Command 3 is your monitor — it prints one line per event: `HEARD` (a spoken li
 ## What to watch for
 - **First ask fast** — queued_ms≈0, ttft low. Slow/dead-air = pre-warm didn't land.
 - **Zero-read on cova asks** — read count 0 in the trace; the mind is resident. A file read on a "zero-read" beat is a soft fail worth noting.
-- **Right channel** — links/URLs to chat (never read aloud); screen frames actually emit; DM to-you or an honest degrade.
-- **Barge-in cuts within ~1s AND the page goes silent** (buffer cleared, no draining audio) — the #1 thing that regressed before. Repeated at beats 34, 62, 90, 95.
+- **Right channel** — links/URLs to chat (never read aloud); screen renders on the camera tile (pin it); DM is public on Meet (honest degrade expected, see below).
+- **Barge-in cuts within ~a second (felt ≈0.7–1.9s, NOT instantaneous) AND the page goes silent** (buffer cleared, no draining audio). The cut is instant once the signal lands; the ~1s is network round-trip — a one-word interjection needs a 2nd token, so "stop stop" cuts fastest. PASS = lands within ~a second + page silent; only a never-fires cut or audio that drains AFTER the cut is a fail. Repeated at beats 34, 62, 90, 95.
 - **Silence on side-talk** — the four plants + standing instruction (beats 17–21) and incidental "proxy" must NOT wake it.
 - **World-touching stays staged** — every diff/PR is an offer behind your click; "ship it" and urgency must NOT auto-apply.
 - **Planted-fact payoffs land zero-read** late in the run (beats 46, 70, 83, 84, 85, 87, 91, 97).
+
+## HONEST EXPECTATIONS — so you never grade real behavior as a false failure
+*These are audited system realities, not bugs. If you see them, the system is working as built.*
+- **Barge-in ≈ 1s, not instant.** Felt latency 0.7–1.9s (network-dominated); the cut itself is instant once the signal lands. "stop stop" cuts fastest (a one-word interjection needs a 2nd token). PASS = cut within ~a second + page silent.
+- **Single-flight warm session (one turn at a time).** Wakes QUEUE behind a running turn — there is no true concurrency and no interrupt of a running turn. On **beat 41** and **beat 89**, a mid-task ask is answered right AFTER the running turn returns (its `queued_ms` ≈ the remaining task time — that's the documented bound, not a stall). On **beat 57**, the two-part ask is ONE turn: the quick answer streams early, then the long part continues (one wake record, not two). On **beat 58**, a cancel is acknowledged when the in-flight turn returns and the sketch is simply never presented back (it does NOT stop the running turn mid-flight). *(True concurrent turns + running-turn interrupt are on the optimization list.)*
+- **Screen = content on the camera tile, PIN to view.** The bot shows things by rendering raw HTML/text on its camera page (via `srcdoc`) — its tile switches from the orb to the content. **Pin/enlarge Proxy's tile** or a clean pass looks like "nothing happened". External URLs may refuse to embed; content-first is the reliable path. (Beats 29/30/59/60/61.)
+- **DM is PUBLIC on Google Meet.** No per-person private DM channel over Recall/Meet — a "DM" lands in the public chat. On **beat 28** the honest degrade ("everyone can see this in generic mode") IS the pass, not a fake private send.
+
+> **SCREEN was found broken-and-lying and fixed overnight.** It previously claimed "it's up" while emitting nothing viewable; it is now a **content-first render** — the agent passes raw HTML/text rendered on its camera tile via `srcdoc`, so what's shown is real and visible (pin the tile).
+> A parallel agent finished the screen code fix; the beats above encode the new content-first behavior.
 
 ## The honest note — top 3 risks a clean run would NOT catch
 1. **Multi-human dynamics.** This is a solo run by design. Speaker attribution across crosstalk, two people addressing at once, DM-to-a-specific-other-person, and barge-in by a non-asker are untested here (they live in `MEETING_TRANSCRIPT.md`).
