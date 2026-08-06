@@ -331,8 +331,13 @@ def test_meeting_in_a_box_full_chain(monkeypatch, tmp_path) -> None:
         # --- STAGE 3: the trigger line itself was NOT dropped. provision_meeting ingested it into the
         # pre-wire buffer and wire_session flushed it into on_line — so it fed MEETING_NOTES AND, being
         # an addressed "Hey Proxy…" line, it woke the workroom. Wait for that first wake to deliver.
+        # Wait for DELIVERY, not just for the turn to be recorded. ``session.results`` is appended
+        # (meeting_session.py:464) BEFORE the file-mode replay reaches the room
+        # (meeting_session.py:473 ``await self.connection.to_meeting(...)``), so breaking on
+        # ``results`` alone observes the turn nine lines before its audio and its ``connection.sent``
+        # record exist. Waiting on the connection record too makes this a delivered-signal.
         for _ in range(400):
-            if runtime.session.results:
+            if runtime.session.results and runtime.connection.sent:
                 break
             await asyncio.sleep(0.02)
         assert runtime.session.results, "the trigger line woke the workroom (wake gate fired)"
