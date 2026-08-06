@@ -280,34 +280,49 @@ def _relay_post(url: str, rec: dict[str, Any]) -> None:
         resp.read()
 
 
-async def _deliver_say(content: str) -> None:
+async def _deliver_say(content: str) -> bool:
     """Stream ONE spoken sentence to the room the instant it closes — the voice channel itself.
 
     LIVE (``PROXY_MEETING_RELAY`` set): POST it to the host relay right now, mid-turn, so the room
     hears sentence 1 while the model is still writing sentence 3. The blocking ``urllib`` POST runs
     off the event loop (``to_thread``) but is AWAITED, so sentences reach the room strictly in order
     without stalling the token stream. PROOF/file mode: append it to the intents file (medium
-    ``say``) so the driver's ``sent`` reflects exactly what was spoken, in order. Never raises — a
-    send fault degrades to a recorded ``relay_error`` line, never a crash."""
+    ``say``) so the driver's ``sent`` reflects exactly what was spoken, in order.
+
+    Never raises. Returns whether the sentence was DELIVERED: ``True`` on a good relay POST (or a
+    file-mode append, which the driver replays), ``False`` when the LIVE relay POST FAILED — the room
+    did NOT hear this sentence. That honest boolean is what lets the caller surface a swallowed miss
+    (Law 2): a failed POST is still recorded locally as a ``relay_error`` line for the trace, but the
+    turn no longer reports it as a clean delivered success. An empty (fully-sanitized-away) chunk is
+    nothing to speak — not a failure — so it returns ``True``."""
     # PHYSICS voice safety net (BUG 1): never hand markdown syntax or a raw URL to TTS. Sanitize at
     # the exact boundary where text meets the voice channel; a chunk that was ONLY a URL sanitizes to
     # empty and is skipped (nothing to speak) rather than spoken as silence-of-characters.
     content = _sanitize_for_voice(content)
     if not content:
-        return
+        return True
     rec: dict[str, Any] = {"ts": time.time(), "content": content, "medium": "say", "to": ""}
     relay = os.environ.get("PROXY_MEETING_RELAY", "").strip()
     if relay:
         try:
             await asyncio.to_thread(_relay_post, relay, rec)
-            return
+            return True
         except Exception as exc:  # noqa: BLE001 — never crash the agent's turn on a send fault
+            # The room did NOT hear this sentence. Record the miss locally for the trace, then report
+            # the FAILURE to the caller so it can degrade honestly (never a silent "delivered").
             rec = {**rec, "relay_error": str(exc)}
+            try:
+                with open(MEETING_OUT, "a", encoding="utf-8") as f:  # noqa: PTH123 — tiny append, in-sandbox
+                    f.write(json.dumps(rec) + "\n")
+            except OSError:
+                pass
+            return False
     try:
         with open(MEETING_OUT, "a", encoding="utf-8") as f:  # noqa: PTH123 — tiny append, in-sandbox
             f.write(json.dumps(rec) + "\n")
     except OSError:
         pass
+    return True
 
 
 async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
@@ -337,6 +352,12 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
     #: atomic under single-threaded asyncio (no await between test and set).
     spoke = False
     opener_fired = False  # the canned opener has been emitted (fired at most once per turn)
+    #: HONEST DELIVERY (Law 2). Latches True if the LIVE relay POST for any spoken ANSWER sentence
+    #: FAILED — the room did not hear that content, yet the turn otherwise "succeeds" (no error). The
+    #: driver reads this to degrade honestly instead of reporting a swallowed miss as a delivered
+    #: success. Only real answer prose (``_flush_ready``) counts; the canned presence opener is filler
+    #: whose miss must not spuriously degrade a turn whose real answer then delivers fine.
+    delivery_failed = False
     #: BUG 2 — the SILENT-TURN gate. When the model's FIRST streamed content is the silent sentinel
     #: (``[SILENT]``), the whole turn is a judged non-response (cross-talk / incidental "proxy"): NO
     #: voice delivery, NO opener — the room hears nothing — while the record still captures the
@@ -361,7 +382,7 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
         internal reasoning the room must not hear. A turn still in the ``sentinel_maybe`` hold-state
         also doesn't flush yet — the streamed content could still complete the sentinel; only once it
         has diverged into real prose (``sentinel_maybe`` cleared) is the held buffer spoken."""
-        nonlocal say_buf, deliver_at, spoke
+        nonlocal say_buf, deliver_at, spoke, delivery_failed
         if silent or sentinel_maybe:
             return
         while True:
@@ -371,12 +392,14 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
             sentence, say_buf = say_buf[:cut].strip(), say_buf[cut:]
             if sentence:
                 spoke = True  # real prose is going out ⇒ suppress the canned opener from here on
-                await _deliver_say(sentence)
+                if not await _deliver_say(sentence):
+                    delivery_failed = True  # the room did not hear this answer sentence (Law 2)
                 if not deliver_at:
                     deliver_at = round(time.monotonic() - turn_start, 2)
         if final and say_buf.strip():
             spoke = True
-            await _deliver_say(say_buf.strip())
+            if not await _deliver_say(say_buf.strip()):
+                delivery_failed = True  # the closing clause never reached the room (Law 2)
             if not deliver_at:
                 deliver_at = round(time.monotonic() - turn_start, 2)
             say_buf = ""
@@ -422,6 +445,8 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
             return
         spoke = True
         opener_fired = True
+        # The canned opener is presence FILLER, not the answer — a miss on it must not degrade a turn
+        # whose real answer then delivers fine, so its delivery result is intentionally not latched.
         await _deliver_say(_OPENER_TEXT)
         if not deliver_at:
             deliver_at = round(time.monotonic() - turn_start, 2)
@@ -492,7 +517,7 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
         await _flush_ready(final=True)  # speak whatever was already composed before surfacing the fault
         return {"tools": tools, "text": last_text, "cost_usd": cost, "turns": turns,
                 "error": str(exc) or exc.__class__.__name__, "deliver_at": deliver_at, "ttft": ttft,
-                "sent": _parse_intents(_read_intents())}
+                "sent": _parse_intents(_read_intents()), "delivery_failed": delivery_failed}
 
     watchdog.cancel()
     await _flush_ready(final=True)  # the closing partial sentence (no trailing terminator yet)
@@ -504,7 +529,8 @@ async def _run_turn(client: Any, prompt: str) -> dict[str, Any]:
     if turns > 0 and not saw_result and not intents:
         error = "turn did not complete"
     return {"tools": tools, "text": text, "cost_usd": cost, "turns": turns,
-            "error": error, "deliver_at": deliver_at, "ttft": ttft, "sent": intents}
+            "error": error, "deliver_at": deliver_at, "ttft": ttft, "sent": intents,
+            "delivery_failed": delivery_failed}
 
 
 def _beat() -> None:

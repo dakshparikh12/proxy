@@ -5,7 +5,9 @@ Native Claude, running inside the per-meeting E2B sandbox, reaches the live room
 call to THIS route — ``POST /meetings/{meeting_id}/relay`` — which authenticates the per-meeting
 bearer, looks up the meeting's live runtime, and lands the call on its ``MeetingConnection``. That
 connection holds the real Recall/Cartesia creds (host-side, never in the sandbox) and carries the
-agent's chosen medium (say/chat/dm/screen/offer/mute) to the physical pipe.
+medium to the physical pipe: the streamed spoken prose rides ``medium='say'`` (the voice channel),
+and the agent's ``to_meeting`` calls carry the non-spoken mediums
+(chat/dm/screen/offer/mute/unmute — the one canonical vocabulary, ``ADVERTISED_MEDIA``).
 
 This is a **driver, not a decision** (Law 4): the agent chose the content + medium inside the
 sandbox; the host only relays. World-touching stays a human click by the credential boundary (Law 3).
@@ -88,7 +90,9 @@ def install_relay_route(app: "FastAPI") -> None:
             return JSONResponse({"ok": False, "error": "invalid body"}, status_code=400)
 
         content = str(body.get("content", "") or "")
-        medium = str(body.get("medium", "say") or "say")
+        # Default to the chat channel when no medium is named (Design B): speaking is the prose stream
+        # (which always POSTs medium='say' explicitly), so an unspecified medium is a non-spoken send.
+        medium = str(body.get("medium", "chat") or "chat")
         to = body.get("to")
         to = str(to) if to not in (None, "") else None
 

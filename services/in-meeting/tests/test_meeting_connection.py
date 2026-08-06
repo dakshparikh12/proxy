@@ -59,8 +59,9 @@ def test_every_medium_routes_and_degrades_and_never_crashes() -> None:
             speak=speak, room=room, bot_id="bot-1", offer=_offer, screen=_screen
         )
 
-        # say (default + explicit)
-        assert (await conn.to_meeting("hello room")).medium == "say"
+        # say — the voice channel the streamed prose rides (medium='say' still routes to speak);
+        # under Design B the agent never *picks* say as a to_meeting medium, so it is explicit here.
+        assert (await conn.to_meeting("hello room", medium="say")).medium == "say"
         assert (await conn.to_meeting("again", medium="voice")).ok
         assert speak.said == ["hello room", "again"]
 
@@ -92,6 +93,10 @@ def test_every_medium_routes_and_degrades_and_never_crashes() -> None:
 
         # the full ordered record is kept for audit/tests
         assert [s.medium for s in conn.sent][:3] == ["say", "say", "chat"]
+
+        # Design B default: an ABSENT medium is the chat channel, never voice (speaking is prose).
+        r = await conn.to_meeting("no medium named")
+        assert r.medium == "chat" and room.chats[-1] == "no medium named"
 
     asyncio.run(_run())
 

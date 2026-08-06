@@ -1,8 +1,11 @@
 """The in-sandbox MCP server that gives native Claude its ONE connection to the meeting.
 
 This standalone script runs INSIDE the workroom sandbox and is registered with native ``claude``
-via ``.mcp.json`` (stdio transport). It exposes exactly one tool, ``to_meeting`` — the agent's whole
-interface to the room (it decides content + medium; see ``meeting_connection.TO_MEETING_TOOL``).
+via ``.mcp.json`` (stdio transport). It exposes exactly one tool, ``to_meeting`` — the agent's ONE
+interface to the NON-SPOKEN channels. Speaking is not one of them: the agent speaks by simply
+writing its reply, which is streamed to the room (Design B); ``to_meeting`` is only for chat / dm /
+screen / offer / mute / unmute. The tool's own docstring is the authoritative advertised vocabulary;
+the host-side driver (``meeting_connection``) routes the same mediums (see ``ADVERTISED_MEDIA``).
 
 Two modes, one tool signature (so the agent's behavior is identical either way):
 

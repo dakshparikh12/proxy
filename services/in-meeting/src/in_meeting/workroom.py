@@ -31,9 +31,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-# The richer PRIME lives in ``in_meeting.prime`` (it describes the ONE ``to_meeting`` tool +
-# the dynamic mediums). Production seeds THAT prime as CLAUDE.md so native Claude knows it can
-# choose speak/chat/dm/screen/offer/mute live — there is no second, weaker prime here.
+# The richer PRIME lives in ``in_meeting.prime``. Production seeds THAT prime as CLAUDE.md so native
+# Claude knows how it talks (Design B): it SPEAKS by writing its reply (streamed to the room), and
+# uses the ONE ``to_meeting`` tool only for the non-spoken channels (chat/dm/screen/offer/mute/
+# unmute). There is no second, weaker prime here.
 from .prime import WORKROOM_PRIME
 
 logger = logging.getLogger(__name__)
@@ -260,6 +261,13 @@ class WorkroomResult:
     #: local JSONL in the no-relay/file path. Each is a channel choice the agent made this turn; the
     #: session replays them over the connection honoring the chosen medium (NOT ``text``).
     sent: list[dict[str, Any]] = field(default_factory=list)
+    #: HONEST DELIVERY (Law 2). True iff the agent intended to SPEAK but the LIVE relay POST for a
+    #: spoken answer sentence FAILED inside the sandbox — the room never heard it, even though the
+    #: turn otherwise succeeded (no ``error``, empty ``sent`` since the failure is a skipped
+    #: ``relay_error`` line). The driver reads this to speak ONE honest degrade rather than treat the
+    #: swallowed miss as a delivered success. False on a clean delivery, in file/proof mode (nothing
+    #: to fail — the intents are replayed), and on any host record that omits the key (older records).
+    delivery_failed: bool = False
     #: HOST-SIDE QUEUE LATENCY (ms) — how long this wake sat in the sandbox's single-flight WAKE_IN
     #: queue (behind a prior in-flight turn) before the warm host started serving it (BUG 5). ~0 for a
     #: wake that hit an idle host; large when it queued behind a long turn (the measured ~30s+ live
@@ -425,8 +433,9 @@ class Workroom:
         isn't up/responding (never started, crashed, or the round-trip times out) this RESTARTS the
         session host and RETRIES the warm turn ONCE; if it still can't be reached the turn honest-
         degrades to a :class:`WorkroomResult` error (§9) — never a crash. The turn reaches the room
-        only through the agent's ONE ``to_meeting`` tool (speak/chat/dm/screen/offer/mute), relayed
-        live to the host connection (or recorded locally when there is no relay).
+        two ways (Design B): the agent's spoken prose is streamed to the voice channel, and its ONE
+        ``to_meeting`` tool carries the non-spoken mediums (chat/dm/screen/offer/mute/unmute) — both
+        relayed live to the host connection (or recorded locally when there is no relay).
 
         Never raises — a failed turn is an honest ``WorkroomResult.error`` (§9). This includes a
         TRANSPORT-induced ``CancelledError`` from a wake's own E2B I/O: the E2B/httpx/anyio stack
@@ -514,7 +523,7 @@ class Workroom:
             "ACTUAL code, run code to verify, draft real files). SPEAK by simply writing your reply — "
             "your words are spoken to the room live, streamed sentence by sentence as you type. Use "
             "your `mcp__meeting__to_meeting` tool (call it by that exact name — already loaded, don't "
-            "search for it) ONLY for the non-spoken channels: chat/dm/screen/offer/mute. CRITICAL: "
+            "search for it) ONLY for the non-spoken channels: chat/dm/screen/offer/mute/unmute. CRITICAL: "
             "deliver the real result IN THIS TURN — do the work now and hand over the actual "
             "result/artifact before you stop. To the ROOM this whole response is ONE continuous "
             "moment: even though you may take several internal steps to get there, speak as if you did "
@@ -694,6 +703,7 @@ class Workroom:
                     deliver_at=float(rec.get("deliver_at", 0.0) or 0.0),
                     ttft=float(rec.get("ttft", 0.0) or 0.0),
                     sent=[dict(s) for s in (rec.get("sent") or []) if isinstance(s, dict)],
+                    delivery_failed=bool(rec.get("delivery_failed", False)),
                     queued_ms=float(rec.get("queued_ms", 0.0) or 0.0),
                 )
             # No result yet — is the host still ALIVE? Check its heartbeat: a changed value means it is

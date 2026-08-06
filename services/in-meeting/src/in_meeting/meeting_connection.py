@@ -22,7 +22,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,20 @@ logger = logging.getLogger(__name__)
 #: Bounded so a long meeting never grows this without limit; the echo window is seconds, so a
 #: handful is plenty — 64 is generous headroom.
 _SPOKEN_LOG_MAX = 64
+
+#: THE ONE canonical ``to_meeting`` medium vocabulary — the NON-SPOKEN channels the agent reaches
+#: the room through. Speaking is deliberately NOT here: the live design (Design B) is that the agent
+#: SPEAKS by writing its reply, which is streamed sentence-by-sentence to TTS (see ``prime.py`` and
+#: ``session_host``); ``to_meeting`` carries only everything that is *not* the voice. This tuple is
+#: the single source of truth the MCP tool advertises, ``_route`` handles, and the relay carries —
+#: kept in ONE place so the lists can never diverge. (A stale second contract that also told the
+#: model ``say`` was a ``to_meeting`` medium/default was the two-contract speaking bug this fixes.)
+ADVERTISED_MEDIA: tuple[str, ...] = ("chat", "dm", "screen", "offer", "mute", "unmute")
+
+#: The default ``to_meeting`` medium when the agent (or the relay/replay) names none: ``chat``, the
+#: first non-spoken channel — NEVER ``say`` (speaking is the prose stream, not a ``to_meeting`` call).
+#: Consistent across the MCP tool, the relay, and this connection so there is one default everywhere.
+DEFAULT_MEDIUM = "chat"
 
 
 class SpeakSink(Protocol):
@@ -126,11 +140,16 @@ class MeetingConnection:
         return float(getattr(self.speak, "_audible_until", 0.0) or 0.0)
 
     async def to_meeting(
-        self, content: str = "", medium: str = "say", to: str | None = None
+        self, content: str = "", medium: str = DEFAULT_MEDIUM, to: str | None = None
     ) -> MeetingSend:
         """Carry ONE thing to the room the way the agent chose. Never raises — a failed send is an
-        honest ``MeetingSend(ok=False, ...)`` so one bad send never crashes the meeting (§3.8)."""
-        m = (medium or "say").strip().lower()
+        honest ``MeetingSend(ok=False, ...)`` so one bad send never crashes the meeting (§3.8).
+
+        ``medium`` is one of :data:`ADVERTISED_MEDIA` (the non-spoken channels); an absent medium
+        defaults to :data:`DEFAULT_MEDIUM` (``chat``). The streamed spoken prose rides the same
+        interface with ``medium='say'`` (still handled by :meth:`_route`), but that is the voice
+        channel — the agent never *chooses* ``say`` as a ``to_meeting`` medium (Design B)."""
+        m = (medium or DEFAULT_MEDIUM).strip().lower()
         try:
             result = await self._route(m, content, to)
         except Exception as exc:  # noqa: BLE001 — never crash the loop on a vendor fault
@@ -151,7 +170,11 @@ class MeetingConnection:
             del self.spoken[: len(self.spoken) - _SPOKEN_LOG_MAX]
 
     async def _route(self, m: str, content: str, to: str | None) -> MeetingSend:
-        # The physical pipe: the agent's chosen medium → the real vendor op. A driver, not a rule.
+        # The physical pipe: the medium → the real vendor op. A driver, not a rule. The non-spoken
+        # mediums here are exactly :data:`ADVERTISED_MEDIA` (chat/dm/screen/offer/mute/unmute); the
+        # ``say``/``speak``/``voice`` branch below is the VOICE channel the streamed prose rides over
+        # the relay (``session_host`` POSTs each spoken sentence as ``medium='say'``) — not a medium
+        # the agent picks. An unrecognized medium falls to the documented safety-net voice fallback.
         if m in ("say", "speak", "voice"):
             # Barge-in latch (Law 3): a human talked over Proxy, so the rest of THIS turn's streamed
             # sentences are dropped rather than played on top of the interrupter. The latch clears on
@@ -197,36 +220,9 @@ class MeetingConnection:
             if approve_url:
                 await self.room.post_chat(self.bot_id, f"Ready to apply — approve: {approve_url}")
             return MeetingSend("offer", True, approve_url)
-        # Unknown medium → default to voice rather than dropping the agent's words silently.
+        # SAFETY-NET fallback (documented, NOT the default): an unrecognized medium string still
+        # reaches the room as voice rather than being dropped silently — the honest last resort when
+        # the agent names something outside :data:`ADVERTISED_MEDIA`. The DEFAULT for an absent
+        # medium is ``chat`` (handled above via :data:`DEFAULT_MEDIUM`), never this branch.
         await self.speak.say(content)
         return MeetingSend("say", True, f"unknown medium {m!r} → said")
-
-
-#: The MCP tool schema the sandbox agent sees — ONE tool, the agent chooses content + medium.
-#: (Kept here so the MCP transport wrapper and the tests share one definition.)
-TO_MEETING_TOOL: dict[str, Any] = {
-    "name": "to_meeting",
-    "description": (
-        "Send something to the live meeting. You decide what to convey and how. "
-        "medium: 'say' (out loud, the default) | 'chat' | 'dm' (needs `to`) | 'screen' (show a "
-        "URL OR raw HTML/text content — PREFER content you produce, since external sites may "
-        "refuse to embed) | 'offer' (stage a world-touching change/message for a human's one-click "
-        "approval) | 'mute' | 'unmute'. Use your judgment like a great teammate; stay silent by "
-        "simply not calling this."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "content": {
-                "type": "string",
-                "description": (
-                    "What to convey. For 'screen': a URL, OR raw HTML/text content to render "
-                    "directly (preferred — external sites may refuse to embed)."
-                ),
-            },
-            "medium": {"type": "string", "description": "How to convey it; defaults to 'say'."},
-            "to": {"type": "string", "description": "Recipient participant id for 'dm'."},
-        },
-        "required": ["content"],
-    },
-}

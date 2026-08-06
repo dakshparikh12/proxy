@@ -488,6 +488,20 @@ class MeetingSession:
                 # (refresh) the window so the founder's next line continues the exchange name-free.
                 self._open_follow_up_window()
                 return
+            if getattr(result, "delivery_failed", False):
+                # HONEST DELIVERY (Law 2). The agent INTENDED to speak, its sentence was streamed —
+                # but the sandbox's relay POST for that spoken content FAILED, so the room never heard
+                # it. The turn otherwise looks clean (no recorded intent, no error, ``deliver_at`` set
+                # because the sentence was flushed), which the delivered-signal below would read as a
+                # silent success. It is NOT: surface ONE honest degrade so a needed answer is never met
+                # with silence. The host-side connection is reached directly here (the failure was the
+                # sandbox→host relay hop), so this degrade line still lands in the room.
+                await self.connection.to_meeting(
+                    "Sorry — I had trouble getting that through to the room just now.",
+                    medium="say",
+                )
+                self._open_follow_up_window()
+                return
             if getattr(result, "error", None):
                 # The turn errored with NO recorded ``to_meeting`` intent (the ``recorded`` branch
                 # returned above when there was one). We speak ONE bare, honest apology — NEVER the

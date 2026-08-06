@@ -1192,3 +1192,97 @@ def test_later_wake_recalls_early_transcript_from_the_resident_cache_with_zero_r
         assert any("the auth token lives in settings.py" in turn for turn in client.conversation)
 
     asyncio.run(_run())
+
+
+# ── T5 HONEST DELIVERY: a failed speak-path relay POST surfaces, never swallowed ──────────────
+
+
+def test_session_host_speak_relay_failure_surfaces_delivery_failed(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Law 2 HONEST DELIVERY. On the live path a spoken sentence is POSTed to the host relay. When
+    that POST FAILS the room never heard the sentence — yet today the failure is caught, written as a
+    skipped ``relay_error`` line, and the turn reports success. The record must instead carry
+    ``delivery_failed=True`` so the driver can degrade honestly (a known miss, never a silent success)."""
+    import in_meeting.session_host as sh
+
+    out = tmp_path / "to_meeting.jsonl"
+    monkeypatch.setattr(sh, "MEETING_OUT", str(out))
+    monkeypatch.setattr(sh, "_OPENER_HARD_FLOOR_S", 999.0)
+    monkeypatch.setattr(sh, "_OPENER_AFTER_TOOL_S", 999.0)
+    monkeypatch.setenv("PROXY_MEETING_RELAY", "http://host/relay")
+
+    def _boom(url: str, rec: dict[str, Any]) -> None:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(sh, "_relay_post", _boom)
+    client = _SlowClient([ResultMessageT()], delay=0.0, deltas=["Here is the answer. "])
+
+    async def _run() -> None:
+        rec = await sh._run_turn(client, "proxy, what's the answer?")
+        assert rec.get("delivery_failed") is True, \
+            "a failed speak-path relay POST must surface, not be swallowed as a clean success"
+
+    asyncio.run(_run())
+
+
+def test_session_host_speak_relay_success_is_not_a_delivery_failure(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The companion: a spoken sentence whose relay POST SUCCEEDS is NOT a delivery failure — the
+    honest signal only fires on a real miss."""
+    import in_meeting.session_host as sh
+
+    out = tmp_path / "to_meeting.jsonl"
+    monkeypatch.setattr(sh, "MEETING_OUT", str(out))
+    monkeypatch.setattr(sh, "_OPENER_HARD_FLOOR_S", 999.0)
+    monkeypatch.setattr(sh, "_OPENER_AFTER_TOOL_S", 999.0)
+    monkeypatch.setenv("PROXY_MEETING_RELAY", "http://host/relay")
+
+    def _ok(url: str, rec: dict[str, Any]) -> None:
+        return None
+
+    monkeypatch.setattr(sh, "_relay_post", _ok)
+    client = _SlowClient([ResultMessageT()], delay=0.0, deltas=["Delivered fine. "])
+
+    async def _run() -> None:
+        rec = await sh._run_turn(client, "proxy, status?")
+        assert rec.get("delivery_failed") is False
+
+    asyncio.run(_run())
+
+
+def test_session_host_file_mode_is_never_a_delivery_failure(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No relay (proof/file mode): the spoken sentence is recorded locally and replayed by the driver
+    — there is no delivery to fail, so ``delivery_failed`` stays False."""
+    import in_meeting.session_host as sh
+
+    out = tmp_path / "to_meeting.jsonl"
+    monkeypatch.setattr(sh, "MEETING_OUT", str(out))
+    monkeypatch.setattr(sh, "_OPENER_HARD_FLOOR_S", 999.0)
+    monkeypatch.setattr(sh, "_OPENER_AFTER_TOOL_S", 999.0)
+    monkeypatch.delenv("PROXY_MEETING_RELAY", raising=False)
+    client = _SlowClient([ResultMessageT()], delay=0.0, deltas=["Recorded locally. "])
+
+    async def _run() -> None:
+        rec = await sh._run_turn(client, "proxy, note this")
+        assert rec.get("delivery_failed") is False
+
+    asyncio.run(_run())
+
+
+def test_warm_result_surfaces_delivery_failed_from_the_record() -> None:
+    """The driver carries the host's ``delivery_failed`` signal onto WorkroomResult (default False
+    when the host record omits it, so pre-existing records parse unchanged)."""
+    from in_meeting.workroom import Workroom
+
+    failed = {"tools": [], "text": "", "turns": 1, "cost_usd": 0.0, "error": None,
+              "sent": [], "delivery_failed": True}
+    clean = {"tools": [], "text": "ok", "turns": 1, "cost_usd": 0.0, "error": None, "sent": []}
+
+    async def _run() -> None:
+        wr = Workroom(sandbox=_WarmSandbox(failed), call=_passthru_call, token="t", warm=True)
+        assert (await wr.run_ask("q")).delivery_failed is True
+        wr2 = Workroom(sandbox=_WarmSandbox(clean), call=_passthru_call, token="t", warm=True)
+        assert (await wr2.run_ask("q")).delivery_failed is False
+
+    asyncio.run(_run())

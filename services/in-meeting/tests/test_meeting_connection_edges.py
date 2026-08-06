@@ -148,17 +148,20 @@ def test_failed_send_is_recorded_on_the_sent_trail_with_the_reason() -> None:
     asyncio.run(_run())
 
 
-def test_empty_say_is_still_a_valid_send() -> None:
-    """A bare ``to_meeting()`` (empty content, default medium) is a valid say — the driver never
-    second-guesses the agent's intent; it just carries it."""
+def test_empty_default_medium_send_is_a_valid_chat() -> None:
+    """A bare ``to_meeting()`` (empty content, no medium) is a valid CHAT under Design B — the default
+    medium is the chat channel, not voice (speaking is the streamed prose, never a to_meeting call).
+    The driver never second-guesses the agent's intent; it just carries it."""
     from in_meeting.meeting_connection import MeetingConnection
 
     async def _run() -> None:
         speak = _FakeSpeak()
-        conn = MeetingConnection(speak=speak, room=_FakeRoom(), bot_id="b")
+        room = _FakeRoom()
+        conn = MeetingConnection(speak=speak, room=room, bot_id="b")
         r = await conn.to_meeting()
-        assert r.ok is True and r.medium == "say"
-        assert speak.said == [""]
+        assert r.ok is True and r.medium == "chat"
+        assert room.chats == [""]        # carried to chat, not spoken
+        assert speak.said == []          # nothing was spoken
 
     asyncio.run(_run())
 

@@ -24,14 +24,16 @@ from typing import Any
 
 def _result(*, text: str = "", error: str | None = None,
             sent: list[dict[str, Any]] | None = None,
-            deliver_at: float = 0.0, ttft: float = 0.0) -> SimpleNamespace:
+            deliver_at: float = 0.0, ttft: float = 0.0,
+            delivery_failed: bool = False) -> SimpleNamespace:
     """A stand-in WorkroomResult carrying the fields _handle reads: text, error, the agent's OWN
     recorded ``to_meeting`` intents (``sent``), and the relay-mode delivery signals ``deliver_at`` /
     ``ttft`` (set by the warm host ONLY when the agent actually spoke/called to_meeting — the robust
     signal the follow-up window opens off, since relay POSTs land on ``connection.sent`` asynchronously
     and may not have grown by the time run_ask returns). ``sent`` defaults to [] (no recorded intents)."""
     return SimpleNamespace(text=text, error=error, sent=list(sent or []),
-                           deliver_at=deliver_at, ttft=ttft)
+                           deliver_at=deliver_at, ttft=ttft,
+                           delivery_failed=delivery_failed)
 
 
 class _Clock:
@@ -1376,5 +1378,53 @@ def test_pre_wire_lines_buffer_and_flush_in_order_on_wire_session() -> None:
         # post-wire: lines feed straight through
         await rt.ingest_line("Riya", "third", ts=3.0)
         assert s.lines[-1] == ("Riya", "third", 3.0, False)
+
+    asyncio.run(_run())
+
+
+def test_speak_delivery_failure_is_an_honest_degrade_not_silent_success() -> None:
+    """T5 HONEST DELIVERY (Law 2). Relay mode: the agent intended to SPEAK, the sentence was streamed,
+    but the sandbox's relay POST FAILED — the room heard nothing, yet ``result.sent`` is empty and
+    ``result.error`` is None (the failure was a skipped ``relay_error`` line) and ``deliver_at`` is set
+    (the sentence was flushed). Without the fix the driver reads deliver_at>0 and treats the turn as a
+    silent delivered success. With ``delivery_failed=True`` the driver must instead speak ONE honest
+    degrade line so a needed answer is never met with silence."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+        wr = _FakeWorkroom(result=_result(text="the answer", sent=[], deliver_at=3.1, ttft=1.0,
+                                          delivery_failed=True))
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        await session.on_line("Bob", "proxy, what's the fix?", ts=1.0)
+        await session.drain()
+
+        assert len(conn.sent) == 1 and conn.sent[-1].medium == "say", \
+            "a delivery failure speaks ONE honest degrade over the host-side connection"
+        low = conn.sent[-1].content.lower()
+        assert "trouble" in low or "problem" in low
+        # the internal prose is never put in Proxy's mouth
+        assert "the answer" not in conn.sent[-1].content
+
+    asyncio.run(_run())
+
+
+def test_delivered_turn_without_a_failure_is_not_degraded() -> None:
+    """No regression: a relay-mode turn that DELIVERED cleanly (delivery_failed False) still opens the
+    follow-up window and speaks NO degrade line — the honest-degrade fires only on a real miss."""
+    from control_plane.meeting_session import MeetingSession
+
+    async def _run() -> None:
+        conn = _FakeConnection()
+        wr = _FakeWorkroom(result=_result(text="done", sent=[], deliver_at=2.0, ttft=1.0,
+                                          delivery_failed=False))
+        session = MeetingSession(workroom=wr, connection=conn)
+
+        await session.on_line("Bob", "proxy, status?", ts=1.0)
+        await session.drain()
+
+        assert conn.sent == [], "a clean delivered turn speaks no degrade"
+        assert session._follow_up_until > 0.0, "a clean delivered turn opens the follow-up window"
 
     asyncio.run(_run())

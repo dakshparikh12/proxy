@@ -159,3 +159,32 @@ def test_relay_url_for_string_physics(monkeypatch) -> None:
     # env-sourced base is honored:
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://env.example.com")
     assert relay_url_for("m-9") == "https://env.example.com/meetings/m-9/relay"
+
+
+def test_relay_default_medium_is_chat_when_absent() -> None:
+    """Design B (T5): a relayed call with NO ``medium`` defaults to the chat channel — not say.
+    Speaking is the prose stream (which always POSTs ``medium='say'`` explicitly), so an unspecified
+    medium is a non-spoken chat send, matching the connection's + MCP tool's chat default."""
+    from fastapi.testclient import TestClient
+
+    class _Conn:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, str | None]] = []
+            self.sent: list[Any] = []
+
+        async def to_meeting(self, content: str, medium: str = "chat", to: str | None = None) -> Any:
+            self.calls.append((content, medium, to))
+            send = SimpleNamespace(ok=True, medium=medium, detail="")
+            self.sent.append(send)
+            return send
+
+    conn = _Conn()
+    app = _app_with_runtime("m-1", _runtime(connection=conn))
+    client = TestClient(app)
+    r = client.post(
+        "/meetings/m-1/relay",
+        json={"content": "hello"},   # no medium field
+        headers={"Authorization": "Bearer tok"},
+    )
+    assert r.status_code == 200
+    assert conn.calls == [("hello", "chat", None)]
