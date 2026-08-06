@@ -194,7 +194,19 @@ class RecallTransport:
         none (and never ships an empty-string URL, which Recall's schema rejects).
         ``output_media`` likewise appears only when a surface URL is configured.
         """
-        body: dict[str, Any] = {"meeting_url": meeting_link, "bot_name": self._bot_name}
+        body: dict[str, Any] = {
+            "meeting_url": meeting_link,
+            "bot_name": self._bot_name,
+            # Recall's DEFAULT bot variant (``web``) gets 250 millicores, which Recall itself
+            # names as the cause of choppy/stuttering output media. The Output-Media page is our
+            # entire speech path (``output_media.camera`` below), so a starved bot browser is
+            # heard directly by the room. ``web_4_core`` per platform is the fix.
+            "variant": {
+                "zoom": "web_4_core",
+                "google_meet": "web_4_core",
+                "microsoft_teams": "web_4_core",
+            },
+        }
         if self._webhook_url:
             body["recording_config"] = {
                 "transcript": {"provider": {"assembly_ai_v3_streaming": {}}},
