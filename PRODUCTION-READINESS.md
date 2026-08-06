@@ -1,306 +1,183 @@
-# Proxy — Path to Customer-Deployable (Master Plan)
+# Proxy — Design Plan & Pathway to a Serverless Multi-Tenant Platform
 
-**Status:** draft for founder review · **Date:** 2026-08-05 · **Branch:** `post-meeting`
-**Read alongside:** `SPEC.md` / `PROXY_SYSTEM_SPEC.md` (product), `CLAUDE.md` (build constitution).
+**Status:** the single consolidated plan (supersedes prior drafts) · **Updated:** 2026-08-06
+**Branch:** `post-meeting` · **Read with:** `SPEC.md`, `CLAUDE.md`.
 
-This plan assumes the **reactive product works end-to-end** (founder is finalizing that
-locally). It covers *everything else* required to turn a working local tool into a
-**customer-deployable, secure, serverless, multi-tenant SaaS** — plus **post-meeting v1**
-(reactive + full post-meeting is the v1 we sell). Grounded in the current codebase and a
-2025–2026 research pass (compute/persistence, onboarding, security/compliance, legal/billing,
-enterprise meeting-agent access). Research briefs live in the session scratchpad.
-
----
-
-## 0. The end goal (one statement)
-
-> A customer says yes → within ~1 hour they are live: **2 clicks + add-a-guest** (install the
-> GitHub App, add Proxy to Slack, add `acme@proxy.<domain>` to their invites). Proxy joins their
-> meetings named and disclosed, already knows their code, works live, and after the meeting sends
-> grounded notes + action items and executes follow-ups behind a human click. It runs
-> **serverless / scale-to-zero** on our cloud, isolates every tenant, and we can hand a technical
-> buyer a trust page + DPA + subprocessor list and answer their security questionnaire same-day.
+This is the **design plan**: what we need to *design*, in clear chunks, in order — not locked
+technical decisions. It takes us from the working-locally reactive product to a **serverless,
+self-serve, multi-tenant platform any company can hop on and use securely at scale.** Calibrated
+to the professional middle (what a real customer-deployable startup has — no less, no more):
+enterprise features (SSO/SCIM/SOC 2/per-tenant DBs) are **planned escape hatches, built when a
+big customer demands them**, not day-one work.
 
 ---
 
-## 1. Guiding principles (protect these at every phase)
+## 1. Where we are today (grounded in the code)
 
-1. **Serverless / scale-to-zero.** Cloud Run scales to zero; E2B sandboxes are per-meeting and
-   killed/reaped (idle → ~$0); Cloud SQL + GCS are managed. We pay per meeting, not per idle hour.
-2. **The sandbox is a rebuildable cache, never a source of truth.** Durable truth = Postgres + GCS.
-   Any sandbox/snapshot can be lost and the work fully reconstructed. This is what makes aggressive
-   cost-reaping safe (§2).
-3. **The five laws hold** (grounded-or-silent, never-overstate, human-control-absolute,
-   dynamic-not-hardcoded, talk-and-glance). Every world-touching action stays a staged draft behind
-   a human click; the sandbox holds no push/send credentials.
-4. **Buy the undifferentiated, build the core.** Auth/SSO (WorkOS-class), billing (Stripe),
-   compliance automation (Vanta/Drata), legal templates (Common Paper) — buy. The agent loop,
-   the map/understanding, the orchestrator — build.
-5. **Tenancy is first-class and isolation is a P0.** `tenant_id` in every schema, per-meeting
-   sandbox, per-tenant GCS prefix, (target) per-tenant CMEK. A cross-tenant read is a P0 breach.
+- **Reactive in-meeting product works** locally: webhook → provision per-meeting E2B sandbox →
+  warm → wake-on-address → work → respond over Recall/Cartesia. ~20k lines, real.
+- **Multi-tenant already threaded** (`tenant_id` pervasive), coherent Terraform stack exists,
+  premeeting clone→understanding→store (repo_maps keyed by tenant/repo/sha) is real.
+- **Missing:** any persistent per-company memory, post-meeting, the customer web app, self-serve
+  onboarding UI, the operational safety layer.
+- **The honest shape:** today Proxy is **body-only** — each meeting is a stateless sandbox. The
+  whole gap to the vision is the **persistent brain** + the platform wrapper.
 
----
+## 2. Where we're going (the north star)
 
-## 2. Compute + persistence architecture (the VM question, resolved)
+With **zero manual work from us**: a company signs up self-serve → gets a securely isolated
+**Proxy of their own** → connects repos + chat + meetings in a few clicks → Proxy auto-provisions
+a **persistent, code-grounded company brain** → joins their meetings (one or many at once), works
+live, and folds everything back into that brain → gets smarter across meetings → acts (PRs,
+messages) behind a human click → secure, hosted by us, scales from one repo to many and one
+company to hundreds. Adding post-meeting/proactive is then just shipping code on this foundation.
 
-**Decision: sandbox-as-cache + durable record (a hardened "Model B"), with a short optional
-warm-snapshot window.** Post-meeting work is *async, not latency-critical*, so we do **not** keep a
-live VM around; we rebuild it cheaply on demand.
+## 3. The core model (Proxy-specific — everything hangs off this)
 
-### The three tiers
-- **Postgres (Cloud SQL)** — structured, transactional, small: meeting records (id, tenant, repo,
-  start/end, attendees, status), action items (+ approval state: staged/approved/executed),
-  readiness verdicts, per-meeting cost/telemetry, post-meeting task/run status, and **snapshot
-  bookkeeping** (`snapshot_id`, `tenant_id`, `meeting_id`, `repo_sha`, `expires_at`, `size_bytes`).
-  Every row carries `tenant_id`.
-- **GCS (object-versioned)** — blobs, append-heavy, large: transcripts, the understanding/`REPO_MAP`
-  docs, **staged diffs/patches** (the human-approval artifacts), agent-generated files. Partition
-  by tenant: `gs://…/<tenant_id>/<meeting_id>/…`. Object versioning = free audit trail.
-- **E2B snapshot** — ephemeral fast-path ONLY. Holds live work state for a short warm-follow-up
-  window (24–72h), TTL'd and **reaped**. If lost, the meeting is fully reconstructable from
-  Postgres + GCS + the baked template.
+**A company's Proxy = a durable BRAIN + an ephemeral BODY + a LEARNING LOOP.**
 
-### The lifecycle
-1. **Pre-meeting** (once per repo, rebuilt on signed push): clone → build understanding/map → store
-   in Postgres+GCS → **bake a per-repo E2B template keyed by commit SHA** (repo + map pre-loaded).
-2. **Meeting**: warm a sandbox *from the template* (never re-clone). Stream transcript. Work live.
-3. **Meeting-end**: persist the meeting record (transcript + Proxy's staged work + intents) to
-   Postgres+GCS. Optionally pause to a snapshot for the warm-follow-up window (record the
-   `snapshot_id` + `expires_at`). **Then it's safe to be killed/reaped.**
-4. **Post-meeting task** (async): if within the warm window → resume the snapshot (~1s); else →
-   spawn a fresh sandbox from the baked template + load the durable record. Do the work, checkpoint
-   each step to GCS+Postgres, stage the result behind a human click, then re-pause or kill.
+- **Brain (durable, one per company, lives forever):** identity + access grants + the accumulating
+  knowledge (code understanding tied to real `file:line`, meeting decisions/action-items/outcomes,
+  ownership, "state of the work"). Small, cheap, encrypted, isolated. In Postgres + GCS. **This is
+  the product the customer buys.**
+- **Body (ephemeral, one per meeting/task, thrown away):** a sandbox rehydrated from the brain +
+  the repo, killed and reaped after. **This is the "instance" we generate per meeting** — not a
+  literal Cloud Run job (a job is wrong for a long interactive session); it's a warm sandbox
+  instance (E2B today, behind a swappable seam; GCE-VM à la Gallop is the proven alternative).
+- **Learning loop (events → brain, incremental):** a **PR/push refreshes the code understanding**;
+  a **meeting ends → its decisions/outcomes fold into the brain**; a **task completes → record the
+  result**. Never a full rebuild — incremental updates. This *is* "gets smarter over time."
 
-### Hard requirements the research surfaced
-- **Own a snapshot reaper** — E2B snapshots have **no TTL / no auto-expiry** and accrue storage
-  cost with **no published per-GB rate**. A Cloud Run cron kills expired snapshots by the Postgres
-  bookkeeping table. Prefer `keepMemory:false` unless the live process tree is needed on resume.
-  *(Get the paused-storage rate from E2B sales in writing before modeling idle as free.)*
-- **Never re-clone per meeting** — versioned baked template rebuilt on the same signed-push trigger
-  as the map.
-- **Any-repo-size escape ladder** (E2B Pro = 8 vCPU / 8 GiB / 20 GB disk; ~4.3 GB Dockerfile-COPY
-  limit; no GPU): (a) baked template for <~4 GB working sets; (b) **sparse + shallow clone**
-  (`--filter=blob:none --sparse --depth`) — the highest-leverage move, turns a 20 GB repo into a
-  few-hundred-MB working set; (c) E2B Volumes + FUSE mount; (d) Enterprise custom disk;
-  (e) off-E2B **Cloud Run job** for heavy clone/build → push pruned working set + map to GCS.
-- **Two sandbox sizes**: 2 vCPU / 4 GiB default (chat/light), 8 vCPU / 8 GiB for code-heavy repos;
-  route >8 GiB builds to the off-E2B Cloud Run job. Cap build subprocess memory so an OOM kills the
-  *build*, not the agent (report honestly — Law 2).
-- **Abstract compute behind a `libs` seam** (like `libs/http`'s external-call discipline) so
-  E2B → Fly Machines / Modal / Northflank-BYOC is a config swap, not a rewrite.
+**"Keep the environment forever" = keep the BRAIN forever; the body stays disposable.** That
+single split resolves persistent-vs-ephemeral and answers "instances vs. selling an agent" — the
+brain is the agent you sell; the body is it temporarily embodied.
 
-### Cost + when to migrate
-- Per meeting ≈ **$0.17/hr** light, **$0.53/hr** heavy — trivial vs Claude token spend. The real
-  cost levers are **concurrency** and **un-reaped snapshots**, not runtime.
-- E2B Pro: 100 concurrent (→1,100 add-on), 5 sandboxes/s creation (warm-pool to hide bursts).
-- Stay on E2B **through product-market fit.** Re-evaluate at **sustained ~100+ concurrent** on
-  economics (E2B list ≈ 2–3× a Fly/Modal build, ≈ 8× BYOC at 200-concurrent) and native idle
-  billing (Fly Sprites) or GCP-native isolation (Northflank BYOC).
-- **The orchestrator is the hard part at scale** (Devin's team: ~¾ of engineering) — provisioning,
-  warm pools, reaping, crash recovery, per-action audit. Budget for it; it is not "just the sandbox."
+**Open granularity decision (to resolve in design, not now):** is a "Proxy" **per-company** (one
+brain) or **per-team** (scoped brains within a company)? *Recommended default:* one company brain
+with **team-scoped views/permissions**, and full per-team brains only if a customer needs hard
+separation — keeps it simple, supports "multiple instances within a company" without N brains.
 
 ---
 
-## 3. Integrations & permissions model
+## 4. The design chunks (what we need to design)
 
-Separate three things people conflate: **joining meetings**, **accessing code**, **reaching people**.
+Each chunk lists the **specific things to design** (the real open questions), current state, and
+the professional calibration (IN now vs LATER escape hatch).
 
-### Code — GitHub App (read now; PR-write host-side, human-gated)
-- **Clone/read** = GitHub App, fine-grained `contents:read` + `metadata:read`, **org-admin-approved,
-  per-repo**. Short-lived installation tokens minted per meeting (never stored, never in the sandbox).
-- **"Do the task and bring it back" = a PR** — the *control-plane* (host-side) uses the App's
-  installation token with `pull_requests:write` to open the PR, **only after a human approves the
-  staged draft**. The sandbox never holds the token. Industry standard (Devin/CodeRabbit/Graphite),
-  and it keeps Law 3 intact.
+### Chunk A — Foundational contracts *(design FIRST; everything reads/writes these)*
+- **The company-Proxy / tenant model:** what a tenant is, its lifecycle (provision at signup →
+  live → offboard/delete), and the company-vs-team granularity above.
+- **The brain / durable store:** the schema for the persistent knowledge — what's stored in
+  Postgres (structured: meeting records, action items, ownership, cost, snapshot bookkeeping) vs
+  GCS (blobs: understanding docs, transcripts, staged diffs). *Minimize durable raw code — keep
+  only derived understanding; raw clones stay ephemeral.*
+- **Cross-meeting memory:** the shape of what persists and how a meeting **retrieves the relevant
+  slice** without blowing context. *Recommended:* simple structured recall first; heavier
+  search/embeddings only if needed.
+- **Identity & auth:** how a person logs into Proxy (**"Sign in with Google/Microsoft" → tenant by
+  domain**, + domain verification) and the credential model for stored grants (encrypted).
+- Calibration — **LATER:** SSO/SAML, SCIM, fine-grained RBAC (start: admin vs member).
 
-### Meetings — Recall join, two admission tiers
-- **Recall joins Meet / Zoom / Teams by URL.** Teams meetings are no harder than Meet here.
-- **Tier 1 (pilot): guest / waiting-room** — bot lands in the lobby; a host admits it. Handle the
-  **5-min silence auto-leave** (join near start) and the not-admitted case honestly.
-- **Tier 2 (real customer): calendar-OAuth signed-in bot** — the bot's Google account email is on
-  the calendar event, so it **skips the waiting room**, avoids anonymous-guest warnings, and enters
-  sign-in-required meetings. Recall **login groups** (a pool of bot accounts) handle concurrency.
-  This is also the **fallback for orgs that block external guest bots**.
-- **Ultimate fallback (locked-down):** a customer-provisioned bot account inside their own Workspace.
+### Chunk B — Onboarding & Access
+- **The self-serve flow/UI:** the step sequence a company follows — sign in → connect code host →
+  connect chat → add Proxy to meetings — with a **readiness view** (cloning → understanding →
+  ready) and honest **failure states** (repo too big, clone failed, monorepo, non-GitHub host).
+- **The connector seam (design once, adapters per family):** code host (GitHub first; Bitbucket/
+  GitLab adapters later), chat (Slack first; Google Chat/Teams later), **email as the universal
+  outreach floor**, meeting-join. Least-privilege scopes; encrypted token storage.
+- **Meeting-join spine:** how Proxy gets invited — per-tenant invite email / calendar → Recall
+  join-by-URL; and the reliable admission tier (signed-in bot on the invite) for locked-down orgs.
+- Calibration — **LATER:** marketplace listings, additional adapters on demand.
 
-### Reaching people — email is the floor, Slack first, Chat/Teams on demand
-Every human has email; calendar attendees, Slack, Chat, and Teams users all key off email. Build
-**one internal outreach seam** with pluggable adapters:
+### Chunk C — Cloud Platform & Runtime *(partial re-architecture: body → brain+body)*
+- **Hosting & per-tenant isolation:** shared multi-tenant infra + strong `tenant_id` isolation
+  (Stage-1, right for 0–500 customers). **Escape hatch (LATER):** per-customer GCP project
+  (Gallop's `customer-platform` module) for enterprise/regulated buyers who demand it.
+- **The instance model:** how a meeting **rehydrates a sandbox** from the brain + baked per-repo
+  template (no cold re-clone), and **folds results back**; kill + **reaper** after.
+- **Multi-repo & big-repo:** a company has N repos; a meeting **scopes to the relevant repo(s)**;
+  big monorepos via **sparse/shallow clone**; understanding rebuilt on signed push.
+- **Concurrency (Proxy joins many meetings at once):** many sandboxes across tenants **and many
+  concurrent sessions of the SAME company's brain** — brain is the source of truth, sandboxes are
+  read-through caches, **writes appended as events + reconciled** (never two VMs mutating shared
+  state). Orchestrator with per-resource locks (copy Gallop's DB-state-machine + reconcile).
+- **Operational essentials (IN — cheap, non-negotiable):** a real deploy (Cloud Run + Terraform,
+  have); basic monitoring + error tracking + the cost telemetry you have; a **per-tenant spend
+  cap**; a **sandbox reaper**; **backups on** (PITR + GCS versioning); **egress controls** on
+  sandboxes; a **cross-tenant isolation test in CI**.
+- Calibration — **LATER:** full observability/on-call/status-page/DR-drills, per-tenant KMS +
+  rotation, schema-per-tenant / dedicated DBs (Stage 2–3).
 
-| Channel | Access | Effort | When |
-|---|---|---|---|
-| **Email** (send-only, own domain) | none from customer | lowest | v1 baseline — always works |
-| **Slack** | "Add to Slack" → bot token, `chat:write`, domain-verified | low | v1 |
-| **Google Chat** | per-org internal app | medium | on demand |
-| **Teams chat** | Teams app + MS Graph + admin consent | high | on demand |
+### Chunk D — Product
+- **Post-meeting:** notes + typed/owned action items → outreach (email floor + Slack) → **execute
+  a task → PR behind a human click**.
+- **The learning loop wiring** (§3): PR/push → refresh understanding; meeting-end → fold into
+  brain; task done → record outcome. **Monitored** so we can see it working and scale it.
+- **Customer dashboard:** meetings, notes, action items, **approve staged drafts**, connection
+  health, billing; **notifications** (ping when a draft awaits approval — the human gate is useless
+  if no one is told).
+- Calibration — **LATER:** the proactive/unprompted model; product analytics; vector memory.
 
-So "sometimes Slack, sometimes Teams" never blocks a sale — email always carries the action items;
-a chat adapter is an upgrade, not a dependency.
-
-- **Identity resolution:** action-item owner (from transcript) → match to a calendar-attendee email
-  → look up their handle on whatever chat platform the tenant connected. Unresolved = flagged
-  `UNASSIGNED`, never guessed (Law 1).
-- **Outreach approval model (proposed):** the **meeting organizer approves the outreach batch once**
-  ("send these notes + reach out to these owners?"); **any code/PR or world-mutation is gated
-  individually**; anything a recipient approves is identity-matched. (Founder decision — §9.)
-
-### Recording consent & disclosure (legal floor — see §5)
-The bot **joins named ("Proxy — AI teammate") and announces transcription**. Never silent/anonymous.
-
----
-
-## 4. Onboarding flow (frictionless, org-safe)
-
-Self-serve, admin-led, bound to a verified corporate domain (one tenant = one org/workspace):
-
-1. **Sign up + pay** (Stripe) → tenant created.
-2. **Install GitHub App** — org admin approves, selects repos. Proxy indexes async
-   (connecting → cloning → indexing → ready, or an honest `not_ready` naming the gap).
-3. **Add to Slack** — one click by a workspace admin; **verify the connecting user's email domain
-   matches the corporate domain** (blocks personal-account installs).
-4. **Invite Proxy to meetings** — add `acme@proxy.<domain>` as a guest (Tier 1), or connect calendar
-   OAuth for signed-in auto-join (Tier 2). No Gmail/mailbox read — send-only.
-
-Email "just works" (own domain configured once, globally). Net customer effort: **2 clicks +
-add-a-guest.** Every grant is least-privilege, revocable, and bound to `tenant_id`.
-
----
-
-## 5. Security, trust & compliance (staged; consent is Stage A)
-
-### Stage A — before the first paid meeting
-- **Recording consent floor (legal):** bot joins **named + announces transcription**; documented
-  consent/disclosure posture; pre-meeting notice; **no silent/anonymous join, ever.** Required for
-  any all-party-consent US state (~12–14, incl. CA) or EU meeting. *Get counsel review of the
-  Ambriz "interceptor/capability" exposure — Proxy acts on transcript content, so its risk is above
-  a passive notetaker's.*
-- **Isolation + credential boundary + injection guardrail** wired and documented (these are your
-  differentiators in security reviews).
-- **Per-action audit log** of every agent world-touching action (PR, message, email) — doubles as
-  Law-3 evidence.
-- **Egress allowlist** on the sandbox (top exfiltration control buyers probe), **per-meeting cost
-  cap**, **sandbox reaper** live (§2).
-
-### Stage B — first real (security-aware) customer
-- **Trust page** documenting the controls above; **DPA + full subprocessor list** (Anthropic,
-  AssemblyAI, Cartesia, Recall, E2B, GCP — each with its own DPA + residency confirmed).
-- **Request Anthropic Zero-Data-Retention**; confirm no-training + retention terms of each
-  subprocessor and state them.
-- **SOC 2 Type I** kicked off via **Vanta/Drata** (~$10–40k/yr platform + $12–40k CPA audit;
-  Type II is the 3–12-month observation window) → market "**Type II in progress**." Acceptable to
-  SMB buyers; enterprise hard-gates on the delivered report.
-- **Pre-answered SIG-Lite / CAIQ / AI-CAIQ v1.0.2** with standing answers to the 7 grill points:
-  consent, where transcripts/code live, subprocessors, autonomous-agent-on-code risk, prompt
-  injection via transcript, can-the-agent-push-code (+ human gate), model provenance.
-- **SSO (SAML+OIDC)** via a WorkOS-class provider at first serious inbound (gates ~$50k+ ACV).
-- **CMEK per-tenant** → "delete the key = crypto-shred the tenant" (clean deletion story).
-
-### Stage C — security-conscious / larger / regulated / EU
-- **SCIM** deprovisioning; **RBAC**; immutable **SIEM-exportable audit logs**.
-- **EU data residency** (EU GCP region + DPA commitment; GDPR legitimate-interest basis + DPIA).
-- **Single-tenant** option + **BYOK**; **BYOC/VPC** deployment only when a specific regulated
-  "code-can't-leave" deal justifies it (SOC 2 must cover the deployment model actually used).
+### Chunk E — Trust, Legal & Business *(parallel; two items gate real customers)*
+- **Gate to onboarding real clients (do early):** recording-**consent** (named bot + announce);
+  **DPA + subprocessor list** (E2B, Recall, AssemblyAI, Cartesia, Anthropic).
+- **IN:** ToS + Privacy Policy (Common Paper + one lawyer review); a **security page** (isolation +
+  credential boundary + injection guardrail); data retention + working delete/offboard (have a
+  route); **Stripe billing** (per-company agent + per-meeting usage); landing page + trial.
+- Calibration — **LATER:** SOC 2 (start when a deal needs it), pen-test, DSAR tooling, trust center.
 
 ---
 
-## 6. Legal (sign-able minimum)
+## 5. The pathway & timeline (design order → then parallel build)
 
-- **Doc set:** MSA/ToS, Privacy Policy, **DPA + subprocessor page** (mandatory — we're a processor),
-  Acceptable Use; Order Form + mutual NDA when sales-led; SLA only if a buyer pushes.
-- **Source:** **Common Paper** (or Bonterms) free standard MSA/DPA/mNDA; generate the Privacy Policy;
-  publish the subprocessor page. Then **one ~$1–2k boutique flat-fee review** of the three risk
-  clauses before the first signed paid deal.
-- **Clauses that matter for Proxy:** customer owns their code + **no-training**; **AI-output IP
-  carve-out** (US Copyright Office Jan-2025: pure AI output isn't copyrightable → assign rights to
-  customer, disclaim warranties, carve AI output out of indemnity); **liability cap at 12mo fees**
-  with AI-output losses excluded from "direct damages"; subprocessor flow-down; automated-agent
-  disclosure + human-approval statement. *(Not legal advice — counsel reviews these three.)*
+**Design in dependency order; front-load contracts so the build parallelizes.**
 
----
+- **Phase 0 — Foundational contracts (Chunk A).** *Gate:* tenant/brain/memory/auth schemas agreed;
+  every other chunk can build against them. *Blocks everything — do first.*
+- **Phase 1 — Onboarding & Platform (Chunks B + C) in parallel.** They meet at ONE clean handoff:
+  *"a provisioned tenant + stored credentials."* Nail that contract and two people build them at
+  once. *Gate:* a brand-new company self-serves to a joined, indexed, working meeting; runs safely
+  (spend cap, reaper, isolation test green).
+- **Phase 2 — Product (Chunk D).** Post-meeting + dashboard + the learning loop on the foundation.
+  *Gate:* a real meeting → grounded notes + action items; one item executed end-to-end behind a
+  click; the brain visibly gets richer across meetings.
+- **Parallel throughout — Trust/Legal/Business (Chunk E)**, with consent + DPA pulled early.
+- **Later — proactive model + enterprise escape hatches** (per-customer project, SSO/SCIM, SOC 2)
+  as specific customers demand them.
 
-## 7. Billing (Stripe, margin-protected)
+*(Calendar dates depend on your velocity — the ordering + gates are the plan; each phase is a
+design pass then a build pass.)*
 
-- **Stripe Billing** (Stripe acquired Metronome Jan 2026 → usage metering going native; staying in
-  Stripe defers ever needing Orb/Lago).
-- **Model:** per-seat base fee + **included per-meeting credits + metered overage**, with **usage
-  caps + alerts** so a runaway sandbox loop can't outspend the customer. Per-meeting is the value
-  metric (tracks bot-minutes + tokens + compute); keep raw tokens internal. Price overage with
-  headroom over marginal COGS.
+## 6. The specific enterprise questions — answered/captured
 
----
+- **Multiple / big repos hosting:** brain holds a **derived understanding per repo** (not a
+  permanent raw copy); a meeting rehydrates only the relevant repo(s) into a sandbox from a baked
+  template; big repos via sparse clone; rebuilt on push. (Chunk C.)
+- **"Cloud Run job per meeting?":** no — the control-plane (Cloud Run) *orchestrates*; the meeting
+  runs in an **ephemeral sandbox instance** (E2B/GCE-VM), the "body." Cloud Run jobs suit batch,
+  not a live interactive session. (Chunk C.)
+- **Customer-to-customer separation:** `tenant_id` everywhere + per-meeting sandbox now;
+  per-customer GCP project escape hatch for enterprise. (Chunk C.)
+- **Proxy joining many meetings at once:** many concurrent sandboxes; the same-company concurrent
+  sessions read the shared brain, writes appended/reconciled; orchestrator with locks. (Chunk C.)
+- **Multiple instances of Proxy (per company / per team):** one company brain + team-scoped views
+  by default; full per-team brains only on demand. (Open decision, §3.)
 
-## 8. The demo / what a startup buyer needs to see
+## 7. Open design decisions (resolve during design — not now)
 
-- **A live "wow" moment:** Proxy joins a real meeting, is asked a code question, answers grounded in
-  *their* repo with real `file:line`, and — the differentiator Otter/Fireflies structurally can't do
-  — **cites the codebase**. Then does a small live task and stages a PR.
-- **The post-meeting artifact:** grounded notes (decisions with the settling line, owners table with
-  `UNASSIGNED`, verified `file:line`) + typed action items delivered to Slack/email.
-- **A one-page trust story:** isolation + credential boundary + human-gated actions + subprocessor
-  list. Technical buyers ask for this on the first call.
-- **Frictionless onboarding shown:** the 2-clicks-+-add-a-guest flow, live.
-
----
-
-## 9. The phased roadmap (with gates + current-state)
-
-Legend: ✅ real/live · 🟡 exists-but-unwired · 🔨 to build · 🔑 founder-gated.
-
-- **Phase 0 — Foundation lock** ✅ (done): one clean trunk (`proxy-build`), dead code gone.
-  Remaining: confirm push to real GitHub.
-- **Phase 1 — Prove reactive on real infra** 🔑 (founder): real vendor keys, swap subscription token
-  → `ANTHROPIC_API_KEY` (ToS), `terraform apply`, bake E2B template, live audio meeting.
-  *Gate:* a real meeting, grounded, barge-in works.
-- **Phase 2 — Ops-at-scale hardening** 🔨: sandbox **reaper** (🟡 `mark_ended`/`mark_meeting_ended`
-  are orphans today), per-meeting **cost cap** (🟡 `record_cost` uncalled), **egress allowlist**
-  verified live, **pause/resume + baked-template** lifecycle (§2), **injection guardrail** wired on
-  the seed path, per-action **audit log**. *Gate:* 10 concurrent meetings / 3 tenants — zero
-  cross-tenant leak, zero orphan VMs, cost capped.
-- **Phase 3 — Onboarding spine** 🔨: GitHub App (host-side PR-write), invite-email → Recall
-  join-by-URL + Tier-2 calendar-OAuth, Slack (domain-verified), own-domain email
-  (SPF/DKIM/DMARC), Stripe. *Gate:* new tenant → joined, indexed, working meeting in 2 clicks +
-  add-a-guest.
-- **Phase 4 — Post-meeting v1** 🔨: persist meeting record at end (today teardown *deletes* it) →
-  one-prompt notes + typed/owned action items → identity resolution → outreach (Slack + email
-  floor) → resume/rebuild sandbox → execute one item → stage PR behind a click. *Gate:* a real
-  meeting yields grounded notes + items; one item executed end-to-end behind approval.
-- **Phase 5 — Trust/legal/compliance** 🔨 (parallel, mostly non-code): consent posture (Stage A!),
-  trust page, DPA + subprocessors, Anthropic ZDR, SOC 2 Type I kicked off on first pilot convert.
-  *Gate:* hand a buyer a security page + DPA + subprocessor list, answer their questionnaire
-  same-day.
-- **Phase 6 — Later** 🔨: Google Chat + Teams chat adapters; SSO/SCIM (WorkOS) on enterprise
-  inbound; single-tenant/EU/BYOC on regulated demand; the **proactive** model.
+1. **Proxy granularity:** company-level brain + team views (recommended) vs per-team brains.
+2. **Live compute engine:** keep E2B for live (recommended) vs adopt Gallop's GCE-VM pattern —
+   behind a provider seam either way, so it's swappable, not a one-way door.
+3. **Memory retrieval:** simple structured recall first (recommended) vs search/embeddings now.
+4. **Warm-follow-up window:** rebuild-on-demand only (simplest) vs a short snapshot window.
+5. **Outreach approval granularity:** organizer approves the batch once + per-mutation gating
+   (recommended) vs per-message.
 
 ---
 
-## 10. Open decisions & founder-gated items
-
-**Decisions for the founder:**
-1. **Outreach approval granularity** (§3): organizer-approves-batch + individual-gate-for-mutations
-   (recommended), vs tighter (per-message) / looser (auto-send notes to a configured channel).
-2. **Warm-snapshot window length** (§2): 0h (pure rebuild-on-demand, simplest) vs 24–72h (faster
-   near-term follow-ups, needs the reaper). Recommend starting at a short window once the reaper
-   exists; 0h is acceptable v1.
-3. **Which chat adapters ship in v1** beyond email + Slack (recommend: none until a customer needs
-   Chat/Teams).
-
-**Founder-gated (only you can do):**
-- Prove reactive live (Phase 1); real vendor creds + GCP billing; swap to `ANTHROPIC_API_KEY`.
-- Get E2B paused-storage per-GB rate in writing.
-- Legal: engage a boutique SaaS lawyer for the 3-clause review.
-- Counsel review of the Ambriz consent/interceptor exposure before all-party-state / EU pilots.
-- Register the GitHub App + Slack app + sending domain; provision the bot Google account(s) for
-  Tier-2 admission.
-
----
-
-## Appendix — current-state ground truth (from a fresh codebase audit)
-
-- **REAL & live:** reactive path (webhook → provision → warm → wake → respond), premeeting map
-  build, multi-tenancy (`tenant_id` pervasive), Terraform/deploy stack.
-- **Exists but unwired:** `db.meetings.mark_ended`, `sandbox_provider.mark_meeting_ended`,
-  `record_cost` (cost metering), the reaper — orphans with zero callers.
-- **Absent (to build):** all post-meeting features (persist-at-end, action items, outreach, notes
-  broadcast), the proactive model.
-- **Uncommitted on disk (pre-existing):** a `premeeting/{comprehension,symbol_map,understanding}.py`
-  layer + `queries/` — confirm intent (commit or discard) as part of Phase 0.
+## Appendix — reference research (in session scratchpad)
+Deep briefs backing this plan: compute/persistence at scale (`research-vm-scale.md`), enterprise
+meeting-agent access + consent law (`research-enterprise-access.md`), completeness audit
+(`verify-completeness.md`), plus the Gallop `~/platform` infra study (proven reference architecture
+we copy below-the-line: Terraform modules + per-customer-project + Packer image + runtime provision
++ idle-reaper + DB-state-machine orchestration + encrypted SCM tokens + Secret Manager).
