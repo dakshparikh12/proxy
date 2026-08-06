@@ -647,6 +647,7 @@ async def _assemble_workroom(
             repo_url=repo_url,
             sha=pinned_sha,
             map_text=map_text or "",
+            meeting_info=meeting_info or "",
             relay_url=relay_url,
             relay_token=relay_token,
         )
@@ -660,20 +661,10 @@ async def _assemble_workroom(
         )
         return None, None, None, speak_pipe
 
-    # Seed MEETING_INFO.md (who's in the room) into the sandbox alongside the prime/map/notes
-    # provision_workroom already seeded, so the agent can address/read the room (SPEC §2/§8).
-    # Best-effort: a seed fault leaves the workroom running without the info file (honest
-    # degrade — the transcript still carries who's speaking), never kills the join.
-    if meeting_info:
-        with contextlib.suppress(Exception):
-            from in_meeting.prime import MEETING_INFO_FILE
-            from in_meeting.workroom import REPO_DIR
-
-            info_path = f"{REPO_DIR}/{MEETING_INFO_FILE}"
-            await call_external(
-                lambda: workroom.sandbox.files.write(info_path, meeting_info),
-                service="e2b",
-            )
+    # MEETING_INFO.md (who's in the room) is now seeded INSIDE ``provision_workroom`` as part of the
+    # ONE boot-verified seed set (T4) — passed as ``meeting_info`` above — so the roster the prime
+    # tells the agent to read can never be silently missing, and there is no scattered best-effort
+    # write here to drift out of sync (SPEC §2/§8).
 
     # The one meeting connection: the agent's result is carried out over the Cartesia speak
     # pipe (say/cut) + the Recall room verbs (chat/dm/mute/unmute — creds host-side) + the

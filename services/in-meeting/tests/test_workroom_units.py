@@ -559,3 +559,159 @@ def test_read_transcript_surfaces_the_sandbox_notes(tmp_path) -> None:
         assert await wr2.read_transcript() == ""
 
     asyncio.run(_run())
+
+
+# ── provision seeding: the interaction layer is seeded + every CLAUDE.md @import resolves ──
+# T4 (BLUEPRINT §B): provision_workroom must seed ONE explicit, boot-verified set covering every
+# file the resident CLAUDE.md/.mcp.json depends on — most critically INTERACTION_LAYER.md, whose
+# native ``@import`` in the composed CLAUDE.md was a DANGLING reference (the layer file was never
+# written), so the behavioral craft never reached the agent. These tests pin: (a) the layer file
+# lands in the sandbox with the packaged content, (b) the CLAUDE.md ``@import`` resolves to it, and
+# (c) an unseeded/failed-to-land import HALTS prep loudly (never a meeting on a dangling import).
+
+
+class _SeedRecordSandbox:
+    """A fake AsyncSandbox that records every file write into ``_store`` and brings the warm host
+    'up' on the detached launch (mirrors the boot-path fake), so provision runs end to end offline.
+    ``drop`` names a sandbox path whose write is SILENTLY DROPPED — to simulate a seed that never
+    landed (a write fault / template shadow), which boot-verification must catch."""
+
+    def __init__(self, drop: str = "") -> None:
+        from in_meeting.workroom import HOST_READY_FILE, WAKE_IN, WAKE_OUT
+
+        self._store: dict[str, str] = {}
+        self.sandbox_id = "sbx-seed"
+        self.created_kwargs: list[dict[str, Any]] = []
+        outer = self
+
+        class _Files:
+            async def write(self, path: str, content: str) -> None:
+                if path == drop:
+                    return  # simulate a write that never lands (dangling seed)
+                outer._store[path] = content
+
+            async def read(self, path: str) -> str:
+                if path not in outer._store:
+                    raise FileNotFoundError(path)
+                return outer._store[path]
+
+        class _Cmds:
+            async def run(self, cmd: str, timeout: int | None = None,
+                          envs: dict[str, str] | None = None,
+                          background: bool = False) -> Any:
+                if background:                       # the detached session-host launch → host 'up'
+                    outer._store[HOST_READY_FILE] = "beat-1"
+                if ">>" in cmd and WAKE_IN in cmd:
+                    argv = shlex.split(cmd[cmd.index("printf"):cmd.index(" >>")])
+                    req = json.loads(argv[-1])
+                    outer._store[f"{WAKE_OUT}/{req['id']}.json"] = json.dumps(
+                        {"tools": [], "text": "", "turns": 1, "cost_usd": 0.0,
+                         "error": None, "sent": []}
+                    )
+                return SimpleNamespace(exit_code=0, stdout="DONE", stderr="")
+
+        self.files = _Files()
+        self.commands = _Cmds()
+
+    async def kill(self) -> None:
+        return None
+
+
+def _seed_sandbox_class(drop: str = "") -> Any:
+    class _SandboxClass:
+        made: list[Any] = []
+
+        @staticmethod
+        async def create(**kwargs: Any) -> Any:
+            sb = _SeedRecordSandbox(drop=drop)
+            sb.created_kwargs.append(dict(kwargs))
+            _SandboxClass.made.append(sb)
+            return sb
+
+    return _SandboxClass
+
+
+def test_provision_seeds_the_interaction_layer_and_resolves_the_claudemd_import() -> None:
+    import re
+
+    import in_meeting.workroom as wm
+    from in_meeting.workroom import (
+        INTERACTION_LAYER_FILE,
+        INTERACTION_LAYER_NAME,
+        PRIME_FILE,
+        REPO_DIR,
+        _packaged_source,
+        provision_workroom,
+    )
+
+    async def _run() -> None:
+        wm._WARM_PROVISION_WAIT_S = 0.2
+        wm._WARM_READY_TIMEOUT_S = 0.2
+        cls = _seed_sandbox_class()
+        wr = await provision_workroom(
+            call=_passthru_call, token="sk-oauth", repo_url="https://example.test/repo.git",
+            map_text="the map with real file:line facts", sandbox_class=cls,
+        )
+        store = cls.made[0]._store
+
+        # (a) INTERACTION_LAYER.md landed in the sandbox with the PACKAGED interaction-layer content
+        #     (the behavioral craft the resident prime imports) — it was never seeded before T4.
+        assert INTERACTION_LAYER_FILE in store, "INTERACTION_LAYER.md was not seeded into the sandbox"
+        assert store[INTERACTION_LAYER_FILE] == _packaged_source(INTERACTION_LAYER_NAME)
+
+        # (b) EVERY native ``@import`` in the composed CLAUDE.md resolves to a file that was seeded —
+        #     so the resident prime carries NO dangling import. (The one import is INTERACTION_LAYER.md.)
+        claude_md = store[PRIME_FILE]
+        imports = re.findall(r"(?m)^\s*@([\w./\-]+)\s*$", claude_md)
+        assert imports, "expected at least one @import in the composed CLAUDE.md"
+        for rel in imports:
+            resolved = f"{REPO_DIR}/{rel.lstrip('./')}"
+            assert resolved in store, f"CLAUDE.md @import {rel!r} → {resolved} is NOT seeded (dangling)"
+
+    asyncio.run(_run())
+
+
+def test_provision_halts_loudly_when_a_claudemd_import_is_unseeded() -> None:
+    """Boot-verification: if a file named/imported by the resident CLAUDE.md fails to land, prep
+    HALTS with an error that surfaces to the provisioner — never a meeting on a dangling import."""
+    import in_meeting.workroom as wm
+    from in_meeting.workroom import INTERACTION_LAYER_FILE, provision_workroom
+
+    async def _run() -> None:
+        wm._WARM_PROVISION_WAIT_S = 0.2
+        wm._WARM_READY_TIMEOUT_S = 0.2
+        # The interaction-layer write never lands → its CLAUDE.md @import is dangling → HALT.
+        cls = _seed_sandbox_class(drop=INTERACTION_LAYER_FILE)
+        raised = False
+        try:
+            await provision_workroom(
+                call=_passthru_call, token="sk-oauth", repo_url="https://example.test/repo.git",
+                map_text="m", sandbox_class=cls,
+            )
+        except Exception as exc:  # noqa: BLE001 — asserting the loud halt on a dangling import
+            raised = True
+            assert "INTERACTION_LAYER" in str(exc) or "import" in str(exc).lower()
+        assert raised, "provision must HALT when a CLAUDE.md @import is unseeded (dangling)"
+
+    asyncio.run(_run())
+
+
+def test_provision_seeds_meeting_info_as_part_of_the_boot_verified_set() -> None:
+    """MEETING_INFO.md (the roster) is folded into the ONE seed set — provision seeds it (from the
+    ``meeting_info`` content), not a scattered best-effort write in the provisioner."""
+    import in_meeting.workroom as wm
+    from in_meeting.workroom import MEETING_INFO_FILE, provision_workroom
+
+    async def _run() -> None:
+        wm._WARM_PROVISION_WAIT_S = 0.2
+        wm._WARM_READY_TIMEOUT_S = 0.2
+        cls = _seed_sandbox_class()
+        roster = "# Meeting\n\n**Participants:**\n- Ann (id: p9)\n- Bob\n"
+        await provision_workroom(
+            call=_passthru_call, token="sk-oauth", repo_url="https://example.test/repo.git",
+            map_text="m", meeting_info=roster, sandbox_class=cls,
+        )
+        store = cls.made[0]._store
+        assert store[MEETING_INFO_FILE] == roster
+
+    asyncio.run(_run())

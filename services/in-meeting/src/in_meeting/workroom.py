@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import shlex
 import time
 import uuid
@@ -55,6 +56,15 @@ PRIME_FILE = f"{REPO_DIR}/CLAUDE.md"
 #: prime. It is CRAFT (rich examples), distinct from the short behavioral law in ``prime.py``.
 INTERACTION_LAYER_NAME = "interaction_layer.md"
 INTERACTION_LAYER_FILE = f"{REPO_DIR}/INTERACTION_LAYER.md"
+#: The ROSTER — who is in the room (title/agenda/participants + the DM-id note), rendered by
+#: ``prime.render_meeting_info`` and seeded as part of the ONE boot-verified seed set (below), so the
+#: file the prime tells the agent to read is never silently missing. Folded in from the provisioner's
+#: former separate best-effort write. ``MEETING_INFO_FILE`` here is the full sandbox path (the
+#: basename lives in ``prime.MEETING_INFO_FILE``).
+MEETING_INFO_FILE = f"{REPO_DIR}/MEETING_INFO.md"
+#: The honest placeholder seeded as MEETING_INFO.md when no roster is known yet — the file is ALWAYS
+#: present (part of the boot-verified set) but never carries a fabricated roster (Law 1/2).
+_MEETING_INFO_PLACEHOLDER = "# Meeting\n\n(no meeting metadata available)\n"
 #: The skills pack — procedural know-how loaded by native ``claude`` only WHEN doing that kind of
 #: work (``.claude/skills/<name>/SKILL.md`` is the CLI's discovery path), keeping the always-on prime
 #: lean. Seeded at provision alongside CLAUDE.md. The names are the packaged source dirs under
@@ -327,6 +337,46 @@ class Workroom:
     async def _write_file(self, path: str, content: str) -> None:
         outcome = await self.call(lambda: self.sandbox.files.write(path, content), service="e2b")
         getattr(outcome, "value", outcome)
+
+    async def _read_file(self, path: str) -> str | None:
+        """Read a seeded file back for boot-verification. Returns the content, or ``None`` if the
+        file is absent (the real E2B SDK RAISES on an absent path — treated as "did not land")."""
+        try:
+            outcome = await self.call(lambda: self.sandbox.files.read(path), service="e2b")
+        except Exception:  # noqa: BLE001 — an absent/failed read is "did not land" → verify fails
+            return None
+        val = getattr(outcome, "value", outcome)
+        return None if val is None else str(val)
+
+    async def _seed_and_verify(self, seed_files: list[tuple[str, str]]) -> None:
+        """Write the ONE explicit seed set into the sandbox, then BOOT-VERIFY it — halting prep loudly
+        (:class:`WorkroomSeedError`) if anything the resident CLAUDE.md depends on did not land.
+
+        Two checks, so a meeting NEVER starts on a dangling resident import:
+        1. Every seeded file is READ BACK non-empty (a write that silently didn't land — a template
+           shadow, a transient fault — is caught here, not at the first wake).
+        2. Every native ``@import`` in the composed CLAUDE.md resolves to a file in the seed set (so
+           the interaction layer — the behavioral craft — is guaranteed present, never dangling).
+
+        This is fail-closed by design (Law 1: grounded or silent): the provisioner catches the halt
+        and boots the meeting WITHOUT a workroom rather than with a half-seeded one."""
+        seeded_paths = {path for path, _ in seed_files}
+        for path, content in seed_files:
+            await self._write_file(path, content)
+        # (1) read-back every seeded file — a write that didn't land is a halt, not a silent gap.
+        missing = [path for path in (p for p, _ in seed_files) if not (await self._read_file(path))]
+        if missing:
+            raise WorkroomSeedError(
+                f"workroom seed incomplete — these files did not land in the sandbox: {missing}"
+            )
+        # (2) every CLAUDE.md @import must resolve to a seeded file (no dangling resident import).
+        claude_md = dict(seed_files)[PRIME_FILE]
+        dangling = [imp for imp in _claude_md_imports(claude_md) if imp not in seeded_paths]
+        if dangling:
+            raise WorkroomSeedError(
+                f"resident CLAUDE.md has @import(s) to unseeded file(s) (dangling): {dangling} — "
+                f"the interaction layer / imported craft would never reach the agent"
+            )
 
     async def feed_transcript(self, transcript_md: str) -> None:
         """Materialize the live transcript into the sandbox as a CRASH/RECONNECT RECOVERY record.
@@ -736,6 +786,30 @@ class Workroom:
             logger.exception("workroom teardown kill failed")
 
 
+class WorkroomSeedError(RuntimeError):
+    """Raised when the ONE boot-verified seed set does NOT fully land in the sandbox — a seeded file
+    is missing after write, or a native ``@import`` in the composed CLAUDE.md points at a file that
+    was not seeded (a DANGLING resident import). Halting prep loudly here is the correct fail-closed
+    behavior: the provisioner catches it and boots the meeting WITHOUT a workroom (honest degrade),
+    rather than letting a meeting start on a resident prime whose behavioral core never loads."""
+
+
+_IMPORT_LINE = re.compile(r"(?m)^\s*@([\w./\-]+)\s*$")
+
+
+def _claude_md_imports(claude_md: str, *, repo_dir: str = REPO_DIR) -> list[str]:
+    """The sandbox paths every native ``@import`` in the composed CLAUDE.md resolves to.
+
+    Claude Code resolves ``@path`` imports in CLAUDE.md RELATIVE to the file, so ``@./FOO.md`` (or
+    ``@FOO.md``) loads ``<repo_dir>/FOO.md`` seeded beside CLAUDE.md. We only treat a line that is
+    JUST an ``@path`` token as an import (the shape ``compose_resident_prime`` emits) — never an
+    ``@`` that happens to appear mid-prose — so the boot check can't false-positive on the prime."""
+    out: list[str] = []
+    for rel in _IMPORT_LINE.findall(claude_md):
+        out.append(f"{repo_dir}/{rel.lstrip('./')}")
+    return out
+
+
 def _packaged_source(name: str) -> str:
     """A packaged script's source, read off disk next to this module — the ONE source of truth for a
     file COPIED into the sandbox verbatim at provision (the script runs where the workspace is not
@@ -752,6 +826,46 @@ def _session_host_source() -> str:
     """The packaged WARM session-host source (``session_host.py``) — the ONE persistent Claude
     session that serves every wake (no per-turn spawn)."""
     return _packaged_source("session_host.py")
+
+
+def _seed_files(*, prime: str, map_text: str, meeting_info: str) -> list[tuple[str, str]]:
+    """The ONE explicit seed set: every file the resident CLAUDE.md / ``.mcp.json`` depends on, as
+    ``(sandbox_path, content)`` pairs written verbatim into the sandbox at provision.
+
+    This is the single source of truth for "what the warm session needs on disk" — so nothing named
+    in CLAUDE.md (the behavioral prime, its ``@import`` of the interaction layer, the roster it reads,
+    the MCP server + ``.mcp.json`` that give it its one connection to the room, the session host that
+    serves each wake) can be silently missing. :func:`provision_workroom` writes THIS list and then
+    boot-verifies it (:meth:`Workroom._seed_and_verify`); any gap HALTS prep (:class:`WorkroomSeedError`).
+
+    - **CLAUDE.md** — the lean behavioral prime + the resident understanding, composed with the native
+      ``@./INTERACTION_LAYER.md`` import (:func:`compose_resident_prime`).
+    - **INTERACTION_LAYER.md** — the packaged craft (``interaction_layer.md``) that CLAUDE.md imports;
+      the T4 fix — before this it was NEVER seeded, so the import dangled and the craft never loaded.
+    - **MEETING_INFO.md** — the roster (who's in the room); an honest placeholder when none is known.
+    - **REPO_MAP.md** — the map as an older-context fallback (the resident block in CLAUDE.md is primary).
+    - **MEETING_NOTES.md** — the empty transcript/recovery record the bridge appends to.
+    - **sandbox_meeting_mcp.py** + **.mcp.json** — the in-sandbox MCP server (the one ``to_meeting``
+      connection) and the stdio config that registers it with native ``claude`` (``alwaysLoad``).
+    - **session_host.py** — the warm permanent session that serves every wake.
+
+    (Skills — ``SKILL_NAMES`` / ``SKILLS_DIR`` — are deliberately NOT in this set yet; the
+    seed-or-delete decision is deferred to the interaction-layer phase.)"""
+    mcp_config = {
+        "mcpServers": {
+            "meeting": {"command": "python3", "args": [MCP_SERVER_FILE], "alwaysLoad": True}
+        }
+    }
+    return [
+        (PRIME_FILE, compose_resident_prime(prime, map_text)),
+        (INTERACTION_LAYER_FILE, _packaged_source(INTERACTION_LAYER_NAME)),
+        (MEETING_INFO_FILE, meeting_info.strip() and meeting_info or _MEETING_INFO_PLACEHOLDER),
+        (MAP_FILE, map_text or "(no pre-built map — explore the repo directly)"),
+        (TRANSCRIPT_FILE, "# Meeting transcript\n"),
+        (MCP_SERVER_FILE, _mcp_server_source()),
+        (MCP_CONFIG_FILE, json.dumps(mcp_config)),
+        (SESSION_HOST_FILE, _session_host_source()),
+    ]
 
 
 async def _start_session_host(wr: Workroom) -> bool:
@@ -797,6 +911,7 @@ async def provision_workroom(
     repo_url: str,
     sha: str | None = None,
     map_text: str = "",
+    meeting_info: str = "",
     prime: str = WORKROOM_PRIME,
     template: str | None = DEFAULT_TEMPLATE,
     sandbox_class: Any = None,
@@ -891,41 +1006,25 @@ async def provision_workroom(
     if sha:
         await wr._run(f"cd {shlex.quote(REPO_DIR)} && git checkout -q {shlex.quote(sha)} || true",
                       timeout=120.0)  # noqa: SLF001
-    # Seed the orientation files.
-    # RESIDENT understanding: CLAUDE.md = the lean behavioral prime + the codebase-understanding block
-    # (the comprehension-first resident doc — a holistic qualitative mental model + a compact
-    # navigation aid, under UNDERSTANDING_HEADER). Because the WARM session loads CLAUDE.md ONCE into
-    # its CACHED prefix, the understanding rides in-context every wake with ZERO reads — resident, not
-    # a REPO_MAP.md the agent must open. Exact file:line is grounded LIVE at answer time (Law 1), using
-    # the understanding to know where to look.
-    #   History: a NAIVE PROSE map inlined into CLAUDE.md was tried and reverted (bloat + cross-talk
-    #   over-fire). This is different: caching is now proven (the warm session reuses the cached prefix,
-    #   so the block is written ONCE not re-parsed per turn) AND the doc is a DENSE, holistic mental
-    #   model kept visually distinct from the behavior above it — understanding, not dilution.
-    # REPO_MAP.md is ALSO still written as an older-context fallback, but the resident block is primary.
-    await wr._write_file(PRIME_FILE, compose_resident_prime(prime, map_text))  # noqa: SLF001
-    await wr._write_file(MAP_FILE, map_text or "(no pre-built map — explore the repo directly)")  # noqa: SLF001
-    await wr._write_file(TRANSCRIPT_FILE, "# Meeting transcript\n")  # noqa: SLF001
-    # Wire the agent's ONE connection to the room: the in-sandbox MCP server + the .mcp.json that
-    # registers it with native ``claude`` over stdio. The agent chooses the medium live; the server
-    # relays each call to the host (or records it locally when there is no relay).
-    await wr._write_file(MCP_SERVER_FILE, _mcp_server_source())  # noqa: SLF001
-    # ``alwaysLoad: true`` — mirror the warm host's config so the ONE meeting tool (``to_meeting``)
-    # skips tool-search deferral and is ALWAYS immediately callable (never behind a ToolSearch
-    # round-trip). See the rationale on ``session_host._mcp_servers``: Claude Code defers MCP tools by
-    # default once descriptions exceed ~10% of context, which put a wasted ``ToolSearch`` right before
-    # the first ``to_meeting`` call on EVERY delivering task. ``to_meeting`` is the sole line to the
-    # room — it must never be deferred.
-    mcp_config = {
-        "mcpServers": {
-            "meeting": {"command": "python3", "args": [MCP_SERVER_FILE], "alwaysLoad": True}
-        }
-    }
-    await wr._write_file(MCP_CONFIG_FILE, json.dumps(mcp_config))  # noqa: SLF001
-    # Write + START the WARM permanent session (the ONE delivery path): one persistent Claude session
-    # per meeting, warm before the first wake. On any launch fault ``warm`` stays False and the first
-    # wake self-heals (restart-and-retry) or honest-degrades.
-    await wr._write_file(SESSION_HOST_FILE, _session_host_source())  # noqa: SLF001
+    # Seed the ONE explicit, boot-verified seed set — every file the resident CLAUDE.md / ``.mcp.json``
+    # depends on, written together and then READ BACK + ``@import``-checked so nothing named in
+    # CLAUDE.md can be silently missing (T4). This folds together what used to be scattered writes:
+    #  - CLAUDE.md = the lean behavioral prime + the RESIDENT codebase-understanding block (composed by
+    #    :func:`compose_resident_prime`, cached ONCE into the warm session's prefix → zero-read recall);
+    #  - INTERACTION_LAYER.md = the packaged craft CLAUDE.md ``@import``s (THE T4 fix — it was never
+    #    seeded before, so that import dangled and the behavioral core never reached the agent);
+    #  - MEETING_INFO.md = the roster (folded in from the provisioner's former best-effort write);
+    #  - REPO_MAP.md (older-context fallback), MEETING_NOTES.md (empty recovery record);
+    #  - sandbox_meeting_mcp.py + .mcp.json (the ONE ``to_meeting`` connection, ``alwaysLoad`` so the
+    #    sole line to the room is never deferred behind a ToolSearch) + session_host.py (the warm session).
+    # A gap HALTS prep loudly (:class:`WorkroomSeedError`) — fail-closed, so a meeting never starts on a
+    # dangling resident import; the provisioner catches it and boots without a workroom (honest degrade).
+    await wr._seed_and_verify(  # noqa: SLF001 — same module
+        _seed_files(prime=prime, map_text=map_text, meeting_info=meeting_info)
+    )
+    # START the WARM permanent session (the ONE delivery path): one persistent Claude session per
+    # meeting, warm before the first wake. On any launch fault ``warm`` stays False and the first wake
+    # self-heals (restart-and-retry) or honest-degrades.
     wr.warm = await _start_session_host(wr)
     if wr.warm:
         # Warm the host DURING provision (before anyone addresses Proxy) so the first wake finds it
