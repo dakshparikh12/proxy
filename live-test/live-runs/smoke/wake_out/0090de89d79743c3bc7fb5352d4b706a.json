@@ -1,1 +1,0 @@
-{"tools": ["Bash"], "text": "Yeah \u2014 it's `pnpm dev` inside `apps/web`, which runs `next dev`. No `cmd/server` anywhere in this repo; that's documentation drift from a different project or an old era.", "cost_usd": 0.2734005, "turns": 2, "error": null, "deliver_at": 5.48, "ttft": 3.7, "sent": [], "queued_ms": 102.5, "_served_at": 1785961533.5851617}

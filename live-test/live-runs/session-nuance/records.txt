@@ -1,0 +1,28 @@
+13:55:52 | q: 100.4 | ttft: 3.15 | spoke: 4.26 | turns: 1 | tools: []
+    Hey Pranav! What's up?
+13:56:03 | q: 59.2 | ttft: 2.82 | spoke: 5.05 | turns: 1 | tools: []
+    [SILENT] Daksh is checking audio with Pranav, and Pranav's "I'm doing good" is a reply to my greeting — just s
+13:56:06 | q: 1675.6 | ttft: 2.03 | spoke: 0.0 | turns: 1 | tools: []
+    [SILENT] Daksh is explaining to Pranav how to wake me — cross-talk between them, not addressing me.
+13:56:19 | q: 2856.7 | ttft: 4.25 | spoke: 5.37 | turns: 1 | tools: []
+    Doing great, thanks! Good to have you both in the room. What are we getting into today?
+13:56:21 | q: 4584.4 | ttft: 1.79 | spoke: 2.22 | turns: 1 | tools: []
+    Yeah, I'm here — go ahead.
+13:56:45 | q: 124.9 | ttft: 2.68 | spoke: 19.16 | turns: 1 | tools: []
+    Cova is an AI interior design app where you photograph your real room, take a style quiz, and get back a photo
+13:56:53 | q: 106.0 | ttft: 3.11 | spoke: 4.82 | turns: 1 | tools: []
+    [SILENT] This is an exact repeat of the question I just answered.
+13:57:06 | q: 91.7 | ttft: 3.38 | spoke: 0.0 | turns: 1 | tools: []
+    [SILENT] Pranav is talking to Daksh, not to me.
+13:57:15 | q: 109.8 | ttft: 3.07 | spoke: 6.3 | turns: 1 | tools: []
+    Cova lets you photograph your room, take a style quiz, and get back a photorealistic AI redesign of that exact
+13:58:33 | q: 101.5 | ttft: 3.91 | spoke: 10.62 | turns: 1 | tools: []
+    It's a Next.js web app on Vercel that orchestrates a set of Python GPU services running on Modal — the browser
+13:59:16 | q: 146.6 | ttft: 7.76 | spoke: 9.68 | turns: 2 | tools: ['Bash']
+    Confirmed — `apps/web`, run `pnpm dev` for dev or `pnpm start` for production. No `cmd/server`, that doc is ju
+13:59:34 | q: 67.1 | ttft: 3.16 | spoke: 0.0 | turns: 1 | tools: []
+    [SILENT]
+13:59:45 | q: 130.6 | ttft: 3.67 | spoke: 4.94 | turns: 1 | tools: []
+    [SILENT] Daksh is talking to Pranav about the TTS latency logs — not addressing me.
+13:59:49 | q: 1160.7 | ttft: 3.92 | spoke: 0.0 | turns: 1 | tools: []
+    [SILENT]

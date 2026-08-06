@@ -155,11 +155,24 @@ def test_page_js_registers_the_worklet_and_streams_via_a_fifo() -> None:
     assert "audioWorklet.addModule" in page
     assert "new Blob([WORKLET_SRC]" in page
     assert "new AudioWorkletNode" in page
-    # chunks are APPENDED to one FIFO and pushed to the worklet — no per-chunk BufferSource:
+    # chunks are APPENDED to one FIFO and pushed to the worklet — the PRIMARY path uses no per-chunk
+    # BufferSource (that was the seam). A per-chunk BufferSource exists ONLY inside the named FALLBACK
+    # player (fallbackPlay) that runs when the worklet can't load — audible beats silent — and the
+    # worklet path never touches it. Pin: the samples path is FIFO-only; createBufferSource is
+    # confined to fallbackPlay and reached only via the worklet-load .catch().
     assert "appendChunk" in page
     assert "postMessage({ type: \"samples\"" in page
-    assert "createBufferSource" not in page, "no per-chunk source nodes survive (that was the seam)"
-    assert "nextStartTime" not in page, "the per-chunk scheduling cursor is fully removed (no dead code)"
+    assert "createBufferSource" in page.split("function fallbackPlay")[1], \
+        "the only per-chunk BufferSource lives in the fallback player, not the worklet path"
+    assert "createBufferSource" not in page.split("function fallbackPlay")[0], \
+        "the primary (worklet) path has no per-chunk source node (that was the seam)"
+    # the per-chunk scheduling cursor (fallbackNextStart) is confined to the fallback player — the
+    # appendChunk→worklet primary path never schedules per-chunk sources:
+    append_body = page.split("function appendChunk")[1].split("function cutPlayback")[0]
+    assert "fallbackNextStart" not in append_body, \
+        "appendChunk (the primary path) carries no per-chunk scheduling cursor"
+    assert "createBufferSource" not in append_body, \
+        "appendChunk (the primary path) creates no per-chunk source node"
     # prebuffer + underrun ramp + cut-clears-FIFO all present:
     assert "PREBUFFER_S" in page and "RAMP_S" in page
     assert "_prebuffer" in page and "_fadingIn" in page
@@ -167,6 +180,49 @@ def test_page_js_registers_the_worklet_and_streams_via_a_fifo() -> None:
     # sample-rate handled ONCE: ask for 44100, resample-at-append only if the ctx differs:
     assert "{ sampleRate: SAMPLE_RATE }" in page
     assert "resampleStream(floats, SAMPLE_RATE, CTX_RATE)" in page
+
+
+def test_page_js_ships_the_stats_reporter() -> None:
+    """PAGE TELEMETRY: the page must periodically send a ``{type:"stats", ...}`` frame back over the
+    SAME WS with the fields the host logs — the instrument that gives ground truth from inside
+    Recall's headless Chrome next live session. Pins the presence of the sender + every field."""
+    from in_meeting.output_media import _render_page
+
+    page = _render_page("m-stats")
+    # a periodic reporter on an interval, wired to the WS open:
+    assert "startStatsReporter" in page
+    assert "setInterval(tick, STATS_INTERVAL_MS)" in page
+    assert "ws.onopen" in page
+    # it ships a JSON stats frame carrying every field the host parses + logs:
+    assert 'type: "stats"' in page
+    for field in (
+        "ctxRate", "requestedRate", "workletLoaded", "activePath",
+        "framesReceived", "samplesAppended", "underruns", "cuts", "fifoDepth",
+    ):
+        assert field in page, f"stats frame missing field {field!r}"
+    # the worklet is the source of the FIFO/underrun/cut truth — the main thread polls it:
+    assert 'postMessage({ type: "stats?" })' in page
+    assert "this._underruns" in page and "this._cuts" in page and "this._samplesAppended" in page
+    # frames received are counted on the binary path:
+    assert "framesReceived++" in page
+
+
+def test_page_js_has_a_worklet_fallback_not_silence() -> None:
+    """WORKLET FALLBACK: if the AudioWorklet fails to load (CSP on blob:, unsupported API) the page
+    must NOT go silent — it falls back to a scheduled-buffer player and reports the active path. Pins
+    the fallback path + the honest activePath telemetry so the next session tells us which is live."""
+    from in_meeting.output_media import _render_page
+
+    page = _render_page("m-fallback")
+    # startWorklet is guarded: a rejection switches to the fallback (never an unhandled silence):
+    assert "startWorklet().catch(" in page
+    assert "startFallbackBuffer" in page
+    assert "fallbackPlay" in page
+    # the fallback path is reported honestly in the stats frame:
+    assert 'activePath = "buffer"' in page
+    assert 'activePath = "worklet"' in page
+    # appendChunk routes to the fallback when the worklet never loaded (audible beats silent):
+    assert "else { fallbackPlay(floats); }" in page
 
 
 def _resample_stream_mirror():

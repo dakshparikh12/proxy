@@ -265,3 +265,64 @@ async def test_cut_while_writer_blocked_clears_and_unblocks() -> None:
     assert writer.done()
     pump.cancel()
     await asyncio.gather(pump, return_exceptions=True)
+
+
+# ---------------------------------------------------------------------------
+# 8. Page telemetry: an inbound page→host stats frame is parsed and LOGGED
+# ---------------------------------------------------------------------------
+
+
+def test_log_stats_frame_parses_and_logs_one_line(caplog: pytest.LogCaptureFixture) -> None:
+    """The host receive path turns one ``{"type":"stats", ...}`` page frame into ONE meeting-tagged
+    ``logger.info`` line carrying the ground-truth fields. A non-stats/malformed frame is ignored."""
+    import logging
+
+    from in_meeting.output_media import _log_stats_frame
+
+    frame = json.dumps({
+        "type": "stats", "ctxRate": 48000, "requestedRate": 44100, "workletLoaded": True,
+        "activePath": "worklet", "framesReceived": 120, "samplesAppended": 640000,
+        "underruns": 3, "cuts": 1, "fifoDepth": 15360,
+    })
+    with caplog.at_level(logging.INFO, logger="in_meeting.output_media"):
+        _log_stats_frame("m-stats", frame)
+        # ignored frames produce no log line:
+        _log_stats_frame("m-stats", json.dumps({"type": "speaking", "speaking": True}))
+        _log_stats_frame("m-stats", "not json at all")
+
+    stats_lines = [r for r in caplog.records if "page stats" in r.getMessage()]
+    assert len(stats_lines) == 1, "exactly one stats line logged (the non-stats/garbage frames ignored)"
+    line = stats_lines[0].getMessage()
+    assert "meeting=m-stats" in line
+    assert "ctxRate=48000" in line and "workletLoaded=True" in line
+    assert "activePath=worklet" in line and "underruns=3" in line and "fifoDepth=15360" in line
+
+
+@pytest.mark.asyncio
+async def test_ws_receives_and_logs_a_page_stats_frame(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """END-TO-END receive path: a page that sends a stats text frame over the SAME WS gets it parsed
+    and logged host-side (meeting-tagged). Proves the WS is no longer purely one-way host→page."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="in_meeting.output_media"):
+        with client.websocket_connect("/output-media/m5/ws") as ws:
+            # Audio still flows host→page (the feed is unchanged)…
+            await channel_for("m5").write_audio(b"pcm-frame")
+            assert ws.receive_bytes() == b"pcm-frame"
+            # …and the page now sends telemetry back over the same socket.
+            ws.send_text(json.dumps({
+                "type": "stats", "ctxRate": 44100, "requestedRate": 44100, "workletLoaded": True,
+                "activePath": "worklet", "framesReceived": 1, "samplesAppended": 4,
+                "underruns": 0, "cuts": 0, "fifoDepth": 4,
+            }))
+            # give the server task a beat to receive + log the frame
+            for _ in range(50):
+                if any("page stats" in r.getMessage() for r in caplog.records):
+                    break
+                await asyncio.sleep(0.01)
+
+    stats_lines = [r for r in caplog.records if "page stats" in r.getMessage()]
+    assert stats_lines, "the host logged the inbound page stats frame"
+    assert "meeting=m5" in stats_lines[0].getMessage()

@@ -47,6 +47,24 @@ REPO_DIR = f"{WORKROOM_ROOT}/repo"
 TRANSCRIPT_FILE = f"{REPO_DIR}/MEETING_NOTES.md"
 MAP_FILE = f"{REPO_DIR}/REPO_MAP.md"
 PRIME_FILE = f"{REPO_DIR}/CLAUDE.md"
+#: The INTERACTION LAYER — worked examples of how Proxy shows up in the room + the above-and-beyond
+#: quality bar + how to reason out the unpredicted. It ships as its OWN editable markdown file
+#: (``interaction_layer.md``, packaged beside this module) and is seeded into the sandbox next to
+#: CLAUDE.md, which pulls it in with a native ``@`` import — so the layer rides the resident prime
+#: exactly like the prime does, but stays a separate file the founder can edit without touching the
+#: prime. It is CRAFT (rich examples), distinct from the short behavioral law in ``prime.py``.
+INTERACTION_LAYER_NAME = "interaction_layer.md"
+INTERACTION_LAYER_FILE = f"{REPO_DIR}/INTERACTION_LAYER.md"
+#: The skills pack — procedural know-how loaded by native ``claude`` only WHEN doing that kind of
+#: work (``.claude/skills/<name>/SKILL.md`` is the CLI's discovery path), keeping the always-on prime
+#: lean. Seeded at provision alongside CLAUDE.md. The names are the packaged source dirs under
+#: ``skills/`` beside this module; each carries one ``SKILL.md``.
+SKILLS_DIR = f"{REPO_DIR}/.claude/skills"
+SKILL_NAMES = ("meeting-artifact", "meeting-diagram", "background-job")
+#: The known sandbox file the warm session writes its own Claude session id into at open, so the
+#: fork-resume advanced option (``claude -p --resume <id> --fork-session …``) in the interaction
+#: layer is actually usable. Written by ``session_host`` on the first turn; read by the agent.
+SESSION_ID_FILE = f"{REPO_DIR}/.proxy_session_id"
 
 #: The in-sandbox MCP server that gives native Claude its ONE connection to the room (the
 #: ``to_meeting`` tool). Written into the sandbox at provision from the packaged source; native
@@ -141,6 +159,19 @@ UNDERSTANDING_HEADER = (
     "location — never cite a line from memory.)\n\n"
 )
 
+#: The native ``@`` import that pulls the INTERACTION LAYER file into CLAUDE.md. Claude Code resolves
+#: ``@path`` imports in CLAUDE.md relative to the file, so ``@./INTERACTION_LAYER.md`` loads the layer
+#: file seeded beside CLAUDE.md — the layer rides the resident prime exactly like the prime, while
+#: staying a separate, easily-editable file (the founder edits ``interaction_layer.md``, not the
+#: prime). Composed AFTER the behavioral prime and BEFORE the guardrail-last invariant, so the
+#: injection guardrail is still the strict final word of the composed CLAUDE.md.
+INTERACTION_LAYER_IMPORT = (
+    "\n\n# How you show up in the room (worked examples + the quality bar)\n"
+    "Your craft — concrete examples of what the room expects, the above-and-beyond quality bar, and "
+    "how to reason out anything not covered — is imported here; read it as part of who you are:\n\n"
+    "@./INTERACTION_LAYER.md\n"
+)
+
 
 def compose_resident_prime(prime: str, map_text: str) -> str:
     """Compose the CLAUDE.md that is seeded RESIDENT into the warm session: the lean behavioral
@@ -163,7 +194,11 @@ def compose_resident_prime(prime: str, map_text: str) -> str:
     # premeeting map-build imports ``agentkit.provider``). ONE shared body, no per-service copy.
     from agentkit.guardrails import with_injection_guardrail
 
-    body = prime if not map_text.strip() else prime + UNDERSTANDING_HEADER + map_text.rstrip() + "\n"
+    # The behavioral prime, THEN the native @import of the interaction layer (craft/examples/quality
+    # bar — its own editable file), THEN the resident codebase understanding (when a map is present).
+    body = prime + INTERACTION_LAYER_IMPORT
+    if map_text.strip():
+        body += UNDERSTANDING_HEADER + map_text.rstrip() + "\n"
     # ``with_injection_guardrail`` is declared ``-> str``; the cross-member ``agentkit.*`` import is
     # opaque to the strict walk (``ignore_missing_imports``), so the return is seen as Any — the value
     # is a real ``str`` (matches the sandbox_meeting_mcp convention for the same cross-boundary case).

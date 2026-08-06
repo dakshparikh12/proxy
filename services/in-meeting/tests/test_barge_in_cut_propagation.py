@@ -94,9 +94,13 @@ def test_page_js_handles_the_cut_frame_and_clears_the_stream() -> None:
     assert "cutPlayback()" in page
     # (b) the cut clears the FIFO instantly via the worklet port message (the new stream player):
     assert 'postMessage({ type: "cut" }' in page
-    # the old per-chunk scheduling machinery is fully gone (no dead code, no per-chunk resample seam):
+    # the old per-chunk scheduling machinery is gone from the PRIMARY (worklet) path (no per-chunk
+    # resample seam). A per-chunk BufferSource survives ONLY inside the named fallback player
+    # (fallbackPlay), which runs when the worklet can't load — audible beats silent — and the cut
+    # path clears the fallback schedule too (fallbackNextStart = 0).
     assert "liveSources" not in page
-    assert "createBufferSource" not in page
+    assert "createBufferSource" not in page.split("function fallbackPlay")[0], \
+        "the worklet path has no per-chunk source node (createBufferSource is confined to fallbackPlay)"
 
 
 def test_barge_in_final_line_is_not_suppressed_by_the_cut_path() -> None:

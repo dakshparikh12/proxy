@@ -12,7 +12,10 @@ meeting as the bot's camera + microphone. This module is that missing surface:
 * ``build_output_media_router()`` / ``router`` — the FastAPI router serving
   ``GET /output-media/{meeting_id}`` (the orb page, one inline HTML string —
   no build step, no external assets) and ``WS /output-media/{meeting_id}/ws``
-  (the page's feed: PCM as BINARY frames, ``{"speaking": bool}`` as JSON text).
+  (host→page: PCM as BINARY frames, ``{"speaking": bool}`` as JSON text; and
+  page→host: periodic ``{"type":"stats", ...}`` telemetry frames the host logs —
+  ground truth for ctx rate / worklet-load / player path / underruns from inside
+  Recall's headless browser).
 * ``channel_for(meeting_id)`` / ``close_channel(meeting_id)`` — the registry:
   one channel per meeting.
 
@@ -567,10 +570,24 @@ class StreamProcessor extends AudioWorkletProcessor {
     this._ramp = Math.max(1, Math.floor((opt.rampS || 0.005) * sampleRate));
     this._priming = true;               // banking samples before the first emit
     this._fadingIn = 0;                 // remaining fade-in samples after an underrun
+    // TELEMETRY counters — the worklet is the ONLY place that sees the real FIFO/underrun/cut
+    // truth inside Recall's headless Chrome. It reports them up on a 'stats?' request (the main
+    // thread polls every ~5s and ships the reply back over the WS). counted since load.
+    this._samplesAppended = 0;          // total samples ever fed into the FIFO
+    this._underruns = 0;                // times process() hit a dry FIFO mid-stream
+    this._cuts = 0;                     // barge-in clears
     this.port.onmessage = (e) => {
       const m = e.data;
       if (m && m.type === 'samples') { this._append(m.samples); return; }
       if (m && m.type === 'cut') { this._cut(); return; }
+      if (m && m.type === 'stats?') {
+        // Snapshot the counters + the live FIFO depth (samples currently banked ahead of play).
+        this.port.postMessage({
+          type: 'stats', samplesAppended: this._samplesAppended,
+          underruns: this._underruns, cuts: this._cuts, fifoDepth: this._available(),
+        });
+        return;
+      }
     };
   }
   _available() { return this._fifo.length - this._read; }
@@ -583,8 +600,9 @@ class StreamProcessor extends AudioWorkletProcessor {
     const next = new Float32Array(keep.length + samples.length);
     next.set(keep, 0); next.set(samples, keep.length);
     this._fifo = next; this._read = 0;
+    this._samplesAppended += samples.length;
   }
-  _cut() { this._fifo = new Float32Array(0); this._read = 0; this._priming = true; this._fadingIn = 0; }
+  _cut() { this._fifo = new Float32Array(0); this._read = 0; this._priming = true; this._fadingIn = 0; this._cuts++; }
   process(inputs, outputs) {
     const out = outputs[0][0];
     if (!out) { return true; }
@@ -599,7 +617,7 @@ class StreamProcessor extends AudioWorkletProcessor {
         // UNDERRUN: emit ramped silence (fade the tail out over _ramp), then re-prime so
         // the resume fades back in — no truncation, no click.
         out[i] = 0;
-        this._priming = true; this._fadingIn = 0;
+        this._priming = true; this._fadingIn = 0; this._underruns++;
         // fade the last emitted samples out:
         const start = Math.max(0, i - this._ramp);
         for (let j = start; j < i; j++) { out[j] *= (i - j) / (i - start || 1); }
@@ -619,6 +637,14 @@ registerProcessor('stream-processor', StreamProcessor);
 // Recall's headless browser allows autoplay; resume() also covers any browser that starts
 // the context suspended. Ask for a 44100 context so our s16le@44.1k path needs ZERO
 // resampling; if the browser refuses and reports another rate we resample ONCE at append.
+//
+// AUDIO-PROCESSING LEVERS (researched, none page-applicable): Recall CAPTURES this page's audio
+// output — the getUserMedia/captureStream constraints (echoCancellation / noiseSuppression /
+// autoGainControl) live on RECALL'S side and are undocumented + not page-controllable (docs.recall.ai
+// "Output Media" / stream-media). Google Meet applies noise suppression + echo cancellation to ALL
+// inbound participant audio automatically with NO sender bypass and NO "music mode" equivalent
+// (support.google.com/meet/answer/9919960). So there is NO page-side lever to set here; the stats
+// frame above is the instrument that will tell us at the next live session what the page actually got.
 let audioCtx;
 try {
   audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
@@ -632,7 +658,21 @@ let workletNode = null;
 let gainNode = null;
 let muted = false;
 
+// TELEMETRY / PATH state — reported every ~5s so the next live session gives ground truth from
+// INSIDE Recall's headless Chrome: which player path is live, whether the worklet actually loaded,
+// how many frames the page received, and (from the worklet) the FIFO/underrun/cut truth.
+let workletLoaded = false;      // true once addModule + node wiring succeeded
+let activePath = "worklet";     // "worklet" (FIFO player) | "buffer" (scheduled-source fallback)
+let framesReceived = 0;         // WS BINARY frames the page has received
+
 async function startWorklet() {
+  // The worklet module is registered from an inline Blob URL. CSP on blob: is a REAL risk for a
+  // served page (a strict connect-src/script-src could reject the blob: worklet). addModule() then
+  // REJECTS — we catch it below and fall back to the scheduled-buffer player rather than going
+  // silent. gainNode is created FIRST so mute/connect work on the fallback path too.
+  gainNode = audioCtx.createGain();
+  gainNode.gain.value = muted ? 0 : 1;
+  gainNode.connect(audioCtx.destination);
   const blob = new Blob([WORKLET_SRC], { type: "application/javascript" });
   const url = URL.createObjectURL(blob);
   await audioCtx.audioWorklet.addModule(url);
@@ -641,11 +681,33 @@ async function startWorklet() {
     outputChannelCount: [1],
     processorOptions: { prebufferS: PREBUFFER_S, rampS: RAMP_S },
   });
-  gainNode = audioCtx.createGain();
-  gainNode.gain.value = muted ? 0 : 1;
-  workletNode.connect(gainNode).connect(audioCtx.destination);
+  workletNode.connect(gainNode);
+  workletLoaded = true;
+  activePath = "worklet";
 }
-const workletReady = startWorklet();
+// If the worklet fails to load (CSP on blob:, unsupported API, …) we do NOT go silent: switch to a
+// FALLBACK scheduled-buffer player. It is the simple per-chunk-source path (a known seam risk under
+// resampling) but AUDIBLE beats SILENT — and the stats frame reports activePath="buffer" so the next
+// live session tells us definitively whether the worklet loaded at all.
+let fallbackNextStart = 0;      // scheduling cursor for the fallback path
+function startFallbackBuffer() {
+  activePath = "buffer";
+  workletLoaded = false;
+  fallbackNextStart = 0;
+}
+function fallbackPlay(floats) {
+  if (!gainNode || floats.length === 0) { return; }
+  const buf = audioCtx.createBuffer(1, floats.length, CTX_RATE);
+  buf.getChannelData(0).set(floats);
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(gainNode);
+  const now = audioCtx.currentTime;
+  if (fallbackNextStart < now) { fallbackNextStart = now; }
+  src.start(fallbackNextStart);
+  fallbackNextStart += buf.duration;
+}
+const workletReady = startWorklet().catch((err) => { startFallbackBuffer(); });
 
 // STREAMING resample (only used if CTX_RATE !== 44100 — e.g. Recall's headless Chrome refuses
 // a 44.1k context and reports 48k). THE live-chop root cause was resampling each ~120ms chunk
@@ -687,6 +749,7 @@ function appendChunk(arrayBuffer) {
   if (floats.length === 0) { return; }
   workletReady.then(() => {
     if (workletNode) { workletNode.port.postMessage({ type: "samples", samples: floats }); }
+    else { fallbackPlay(floats); }   // worklet never loaded → audible fallback beats silent
   });
 }
 
@@ -697,6 +760,7 @@ function cutPlayback() {
   resampleState.frac = 0; resampleState.tail = 0; resampleState.hasTail = false;
   workletReady.then(() => {
     if (workletNode) { workletNode.port.postMessage({ type: "cut" }); }
+    else { fallbackNextStart = 0; }   // fallback: drop the schedule so nothing queued plays on
   });
 }
 
@@ -705,10 +769,49 @@ function setMuted(v) {
   if (gainNode) { gainNode.gain.value = muted ? 0 : 1; }
 }
 
+// STATS REPORTER — every ~5s while the WS is open, ask the worklet for its FIFO/underrun/cut
+// snapshot and ship one JSON {type:"stats", ...} text frame back over the SAME WS. The host logs
+// each frame (meeting-tagged), giving ground truth from inside Recall's headless Chrome: is the ctx
+// really 48k? did the worklet load? do underruns actually fire? Tiny, one-way page→host telemetry.
+const STATS_INTERVAL_MS = 5000;
+function sendStats(activeWs, workletStats) {
+  if (!activeWs || activeWs.readyState !== 1) { return; }
+  const s = workletStats || { samplesAppended: 0, underruns: 0, cuts: 0, fifoDepth: 0 };
+  try {
+    activeWs.send(JSON.stringify({
+      type: "stats", ctxRate: CTX_RATE, requestedRate: SAMPLE_RATE,
+      workletLoaded: workletLoaded, activePath: activePath, framesReceived: framesReceived,
+      samplesAppended: s.samplesAppended, underruns: s.underruns, cuts: s.cuts, fifoDepth: s.fifoDepth,
+    }));
+  } catch (err) { /* WS closed under us — the next tick will no-op on readyState */ }
+}
+function startStatsReporter(activeWs) {
+  const tick = () => {
+    if (workletNode) {
+      // Ask the worklet for its counters; it replies on the port and we ship the combined frame.
+      const once = (e) => {
+        if (e.data && e.data.type === "stats") {
+          workletNode.port.removeEventListener("message", once);
+          sendStats(activeWs, e.data);
+        }
+      };
+      workletNode.port.addEventListener("message", once);
+      workletNode.port.start && workletNode.port.start();
+      workletNode.port.postMessage({ type: "stats?" });
+    } else {
+      // Fallback path has no worklet counters — still report the page-level truth (path, frames).
+      sendStats(activeWs, null);
+    }
+  };
+  return setInterval(tick, STATS_INTERVAL_MS);
+}
+
 function connect() {
   const scheme = location.protocol === "https:" ? "wss://" : "ws://";
   const ws = new WebSocket(scheme + location.host + WS_PATH);
   ws.binaryType = "arraybuffer";
+  let statsTimer = null;
+  ws.onopen = () => { statsTimer = startStatsReporter(ws); };
   ws.onmessage = (event) => {
     if (typeof event.data === "string") {
       let msg;
@@ -731,9 +834,11 @@ function connect() {
       }
       return;
     }
+    framesReceived++;
     appendChunk(event.data);
   };
   ws.onclose = () => {
+    if (statsTimer !== null) { clearInterval(statsTimer); statsTimer = null; }
     orb.classList.remove("speaking");
     setTimeout(connect, 1000);
   };
@@ -753,13 +858,38 @@ def _render_page(meeting_id: str) -> str:
     return _PAGE_TEMPLATE.replace("__WS_PATH__", ws_path_js)
 
 
-async def _await_disconnect(websocket: WebSocket) -> None:
-    """Return when the page goes away — that is this task's only job."""
+def _log_stats_frame(meeting_id: str, text: str) -> None:
+    """Parse one inbound page→host ``{"type":"stats", ...}`` text frame and LOG it (meeting-tagged),
+    one ``logger.info`` line. This is ground truth from inside Recall's headless Chrome — the ctx
+    rate it actually got, whether the worklet loaded, which player path is live, and the worklet's
+    FIFO/underrun/cut counters. A non-stats or malformed frame is ignored (never throws)."""
+    try:
+        msg = json.loads(text)
+    except (ValueError, TypeError):
+        return
+    if not isinstance(msg, dict) or msg.get("type") != "stats":
+        return
+    logger.info(
+        "output-media page stats (meeting=%s): ctxRate=%s requestedRate=%s workletLoaded=%s "
+        "activePath=%s framesReceived=%s samplesAppended=%s underruns=%s cuts=%s fifoDepth=%s",
+        meeting_id, msg.get("ctxRate"), msg.get("requestedRate"), msg.get("workletLoaded"),
+        msg.get("activePath"), msg.get("framesReceived"), msg.get("samplesAppended"),
+        msg.get("underruns"), msg.get("cuts"), msg.get("fifoDepth"),
+    )
+
+
+async def _await_disconnect(websocket: WebSocket, meeting_id: str = "") -> None:
+    """Read the page→host WS until the page goes away. The channel's audio feed is one-way
+    host→page, but the page also sends periodic ``stats`` text frames (telemetry from inside
+    Recall's browser); each is parsed + logged here. Returns on disconnect."""
     try:
         while True:
             message = await websocket.receive()
             if message.get("type") == "websocket.disconnect":
                 return
+            text = message.get("text")
+            if text is not None:
+                _log_stats_frame(meeting_id, text)
     except Exception:
         return
 
@@ -783,7 +913,7 @@ def build_output_media_router() -> APIRouter:
             return
         token = channel._attach()
         pump = asyncio.ensure_future(channel._pump(token, websocket))
-        watch = asyncio.ensure_future(_await_disconnect(websocket))
+        watch = asyncio.ensure_future(_await_disconnect(websocket, meeting_id))
         try:
             await asyncio.wait({pump, watch}, return_when=asyncio.FIRST_COMPLETED)
         except Exception:

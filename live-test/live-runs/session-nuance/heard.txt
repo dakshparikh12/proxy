@@ -1,0 +1,97 @@
+[124.0] Pranav Goel: Oh shit.
+[127.0] Pranav Goel: Hi, Proxy.
+[127.0] Daksh Amit Parikh: Hey, you with me? Just say hi so I know the audio is landing.
+[138.0] Pranav Goel: I'm doing good. How are you?
+[141.0] Daksh Amit Parikh: No, you have to say proxy. He's not gonna be able to say it.
+[143.0] Pranav Goel: Proxy, I'm doing good. How are you?
+[155.0] Pranav Goel: Proxy.
+[160.0] Daksh Amit Parikh: Hey Proxy, can you give me a 2 to 3 sentence description of Kova?
+[185.0] Daksh Amit Parikh: Hey Proxy, can you give me a 2 to 3 sentence description of Kova?
+[202.0] Pranav Goel: Is it cash from the last meeting?
+[206.0] Daksh Amit Parikh: Hey Proxy, can you give me a one-sentence description of Kova?
+[232.0] Daksh Amit Parikh: Where does, um,
+[239.0] Pranav Goel: Wait, what's the speech form for this?
+[242.0] Pranav Goel: Recall's own thing? Are we using a different tool?
+[245.0] Daksh Amit Parikh: Using Cartesia to bring it back.
+[249.0] Daksh Amit Parikh: I think there's a problem with Cartesia. You see, like, what I'm saying is, like, because I'm looking at the logs, right? I'm looking at the logs of what it's saying. The reply for our initial question was there in 3 seconds.
+[262.0] Daksh Amit Parikh: But it's taking a long time for that transport to happen.
+[265.0] Pranav Goel: from text-to-speech.
+[267.0] Daksh Amit Parikh: Yeah.
+[270.0] Daksh Amit Parikh: Uh.
+[273.0] Daksh Amit Parikh: Okay, look.
+[270.0] Pranav Goel: All right, yeah, I, I'll look. Um, there's ElevenLabs and one other company that offer good text-to-speech.
+[277.0] Daksh Amit Parikh: Hey Proxy, orient me like I'm a new hire in a sentence or 2. What is Kova architecturally?
+[315.0] Daksh Amit Parikh: Hey Proxy, where does this thing actually start? The doc says cmd/server. I think that's wrong.
+[351.0] Pranav Goel: That's true.
+[352.0] Daksh Amit Parikh: It's good. I'm just saying, again, look at the logs. The log says that the TTS was 7 seconds and spoke at 10 seconds.
+[363.0] Daksh Amit Parikh: So 7 seconds isn't bad for that answer to actually happen.
+[367.0] Daksh Amit Parikh: Um,
+[367.0] Pranav Goel: You know what I'm seeing from this? The first second or 2 of its response is lost.
+[373.0] Pranav Goel: I don't know if this is because of recall or that's just how— that's the best a bot can be right now. But if the first 1 to 2 seconds of a response is consistently lost, you should have proxy always start with a filler. So then the actual response is there. Like, yeah, here's my answer to this question. And if that's all lost, it'll start off with the answer anyways. Try something again. I don't know, maybe I'm tweaking.
+[398.0] Pranav Goel: No, yeah, ask it another question for Google.
+[402.0] Daksh Amit Parikh: Hey Proxy, what image are we using?
+[411.0] Daksh Amit Parikh: Hey Proxy, what image generation model are we using?
+[425.0] Pranav Goel: 嗯。
+[454.0] Pranav Goel: Yeah.
+[451.0] Daksh Amit Parikh: Okay, so you saw what happened there. It basically— we said it twice, right? So the first answer it said, and then— so that— I think there's something wrong with Cartesia maybe, but it's so like the
+[462.0] Pranav Goel: Wait, um, look, did the answer it generate was good?
+[467.0] Pranav Goel: start there.
+[466.0] Daksh Amit Parikh: Yeah, the answer is good. The answer is good.
+[469.0] Pranav Goel: So then the issue is speaking back, right?
+[471.0] Daksh Amit Parikh: Yeah.
+[472.0] Pranav Goel: From a, from a text or transcript or something, right? It's getting— that's its input.
+[475.0] Daksh Amit Parikh: I'm looking at the transcript right now. It's getting everything that even though we're speaking right now, it's fully getting.
+[482.0] Pranav Goel: Is it associating person by person?
+[482.0] Daksh Amit Parikh: Like the— yeah, Pranav Goel, Dakshamit Parikh.
+[488.0] Daksh Amit Parikh: Yeah.
+[490.0] Pranav Goel: I'll add it to the link to check it too.
+[505.0] Daksh Amit Parikh: Proxy, walk me through how the redesign pipeline works, the passes at a gist level. Take a bit of depth here.
+[564.0] Daksh Amit Parikh: Okay, okay, okay.
+[566.0] Daksh Amit Parikh: Hey Proxy, can you create a diagram, a very visually appealing HTML diagram, and share your screen and walk me through the full, um, process end to end?
+[609.0] Pranav Goel: I think the first 1 to 2 seconds are always lost.
+[613.0] Pranav Goel: even more.
+[618.0] Daksh Amit Parikh: Yes.
+[622.0] Pranav Goel: Is Cartesia a SaaS, a token subscription? What's your model?
+[625.0] Daksh Amit Parikh: This is us.
+[628.0] Pranav Goel: Tiers of how good their text-to-speech is.
+[632.0] Daksh Amit Parikh: We're on the free planner now.
+[635.0] Daksh Amit Parikh: Maybe that's why.
+[638.0] Pranav Goel: That's a good thing. That makes for a better VC story.
+[640.0] Daksh Amit Parikh: I also don't know if we talked over it. Did it stop? It's a proxy. What's the status on that HTML?
+[665.0] Daksh Amit Parikh: Hey proxy, what is the status on the HTML?
+[692.0] Pranav Goel: Can it run concurrent tasks?
+[695.0] Daksh Amit Parikh: I was supposed to. It says it's supposed to.
+[701.0] Pranav Goel: Hey Proxy, I'm new to this team. How does our product matching system work once we have a redesigned room for Cobra?
+[731.0] Pranav Goel: Hey Proxy, I'm new to this team.
+[734.0] Pranav Goel: How does the product matching system work for Cobra?
+[739.0] Daksh Amit Parikh: This one.
+[753.0] Pranav Goel: 嗯。
+[759.0] Pranav Goel: So what's happening here? What's Flagship saying?
+[763.0] Daksh Amit Parikh: It's capturing what we're saying. The— not going through. I think it's because it's working on the HTML.
+[773.0] Daksh Amit Parikh: So it's not being able to pick up what another asks. Look at the screen.
+[787.0] Pranav Goel: Can't see the beginning.
+[790.0] Pranav Goel: 对。
+[798.0] Daksh Amit Parikh: Like, you see what I'm saying about these nuances?
+[801.0] Daksh Amit Parikh: Is that it's like, this is a good job. This is good. This is great, right?
+[808.0] Daksh Amit Parikh: Like, it's getting everything from the room type pairwise.
+[812.0] Pranav Goel: Yeah, pairwise confirm fingerprint reveal.
+[816.0] Daksh Amit Parikh: Like, it's good. Like, the accuracy is good. It's these nuances that are very like
+[823.0] Daksh Amit Parikh: One, the audio, I don't know why it's not working. But 2, I don't know how to get— we can't hard code for all these nuances, like being able to work in 2 things at one time, being able to still work in the background as we're talking.
+[849.0] Daksh Amit Parikh: Nope.
+[845.0] Pranav Goel: I think we're lowkey almost there. I think there's a few stuff that we need. One is we need to figure out this first few seconds because you can't lose the first few seconds of a response, especially if the meeting's technical, like the response is technical.
+[858.0] Daksh Amit Parikh: No, we're there. Look, this is pretty decent, right? Even if it took like, what, like a minute or whatever to get this done, we'll obviously optimize for latency after this. It's pretty shit right now, but the content being delivered is good.
+[872.0] Daksh Amit Parikh: my opinion.
+[875.0] Pranav Goel: Yeah, this is, this is fine.
+[877.0] Daksh Amit Parikh: I just, I just
+[882.0] Daksh Amit Parikh: Okay.
+[878.0] Pranav Goel: Does chat work? Can I ask?
+[0.0] Pranav Goel: hey proxy im new here explain the product matching system to me
+[910.0] Daksh Amit Parikh: Yeah, it came.
+[939.0] Pranav Goel: Chat.
+[937.0] Daksh Amit Parikh: The answer is good. I think I should have answered in the chat.
+[942.0] Daksh Amit Parikh: That's what I'm saying, is like all these like small, small, small details.
+[951.0] Daksh Amit Parikh: I don't know how to go forward from here.
+[955.0] Daksh Amit Parikh: Hey, Proxy, can you scroll down on the HTML file so we can see phase 2 clearly?
+[970.0] Pranav Goel: I think this is just iteration now. Like, I think this is like us, we just have to figure out what's the 10 biggest nuances.
+[995.0] Daksh Amit Parikh: All right, um.
+[998.0] Daksh Amit Parikh: All right, let me kick this shit out.

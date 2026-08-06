@@ -1,0 +1,1 @@
+{"tools": [], "text": "FLUX general on fal.ai \u2014 `fal-ai/flux-general/image-to-image` \u2014 run as a 3-pass pipeline on Modal, with custom style LoRAs blended in based on your quiz fingerprint.", "cost_usd": 0.58275, "turns": 1, "error": null, "deliver_at": 8.92, "ttft": 3.85, "sent": [], "queued_ms": 12273.4, "_served_at": 1785963654.0423102}

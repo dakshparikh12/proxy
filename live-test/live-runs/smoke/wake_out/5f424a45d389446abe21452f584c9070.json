@@ -1,0 +1,1 @@
+{"tools": ["Bash"], "text": "Confirmed \u2014 `apps/web`, run `pnpm dev` for dev or `pnpm start` for production. No `cmd/server`, that doc is just stale.", "cost_usd": 0.3830295, "turns": 2, "error": null, "deliver_at": 9.68, "ttft": 7.76, "sent": [], "queued_ms": 146.6, "_served_at": 1785963556.924691}
