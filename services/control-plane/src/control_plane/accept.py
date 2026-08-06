@@ -7,14 +7,16 @@ never touches the in-memory review session (which died at teardown).
 
 The apply is kind-aware (§3.16.1 / CANONICAL §4/§12.9):
 
-  * a core ``notes-edit`` draft  → write the edit into the notes object via Doc 03's
-                                    durable write path (a ``note_deltas`` append),
-                                    then flip the row to ``status='applied'``;
   * a ``code-change`` draft       → RECORD the approval (flip to ``applied``) + expose
                                     the already-persisted diff bundle for download.
                                     It NEVER pushes / opens a PR — push is an Expansion
                                     seam behind the ``contents:write`` scope the core
                                     deliberately does not hold (Law 3, AC-INV-007).
+  * any other kind (a legacy      → RECORD the approval (flip to ``applied``) only. The
+    ``notes-edit`` draft)           §2.6 notes fold that once appended to ``note_deltas``
+                                    on accept was removed in the workroom pivot, so a
+                                    notes-edit accept is now a status-flip with no
+                                    durable write.
 
 This module deals in a SYNCHRONOUS psycopg connection (the post-teardown accept path):
 the accept can arrive long after the meeting's async harness is gone, so it runs on a
@@ -22,12 +24,13 @@ plain durable connection, not the live meeting runtime.
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any
 
-# Draft kinds that are a core notes-edit apply vs a code-change (no-push) apply.
-_NOTES_EDIT_KINDS = frozenset({"notes-edit"})
+# Draft kinds that get the code-change (no-push) apply — a download bundle is exposed. Every
+# other kind (e.g. a legacy ``notes-edit``) is a plain approval status-flip: the §2.6 notes
+# fold that once read ``note_deltas`` was removed in the workroom pivot, so there is no durable
+# note write on accept anymore.
 _CODE_CHANGE_KINDS = frozenset({"code-change", "file-change"})
 
 
@@ -55,47 +58,14 @@ def _bundle_url(tenant_id: Any, draft_id: Any) -> str:
     return f"gs://proxy-drafts/{tenant_id}/{draft_id}/bundle.diff"
 
 
-def _apply_notes_edit(conn: Any, *, meeting_id: Any, draft_id: Any, content: str) -> None:
-    """Write the notes edit into the durable notes object (Doc 03's write path).
-
-    The notes object is the deterministic left-fold of the append-only
-    ``note_deltas`` ledger (§3.3); applying a notes-edit is a ``patch`` append
-    keyed by the draft id (``entry_id = 'draft:<id>'``). The accept is guarded
-    against double-apply UPSTREAM of this write — the route's in-memory ledger and,
-    post-restart, the durable ``staged_drafts`` row-status belt (``status IN
-    ('applied','rejected')`` in :func:`apply_accepted_draft`) short-circuit before a
-    second append ever reaches here — so this append runs at most once per draft.
-
-    The ``ON CONFLICT ... DO NOTHING`` clause is a harmless best-effort tail: the
-    §3.3 UNIQUE INDEX is ``(meeting_id, window_start_s, entry_id, op)`` and this row
-    carries ``window_start_s = NULL``, which Postgres treats as DISTINCT (the index
-    is not declared ``NULLS NOT DISTINCT``), so the clause does NOT itself dedupe a
-    NULL-window append — it is NOT the idempotency guard. The durable witness against
-    a double-apply is the row-status belt above, which the tests exercise directly.
-    The payload carries the accepted edit body verbatim.
-    """
-    payload = json.dumps({"text": content, "source": "accept-handler"})
-    conn.execute(
-        """
-        INSERT INTO note_deltas (meeting_id, entry_id, op, payload, window_start_s)
-        VALUES (%s, %s, 'patch', %s::jsonb, NULL)
-        ON CONFLICT (meeting_id, window_start_s, entry_id, op) DO NOTHING
-        """,
-        (meeting_id, f"draft:{draft_id}", payload),
-    )
-
-
 def apply_accepted_draft(conn: Any, *, meeting_id: Any, draft_id: Any) -> AppliedDraft:
     """Apply a staged draft from its persisted row (post-teardown safe, kind-aware).
 
-    Reads the DURABLE ``staged_drafts`` row + its GCS-versioned body, applies the
-    edit for a core notes-edit (Doc 03 write path), records approval for a
-    code-change (never pushing), and flips the row to ``status='applied'``. Raises
-    :class:`LookupError` when the draft does not exist. Never reads the dead
-    in-memory review session — proof is ``read_from == 'durable'``.
+    Reads the DURABLE ``staged_drafts`` row, records approval (exposing the diff
+    bundle for a code-change, never pushing), and flips the row to
+    ``status='applied'``. Raises :class:`LookupError` when the draft does not exist.
+    Never reads the dead in-memory review session — proof is ``read_from == 'durable'``.
     """
-    from workroom import objectstore
-
     row = conn.execute(
         "SELECT artifact_ref, kind, meeting_id, status FROM staged_drafts WHERE draft_id = %s",
         (draft_id,),
@@ -127,18 +97,10 @@ def apply_accepted_draft(conn: Any, *, meeting_id: Any, draft_id: Any) -> Applie
             already_applied=True,
         )
 
-    # Read the body from DURABLE object storage (the GCS-versioned artifact), never
-    # a dead in-memory session.
-    content = objectstore.get(artifact_ref) or ""
-
-    if kind in _CODE_CHANGE_KINDS:
-        # Record approval + expose the bundle (computed above); NEVER push
-        # (Expansion seam, §12.9). No notes-edit is written for a code-change.
-        pass
-    else:
-        # Core notes-edit: write the edit into the notes object durably.
-        _apply_notes_edit(conn, meeting_id=row_meeting_id, draft_id=draft_id, content=content)
-
+    # Record approval and flip the row to 'applied'. A code-change additionally exposes its
+    # download bundle (computed above) but NEVER pushes (Expansion seam, §12.9); any other kind
+    # (a legacy notes-edit) is a status-flip only — the §2.6 notes fold that once wrote
+    # ``note_deltas`` on accept was removed in the workroom pivot, so there is no durable write.
     conn.execute(
         "UPDATE staged_drafts SET status = 'applied' WHERE draft_id = %s",
         (draft_id,),
@@ -159,9 +121,9 @@ def reject_staged_draft(conn: Any, *, meeting_id: Any, draft_id: Any) -> Applied
 
     Reject is the symmetric twin of :func:`apply_accepted_draft` (§3.16.1, CANONICAL
     §12.9): it reads the DURABLE ``staged_drafts`` row and flips it to
-    ``status='rejected'`` — but it applies NOTHING (no ``note_deltas`` append for a
-    notes-edit; no push for a code-change: reject is the opposite of a push). It is
-    kind-aware only insofar as a code-change reject still never touches the push seam.
+    ``status='rejected'`` — but it applies NOTHING (no durable write for a notes-edit;
+    no push for a code-change: reject is the opposite of a push). It is kind-aware only
+    insofar as a code-change reject still never touches the push seam.
 
     The DURABLE idempotency belt is the same row-status witness the accept uses: an
     already-terminal row (``status IN ('applied','rejected')``) is NOT re-written, so a
