@@ -15,7 +15,7 @@ line-length = 120
 # The sealed acceptance tests under tests/ are not product code; the ruff style
 # gate applies to the services/ + libs/ product surface. force-exclude honours
 # these even when the paths are passed explicitly.
-extend-exclude = ["tests", ".venv", "services/in-meeting/proof"]
+extend-exclude = ["tests", ".venv"]
 force-exclude = true
 
 [tool.bandit]
@@ -50,7 +50,7 @@ mypy_path = "."
 # The service-local ``tests/`` dirs (incl. nested ``services/*/tests``) are NOT product code —
 # they legitimately use fakes/dynamic fixtures; the ``--strict`` static gate covers the product
 # surface only (matching the ruff + bandit ``tests`` excludes above).
-exclude = ['^libs/[^/]+/__init__\.py$', '(^|/)tests/', 'services/in-meeting/proof/']
+exclude = ['^libs/[^/]+/__init__\.py$', '(^|/)tests/']
 
 # Third-party packages that ship no type information.
 [[tool.mypy.overrides]]

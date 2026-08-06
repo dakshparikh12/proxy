@@ -93,25 +93,6 @@ async def _resolve_session_from_request(request: Request) -> dict[str, Any] | No
     return {"user_id": user_id, "tenant_id": tenant_id}
 
 
-def _stamp_internal_scoped(app: FastAPI) -> None:
-    """Mark the ``/internal/*`` routes as internal-bearer-token-scoped (§4.6).
-
-    These routes are gated by the ``X-Internal-Token`` header (a server-to-server
-    trust plane, NEVER the user session cookie), so they are tenant-scoped by a
-    different gate than ``protected()``. Stamping their endpoints lets the
-    route-enumeration test classify them as scoped rather than raw — the test then
-    still fails on any genuinely-unwrapped route.
-    """
-    from libs.http import mark_internal_scoped
-
-    for route in app.routes:
-        path = getattr(route, "path", "") or ""
-        if path.startswith("/internal/"):
-            endpoint = getattr(route, "endpoint", None)
-            if endpoint is not None:
-                mark_internal_scoped(endpoint)
-
-
 def create_app() -> FastAPI:
     """Construct the control_plane ASGI app with the /auth routes + /health.
 
@@ -132,7 +113,6 @@ def create_app() -> FastAPI:
 
     # The /m user surface + the accept/reject/webhook routes.
     from .accept_route import install_accept_route, install_reject_route
-    from .gateway_route import install_gateway_route
     from .meeting_home import install_meeting_home_route
     from .webhook_routes import install_recall_webhook_route
 
@@ -159,11 +139,6 @@ def create_app() -> FastAPI:
     from .github_webhook import install_github_webhook_route
 
     install_github_webhook_route(app)
-    # The §4.6 internal-token trust plane: the /internal/* routes are gated by the
-    # X-Internal-Token header (a server-to-server bearer, NEVER the user session
-    # cookie), so they are tenant-scoped by a different gate than protected(). Stamp
-    # them so the route-enumeration test recognises them as scoped, not raw.
-    _stamp_internal_scoped(app)
     # The authenticated draft-accept surface (§12.9): POST /m/{id}/drafts/{id}/accept
     # BEHIND the auth wall, reading durable storage (post-teardown safe). It declares
     # the §4.6 protected() wrapper so a fail-closed 401/403 fires server-side BEFORE
@@ -208,9 +183,6 @@ def create_app() -> FastAPI:
     from .relay import install_relay_route
 
     install_relay_route(app)
-    # The WS upgrade gateway (§4.3/§12.9): /ws authenticates at the connection UPGRADE —
-    # an unauthenticated upgrade is rejected (401) BEFORE the 101, never per-message.
-    install_gateway_route(app)
     # The connect page's two PUBLIC REST routes (§2.7/§4.6): GET /connect/status (the
     # readiness poll — REST, not a WS message, CANONICAL §12.12) and POST
     # /connect/install/start (launch the GitHub-App install AND fire the connect→index

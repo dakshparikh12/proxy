@@ -1,27 +1,6 @@
-"""libs.http — the one dispatch() funnel + the WS upgrade gateway (§4.3/§12.9)."""
+"""libs.http — the route-authz classifier + safeError + the webhook HMAC verifiers (§4.6)."""
 from __future__ import annotations
 
-from .dispatch import (
-    DispatchCtx as DispatchCtx,
-)
-from .dispatch import (
-    PerConnectionRateLimiter as PerConnectionRateLimiter,
-)
-from .dispatch import (
-    dispatch as dispatch,
-)
-from .dispatch import (
-    resolve_entity_tenant as resolve_entity_tenant,
-)
-from .gateway import (
-    Connection as Connection,
-)
-from .gateway import (
-    RejectUpgrade as RejectUpgrade,
-)
-from .gateway import (
-    authorize_upgrade as authorize_upgrade,
-)
 from .registry import (
     PUBLIC_ROUTES as PUBLIC_ROUTES,
 )
@@ -58,20 +37,13 @@ from .webhook import (
 
 __all__ = [
     "AuthzCtx",
-    "Connection",
-    "DispatchCtx",
     "PUBLIC_ROUTES",
-    "PerConnectionRateLimiter",
     "PublicAuthzCtx",
-    "RejectUpgrade",
     "WebhookVerificationError",
-    "authorize_upgrade",
     "classify_route",
-    "dispatch",
     "install_safe_error_handler",
     "protected",
     "public",
-    "resolve_entity_tenant",
     "safe_error_handler",
     "verify_github_signature",
     "verify_recall_signature",

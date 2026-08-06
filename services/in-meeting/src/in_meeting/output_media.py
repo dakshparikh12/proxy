@@ -556,9 +556,7 @@ const RAMP_S = 0.005;       // fade-out/in at underrun gap edges → click-free 
 
 // The worklet processor SOURCE — an inline module (the page is one served HTML string, so
 // we register it from a Blob URL). It owns the FIFO and the prebuffer/underrun/cut logic;
-// the main thread only decodes+appends and sends control messages over the port. This JS
-// is the byte-for-byte MIRROR of the reference implementation proven in
-// tests/test_output_media_stream_player.py (fifo_player.py) — keep them in lockstep.
+// the main thread only decodes+appends and sends control messages over the port.
 const WORKLET_SRC = `
 class StreamProcessor extends AudioWorkletProcessor {
   constructor(options) {

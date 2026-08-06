@@ -70,13 +70,6 @@ class Database:
         pool = await open_pool(dsn)
         return cls(pool, instance_id or f"proc-{uuid.uuid4().hex}")
 
-    @property
-    def repos(self) -> Any:
-        """The per-domain repository namespace this facade owns (§11)."""
-        from .repos.repositories import Repos
-
-        return Repos(self)
-
     async def close(self) -> None:
         await self._pool.close()
 
