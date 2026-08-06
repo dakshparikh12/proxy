@@ -68,7 +68,6 @@ class CartesiaTTS:
         chunk_ms: int | None = None,
         voice_id: str | None = None,
         register: str = _DEFAULT_REGISTER,
-        call_external_stream: Any = None,
     ) -> None:
         # ``api_key`` from Secret Manager via the CARTESIA_API_KEY settings surface
         # when not injected; never logged, never placed in a request body (AC-XCUT-02).
@@ -82,17 +81,6 @@ class CartesiaTTS:
             voice_id if voice_id is not None else os.environ.get("CARTESIA_VOICE_ID", _DEFAULT_VOICE_ID)
         )
         self._register = register
-        #: The ONE session HTTP client, built on first speech by :meth:`_get_client`.
-        self._client: Any = None
-        #: The streaming seam. Injected like ``call_external`` so a test can drive the whole
-        #: pipe offline; defaults to the real ``libs.http`` streaming seam (§14 / AC-XCUT-03).
-        #: TTS is NON-RETRYABLE by design — see ``call_external_stream``'s docstring.
-        if call_external_stream is not None:
-            self._call_external_stream: Any = call_external_stream
-        else:
-            from libs.http.src.http.external import call_external_stream as _real_stream
-
-            self._call_external_stream = _real_stream
 
     @property
     def voice(self) -> tuple[str, str]:
@@ -103,58 +91,25 @@ class CartesiaTTS:
         return self._stream(text)
 
     async def _stream(self, text: str) -> AsyncIterator[AudioChunk]:
-        """Yield chunks AS CARTESIA PRODUCES THEM — first audio must not wait for last audio.
-
-        This used to ``await`` the whole synthesis through ``call_external`` and only then walk
-        a completed ``list[bytes]``, so the first chunk could not exist until the last one did:
-        time-to-first-audio was the full synth duration of the utterance. Now the raw round-trip
-        is an async generator driven through :func:`call_external_stream`, which keeps the §14 /
-        AC-XCUT-03 seam rule while forwarding each chunk the moment it lands.
-
-        ``is_final`` is decided by LOOKAHEAD (hold one chunk back, emit it when the next arrives
-        or the stream ends) — a streaming producer cannot know the last chunk in advance, and the
-        speak pipe needs the flag to close the turn.
-        """
-        call_external_stream = self._call_external_stream
-        if call_external_stream is None:
+        call_external = self._call_external
+        if call_external is None:
             return
-        seq = 0
-        held: bytes | None = None
-        async for pcm in call_external_stream(
-            lambda: self._synth_stream(text),
+        outcome = await call_external(
+            lambda: self._synth(text),
             service="cartesia",
             unit_cost_usd=0.0,
-        ):
-            if held is not None:
-                yield AudioChunk(pcm=held, seq=seq, is_final=False)
-                seq += 1
-            held = pcm
-        if held is not None:
-            yield AudioChunk(pcm=held, seq=seq, is_final=True)
+        )
+        # The seam returns an ``ExternalCallOutcome`` (payload under ``.value``); a
+        # fake may hand back the raw payload directly. Duck-type both — honoring the
+        # seam contract (AC-XCUT-03) — without coupling transport to ``libs.http``.
+        result = getattr(outcome, "value", outcome)
+        frames: list[bytes] = result if isinstance(result, list) else []
+        last = len(frames) - 1
+        for seq, pcm in enumerate(frames):
+            yield AudioChunk(pcm=pcm, seq=seq, is_final=(seq == last))
 
-    async def _get_client(self) -> Any:
-        """The ONE Cartesia HTTP client for this session, built lazily on first speech.
-
-        Hoisted out of :meth:`_synth_stream`, which used to open and close a client inside every
-        synthesis — a TLS+TCP handshake on the hot path of every utterance. Built lazily (not in
-        ``__init__``) so constructing a ``CartesiaTTS`` stays side-effect-free and offline, which
-        the boot path and the offline tests both rely on.
-        """
-        if self._client is None:
-            from libs.http.src.http.external import http_client
-
-            self._client = http_client(timeout=_HTTP_TIMEOUT_S)
-        return self._client
-
-    async def aclose(self) -> None:
-        """Close the session client. Idempotent — safe on a session that never spoke."""
-        client = self._client
-        self._client = None
-        if client is not None:
-            await client.aclose()
-
-    async def _synth_stream(self, text: str) -> AsyncIterator[bytes]:
-        """The sole raw Cartesia round-trip; invoked only via ``call_external_stream`` (AC-XCUT-03).
+    async def _synth(self, text: str) -> list[bytes]:
+        """The sole raw Cartesia round-trip; invoked only via ``call_external`` (AC-XCUT-03).
 
         POSTs Cartesia's REAL ``/tts/bytes`` streaming request (shape confirmed against
         the live docs): ``model_id`` + ``transcript`` + ``voice`` + ``language`` +
@@ -184,23 +139,13 @@ class CartesiaTTS:
             "language": _LANGUAGE,
             "output_format": dict(_OUTPUT_FORMAT),
         }
+        pcm = bytearray()
+        async with http_client(timeout=_HTTP_TIMEOUT_S) as client:
+            async with client.stream(
+                "POST", f"{_CARTESIA_BASE}/tts/bytes", headers=headers, json=body
+            ) as resp:
+                resp.raise_for_status()
+                async for part in resp.aiter_bytes():
+                    pcm.extend(part)
         step = max(_SAMPLE_RATE_HZ * _BYTES_PER_SAMPLE * self._chunk_ms // 1000, _BYTES_PER_SAMPLE)
-        # ONE client for the whole session, not one per utterance: a fresh ``http_client`` per
-        # synth paid a TLS+TCP handshake on the hot path of every single thing Proxy says.
-        client = await self._get_client()
-        carry = bytearray()
-        async with client.stream(
-            "POST", f"{_CARTESIA_BASE}/tts/bytes", headers=headers, json=body
-        ) as resp:
-            resp.raise_for_status()
-            async for part in resp.aiter_bytes():
-                carry.extend(part)
-                # Emit whole worklet-sized chunks as soon as they are complete; keep the
-                # remainder for the next arrival. ``step`` is unchanged — the page's worklet
-                # framing and the 44.1 kHz rate are untouched by this change.
-                while len(carry) >= step:
-                    yield bytes(carry[:step])
-                    del carry[:step]
-        if carry:
-            # The tail is short of a full frame; 2-byte alignment is the speak pipe's job.
-            yield bytes(carry)
+        return [bytes(pcm[i : i + step]) for i in range(0, len(pcm), step)]

@@ -11,7 +11,7 @@ else.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -93,45 +93,6 @@ async def call_external(
         return ExternalCallOutcome(value=value, attempts=attempt, total_cost_usd=total_cost_usd)
     assert last_exc is not None  # noqa: S101 - loop invariant
     raise last_exc
-
-
-async def call_external_stream(
-    op: Callable[[], AsyncIterator[T]],
-    *,
-    service: str,
-    unit_cost_usd: float = 0.0,
-) -> AsyncIterator[T]:
-    """Issue one STREAMING external call — chunks yielded as produced, **never retried**.
-
-    The streaming sibling of :func:`call_external`, and it exists so a streaming vendor call
-    still goes through the ONE seam (§14 / AC-XCUT-03) instead of holding a raw client at the
-    call site. Same shape: pre-flight, meter, honest surface on error.
-
-    **NO RETRY LOOP, BY DESIGN — this is the whole reason it is a separate function.**
-    :func:`call_external` can retry because its ``op`` is atomic: nothing is observable until it
-    returns, so a second attempt is invisible. A stream is the opposite — by the time an error
-    arrives, chunks have already been handed to the caller and, for TTS, already played into a
-    live meeting. **Emitted audio is unreplayable.** Retrying would make the room hear a phrase
-    twice, which is worse than hearing it truncated: a cut-off sentence is an honest failure the
-    humans can see, a stutter-repeat is Proxy appearing to malfunction (Law 2 — failures spoken
-    honestly, never papered over). So a fault here propagates on the first occurrence.
-
-    Metering settles once, on completion OR error, with ``attempts=1`` — there is never a second
-    attempt to accumulate. A partial stream still cost the vendor money, so it is still metered.
-
-    Cancellation is NOT reinterpreted here. :func:`call_external` retries a ``cancelling()==0``
-    ``CancelledError`` as a transport blip, but that trick depends on being able to re-run the
-    operation — which is exactly what this function must not do. A cancellation mid-stream ends
-    the stream, and the caller sees the truncation.
-    """
-    stream = op()
-    try:
-        async for chunk in stream:
-            yield chunk
-    finally:
-        # Settle metering exactly once, on every exit path (clean end, error, cancellation): a
-        # partial stream consumed vendor resources and must not go unbilled.
-        _record_cost(service, unit_cost_usd, 1)
 
 
 def anthropic_client(**kwargs: Any) -> AsyncAnthropic:
