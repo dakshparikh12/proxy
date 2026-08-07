@@ -1,136 +1,166 @@
-# Proxy — Cloud & Runtime (the technical backbone)
+# Proxy — Cloud, Runtime & Data
 
-**Status:** designed (2026-08-06), grounded in a code-study of Gallop's proven Claude runtime +
-infra. Read with `ONBOARDING-INTEGRATION.md`. Principle: **copy Gallop where it fits, invert two
-things for the live/latency path, don't overcomplicate.**
+**One of two canonical docs** (the other is `ONBOARDING-INTEGRATION.md`). Self-contained; current as
+of 2026-08-06. Covers how Proxy runs on the cloud at scale: the architecture, how the agent runs, how
+meetings spawn, how everything is stored, and the honest build list. Grounded in a code-study of
+**Gallop** (a sister company running this shape for enterprise customers; reference repo `~/platform`).
+Principle: **copy Gallop where it fits, invert two things for the live path, don't overcomplicate.**
 
 ---
 
-## 1. The three planes
-| Plane | Where | What it is | Holds |
-|---|---|---|---|
-| **Control plane** | **Cloud Run** (stateless, scale-to-zero) | webhooks (Recall, GitHub push), meeting orchestration, the Recall/Cartesia relay, the `to_meeting` surface, admission/cost/reaper, WorkOS/Composio/Stripe, connect page + console API | **all credentials**; DB is truth, no authoritative state in memory |
-| **Durable substrate** | **Cloud SQL + GCS** (per-tenant) | the **brain's home** — Postgres (structured) + GCS (blobs), keyed by `tenant_id` | the durable source of truth |
-| **Per-meeting sandbox** | **E2B microVM** (ephemeral; behind a provider seam) | the **body** — booted from a per-repo baked template, runs Claude *inside* it | the repo + Claude; **no credentials** |
+## 1. The architecture — three planes
+```
+   CUSTOMER (admin + team; browser & Slack)
+        ▼
+ ┌──────────────────────────────────────────────────────────────┐
+ │  CONTROL PLANE  — Cloud Run (ONE service, stateless, →0)       │
+ │  webhooks (Recall, GitHub push) · meeting orchestration        │
+ │  Recall/Cartesia relay · the `to_meeting` surface              │
+ │  heartbeat · admission · reaper · billing · connect+console API│
+ │  ── HOLDS ALL CREDENTIALS ──                                   │
+ └───┬───────────────────────────────────────┬──────────────────┘
+     │ durable truth                          │ spawns 1 per meeting (MANY in parallel)
+     ▼                                        ▼
+ ┌───────────────────────────┐        ┌───────────────────────────────┐
+ │ BRAIN  (per tenant)        │        │ BODY  — E2B sandbox (ephemeral)│
+ │ Cloud SQL (structured) +   │◀──────▶│ repo (from GCS) + Claude,      │
+ │ GCS (blobs), tenant_id     │ seed / │ booted from a toolchain        │
+ │ one per company, forever   │  fold  │ template. Claude runs HERE.    │
+ └───────────────────────────┘        │ NO credentials.                │
+                                       └───────────────────────────────┘
+ externals: GitHub App · Composio · Recall · Cartesia · Anthropic
+```
+This shape — one control plane + shared DB with `tenant_id` logical isolation + per-session managed
+microVMs — is the **converged 2025–26 pattern** for multi-tenant AI-agent SaaS (cf. AWS Bedrock
+AgentCore). We're on-pattern; the risk is execution completeness, not the architecture.
 
-## 2. The Proxy instance = brain (durable) + body (ephemeral)
-- **The company's "Proxy instance" IS its durable brain** (per-tenant Postgres + GCS) — one per
-  company, persistent forever.
-- **A meeting spawns a body** (E2B sandbox) rehydrated from the brain + baked template → killed/
-  reaped after. Compute is disposable; the brain is the product.
-- **One brain per company; MANY concurrent bodies.** Dozens of meetings — same company and across
-  companies — run in parallel, each a fresh sandbox reading the one shared brain; writes are
-  appended as events and folded back (never two bodies mutating shared state).
-- **Compute decision (LOCKED 2026-08-06): E2B now.** It's already wired and is the fastest path to
-  ship; we use it exactly as currently integrated. **GCE-VMs-copying-Gallop is the documented
-  future option behind the provider seam** — chosen later if we want to drop the vendor, escape
-  E2B's concurrency caps, or need bigger machines. Not now.
+## 2. The instance model — brain (durable) + body (ephemeral)
+- **The company's "Proxy" IS its durable brain** (per-tenant Cloud SQL + GCS) — one per company,
+  forever. This is what the customer buys.
+- **A meeting spawns a body** (E2B sandbox) that reads the brain, does the work, folds results back,
+  then is reaped. Compute is disposable; the brain is the product.
+- **One brain, MANY concurrent bodies.** Dozens of meetings (same company + across companies) run in
+  parallel; each reads the shared brain; writes are appended as events + folded back (never two
+  bodies mutating shared state).
+- **Compute: E2B — LOCKED.** GCE-VMs-copying-Gallop is the documented future swap behind a provider
+  seam (chosen later only to drop the vendor / escape concurrency caps).
 
-## 3. How Claude runs — the agent loop + the two inversions
-Gallop runs Claude **host-side on Cloud Run** and reaches tools **remotely on the VM** (a network
-hop per tool). Proxy **inverts two things** for the live path:
+## 3. How the agent runs (the two inversions vs Gallop)
+Gallop runs Claude host-side and reaches tools remotely (a network hop per tool). Proxy **inverts two
+things for the latency-sensitive live meeting:**
+1. **Claude runs INSIDE the E2B sandbox**, repo local → code tools (Read/Grep/Bash/Edit) are **local
+   built-ins, instant — no per-tool round-trip.**
+2. **Prompt-cache the stable prime** (behavioral prime + `REPO_MAP` + meeting info) → each wake pays
+   only the fresh transcript delta.
+- **Model: Claude Sonnet 5** (accuracy without Opus cost); **we hold the Anthropic key and meter per
+  tenant.**
+- **Agent loop** = the SDK `query()` agentic loop behind a single "AgentService choke-point" (owns the
+  loop, event→delta translation, the injection-guardrail append, tool config, and **abort = barge-in**).
+- **Tools:** code = in-sandbox built-ins; the **only MCP surface is `to_meeting`** (say/chat/screen/
+  offer). World-touching = staged draft, executed host-side (credential boundary).
+- **Wake:** voice + chat (Recall chat events). **Voice out = Recall Output Audio** (base64 MP3 clips
+  via Cartesia — the simplest path; Output Media/continuous+screenshare is a later upgrade).
 
-1. **Claude runs INSIDE the E2B sandbox**, repo local → code tools (Read/Grep/Bash/Edit) are
-   **local built-ins, free and instant — no per-tool network round-trip.** Big latency win.
-2. **Prompt caching on the stable prime** (`CLAUDE.md` prime + `REPO_MAP` + `MEETING_INFO` as
-   cached blocks). Gallop has none; for Proxy each wake pays **only the fresh transcript delta** —
-   the decisive latency lever.
+## 4. Template + spawn (kept fresh, pre-warmed)
+- **Bake the TOOLCHAIN into ONE shared E2B template** (claude + mcp + git + deps) — this kills the
+  real cold-spawn cost (the installs), and rarely changes.
+- **Keep the repo as a shallow (`--depth=1`) copy in GCS, refreshed by the PR-push webhook** — a
+  *mutable* store, not the immutable template image. Always current by construction; no template
+  rebuilds. (Full git history not stored; PR/diff awareness comes from the webhook + GitHub API.)
+- **The understanding (`REPO_MAP`) is computed once, persisted in the brain, and re-indexed on push**
+  — never recomputed per meeting.
+- **At spawn** (pre-warmed on Recall's `bot.joining_call`, ~2 min early): boot from the toolchain
+  template → pull the repo from GCS (no GitHub hit) → load the cached understanding/prime → ready.
+- Idle ≈ $0 (bodies die at meeting-end; nothing kept alive). Per-repo full-image bake = huge-monorepo
+  escape hatch only.
 
-**Copied from Gallop:** the SDK `query()` agentic loop behind a single **AgentService choke-point**
-(owns the loop, event→delta translation, the guardrail central-append, tool config, and
-**abort = barge-in**), `strictMcpConfig`/`settingSources:[]` isolation, "tool handlers return
-errors, never throw."
+## 5. Concurrency (already built + the 4 fixes)
+**Already correct in code (do not rebuild):** a per-meeting `MeetingRuntimeRegistry` + a correct
+**atomic claim** (one harness per meeting) + per-meeting isolated task/sandbox/keepwarm/teardown.
+**To run dozens across instances — 4 additive fixes (no redesign):**
+1. **Tick the meeting heartbeat** (the fence exists but isn't ticked; else a 2nd instance reaps live
+   meetings) — *or* pin Cloud Run to 1 instance for now. *Do first.*
+2. **Watchdog + orphan-sandbox reaper** (wire the reconcile loop; tag E2B `create` with
+   `{meeting_id, tenant_id}`).
+3. **Admission control + per-tenant spend cap** before spawn (cost/DoS backstop).
+4. **Provisioning circuit breaker** (3 strikes).
 
-**Tools:** code tools = in-sandbox built-ins. The **only MCP surface is `to_meeting`**
-(say/chat/dm/show/offer/mute), carried by the host relay. World-touching actions = **staged drafts
-behind a human click**, executed host-side (GitHub App PR, Composio message) — never from the
-sandbox (credential boundary).
+## 6. Persistence / data model — what's stored where
+**Rule:** the sandbox is a rebuildable cache; **durable truth = Postgres + GCS**, keyed by
+`tenant_id`. We store the *minimum* raw code (derived map persists; raw clone is ephemeral/in-GCS).
 
-## 4. Instances, spawning, concurrency, lifecycle
-- **Spawn:** meeting-start (calendar/invite → tenant resolved) → control plane boots a sandbox from
-  that tenant's **per-repo baked template** (no re-clone), seeds cached prime + brain context,
-  starts the Claude session. Warmed just ahead of the meeting for latency.
-- **Many at once:** many sandboxes across tenants *and* for one tenant — **all read the one shared
-  brain; writes appended as events + folded back** (never two bodies mutating shared state).
-  Orchestrated by a DB-state-machine + atomic claim (copy Gallop).
-- **Lifecycle/cost:** copy Gallop's **5-min keepalive + 3-strike circuit breaker + idle-reaper +
-  hard-delete backstop**. Sandbox dies at meeting-end → idle ≈ $0. **We own the reaper** (E2B
-  snapshots have no TTL). Concurrency bounded by E2B (100 → 1,100 add-on); swappable via the
-  provider seam (E2B → Fly/Modal/GCE-Gallop-style).
+**Postgres (Cloud SQL) — structured:** `tenants`, `members`, `connections` (per-tenant integration
+handles; tokens encrypted/in Composio vault), `repos` (+ `current_sha`, template ref, index status),
+`repo_maps` (pointer to the understanding blob), `meetings` (+ completion status), `meeting_events`,
+`action_items`, **`memory`** (cross-meeting: confirmed decisions, ownership, work-state), `sessions`,
+`operation_runs` (the claim/heartbeat spine), `sandboxes` (reaper bookkeeping), `usage`/`cost`,
+`upcoming_meetings`. `tenant_id` + RLS on every row.
 
-## 4a. Concurrency — already built vs. the 4 fixes to run dozens (verified in code)
-**Good news: Proxy is already concurrent-by-design, not single-meeting.** Already correct — do
-NOT rebuild:
-- per-meeting **`MeetingRuntimeRegistry`** (dict keyed by `meeting_id`); each meeting = its own
-  runtime + background asyncio task + E2B sandbox + keep-warm + teardown, isolated, no
-  cross-meeting global-state collisions;
-- a correct **Gallop-style atomic claim** (`INSERT … ON CONFLICT … RETURNING` on a partial-unique
-  index) = exactly one harness per meeting; idempotent redelivery; pause/resume fast-join.
+**GCS (object-versioned, per-tenant prefix `gs://…/<tenant_id>/…`):** the understanding/`REPO_MAP`,
+the shallow repo copy, full transcripts, staged diffs/artifacts, git-mirrored workroom output.
 
-**Not yet safe to run dozens *across instances* — 4 additive fixes (no redesign):**
-1. **Hook the meeting heartbeat (FIRST — unblocks multi-instance).** The fencing token
-   (`OperationHandle`) exists but **nothing ticks it**, so every live meeting's row looks stale
-   after 40s → a second instance's stale-sweep can reap live meetings and double-provision a
-   sandbox. Fix: per-meeting heartbeat loop (reuse the existing `_heartbeat_loop`) ticking every
-   ~10s, self-terminating on `is_owner=False`. **This is the precondition for >1 instance.**
-2. **Periodic reclaim + orphan-sandbox reaper (watchdog).** Schedule the reconcile loop (~300s);
-   tag E2B `create` with `metadata={meeting_id, tenant_id}` and reap orphans via
-   `AsyncSandbox.list()`. (A reaper exists in code but is unwired + off the live path.)
-3. **Admission control before spawn.** Per-tenant + global concurrent-meeting cap (+ the cost
-   signal already flowing through `call_external`) → honest-degrade over the cap.
-4. **Provisioning circuit breaker (3 strikes)** per tenant/repo → cooldown instead of hammering E2B.
-5. *(Throughput, later, only at >1 instance)* de-serialize the webhook drain (cache
-   bot_id→meeting; fan out).
+**E2B template registry:** the shared toolchain template (+ optional per-repo later).
 
-**"One brain, many concurrent bodies" is achievable with the current architecture + these four
-additive fixes — hardening, not a redesign.**
+**"Every meeting = a stored data point":** each meeting writes a `meetings` row + transcript +
+`meeting_events`/`action_items`, and **folds decisions/ownership into `memory`** — that's how the
+brain learns across meetings. (Retrieval starts as simple structured recall; vectors only if needed.)
 
-## 5. Storage + cross-meeting memory + continuous learning
-- **At meeting-end:** persist the meeting record (transcript + Proxy's work + intents) to
-  Postgres+GCS; **git-mirror code output to GCS** (copy Gallop's rsync + HEAD-verify + refuse-to-
-  wipe guards); fold decisions/action-items into the brain; kill the sandbox.
-- **Data split:** Postgres = structured (tenants, meetings, action items, sessions, brain metadata,
-  snapshot/instance bookkeeping, cost); GCS = blobs (transcripts, `REPO_MAP`/understanding, staged
-  diffs, artifacts), per-tenant prefix. **Sandbox = rebuildable cache, never source of truth.**
-- **Cross-meeting memory:** the brain + a **Postgres transcript mirror** (copy Gallop's
-  `PostgresSessionStore`) → Proxy remembers across meetings.
-- **Continuous learning:** PR/push → webhook re-indexes changed files → updates the brain +
-  rebakes the template.
+## 7. The customer lifecycle (nested scopes)
+`TENANT → REPOS(1..N) → MEETINGS(0..N) → BODY(1 per meeting, many ‖) → MEMORY(accumulates)`
+1. **Onboard** → provision tenant (brain shell + per-tenant email + connections).
+2. **Connect repo** → clone → understanding → store → (toolchain template shared; repo copy to GCS).
+3. **Push/PR** → re-index changed files → refresh the GCS repo copy + the understanding.
+4. **Meeting** → resolve tenant → atomic claim → pre-warm+spawn body → Recall joins → Claude works →
+   voice/chat out (world-touching = staged draft).
+5. **Meeting-end** → persist record + git-mirror output + **fold into the brain** → reap body.
+6. **Post-meeting** (async) → re-spawn body from template+brain → do the work → Composio executes +
+   hears replies → brain updated.
+7. **Across meetings** → the brain is the continuity, per tenant, forever, learning.
 
-## 6. End-to-end trace (one meeting)
-1. **Pre-meeting** (once/repo): clone → understanding/`REPO_MAP` → store in brain → **bake template**.
-2. **Start:** tenant resolved → sandbox spawned/warmed from template + cached prime + brain context.
-3. **During:** Recall bot joins (host-side); transcript streams into the sandbox's Claude context
-   (cached — only the delta is fresh).
-4. **Wake:** Claude `query()` runs *in the sandbox* → local built-in code tools → streams reply
-   deltas out → host relay → **Cartesia TTS (voice, first-clause TTFT)** / `to_meeting` chat.
-5. **Action:** staged draft → human approves → executed host-side (GitHub App / Composio).
-6. **End:** persist record + git-mirror output + fold into brain → reap sandbox.
-7. **Post-meeting:** on event/approval → rebuild sandbox from brain+template → Claude follow-up →
-   Composio executes + hears replies (triggers→webhook) → brain updated.
+## 8. Multi-tenant scale, isolation, cost
+- **N tenants on shared infra:** ONE Cloud Run, ONE Cloud SQL (`tenant_id` + RLS), ONE GCS bucket
+  (per-tenant prefixes). Compute scales by adding bodies (bounded by admission control); the reaper
+  keeps orphans ≈ 0; idle ≈ $0.
+- **Isolation:** `tenant_id` everywhere + per-meeting sandbox + per-tenant GCS prefix + a JWT
+  host↔sandbox control channel + the credential boundary. **Enterprise escape hatch:** a dedicated
+  GCP project per customer (copy Gallop's `customer-platform` module) — only when demanded.
+- **Egress:** the sandbox may reach what it needs for real work (package registries, GitHub,
+  Anthropic, the host) — a **generous allowlist**, not arbitrary hosts (the sandbox holds private
+  code; arbitrary exfil is the one risk; the injection guardrail is the backstop). Tighten to a strict
+  allowlist before security-conscious customers.
+- **Cost:** per meeting ≈ $0.17–0.53 compute + Claude(Sonnet-5) tokens (dominant, cache-reduced); E2B
+  Pro 100 concurrent (→1,100 add-on). The real cost risk is un-reaped/un-capped sandboxes → fix #2/#3.
+- **Retention/deletion:** transcript ~90d, `meeting_events` ~12mo, decisions ∞ (per-tenant, capped);
+  raw media on Recall (or `retention:null`); offboard = purge Postgres rows + GCS prefix + revoke
+  tokens + kill sandboxes.
 
-## 7. Copy-from-Gallop vs adapt
-- **Copy verbatim:** AgentService choke-point · guardrail central-append · `strictMcpConfig`/
-  `settingSources:[]` · credential boundary · delta streaming · Postgres transcript mirror ·
-  git-to-GCS mirror (+guards) · keepalive/circuit-breaker/abort · the whole Terraform/Packer/
-  provisioning/reaper infra pattern · per-tenant-project escape hatch.
-- **Invert/adapt:** Claude **in** the sandbox (local tools) · **prompt caching** on the prime ·
-  **voice-first** streaming at clause boundaries · MCP only for the meeting surface · the per-meeting
-  sandbox is the session boundary (no Cloud-Run scale-out disk-locality problem *during* a meeting).
+## 9. The exact cloud footprint
+Cloud Run (control plane) · Cloud SQL Postgres (shared, `tenant_id`+RLS, PITR on) · GCS (versioned,
+per-tenant prefixes) · Secret Manager · Artifact Registry (control-plane image) · **E2B** (bodies +
+toolchain template) · Cloud Scheduler (reaper/stale-sweep) · inbound-email webhook · vendors (Recall,
+Cartesia, AssemblyAI, Anthropic). Provisioned by **copy-Gallop Terraform/Packer.** Single region to
+start (us-central1); EU/per-customer-project later.
 
-## 8. Hosting, scale, cost, the seam
-- **Hosting (one line):** Cloud Run (control plane) + Cloud SQL + GCS (brain) + E2B (bodies) +
-  Recall/Cartesia (transport, host-side), provisioned by **copy-Gallop Terraform/Packer**. Everything
-  on the cloud; nothing per-customer manual.
-- **Per-tenant isolation:** `tenant_id` everywhere + one sandbox per meeting + per-tenant GCS prefix;
-  per-customer GCP project as the enterprise escape hatch (copy Gallop's `customer-platform` module).
-- **Provider seam:** compute abstracted (like `libs/http`) so E2B → Fly/Modal/GCE swaps by config;
-  re-evaluate at sustained ~100+ concurrent.
-- **Cost:** per meeting ≈ $0.17–0.53 sandbox + Claude tokens (dominant, cache-reduced); idle ≈ $0.
-  The orchestrator (spawn/warm/reap/audit) is the real engineering, per Gallop (~¾ of their effort).
+## 10. What we copy from Gallop
+The atomic-claim/heartbeat/reaper concurrency spine · Packer/template golden-image pattern (as the
+E2B toolchain template) · Postgres(meta)+GCS(blobs) split · **git-mirror-to-GCS** (HEAD-verify +
+refuse-to-wipe) · `tenant_id`-everywhere + shared-default + per-customer-project escape hatch · the
+`AgentService` choke-point · encrypted per-tenant tokens · the credential boundary · the whole
+Terraform estate shape.
 
-## 9. What we build (the moat)
-The **brain** (per-company knowledge), the **agent loop** (Claude in-sandbox), the **live-meeting
-core** (the host relay holding Recall/Cartesia + the `to_meeting` surface), the **GitHub clone +
-repo-map**, the **human-gate**, and the **orchestrator** (spawn/warm/reap/cost). Everything else —
-rent (E2B, Recall, Cartesia, WorkOS, Composio) or copy (Gallop's infra patterns).
+## 11. Current state vs. to-build (honest)
+**Real today:** the live in-meeting loop; the atomic claim + per-meeting registry (genuinely built);
+the durable **code understanding** (`repo_maps`); a coherent Terraform stack; staged-draft path.
+**Not yet built (the v1 work):**
+- The **durable brain persistence** — `meetings`/`meeting_events`/`memory` + a **meeting-end writer**
+  (today teardown discards everything). *The keystone; in v1 because post-meeting depends on it.*
+- **Toolchain template bake** + **repo-in-GCS + pull-at-spawn** (today: cold clone + installs, 60–90s).
+- **Private-repo clone wired** (thread the GitHub-App token into the sandbox fetch).
+- Swap the shared personal Claude token → **per-tenant `ANTHROPIC_API_KEY`** (ToS + isolation).
+- The **4 concurrency fixes** (heartbeat, reaper, admission/cap, breaker).
+**Founder-gated deploy:** real vendor keys in Secret Manager · GCP billing + `terraform apply` ·
+build/push the image + `PUBLIC_BASE_URL` · register the Recall webhook · bake the E2B template.
+
+**Framing (from the red-team):** the architecture is coherent + on-pattern and the concurrency
+primitives are genuinely built — this is **finishing a platform on a working in-meeting core, not
+hardening a finished system.** The list above is bounded; none of it is a redesign.

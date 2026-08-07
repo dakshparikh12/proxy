@@ -1,143 +1,123 @@
-# Proxy — Onboarding & Integration (definitive process)
+# Proxy — Onboarding & Integration
 
-**Status:** designed + tool-validated (2026-08-06). Scope: everything from "a company is
-interested" → fully onboarded, integrated, and running as a permanent tool. The cloud/runtime
-("how Claude runs per-tenant + multi-meeting spawning") is a separate pass.
-
-Calibrated for a **startup-first** motion that scales to enterprise on the same rails. Principle:
-**rent the plumbing, build the moat, keep the frontend thin and the backend rich.**
+**One of two canonical docs** (the other is `CLOUD-RUNTIME.md`). Self-contained; current as of
+2026-08-06. Covers how a customer goes from "interested" → onboarded → connected to all their
+systems → running as a permanent tool. Principle: **rent the plumbing, build the moat, keep the
+frontend thin and the backend rich; simplest thing that works for startups, scalable to enterprise.**
 
 ---
 
-## 1. Core model
-- **One company = one WorkOS Organization = one tenant (`tenant_id`) = one Proxy "brain."**
-  Company-centric, never per-individual.
-- **Brain** (durable, per company, forever) + **body** (ephemeral sandbox per meeting) + a
-  **learning loop** (PR/push + meeting-end events keep the brain current).
+## 1. What Proxy is (for a fresh reader)
+Proxy is an AI teammate that **joins a company's meetings already knowing their codebase**, works
+live when addressed, and (post-meeting) turns decisions into owned action items + does follow-up
+work — reaching people over Slack/email. Multi-tenant SaaS. **One company = one tenant = one durable
+"brain"; each meeting spawns an ephemeral sandbox that reads that brain.** (The runtime is in
+`CLOUD-RUNTIME.md`.)
 
-## 2. The stack — rent vs build
-| Layer | Tool | Role |
-|---|---|---|
-| Identity / org / SSO / SCIM / RBAC / FGA / audit / admin portal | **WorkOS** | the identity + authorization + audit control plane |
-| Third-party tool connections + inbound events (per-tenant) | **Composio** | Slack/Chat/Teams/Google/Microsoft/Jira/Linear/Notion/Docs/email |
-| Code clone + repo work + PRs | **GitHub App (ours)** | in-house (credential boundary) |
-| Meeting join + calendar detection | **Recall** | |
-| Proxy's own-domain email | **Resend** | send + receive replies |
-| Ephemeral code sandbox | **E2B** | the "body" (cloud pass) |
-| Reasoning | **Claude** | the brain's cognition |
-| **The moat (BUILD)** | — | the per-company brain, agent loop, live-meeting core, GitHub clone/repo-map, human-gate, webhook router |
+## 2. The onboarding model
+- **Company-centric, not per-user.** Onboarding provisions a *company's* Proxy, not an individual's.
+- **Frictionless + self-serve** (also works from a cold-outreach link): net customer effort ≈
+  **sign in + a few scoped OAuth clicks.**
+- **Proxy operates through its OWN identity** (own-domain email + its Slack/Chat bot) and reaches
+  *into* the customer's systems via **delegated OAuth** — so it never needs to read a private mailbox.
 
-## 3. The OAuth apps WE own (register once, Composio operates)
-No product mints your branded apps — you register each in the platform's dev console (≈30 min
-each, one-time, global), then Composio (custom auth) operates them per-customer.
+## 3. Identity & auth — **DIY for v1, no WorkOS** (the simplest proven pattern)
+WorkOS's real value is enterprise SSO/SCIM/audit, which **v1 (startups) does not need**. So for v1
+we DIY the two simple parts and defer the rest:
+- **Login = "Sign in with Google/Microsoft"** (OAuth/OIDC via **Authlib** in Python — the exact
+  equivalent of Gallop's `passport-google-oauth20`/`passport-microsoft`).
+- **Sessions = signed cookie + a Postgres `sessions` table** (Proxy already has session infra).
+- **Tenant/org model = our own Postgres tables** (`tenants` (exists) + `members(user_id, tenant_id,
+  role)`). On first sign-in, derive the company from the **verified email domain** → find/create the
+  tenant → create the member. **First user for a domain = admin; others = member** (two roles, a
+  column — no RBAC engine).
+- **Membership default:** auto-join by verified domain (frictionless); admin-approve is the tighten-
+  later option.
+- **Deferred to enterprise:** SSO/SAML, SCIM, audit-log streaming, an admin portal — add **WorkOS**
+  (free ≤1M users, drop-in) only when a specific enterprise demands them.
 
-| App | We register in | Used for | Operated by |
-|---|---|---|---|
-| **GitHub App** | GitHub dev settings | clone (read) + PRs (write, human-gated) | **us** (install token host-side) |
-| **Slack app** | api.slack.com | bot: post/DM/read + events | Composio |
-| **Google OAuth client** | Google Cloud console | Chat, Calendar, Gmail-send, Docs | Composio |
-| **Microsoft Entra app** | Entra/Azure portal | Teams, Outlook, calendar | Composio |
-| *(optional, on demand)* Notion / Jira / Linear | each platform | tickets/pages | Composio |
+This is *the* default B2B pattern ("Sign in with Google + DB sessions + tenants/members") — boring,
+proven, and exactly what Gallop runs while serving enterprise customers.
 
-- **Per-service, least-privilege:** each is its own grant with minimal scopes (what security teams
-  check). No blanket "everything" grant.
-- **Verification:** Google + Microsoft apps need a one-time app verification — the *light* kind,
-  because Proxy **sends** and never **reads private mailboxes** (non-restricted scopes; avoids the
-  annual CASA audit). A directly-installed Slack app needs no marketplace review.
+## 4. Tool connections — Composio + our own apps (per-tenant, isolated)
+- **We register ~4 of our OWN OAuth apps once, globally:** the **GitHub App** (repos), **Slack**,
+  **Google**, **Microsoft**. Composio's "custom auth" *operates* them — so the customer's consent
+  screen shows **"Proxy"** and we control least-privilege scopes. (A per-service grant, not one
+  blanket grant. No product mints your branded apps for you — but you register each once, ~30 min.)
+- **Composio** handles the per-customer connect flow, encrypted token vault, refresh, webhooks, and
+  **per-tenant isolation via `user_id` = tenant**: each customer's token is workspace-scoped and
+  stored under their `user_id`; 10 companies = 10 isolated tokens; outbound scoped by `user_id`,
+  inbound events arrive on one signed webhook mapped back to the tenant. **The sandbox holds no
+  tokens** — the host invokes Composio-scoped tools (the credential boundary).
+- **GitHub is special:** we use our own **GitHub App** for the clone + host-side PRs (the
+  differentiated path); Composio covers the breadth (Slack/Chat/Google/Microsoft/Jira/Linear/Notion).
+- **Google/Microsoft apps** need a one-time *light* verification (we **send**, never read mailboxes →
+  non-restricted scopes, no CASA audit). A directly-installed Slack app needs no marketplace review.
 
-## 4. One-time setup WE must do to be integration-ready (the actionable list)
-1. Register the **GitHub App** (`contents:read`, `pull_requests:write`; per-repo install).
-2. Register the **Slack app** (bot scopes + event subscriptions).
-3. Register the **Google OAuth client** (Chat/Calendar/Gmail-send/Docs scopes) + consent screen +
-   submit light verification.
-4. Register the **Microsoft Entra app** (Teams/Mail.Send/Calendars) + admin-consent config.
-5. **Composio:** create a **custom-auth config per service** (paste our client IDs/secrets),
-   set the redirect URI, build on the `link()` connect flow (not deprecated `initiate()`).
-6. **WorkOS:** wire AuthKit (login), the Organization model (= tenant), and turn on SSO / SCIM /
-   RBAC / FGA / Audit Logs / Admin Portal.
-7. **Resend:** own sending domain + SPF/DKIM/DMARC.
-8. **Recall:** bot + calendar API.
-9. Build **one signed webhook endpoint** to receive Composio triggers (map event → tenant).
-10. Build the **connect page** (Next.js) rendering the WorkOS + Composio hosted flows.
+## 5. Meeting join — Recall Calendar (default) + invite-email (fallback)
+- **Default = Recall Calendar OAuth.** Customer connects their Google/Microsoft calendar in
+  onboarding → **Recall auto-detects meetings and auto-joins the bot ~2 min before start** (`join_at`;
+  Recall reserves the machine) → reschedule/cancel handled via Recall webhooks. **We run no
+  scheduler.**
+- **Fallback = the per-tenant invite email** (any provider / no calendar): they add
+  `acme@useproxy.co` to the invite → we parse the `.ics` → set `join_at` on Recall.
+- **The meeting URL is the provider-agnostic key** — Recall joins Zoom/Meet/Teams/Webex by URL, and
+  we get that URL from the calendar (Recall) or the parsed invite. Upcoming meetings live in an
+  `upcoming_meetings` Postgres row `{tenant, source, start_at, meeting_url, recall_bot_id, status}`.
+- **All platforms supported in v1** (free — Recall joins any by URL).
 
-## 5. The per-customer onboarding flow (8 steps · thin frontend, rich backend)
-| # | Step | Frontend (mostly rented) | Backend (ours) |
-|---|---|---|---|
-| 1 | **Register the company** | WorkOS AuthKit sign-in (Google/Microsoft SSO) | derive company from verified domain → create WorkOS Org + tenant + **provision the Proxy brain**. *Info collected: work identity + company name only.* |
-| 2 | **Profile + admin** | one confirm screen | confirm name/domain/admin; domain ties future members + meetings to this tenant |
-| 3 | **Connect code (scoped)** | GitHub App install (pick specific repos) | store install token host-side; **start clone + understanding** |
-| 4 | **Connect workspace (scoped)** | Composio Connect UI (Slack/Chat + calendar) | store per-tenant connected accounts (`user_id`=tenant) |
-| 5 | **Index + PROVE it worked** | status surface + a "here's what I understood" result | background index → **Proxy answers a repo question / posts a finding** (the "aha" before any meeting — time-to-value) |
-| 6 | **Team access** | members list / roles | members via manual or SSO/SCIM; roles via WorkOS RBAC/FGA (who may approve Proxy's actions) |
-| 7 | **Go live** | "invite Proxy / connect calendar" | Recall joins the meeting → spawn a body from the brain → work → deliver |
-| 8 | **Persist** | console home | standing bot + GitHub App + brain; expand repos/seats over time |
+## 6. Email — per-tenant address on one catch-all domain
+- We own `useproxy.co` with a **catch-all inbox → one webhook**. **Each tenant gets a unique address**
+  (`acme@useproxy.co`) = the routing key (local-part → tenant). Bot display name is "Proxy".
+- **Inbound** via Cloudflare Email Routing / Postmark → webhook. **Outbound** (notes/outreach) via
+  **Resend** from the per-tenant address; replies return to the same address → same tenant.
 
-**Startup path:** self-serve, first admin sign-in establishes the org — value in the first meeting.
-**Enterprise path (same rails, added gates):** authorized-admin + **domain-claim/verification**
-before the org is trusted (not "first-sign-in wins"), SSO enforcement, SCIM, admin-approved
-tool installs.
+## 7. The onboarding flow (thin frontend, rich backend)
+1. **Sign in** (Google/Microsoft) → company tenant + Proxy provisioned (info collected: work identity
+   + company name only).
+2. **Connect code** — install the GitHub App, pick specific repos → clone + understanding begins.
+3. **Connect workspace + calendar** — Slack/Chat + calendar via Composio/Recall (one click each).
+4. **Index + PROVE it worked** — Proxy answers a repo question / posts a finding *before* the first
+   meeting (time-to-value).
+5. **Team access** — members auto-join by domain; admin/member roles.
+6. **Go live** — Recall joins the next meeting; Proxy works; folds results back.
+7. **Persist** — a standing bot + GitHub App + brain + console; expand repos/seats over time.
 
-## 6. Auth & multi-tenant mechanics (how isolation actually works)
-- Company A's admin clicks "Connect Slack" → Composio hosted OAuth → Slack issues a
-  **workspace-scoped token** → stored as a **connected account under `user_id = tenant_A`** (encrypted).
-- **Outbound:** Proxy calls a tool with `user_id = tenant_A` → Composio uses *that* token → lands
-  in Company A's workspace. Company B's token is unreachable in that call.
-- **Inbound:** replies/comments arrive on our **one signed webhook**; the payload's connected-account
-  identifies the tenant → routed to the right brain.
-- **10 companies = 10 isolated tokens**, each under its own `user_id`. No mixing possible.
-- **Two roles:** *we* create the apps once; the *customer's admin* approves each connection —
-  gated by their own Slack/GitHub admin rights (their platform enforces "who may grant access").
-- **Credential boundary:** the sandbox holds **no** tokens; the host executes Composio-scoped calls.
+## 8. The console (one company workspace, role-scoped)
+One shared company console with role-scoped views (admin sees all; member sees own). Sections:
+company profile · **connections + health** (per-integration status + reconnect) · members & roles ·
+activity/monitoring · **controls** (the human-approval gate for world-touching actions) · billing
+(later). **The onboarding steps fill the console.** Enterprise-selling trio: capabilities ·
+transparency (activity) · frictionless control.
 
-## 7. Security & admin model
-- Work identity via SSO (domain-verified employee); connection grants gated by the customer's own
-  platform admin controls; (enterprise) domain verification + SSO + SCIM = authoritative membership.
-- **WorkOS RBAC/FGA = the human-control gate** (every staged action-behind-a-click is an FGA check).
-- **Audit Logs** (+ SIEM streaming) = the immutable "what Proxy did / what admins changed" trail.
-- **Offboarding/exit (build this):** revoke tokens, purge indexed code + transcripts + brain,
-  confirm deletion — a security-review requirement.
+## 9. Security & consent (the parts that gate real customers)
+- **Recording-consent floor (legal):** the bot **joins named + announces transcription**; never
+  silent. Required for all-party-consent US states + EU. *(Exact mechanism = an OPEN decision:
+  named bot + a join announcement + a host consent setting + a jurisdiction default.)*
+- **Credential boundary:** OAuth tokens encrypted host-side; the sandbox holds none; every
+  world-touching action (PR, message) is a **staged draft executed host-side after a human click**.
+- **Delete/offboard:** revoke tokens + purge the tenant's data + kill sandboxes (to build).
+- **DPA + subprocessor list + ToS/Privacy** (Common Paper templates) before a paying customer.
 
-## 8. The post-meeting loop (what "integrated" delivers downstream)
-- **Claude** — action items, recipients, plans, interpret replies.
-- **Human-gate (us)** — approve before any world-touching action (Law 3).
-- **Composio** — execute: send Slack/email, create Jira/Linear tickets, write Docs, post PR comments.
-- **E2B** — the actual code work (in-house); result posted out via Composio/GitHub.
-- **Composio triggers → our webhook** — receive replies/comments → route to meeting context → loop.
-- **Covered end-to-end** for Slack/email/Jira/Linear/Notion/Docs/GitHub.
-- **Two caveats to design around:** Microsoft Teams can *send* but not *receive* replies via Composio
-  (MS Graph fallback); email replies are delayed ~15 min (polling). Slack/tickets/GitHub are realtime.
+## 10. What Recall already does for us (don't build)
+- **Meeting scheduling / join-at-time** (Calendar V2 + `join_at`).
+- **Action-item owner → email resolution** (Recall recovers participant emails via calendar
+  fuzzy-matching — solves "who do I message" for free).
+- **Bot/meeting state** (consume `bot.*` webhooks: joining, waiting-room, permission-denied, ended).
+- **Raw transcript/recording storage** (or `retention:null` for zero-retention).
 
-## 9. Persistence (permanent standing tool)
-Always-present Slack bot + GitHub App on repos · a persistent per-tenant brain (Postgres `tenant_id`
-+ per-tenant GCS prefix) that keeps learning · a console they return to · SSO/SCIM binding so it
-survives employee churn.
+## 11. Current state vs. to-build (honest)
+- **Real today:** the GitHub connect → index trigger; session/tenant infra; the in-meeting agent.
+- **To build (v1):** Google/MS sign-in wiring + `members` table; the ~4 OAuth apps + Composio
+  custom-auth configs; the per-tenant email routing + inbound webhook; the connect page + console;
+  the recording-consent mechanism; the delete/offboard path.
+- **Deferred to enterprise:** WorkOS (SSO/SCIM/audit), per-tenant KMS, marketplace listings.
 
-## 10. The console (one company workspace, role-scoped)
-One shared company console with **role-scoped views** (admin sees all; member sees own). Sections:
-company profile · connections + health · members & roles · activity/monitoring · controls (the
-human-gate) · audit · security (SSO/SCIM via WorkOS Admin Portal) · billing (later). Proxy's presence
-= the console + the Slack bot. The onboarding steps fill the console directly. Enterprise-selling
-trio: **capabilities · transparency (audit/activity) · frictionless control.**
+## 12. Locked decisions (onboarding)
+Auth: **DIY Google/MS sign-in, no WorkOS for v1** · Connectors: **Composio custom-auth**, our own
+GitHub App · Calendar: **Recall OAuth default**, invite-email fallback · Email: **per-tenant address**
+· Membership: **auto-join by verified domain** · Wake: **voice + chat** (verify chat-wake is wired).
 
-## 11. Enterprise-readiness — what this covers vs. the remaining gate
-Enterprise-readiness = **① identity/access (WorkOS+Composio — done here) · ② secure cloud/data
-(next pass) · ③ trust/compliance (mostly deferred, non-optional for big enterprise).**
-WorkOS+Composio cover ~half (①). The other half is **ours and no tool provides it:** SOC 2, DPA +
-subprocessor list (note: WorkOS/Composio/E2B/Recall/Anthropic all become disclosed subprocessors),
-data residency, retention/deletion, pen test, documented AI-safety controls (no-training via
-Anthropic ZDR, egress control, prompt-injection guardrail, human-in-the-loop), SLA/status page.
-Startups/pilots don't need most of ③ yet; a big enterprise does.
-
-## 12. Cost (rough)
-Fixed ≈ **$200–400/mo** early (E2B $150 + GCP $50–100 + mostly-free SaaS tiers). WorkOS free ≤1M
-users; **SSO/SCIM $125→$50/connection** (enterprise-revenue-funded). Composio free 20k calls →
-$29/mo (per-tool-call; pricing changes Aug 15 2026 — budget per meeting). Per-meeting COGS ≈
-**$1.50–5.50**, Claude-token-dominated.
-
----
-
-**One-sentence flow:** admin signs in with their work identity → we provision their tenant + Proxy
-→ they connect their systems with a few scoped OAuth clicks (our apps, operated by Composio,
-isolated per tenant) → Proxy indexes and *proves* it understood → the team gets role-based access →
-Proxy goes live in meetings and runs the full post-meeting loop (Claude + Composio + E2B,
-human-gated) → and it persists as an always-on, continuously-learning tool with a console.
+## Cost (onboarding-related)
+Composio free 20k tool-calls → $29/mo · Recall $0.50/recording-hr (+ free calendar API) · Resend free
+→ $20/mo · WorkOS $0 (deferred). The heavy costs are LLM tokens + compute — see `CLOUD-RUNTIME.md`.
