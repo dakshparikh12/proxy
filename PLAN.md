@@ -72,6 +72,27 @@ across instances needs the heartbeat + reaper + admission control (§5).
   one shared address.
 - **Isolation:** `tenant_id` everywhere + per-meeting sandbox + per-tenant GCS prefix; RLS to add.
 
+## 4a. Newly-locked decisions (2026-08-06)
+- **Calendar join — DEFAULT = Recall Calendar OAuth.** Customer connects Google/Microsoft calendar
+  in onboarding → Recall auto-detects meetings + auto-joins (`join_at`, joins ~2 min early). The
+  per-tenant **invite-email address is the always-available no-grant fallback** (any provider / no
+  calendar). The **meeting URL is the provider-agnostic key**; upcoming meetings stored in an
+  `upcoming_meetings` Postgres table.
+- **v1 scope = reactive + FULL post-meeting.** Post-meeting reuses the same agent loop + the Composio
+  connectors (a place to work + reach out — not a new intelligence build), **but it requires the
+  brain/meeting-record persistence (blocker #5)** — so #5 moves INTO the v1 critical path (no longer
+  deferred). Proactive stays deferred.
+- **Template baking (resolved):** bake the **toolchain** into ONE shared E2B template (kills the
+  install latency — the real cold-spawn cost); keep the **repo as a shallow (`--depth=1`) copy in
+  GCS, refreshed by the PR-push webhook** (a mutable store — NOT the immutable E2B template image);
+  **at spawn, pull the repo from GCS + load the cached understanding** (no per-spawn GitHub clone);
+  **pre-warm on Recall's `bot.joining_call`** (~2 min early). A per-repo full bake is the
+  huge-monorepo escape hatch only.
+- **Recall offloads (trim from our build):** meeting scheduling/join-timing · action-item
+  **owner→email resolution** (Recall calendar fuzzy-match) · bot/meeting **state** (consume `bot.*`
+  webhooks, don't infer) · **raw-audio/transcript storage** (Recall stores it, or `retention:null`
+  for zero-retention) · **diarization** (BYOK flag). We keep only the brain + agent loop + relay.
+
 ## 5. THE FIRST-CUSTOMER BLOCKERS (ordered — this is the build list)
 Everything below **blocks a first paying customer**; each is bounded (not a redesign):
 1. **Private-repo clone into the sandbox.** Thread `premeeting.github_auth`'s GitHub-App installation
