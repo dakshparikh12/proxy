@@ -33,6 +33,11 @@ we DIY the two simple parts and defer the rest:
   column — no RBAC engine).
 - **Membership default:** auto-join by verified domain (frictionless); admin-approve is the tighten-
   later option.
+
+  > ⚠ **Current code diverges — fix first.** `libs/db/.../identity.py` today creates a *new tenant
+  > per email address* (named after the full email), not per domain — so two colleagues at the same
+  > company get **separate, disjoint tenants**. Rewriting this to *domain → find/create company
+  > tenant → add a `members` row (first = admin)* is the **first onboarding build task**.
 - **Deferred to enterprise:** SSO/SAML, SCIM, audit-log streaming, an admin portal — add **WorkOS**
   (free ≤1M users, drop-in) only when a specific enterprise demands them.
 
@@ -92,8 +97,10 @@ transparency (activity) · frictionless control.
 
 ## 9. Security & consent (the parts that gate real customers)
 - **Recording-consent floor (legal):** the bot **joins named + announces transcription**; never
-  silent. Required for all-party-consent US states + EU. *(Exact mechanism = an OPEN decision:
-  named bot + a join announcement + a host consent setting + a jurisdiction default.)*
+  silent. Required for all-party-consent US states + EU. *(Good news — the core is ALREADY BUILT: a
+  hard consent gate posts a consent notice as the bot's first observable action before it listens,
+  `transport/consent.py` + `transport/join.py`. Remaining: a host consent setting + a jurisdiction
+  default.)*
 - **Credential boundary:** OAuth tokens encrypted host-side; the sandbox holds none; every
   world-touching action (PR, message) is a **staged draft executed host-side after a human click**.
 - **Delete/offboard:** revoke tokens + purge the tenant's data + kill sandboxes (to build).

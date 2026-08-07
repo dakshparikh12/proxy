@@ -94,7 +94,8 @@ handles; tokens encrypted/in Composio vault), `repos` (+ `current_sha`, template
 `repo_maps` (pointer to the understanding blob), `meetings` (+ completion status), `meeting_events`,
 `action_items`, **`memory`** (cross-meeting: confirmed decisions, ownership, work-state), `sessions`,
 `operation_runs` (the claim/heartbeat spine), `sandboxes` (reaper bookkeeping), `usage`/`cost`,
-`upcoming_meetings`. `tenant_id` + RLS on every row.
+`upcoming_meetings`. `tenant_id` on every row (Postgres **RLS to add** — today isolation is
+application-level `tenant_id` filtering only, NOT database RLS).
 
 **GCS (object-versioned, per-tenant prefix `gs://…/<tenant_id>/…`):** the understanding/`REPO_MAP`,
 the shallow repo copy, full transcripts, staged diffs/artifacts, git-mirrored workroom output.
@@ -118,7 +119,7 @@ brain learns across meetings. (Retrieval starts as simple structured recall; vec
 7. **Across meetings** → the brain is the continuity, per tenant, forever, learning.
 
 ## 8. Multi-tenant scale, isolation, cost
-- **N tenants on shared infra:** ONE Cloud Run, ONE Cloud SQL (`tenant_id` + RLS), ONE GCS bucket
+- **N tenants on shared infra:** ONE Cloud Run, ONE Cloud SQL (`tenant_id`; RLS to add), ONE GCS bucket
   (per-tenant prefixes). Compute scales by adding bodies (bounded by admission control); the reaper
   keeps orphans ≈ 0; idle ≈ $0.
 - **Isolation:** `tenant_id` everywhere + per-meeting sandbox + per-tenant GCS prefix + a JWT
