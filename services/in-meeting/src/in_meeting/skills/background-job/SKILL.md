@@ -47,3 +47,13 @@ proven, reliable pattern. Cap yourself at ~2 concurrent jobs.
   X, here's what I got and what's left") — never claim done when it isn't.
 - Know your jobs: if someone asks about one mid-flight, report its real status.
 - Two jobs max in flight; beyond that you lose the thread.
+
+## Coding-turn discipline (when the job is a code change)
+- **One step, then stop.** Do only the current step of the plan, verify it, then stop — don't
+  run ahead into the next change. Small verified increments beat a big unverified batch.
+- **Done means verified, never assumed.** If any step failed, the job is NOT done: leave the
+  done-file unwritten, write what broke into `out.md`, and report it honestly (Law 2 — never
+  overstate). A step that "should work" is not a step that works.
+- **Prove it by running.** For a code change, run the test/command and paste the ACTUAL output
+  into the result as evidence — the failing run first (RED), then the passing run after your
+  fix (GREEN). "Verified" means run on real data, not that it compiled. No output, no claim.

@@ -4,7 +4,7 @@ This standalone script runs INSIDE the workroom sandbox and is registered with n
 via ``.mcp.json`` (stdio transport). It exposes exactly one tool, ``to_meeting`` — the agent's ONE
 interface to the NON-SPOKEN channels. Speaking is not one of them: the agent speaks by simply
 writing its reply, which is streamed to the room (Design B); ``to_meeting`` is only for chat / dm /
-screen / offer / mute / unmute. The tool's own docstring is the authoritative advertised vocabulary;
+screen / offer / mute / unmute / raise_hand. The tool's own docstring is the authoritative vocabulary;
 the host-side driver (``meeting_connection``) routes the same mediums (see ``ADVERTISED_MEDIA``).
 
 Two modes, one tool signature (so the agent's behavior is identical either way):
@@ -75,7 +75,9 @@ def main() -> None:
         you produce, e.g. a rendered doc/mockup/diff, because external sites often refuse to embed
         (X-Frame-Options/CSP) and would show blank. Keep it presentation-ready; pass "" to clear back
         to the orb) | 'offer' (stage a world-touching change for a human's one-click approval) |
-        'mute' | 'unmute'. Use your judgment like a great teammate.
+        'mute' | 'unmute' | 'raise_hand' (put up a visible "✋ Proxy raised its hand" bar + a quiet
+        chat nudge so people know you have something to add — WITHOUT talking over anyone; it clears
+        itself the moment you next speak). Use your judgment like a great teammate.
         """
         return _deliver(content, (medium or "chat").strip().lower(), to)
 

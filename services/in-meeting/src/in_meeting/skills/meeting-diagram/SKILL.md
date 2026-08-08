@@ -1,49 +1,70 @@
 ---
 name: meeting-diagram
-description: Draw a fast, clear architecture or flow diagram as inline SVG inside a meeting artifact. Use when a picture of how the system fits together lands better than words.
+description: Draw a fast, clear architecture or flow diagram inside a meeting artifact — Mermaid by default, inline SVG when you want zero dependency. Use when a picture of how the system fits together lands better than words.
 ---
 
 # Drawing a meeting diagram
 
-A diagram carries architecture and flow faster than talking. Draw it as inline SVG inside the
-HTML artifact (see the `meeting-artifact` skill) so it renders standalone — no image URLs, no
-network, no build.
+A diagram carries architecture and flow faster than talking. Draw it inside the HTML artifact
+(see the `meeting-artifact` skill), themed to the SAME house tokens, so a diagram and a doc
+read as one system.
 
 ## When
 - Explaining how components fit together, a request flow, a data path, a sequence.
 - The room would "get it" faster from a picture than from a paragraph.
 
-## Principles
-- Draw THIS system: real component names (`control-plane`, `workroom`, `session_host`), real
-  edges. Never a generic box-and-arrow that could be any system.
-- Clear over fancy: a few labeled boxes and arrows that read at a glance beat a dense graph.
-- Match the artifact's dark theme (light strokes/text on the dark page).
-
-## Inline SVG pattern
-Boxes as `<rect>` + `<text>`; arrows as `<line>`/`<path>` with an arrowhead `<marker>`.
+## Mermaid (default)
+Best for sequences and branchy flows. Theme it to the house palette with an `init` directive
+so it matches the artifact. The `<script src>` is the one external fetch we allow (same rule
+as charts) — if the render surface may be offline, use the inline-SVG pattern below instead.
 
 ```html
-<svg viewBox="0 0 640 180" width="100%" font-family="sans-serif" font-size="13">
+<pre class="mermaid">
+%%{init:{'theme':'base','themeVariables':{
+  'background':'#0f1216','primaryColor':'#161a20','primaryBorderColor':'#272d37',
+  'primaryTextColor':'#e7eaee','lineColor':'#8aa0ff','fontFamily':'ui-sans-serif,system-ui'}}}%%
+flowchart LR
+  cp[control-plane] --> im[in-meeting]
+  im -->|transcript| wr[workroom · E2B sandbox]
+  wr -->|to_meeting| cp
+</pre>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true});</script>
+```
+
+## Inline SVG (zero dependency)
+When you want it to render with no network at all, or need precise control. Boxes as
+`<rect>` + `<text>`, arrows as `<line>` with an arrowhead `<marker>`. Same house colors.
+
+```html
+<svg viewBox="0 0 640 120" width="100%" font-family="ui-sans-serif,system-ui" font-size="13">
   <defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
-    <path d="M0,0 L7,3 L0,6 Z" fill="#7ee787"/></marker></defs>
-  <g fill="#161b22" stroke="#30363d">
-    <rect x="20"  y="60" width="150" height="52" rx="8"/>
-    <rect x="245" y="60" width="150" height="52" rx="8"/>
-    <rect x="470" y="60" width="150" height="52" rx="8"/>
+    <path d="M0,0 L7,3 L0,6 Z" fill="#8aa0ff"/></marker></defs>
+  <g fill="#161a20" stroke="#272d37" rx="8">
+    <rect x="20"  y="40" width="150" height="48" rx="8"/>
+    <rect x="245" y="40" width="150" height="48" rx="8"/>
+    <rect x="470" y="40" width="150" height="48" rx="8"/>
   </g>
-  <g fill="#e6edf3" text-anchor="middle">
-    <text x="95"  y="90">control-plane</text>
-    <text x="320" y="90">workroom (E2B)</text>
-    <text x="545" y="90">session_host</text>
+  <g fill="#e7eaee" text-anchor="middle">
+    <text x="95"  y="69">control-plane</text>
+    <text x="320" y="69">workroom (E2B)</text>
+    <text x="545" y="69">session_host</text>
   </g>
-  <g stroke="#7ee787" marker-end="url(#a)">
-    <line x1="170" y1="86" x2="243" y2="86"/>
-    <line x1="395" y1="86" x2="468" y2="86"/>
+  <g stroke="#8aa0ff" marker-end="url(#a)">
+    <line x1="170" y1="64" x2="243" y2="64"/>
+    <line x1="395" y1="64" x2="468" y2="64"/>
   </g>
 </svg>
 ```
 
-For a sequence or a branchy flow where SVG hand-layout gets fiddly, a **mermaid-as-text**
-block inside a `<pre class="mermaid">` is fine too — write the mermaid source as text; keep
-it simple (`graph LR` / `sequenceDiagram`). Prefer inline SVG when you want it to render with
-zero dependencies. Either way: real names, few elements, readable in one glance.
+## Principles (fold in the anti-slop visual rules)
+- **Real names, real edges.** Draw THIS system: `premeeting`, `control-plane`, `in-meeting`,
+  `workroom`, the E2B sandbox, `to_meeting`, Recall/AssemblyAI/Cartesia, Postgres + GCS. Never
+  a generic box-and-arrow that could be any system.
+- **Label edges with what actually flows** — `transcript`, `to_meeting`, `signed push`, not a
+  bare line.
+- **Few nodes (aim 5–9).** If it needs more, you're diagramming too much — split it or zoom in.
+- **One accent, neutral boxes.** No per-box rainbow fills, no gradients or drop shadows on
+  nodes, no decorative icons. Clarity over decoration — a few labeled boxes that read at a
+  glance beat a dense graph.
+- **Match the artifact** — same fonts and colors, so the picture belongs to the page.

@@ -7,7 +7,7 @@ bearer, looks up the meeting's live runtime, and lands the call on its ``Meeting
 connection holds the real Recall/Cartesia creds (host-side, never in the sandbox) and carries the
 medium to the physical pipe: the streamed spoken prose rides ``medium='say'`` (the voice channel),
 and the agent's ``to_meeting`` calls carry the non-spoken mediums
-(chat/dm/screen/offer/mute/unmute — the one canonical vocabulary, ``ADVERTISED_MEDIA``).
+(chat/dm/screen/offer/mute/unmute/raise_hand — the one canonical vocabulary, ``ADVERTISED_MEDIA``).
 
 This is a **driver, not a decision** (Law 4): the agent chose the content + medium inside the
 sandbox; the host only relays. World-touching stays a human click by the credential boundary (Law 3).

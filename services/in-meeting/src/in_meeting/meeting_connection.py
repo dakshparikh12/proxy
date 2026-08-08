@@ -38,7 +38,9 @@ _SPOKEN_LOG_MAX = 64
 #: the single source of truth the MCP tool advertises, ``_route`` handles, and the relay carries —
 #: kept in ONE place so the lists can never diverge. (A stale second contract that also told the
 #: model ``say`` was a ``to_meeting`` medium/default was the two-contract speaking bug this fixes.)
-ADVERTISED_MEDIA: tuple[str, ...] = ("chat", "dm", "screen", "offer", "mute", "unmute")
+ADVERTISED_MEDIA: tuple[str, ...] = (
+    "chat", "dm", "screen", "offer", "mute", "unmute", "raise_hand",
+)
 
 #: The default ``to_meeting`` medium when the agent (or the relay/replay) names none: ``chat``, the
 #: first non-spoken channel — NEVER ``say`` (speaking is the prose stream, not a ``to_meeting`` call).
@@ -71,6 +73,10 @@ ScreenSink = Callable[[str], Awaitable[str]]
 #: Mute/unmute the meeting's conversational audio at the Output-Media webpage channel (where the
 #: spoken PCM actually rides). ``True`` mutes, ``False`` unmutes. Law 3 — human control is absolute.
 AudioMuteSink = Callable[[bool], Awaitable[None]]
+#: Raise/lower Proxy's visible "hand" on the Output-Media surface — the ``raise_hand`` medium. ``True``
+#: shows the green "✋ Proxy raised its hand" bar; ``False`` hides it. Presence only — it never plays
+#: audio or cuts into the room (Law 3 — no interruption; Law 5 — talk-and-glance).
+RaiseHandSink = Callable[[bool], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +104,13 @@ class MeetingConnection:
     #: ``room.mute/unmute`` still fires alongside it for the (unused) clip path. ``None`` ⇒ only the
     #: room verb (the pre-wiring behavior).
     audio_mute: AudioMuteSink | None = None
+    #: Raise/lower the visible "✋ Proxy raised its hand" bar on the Output-Media surface (the
+    #: ``raise_hand`` medium). When set, a 'raise_hand' send shows the bar + drops a chat nudge, and
+    #: the bar AUTO-CLEARS the moment Proxy next speaks. ``None`` ⇒ the medium reports unavailable.
+    raise_hand: RaiseHandSink | None = None
+    #: True while Proxy's hand is currently raised (so the say-path clears it EXACTLY once, on the
+    #: first spoken sentence, instead of re-sending a lower frame per sentence). Host-side bookkeeping.
+    hand_raised: bool = False
     #: every send, in order — the host-observed record (never the model's prose), for tests + audit.
     sent: list[MeetingSend] = field(default_factory=list)
     #: what Proxy actually SAID out loud, as ``(wall_ts, text)`` — the ground-truth reference for
@@ -171,7 +184,8 @@ class MeetingConnection:
 
     async def _route(self, m: str, content: str, to: str | None) -> MeetingSend:
         # The physical pipe: the medium → the real vendor op. A driver, not a rule. The non-spoken
-        # mediums here are exactly :data:`ADVERTISED_MEDIA` (chat/dm/screen/offer/mute/unmute); the
+        # mediums here are exactly :data:`ADVERTISED_MEDIA`
+        # (chat/dm/screen/offer/mute/unmute/raise_hand); the
         # ``say``/``speak``/``voice`` branch below is the VOICE channel the streamed prose rides over
         # the relay (``session_host`` POSTs each spoken sentence as ``medium='say'``) — not a medium
         # the agent picks. An unrecognized medium falls to the documented safety-net voice fallback.
@@ -184,6 +198,11 @@ class MeetingConnection:
                 return MeetingSend("say", False, "dropped: barged-in")
             await self.speak.say(content)
             self._record_spoken(content)
+            # AUTO-CLEAR the raised hand: Proxy is now speaking, so lower the "✋" bar. Once only
+            # (``hand_raised`` guards) so a multi-sentence turn doesn't re-send a lower frame per line.
+            if self.hand_raised and self.raise_hand is not None:
+                self.hand_raised = False
+                await self.raise_hand(False)
             return MeetingSend("say", True)
         if m in ("chat", "message", "post"):
             await self.room.post_chat(self.bot_id, content)
@@ -212,6 +231,16 @@ class MeetingConnection:
             # honest failure like oversize/fault). Surface it verbatim — never a fabricated success.
             outcome = await self.screen(content)
             return MeetingSend("screen", True, outcome)
+        if m in ("raise_hand", "raisehand", "raise-hand", "hand"):
+            # Show a visible "✋ Proxy raised its hand" bar on the Output-Media surface AND drop a
+            # short chat nudge, so the room notices Proxy wants to speak WITHOUT it cutting in (Law 3
+            # — no interruption; Law 5 — talk-and-glance). The bar auto-clears when Proxy next speaks.
+            if self.raise_hand is None:
+                return MeetingSend("raise_hand", False, "raise-hand surface not available")
+            await self.raise_hand(True)
+            self.hand_raised = True
+            await self.room.post_chat(self.bot_id, "Proxy has something to add")
+            return MeetingSend("raise_hand", True)
         if m in ("offer", "propose", "draft", "approve"):
             if self.offer is None:
                 return MeetingSend("offer", False, "offer path not available")

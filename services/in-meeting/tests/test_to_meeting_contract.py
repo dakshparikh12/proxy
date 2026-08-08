@@ -15,7 +15,7 @@ import inspect
 def test_advertised_media_is_the_one_canonical_non_spoken_vocabulary() -> None:
     from in_meeting.meeting_connection import ADVERTISED_MEDIA
 
-    assert ADVERTISED_MEDIA == ("chat", "dm", "screen", "offer", "mute", "unmute")
+    assert ADVERTISED_MEDIA == ("chat", "dm", "screen", "offer", "mute", "unmute", "raise_hand")
     # speaking is NOT a to_meeting medium under Design B — it is the streamed prose channel.
     for spoken in ("say", "speak", "voice"):
         assert spoken not in ADVERTISED_MEDIA

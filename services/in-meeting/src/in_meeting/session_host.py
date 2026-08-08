@@ -32,16 +32,21 @@ import json
 import os
 import pathlib
 import re
+import shlex
+import shutil
 import time
 import urllib.request
 from typing import Any
 
-#: The persistent session's default model. Sonnet (not Haiku): the real-data dry-run proved Haiku
-#: OVER-EXPLORES a normal ask and exhausts the turn budget WITHOUT calling ``to_meeting`` — it wakes
-#: but delivers nothing (a fast model that says nothing is useless). Sonnet follows the "deliver in
-#: one turn" instruction reliably. Overridable via ``PROXY_WORKROOM_MODEL`` (Law 4: no per-task model
-#: in code; the agent still escalates heavy work to a stronger model through its own sub-agents).
-DEFAULT_MODEL = "claude-sonnet-4-6"
+#: The persistent session's default model. **Sonnet 5** — the current latency/cost sweet spot for
+#: grounded agentic work (adaptive thinking baked into ``effort=high``, faster + cheaper than Opus).
+#: Sonnet (not Haiku): the real-data dry-run proved Haiku OVER-EXPLORES a normal ask and exhausts the
+#: turn budget WITHOUT calling ``to_meeting`` — it wakes but delivers nothing (a fast model that says
+#: nothing is useless). Sonnet follows the "deliver in one turn" instruction reliably. Overridable via
+#: ``PROXY_WORKROOM_MODEL`` (Law 4: no per-task model in code; the agent still escalates heavy work to
+#: a stronger model through its own sub-agents). Fall back to ``claude-sonnet-4-6`` if a live replay
+#: shows a quality regression on grounded work.
+DEFAULT_MODEL = "claude-sonnet-5"
 
 WAKE_IN = os.environ.get("PROXY_WAKE_IN", "/tmp/wake_in.jsonl")  # nosec B108 — path INSIDE the isolated per-tenant E2B microVM
 WAKE_OUT = os.environ.get("PROXY_WAKE_OUT", "/tmp/wake_out")  # nosec B108 — path INSIDE the isolated per-tenant E2B microVM
@@ -61,6 +66,27 @@ MODEL = (os.environ.get("PROXY_WORKROOM_MODEL", "") or DEFAULT_MODEL).strip()
 #: key present asserts the founder has provisioned egress + the key, and only then does it load.
 CONTEXT7_API_KEY = os.environ.get("CONTEXT7_API_KEY", "").strip()
 
+#: SERENA (LSP-backed, SYMBOL-LEVEL code intel) as a PRE-WIRED stdio MCP server — a "workshop" tool
+#: that lets the agent look up / navigate symbols (find_symbol, references, insert-at-symbol) instead
+#: of reading whole files. On a big customer repo that is a real token + latency win: the agent goes
+#: straight to a definition/callsite rather than grepping and reading megabytes to locate it.
+#:
+#: GATED ON REAL AVAILABILITY (Law 2 — never stand up a child that will fail = a FAKE capability). It
+#: is wired ONLY when Serena is actually reachable in the sandbox, detected in order:
+#:   1. ``PROXY_SERENA_CMD`` — an explicit full command line (e.g. the ``uvx --from git+…`` form) that
+#:      the baked template knows works; used verbatim if set.
+#:   2. ``PROXY_SERENA`` truthy — the baked per-repo template sets this to assert it installed Serena
+#:      on PATH (``serena start-mcp-server``); trusted even if this process's PATH lookup lags.
+#:   3. ``shutil.which("serena")`` — the binary is genuinely on PATH right now.
+#: If none hold, Serena is SKIPPED SILENTLY (the base sandbox does not ship it, and egress is default-
+#: deny so we can't uvx-fetch it at warm time — wiring it anyway would only fail at spawn).
+#:
+#: CACHE-SAFE BY CONSTRUCTION: Serena is wired WITHOUT ``alwaysLoad``, so on Sonnet 5 its many tool
+#: schemas stay DEFERRED behind ToolSearch (auto tool-search) and never bloat the cached resident
+#: prefix — unlike ``meeting`` (one tiny tool, alwaysLoad). The agent discovers Serena's tools on
+#: demand when it actually needs symbol nav; a chit-chat turn never pays for them.
+SERENA_CONTEXT = (os.environ.get("PROXY_SERENA_CONTEXT", "") or "ide-assistant").strip()
+
 #: The meeting-wide thinking EFFORT — FIXED for the whole session so the CLI flags are byte-identical
 #: every turn (a per-turn change would invalidate the resident-prime prompt cache mid-meeting). Adaptive
 #: thinking (below) still decides PER ASK whether to think at all — hard asks think, trivial ones skip —
@@ -70,6 +96,18 @@ _EFFORT_ALLOWED = {"low", "medium", "high", "xhigh", "max"}
 EFFORT = (os.environ.get("PROXY_WORKROOM_EFFORT", "") or "high").strip()
 if EFFORT not in _EFFORT_ALLOWED:
     EFFORT = "high"
+
+#: A per-meeting HARD cost ceiling in USD (``ClaudeAgentOptions.max_budget_usd``): the SDK stops a run
+#: that exceeds it (``error_max_budget_usd``) instead of spending unboundedly. Set as a generous
+#: RUNAWAY BACKSTOP, not a normal-operation limiter — a legitimate heavy code task must never die
+#: mid-work — so it sits well above any real single-meeting spend; ``max_turns`` + the driver's
+#: ASK_TIMEOUT already bound a normal turn. Overridable via ``PROXY_MAX_BUDGET_USD`` (the overnight
+#: live-test caps TOTAL spend at the harness level; this is the per-meeting safety net). Unparsable
+#: keeps the default.
+try:
+    MAX_BUDGET_USD = float(os.environ.get("PROXY_MAX_BUDGET_USD", "") or 20.0)
+except ValueError:
+    MAX_BUDGET_USD = 20.0
 
 #: How long the host waits for the next wake line before re-polling (seconds). The session stays
 #: warm across this idle; the driver's append is picked up within one beat.
@@ -150,6 +188,23 @@ def _could_be_silent_sentinel(text: str) -> bool:
     head = text.strip().upper()
     return SILENT_SENTINEL.startswith(head)
 
+
+#: PRIME-THE-CACHE-DURING-PREP. The big resident prefix (behavioral prime + interaction layer +
+#: codebase understanding + MCP tool schemas) pays a one-time ``cache_creation`` on the FIRST request
+#: of the session; every later wake is a cheap ``cache_read``. Left alone, that one-time cost lands on
+#: the first REAL wake — exactly when the room is waiting. So BEFORE serving any wake we fire ONE
+#: synthetic warm-up turn that reuses the SILENT-turn machinery: it is instructed to emit exactly the
+#: ``[SILENT]`` sentinel, so ``_run_turn`` suppresses all voice/relay delivery and the room hears
+#: NOTHING. As a belt-and-suspenders guarantee the room can't be touched, ``_prime_cache`` also
+#: temporarily removes the relay env for the warm-up (see below). Best-effort — a failure never blocks
+#: serving. Disable with ``PROXY_PRIME_CACHE=0`` (e.g. if a deployment prefers not to spend the warm-up).
+_PRIME_CACHE = os.environ.get("PROXY_PRIME_CACHE", "1").strip().lower() not in {"0", "false", "no", "off"}
+_PRIME_PROMPT = (
+    "Internal warm-up ping before the meeting starts — no one has addressed you and there is nothing "
+    "to do. Do NOT use any tool, do NOT read or explore anything. Reply with this one exact line and "
+    "nothing else:\n"
+    f"{SILENT_SENTINEL}"
+)
 
 #: Bare-URL matcher for the voice sanitizer (BUG 1): an ``http(s)://…`` or ``www.…`` run of non-space
 #: characters. TTS must NEVER speak a URL verbatim (the live failure: it read a whole weather.gov query
@@ -594,6 +649,34 @@ async def _serve(client: Any) -> None:
         await asyncio.sleep(_POLL_S)
 
 
+def _serena_server() -> dict[str, Any] | None:
+    """Serena's stdio MCP config, or ``None`` when Serena is not genuinely available (skip silently).
+
+    Honest gate (Law 2): only returns a config when Serena can actually run in this sandbox —
+    an explicit ``PROXY_SERENA_CMD``, the template's ``PROXY_SERENA`` assertion, or the ``serena``
+    binary on PATH. The base sandbox ships none of these, so by default this returns ``None`` and no
+    child is spawned. ``--project REPO_DIR`` pins Serena at the cloned repo regardless of the stdio
+    child's cwd (robust vs. relying on an inherited cwd). No ``alwaysLoad`` — see ``SERENA_CONTEXT``:
+    the tools stay deferred so they never touch the cached prefix."""
+    override = os.environ.get("PROXY_SERENA_CMD", "").strip()
+    if override:
+        try:
+            parts = shlex.split(override)
+        except ValueError:
+            return None
+        if not parts:
+            return None
+        return {"type": "stdio", "command": parts[0], "args": parts[1:]}
+    optin = os.environ.get("PROXY_SERENA", "").strip().lower() in {"1", "true", "yes", "on"}
+    if optin or shutil.which("serena"):
+        return {
+            "type": "stdio",
+            "command": "serena",
+            "args": ["start-mcp-server", "--context", SERENA_CONTEXT, "--project", REPO_DIR],
+        }
+    return None
+
+
 def _mcp_servers() -> dict[str, Any]:
     """The meeting MCP server config for the WARM session — the SAME stdio server the cold path
     registered via ``.mcp.json``, so ``to_meeting`` loads ONCE for the whole session. The relay envs
@@ -629,7 +712,35 @@ def _mcp_servers() -> dict[str, Any]:
             "command": "npx",
             "args": ["-y", "@upstash/context7-mcp", "--api-key", CONTEXT7_API_KEY],
         }
+    # SERENA (symbol-level code intel) — added ONLY when actually available (see ``_serena_server``),
+    # and deliberately WITHOUT ``alwaysLoad`` so its tool schemas stay deferred (cache-safe on Sonnet 5).
+    serena = _serena_server()
+    if serena is not None:
+        servers["serena"] = serena
     return servers
+
+
+async def _prime_cache(client: Any) -> None:
+    """Fire ONE synthetic silent warm-up so the resident-prefix cache is CREATED before the first real
+    wake (which then pays only a fast ``cache_read``). Reuses ``_run_turn`` + the ``[SILENT]`` sentinel
+    so nothing is spoken; ALSO strips the relay env for the duration as a hard guarantee the warm-up
+    can never reach the room even if the model doesn't emit the sentinel. Best-effort — any failure is
+    swallowed so a prime hiccup never blocks serving. Runs on the SAME single-flight client, so it is
+    AWAITED to completion before ``_serve`` issues the first real query (no concurrent-query conflict)."""
+    if not _PRIME_CACHE:
+        return
+    # HARD guarantee the warm-up cannot touch the room: remove the relay so ``_deliver_say`` falls back
+    # to a local file append (which the next real turn's ``_reset_intents`` clears) instead of POSTing.
+    saved_relay = os.environ.pop("PROXY_MEETING_RELAY", None)
+    try:
+        rec = await _run_turn(client, _PRIME_PROMPT)
+        print(f"[prime] cache warmed (turns={rec.get('turns')} err={rec.get('error')})", flush=True)
+    except Exception as exc:  # noqa: BLE001 — priming is best-effort; never block serving on it
+        print(f"[prime] warm-up skipped: {type(exc).__name__}: {exc}", flush=True)
+    finally:
+        if saved_relay is not None:
+            os.environ["PROXY_MEETING_RELAY"] = saved_relay
+        _reset_intents()  # discard any local intent lines the warm-up produced (clean first real wake)
 
 
 async def main() -> None:
@@ -667,6 +778,17 @@ async def main() -> None:
         # delivering nothing. A larger budget lets it finish + deliver (the per-ask wall-clock is
         # still bounded by ASK_TIMEOUT_S on the driver side; a runaway can't stall the meeting).
         max_turns=int(os.environ.get("PROXY_MAX_TURNS", "40") or "40"),
+        # A per-meeting HARD cost ceiling (see ``MAX_BUDGET_USD``): the SDK stops a run that exceeds it
+        # rather than spending unboundedly — a runaway backstop, set well above any real single-meeting
+        # spend so it never bites a legitimate heavy task.
+        max_budget_usd=MAX_BUDGET_USD,
+        # DETERMINISTIC TOOL SURFACE: only the MCP servers we pass HERE load — the CLI ignores any
+        # discovered ``.mcp.json`` / user connectors, so the warm session can't pick up a surprise
+        # server that would waste tokens/turns OR (worse) change the byte-stable tool schemas and
+        # invalidate the resident-prime cache mid-meeting. ``to_meeting`` is passed via ``_mcp_servers``
+        # below, so it still loads (verified in the real-inference smoke); this only closes the door on
+        # UNdeclared servers. Native built-in tools (Read/Bash/…) are unaffected — the workshop stays whole.
+        strict_mcp_config=True,
         mcp_servers=_mcp_servers(),
         # ADAPTIVE thinking: Claude decides PER ASK whether — and how much — to think. A trivial ask
         # ("mute yourself") skips thinking entirely (no TTFT hit), a hard code task thinks hard. FIXED
@@ -698,6 +820,12 @@ async def main() -> None:
             pathlib.Path(WAKE_OUT).mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
+        # PRIME THE CACHE before marking ready: fire one silent warm-up so the big resident prefix pays
+        # its one-time cache_creation NOW (during prep, off the room's critical path) — the first REAL
+        # wake is then a fast cache_read. Awaited to completion (single-flight client), then we mark
+        # ready. Best-effort: a warm-up fault is swallowed and we serve anyway. Provision's readiness
+        # wait (_WARM_PROVISION_WAIT_S) generously covers this small extra delay before the first wake.
+        await _prime_cache(client)
         _beat()
         # Run the heartbeat CONCURRENTLY with serving so the breadcrumb's mtime keeps advancing while
         # the host is alive — idle or mid-turn. If the process dies (OOM/SIGKILL) both tasks stop and

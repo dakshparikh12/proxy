@@ -8,7 +8,8 @@ meeting as the bot's camera + microphone. This module is that missing surface:
 
 * ``OutputMediaChannel`` — the server-side handle the speak path writes into:
   ``write_audio(pcm)`` enqueues raw PCM (s16le, 44.1 kHz, mono — the format the
-  speech synth emits) and ``set_speaking(bool)`` drives the orb pulse.
+  speech synth emits), ``set_speaking(bool)`` drives the orb pulse, and
+  ``set_raised_hand(bool)`` shows/hides the visible "✋ Proxy raised its hand" bar.
 * ``build_output_media_router()`` / ``router`` — the FastAPI router serving
   ``GET /output-media/{meeting_id}`` (the orb page, one inline HTML string —
   no build step, no external assets) and ``WS /output-media/{meeting_id}/ws``
@@ -190,6 +191,11 @@ class OutputMediaChannel:
         #: medium). Recorded honestly (the current shown surface) — never a fabricated success.
         #: The orb page reads it as a state message and swaps its view to the URL; absent = the orb.
         self._screen_url: str = ""
+        #: Whether Proxy is currently showing a "raised hand" (the ``raise_hand`` medium): a visible
+        #: green bar on the page saying it wants to speak, WITHOUT cutting into the room (Law 5 —
+        #: talk-and-glance). A state-only flag/frame; auto-cleared by the connection when Proxy next
+        #: speaks. Recorded honestly (the current shown state) — never fabricated.
+        self._raised_hand: bool = False
 
     # -- the speak-path surface ---------------------------------------------
 
@@ -278,6 +284,20 @@ class OutputMediaChannel:
         """Signal the orb pulse: True while Proxy speaks, False after."""
         self._frames.append(json.dumps({"speaking": speaking}))
         self._notify()
+
+    async def set_raised_hand(self, raised: bool) -> None:
+        """Raise / lower Proxy's visible "hand" (the ``raise_hand`` medium): a green bar on the page
+        reading "✋ Proxy raised its hand", so people see Proxy wants to speak without it cutting into
+        the room (Law 5 — talk-and-glance; Law 3 — no interruption). A state-only ordered frame
+        (rides even while muted, like speaking/screen); the connection auto-clears it when Proxy next
+        speaks. Idempotent and never-throw."""
+        self._raised_hand = bool(raised)
+        self._frames.append(json.dumps({"raised_hand": self._raised_hand}))
+        self._notify()
+
+    def raised_hand(self) -> bool:
+        """Is Proxy's hand currently raised on this meeting's Output-Media surface?"""
+        return self._raised_hand
 
     async def cut(self) -> None:
         """Barge-in propagation (Law 3): a human talked over Proxy — stop the room's audio NOW.
@@ -503,11 +523,23 @@ _PAGE_TEMPLATE: Final[str] = """<!DOCTYPE html>
   }
   #screen.active { display: block; }
   #stage.hidden { display: none; }
+  /* The raise-hand bar: a noticeable GREEN pill, top-right, ABOVE the orb AND the screen (so it
+     shows over whatever surface is live). Hidden until Proxy raises its hand; auto-cleared when
+     Proxy next speaks. Presence only — never cuts into the room (Law 3/Law 5). */
+  #raisehand {
+    position: fixed; top: 2.5vmin; right: 2.5vmin; z-index: 10; display: none;
+    align-items: center; gap: 1vmin; padding: 1.4vmin 2.4vmin; border-radius: 999px;
+    background: #16a34a; color: #f0fff4;
+    font: 600 2.6vmin/1 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    box-shadow: 0 0.4vmin 2.4vmin rgba(22, 163, 74, 0.55);
+  }
+  #raisehand.active { display: flex; }
 </style>
 </head>
 <body>
 <div id="stage"><div id="orb"></div></div>
 <iframe id="screen" sandbox="allow-scripts allow-same-origin"></iframe>
+<div id="raisehand">✋ Proxy raised its hand</div>
 <script>
 "use strict";
 const WS_PATH = __WS_PATH__;
@@ -515,6 +547,12 @@ const SAMPLE_RATE = 44100;
 const orb = document.getElementById("orb");
 const stage = document.getElementById("stage");
 const screen = document.getElementById("screen");
+const raisehand = document.getElementById("raisehand");
+
+// The raise-hand bar (the agent's 'raise_hand' medium). A state message toggles a green pill that
+// sits above the orb and the screen — presence only, it never plays audio or cuts in. The host
+// clears it (raised_hand:false) when Proxy next speaks.
+function setRaisedHand(v) { raisehand.classList.toggle("active", !!v); }
 
 // The screen surface (the agent's 'screen' medium). A URL points the iframe at a page; raw
 // html rides srcdoc (self-contained, always renders — no X-Frame-Options blank). An empty
@@ -824,6 +862,9 @@ function connect() {
       }
       if (msg && typeof msg.speaking === "boolean") {
         orb.classList.toggle("speaking", msg.speaking);
+      }
+      if (msg && typeof msg.raised_hand === "boolean") {
+        setRaisedHand(msg.raised_hand);
       }
       if (msg && "screen_html" in msg) {
         showScreenHtml(msg.screen_html);

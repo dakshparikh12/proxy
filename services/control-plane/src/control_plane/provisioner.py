@@ -214,8 +214,8 @@ def _approve_url_for(meeting_id: str, draft_id: str) -> str:
 
 def _build_meeting_sinks(
     *, db: Database, meeting_id: str, tenant_id: str
-) -> tuple[Any, Any, Any]:
-    """Build the ``(offer, screen, audio_mute)`` sinks the :class:`MeetingConnection` carries (Law-3 safe).
+) -> tuple[Any, Any, Any, Any]:
+    """Build the ``(offer, screen, audio_mute, raise_hand)`` sinks the :class:`MeetingConnection` carries (Law-3 safe).
 
     * **offer** ``(content, to) -> approve_url``: STAGES a durable draft (``workroom.drafts.
       propose_change`` on the async pool → one GCS bundle + one ``staged_drafts`` row at
@@ -298,7 +298,24 @@ def _build_meeting_sinks(
                 exc_info=True,
             )
 
-    return _offer, _screen, _audio_mute
+    async def _raise_hand(raised: bool) -> None:
+        # Raise/lower Proxy's visible "hand" on the Output-Media surface — the green "✋ Proxy raised
+        # its hand" bar (the 'raise_hand' medium). Mirrors _audio_mute: host-side, an honest no-op on
+        # fault, never crashes the turn. The connection auto-clears it (raised=False) when Proxy speaks.
+        try:
+            from in_meeting import output_media
+
+            channel = output_media.channel_for(meeting_id)
+            await channel.set_raised_hand(raised)
+        except Exception:  # noqa: BLE001 - a surface fault degrades to an honest no-op, never a crash
+            _log.warning(
+                "raise-hand toggle (raised=%s) failed for meeting %s (honest degrade)",
+                raised,
+                meeting_id,
+                exc_info=True,
+            )
+
+    return _offer, _screen, _audio_mute, _raise_hand
 
 
 def _meeting_info_md(payload: dict[str, Any]) -> str:
@@ -671,7 +688,7 @@ async def _assemble_workroom(
     # offer/screen sinks (world-touching-safe, below). This is a driver, not a decision (Law 4):
     # the agent chooses what/how, this maps to physics.
     tenant_id = str(resolved.get("tenant_id") or "")
-    offer_sink, screen_sink, audio_mute_sink = _build_meeting_sinks(
+    offer_sink, screen_sink, audio_mute_sink, raise_hand_sink = _build_meeting_sinks(
         db=db, meeting_id=meeting_id, tenant_id=tenant_id
     )
     connection = MeetingConnection(
@@ -681,6 +698,7 @@ async def _assemble_workroom(
         offer=offer_sink,
         screen=screen_sink,
         audio_mute=audio_mute_sink,
+        raise_hand=raise_hand_sink,
     )
     session = MeetingSession(workroom=workroom, connection=connection)
     _log.info(

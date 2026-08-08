@@ -56,6 +56,71 @@ _REALTIME_EVENTS = (
     "participant_events.chat_message",
 )
 
+# AssemblyAI Universal-Streaming (v3) session options, forwarded VERBATIM by Recall through
+# ``recording_config.transcript.provider.assembly_ai_v3_streaming`` (Recall's documented AssemblyAI
+# passthrough — https://docs.recall.ai/docs/assemblyai). Tuned for the ONE thing a live teammate
+# needs: hear its own NAME and react at PARTIAL latency (~300ms) instead of end-of-turn (~1.3s).
+# Every field is a REAL AssemblyAI v3 streaming param (verified against
+# https://www.assemblyai.com/docs/api-reference/streaming-api/streaming-api and the turn-detection
+# guide) — nothing invented:
+#
+# * ``keyterms_prompt`` — bias recognition toward "Proxy" so the spoken wake word is reliably
+#   captured (AssemblyAI keyterms; each term ≤50 chars, ≤100 terms). A mis-heard "Proxy" is a
+#   missed wake, so this is the single highest-value field for reliable addressing.
+# * ``mode: "min_latency"`` — the Universal-3.5-Pro latency/accuracy preset that tightens
+#   turn-detection + partial-emission defaults for the SHORTEST time-to-signal (min_latency |
+#   balanced | max_accuracy). REQUIRES the Universal-3.5-Pro streaming model on the account.
+# * ``include_partial_turns: true`` — emit partial (in-progress) transcripts (AssemblyAI default
+#   true, set explicitly because the wake-on-partial path DEPENDS on them). Words in a partial are
+#   immutable once ``word_is_final`` (AssemblyAI), so waking on the partial that carries "Proxy" is
+#   safe — that word will not change under the reactive loop.
+# * ``format_turns: true`` — clean, punctuated FINAL turns for the notes/transcript.
+# * ``end_of_turn_confidence_threshold`` / ``min_end_of_turn_silence_when_confident`` — finalize a
+#   short command ("Proxy, mute yourself") fast instead of waiting out a long trailing silence.
+#
+# HONEST live-verify (Law 2): Recall forwards these to AssemblyAI, but the EXACT accepted field set
+# and the ``min_latency`` model-tier must be confirmed against the live Recall workspace before the
+# real meeting — a field Recall rejects could 400 the join. This is a founder live-verify item; the
+# prior config was ``{}`` (accepts nothing extra), so a live check is the safe cut-over.
+_ASSEMBLY_STREAMING_CONFIG: dict[str, Any] = {
+    "keyterms_prompt": ["Proxy"],
+    "mode": "min_latency",
+    "include_partial_turns": True,
+    "format_turns": True,
+    "end_of_turn_confidence_threshold": 0.4,
+    "min_end_of_turn_silence_when_confident": 400,
+}
+
+
+def _output_media_surface() -> str:
+    """Which Recall Output-Media SURFACE carries Proxy's webpage — its ``camera`` tile (default,
+    proven) or a ``screenshare`` (Law 4 — deployment-set via env, never baked in).
+
+    The ``screenshare`` surface is a REAL, documented Recall key, not an invented one. Recall's
+    OpenAPI ``OutputMedia`` schema (from https://docs.recall.ai/reference/bot_output_screenshare_create
+    ``.md`` — the shared components block) defines BOTH ``camera`` AND ``screenshare`` as an
+    ``OutputMediaConfig``, and ``OutputMediaConfig`` is a ``{kind:"webpage", config:{url}}`` webpage
+    (``OutputMediaWebpage``; ``kind`` enum = ``webpage`` only). So the same webpage that renders as
+    the camera tile can instead be presented as a prominent shared screen — this is Recall's stated
+    "the bot can present the webpage either as a screenshare or as its camera video"
+    (https://docs.recall.ai/docs/stream-media), and the symmetric ``output_media.screenshare`` key is
+    exactly how it is selected (both at Create-Bot time and via the runtime
+    ``POST /bot/{id}/output_media/`` endpoint, which takes the same ``OutputMedia`` shape).
+
+    NOTE — a DIFFERENT endpoint, ``POST /bot/{id}/output_screenshare/`` (``VideoOutputRequest``),
+    only accepts static ``kind:"jpeg"`` frames, NOT a webpage; the live-HTML screenshare rides
+    ``output_media.screenshare`` (webpage), never that frame endpoint.
+
+    The DEFAULT stays the proven ``camera`` tile (which already renders Proxy's ``screen`` content
+    full-frame as the bot's video); ``screenshare`` is an OPT-IN
+    (``RECALL_OUTPUT_MEDIA_SURFACE=screenshare``) — schema-confirmed above, but not yet proven on a
+    live meeting from this deployment, so it is human-enabled per environment rather than
+    defaulted-on (Law 2 — claim only what is proven; Law 3 — the surface is a deployment choice).
+    Any unknown value falls back to ``camera``.
+    """
+    surface = os.environ.get("RECALL_OUTPUT_MEDIA_SURFACE", "").strip().lower()
+    return "screenshare" if surface == "screenshare" else "camera"
+
 
 #: The transport's bound ``_api`` round-trip — (method, path, body) → parsed JSON body.
 _ApiCall = Callable[[str, str, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -172,9 +237,12 @@ class RecallTransport:
         participant rather than a mute recorder:
 
         * ``recording_config.transcript.provider.assembly_ai_v3_streaming`` — runs
-          AssemblyAI Universal-Streaming transcription. BYOK: our AssemblyAI key is
-          registered in Recall's dashboard, so the provider object rides EMPTY — no
-          credential ever enters the body (AC-XCUT-02).
+          AssemblyAI Universal-Streaming transcription, carrying the wake-tuning session
+          options in ``_ASSEMBLY_STREAMING_CONFIG`` (keyterms "Proxy", min-latency mode,
+          partial turns, tightened end-of-turn) so Proxy can be woken by the immutable
+          partial that names it, not only at end-of-turn. BYOK: our AssemblyAI key is
+          registered in Recall's dashboard, so NO credential ever enters this body — only
+          non-secret tuning options do (AC-XCUT-02).
         * ``recording_config.realtime_endpoints`` — one ``webhook`` endpoint at our
           receiver, subscribed to the transcript finals + partials Recall enumerates
           (``transcript.data``/``transcript.partial_data``) plus the meeting-chat
@@ -184,10 +252,12 @@ class RecallTransport:
         * ``bot_name`` — ``"Proxy"``, so Recall labels the bot's own transcribed
           speech as "Proxy"; the self-wake guard (``PROXY_SPEAKER == "Proxy"``) then
           filters Proxy's own lines instead of self-waking on them.
-        * ``output_media.camera`` — ``{kind: "webpage", config: {url}}``, Recall's
-          Output Media: the bot streams our webpage as its camera, the designated
-          low-latency path for an agent to emit audio (the ``output_audio`` clip
-          endpoint is explicitly not for conversational audio).
+        * ``output_media.<surface>`` — ``{kind: "webpage", config: {url}}``, Recall's
+          Output Media: the bot streams our webpage as its ``camera`` (default, proven) or
+          ``screenshare`` (opt-in — schema-confirmed, see ``_output_media_surface``). Recall's
+          ``OutputMedia`` schema defines both keys as the same webpage config, so the surface KEY
+          is the only difference. This is the designated low-latency path for an agent to emit
+          audio (the ``output_audio`` clip endpoint is explicitly not for conversational audio).
 
         Transcription + delivery ride together behind ``webhook_url``: a transport
         with no configured receiver cannot consume live transcripts, so it asks for
@@ -197,7 +267,9 @@ class RecallTransport:
         body: dict[str, Any] = {"meeting_url": meeting_link, "bot_name": self._bot_name}
         if self._webhook_url:
             body["recording_config"] = {
-                "transcript": {"provider": {"assembly_ai_v3_streaming": {}}},
+                "transcript": {
+                    "provider": {"assembly_ai_v3_streaming": dict(_ASSEMBLY_STREAMING_CONFIG)}
+                },
                 "realtime_endpoints": [
                     {
                         "type": "webhook",
@@ -207,8 +279,13 @@ class RecallTransport:
                 ],
             }
         if self._output_media_url:
+            # The webpage rides one Output-Media surface: the ``camera`` tile (default, proven) or a
+            # ``screenshare`` (opt-in) — see ``_output_media_surface``. Recall's ``OutputMedia`` schema
+            # exposes both as an ``OutputMediaConfig`` webpage, so the same
+            # ``{kind:"webpage", config:{url}}`` shape rides either surface; the surface KEY is the
+            # only difference, chosen by deployment env (Law 4), never baked in.
             body["output_media"] = {
-                "camera": {
+                _output_media_surface(): {
                     "kind": "webpage",
                     "config": {"url": self._output_media_url},
                 }

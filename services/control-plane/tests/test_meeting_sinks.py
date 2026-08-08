@@ -103,10 +103,12 @@ def _wired_connection(db: Any, meeting_id: str = "m-sink-1") -> Any:
     from control_plane.provisioner import _build_meeting_sinks
     from in_meeting.meeting_connection import MeetingConnection
 
-    offer, screen, audio_mute = _build_meeting_sinks(db=db, meeting_id=meeting_id, tenant_id="t-1")
+    offer, screen, audio_mute, raise_hand = _build_meeting_sinks(
+        db=db, meeting_id=meeting_id, tenant_id="t-1"
+    )
     return MeetingConnection(
         speak=_Speak(), room=_Room(), bot_id="bot-1",
-        offer=offer, screen=screen, audio_mute=audio_mute,
+        offer=offer, screen=screen, audio_mute=audio_mute, raise_hand=raise_hand,
     )
 
 

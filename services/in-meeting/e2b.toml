@@ -1,0 +1,28 @@
+# E2B template config for the per-repo WORKROOM (pairs with e2b.Dockerfile).
+#
+# This is the founder-gated deploy artifact that bakes the workroom toolchain + code-intel + deps +
+# (optionally) the customer repo into a reusable E2B template. Build it with the E2B CLI:
+#
+#   e2b template build \
+#     --build-arg REPO_URL=https://github.com/<org>/<repo>.git \
+#     --build-arg REPO_SHA=<sha>
+#
+# The build prints a template id; pass that id per-provision as
+# ``provision_workroom(template="<id>")``. ``workroom.DEFAULT_TEMPLATE`` stays None so the proven
+# base-sandbox warm-time-setup path is unchanged until a template id is deliberately wired.
+#
+# NOTE (pause/resume): a template ALSO underlies the pause/resume fast-join lever — a pre-primed
+# sandbox from this template can be beta_pause'd and connect()'d in ~1s. That path is behind
+# PROXY_ENABLE_PAUSE_RESUME (default OFF) and needs live multi-cycle validation first (E2B persistence
+# is public beta; issue #884). See workroom._pause_resume_enabled.
+
+dockerfile = "e2b.Dockerfile"
+
+# Give the template a stable, per-customer name when baking (override on the CLI or here per repo),
+# e.g. "proxy-workroom-<customer>". Left generic here since the repo is a build arg.
+template_name = "proxy-workroom"
+
+# The warm session host is started by workroom._start_session_host at provision (it needs the
+# per-meeting relay/auth envs that only exist at runtime), so no start_cmd is baked here — the
+# template only provides the pre-installed toolchain + repo. Keeping start-up out of the template
+# means one template serves every meeting on that repo.

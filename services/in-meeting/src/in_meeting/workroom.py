@@ -154,8 +154,24 @@ PROVISION_TIMEOUT_S = 1800.0
 ASK_TIMEOUT_S = 900.0
 
 #: The default pre-baked E2B template (repo + node + claude + deps warm). Until it is baked,
-#: ``None`` provisions a base sandbox and sets it up at warm time (proven path).
+#: ``None`` provisions a base sandbox and sets it up at warm time (proven path). The bake spec that
+#: PRODUCES such a template (toolchain + Serena + ast-grep + deps as image layers) is checked in as
+#: ``services/in-meeting/e2b.Dockerfile`` (+ ``e2b.toml``); once a customer template is baked, its id
+#: is passed per-provision via the ``template`` arg — this default stays ``None`` so the base-sandbox
+#: warm-time-setup path (the proven, working default) is UNCHANGED until a template is deliberately wired.
 DEFAULT_TEMPLATE: str | None = None
+
+#: PAUSE/RESUME FAST-JOIN — the biggest latency/cost lever, GATED OFF by default. When ON, a PRE-PRIMED
+#: sandbox (repo cloned, files seeded, warm session + built cache) is ``beta_pause``d at teardown and a
+#: later meeting RESUMES it via ``AsyncSandbox.connect(id)`` in ~1s instead of a cold clone+build. It is
+#: OFF by default because E2B persistence is PUBLIC BETA with a known multi-cycle bug (E2B issue #884:
+#: file changes may not persist after the 2nd+ resume) — so it needs live multi-cycle validation before
+#: it can be trusted on a real meeting. With the flag OFF the working path is byte-for-byte unchanged:
+#: ``pause`` is a no-op (tear down cold) and any ``resume_id`` is IGNORED (fresh cold provision). Turn it
+#: on ONLY after validation via ``PROXY_ENABLE_PAUSE_RESUME=1``. Even ON, resume degrades to a cold
+#: provision on any fault — the meeting never blocks on a bad snapshot (Law 2: no fake fast-path).
+def _pause_resume_enabled() -> bool:
+    return os.environ.get("PROXY_ENABLE_PAUSE_RESUME", "").strip().lower() in {"1", "true", "yes", "on"}
 
 #: The delimiter that OPENS the resident codebase-understanding block appended to the prime
 #: (CLAUDE.md). The symbol map (real file:line, ranked) lives here so it is part of the CACHED
@@ -557,6 +573,14 @@ class Workroom:
             "PROXY_MEETING_RELAY": self.relay_url,
             "PROXY_MEETING_TOKEN": self.relay_token,
             "PROXY_MEETING_OUT": TO_MEETING_OUT,
+            # 1-HOUR PROMPT-CACHE TTL. The resident prime (behavioral prime + interaction layer +
+            # codebase understanding + tool schemas) is the big cached prefix; on the default 5-min TTL
+            # a quiet meeting stretch >5 min would expire it and the next wake would cold re-encode the
+            # whole prefix (slow + costly). A meeting fits inside one hour, so the 1h TTL keeps the
+            # cache warm across the entire session — quiet gaps no longer expire it (no keep-warm ping
+            # needed). This is an env toggle honored by the Claude Code CLI (the SDK exposes no TTL
+            # option); on subscription auth 1h may already be the default, so this only makes it explicit.
+            "ENABLE_PROMPT_CACHING_1H": "1",
         }
         # Tool-workshop convenience: forward the Context7 key ONLY when the founder has provisioned it
         # (from Secret Manager into this host's env). Present ⇒ the warm session host pre-wires the
@@ -566,6 +590,15 @@ class Workroom:
         context7_key = os.environ.get("CONTEXT7_API_KEY", "").strip()
         if context7_key:
             envs["CONTEXT7_API_KEY"] = context7_key
+        # SERENA (symbol-level code intel) enablement: forward the opt-in signals ONLY when set
+        # host-side, so a deployment can turn Serena on without a baked template (the baked template
+        # instead sets these as image ENV). The warm session host gates on real availability
+        # (``session_host._serena_server`` — shutil.which / PROXY_SERENA / PROXY_SERENA_CMD), so a
+        # forwarded flag that can't actually run Serena still stands up NO child (Law 2).
+        for serena_env in ("PROXY_SERENA", "PROXY_SERENA_CMD", "PROXY_SERENA_CONTEXT"):
+            val = os.environ.get(serena_env, "").strip()
+            if val:
+                envs[serena_env] = val
         # Research-spend keys (founder-authorized): forwarded ONLY when the founder has provisioned
         # them host-side, so the agent can ACTUALLY run things it recommends (fire test renders,
         # compare image models) instead of only describing them — the go-above-and-beyond principle
@@ -774,11 +807,20 @@ class Workroom:
 
     async def pause(self) -> str | None:
         """Pause the sandbox at teardown so a warm per-repo snapshot can RESUME in ~1s (vs a cold
-        clone+install). Returns the paused sandbox id on success, or ``None`` when the E2B SDK exposes
-        no clean pause (then the caller simply tears down). NEVER raises — pause is an optimization.
+        clone+install). Returns the paused sandbox id on success, or ``None`` when pause is disabled /
+        unavailable / failed (then the caller simply tears down cold). NEVER raises — pause is an
+        optimization behind the ``PROXY_ENABLE_PAUSE_RESUME`` flag.
 
-        Resume is wired in :func:`provision_workroom` via ``resume_id`` (``Sandbox.connect(id)``)."""
-        pause = getattr(self.sandbox, "pause", None)
+        FLAG-GATED (default OFF): with the flag off this is a no-op ``None`` so teardown is the normal
+        cold kill — the working path is unchanged (E2B persistence is public beta; see the flag note).
+
+        SDK method: the ASYNC E2B SDK exposes persistence as ``beta_pause()`` (verified against the
+        v2.x async SDK reference), NOT ``pause()`` — so we prefer ``beta_pause`` and fall back to a
+        plain ``pause`` only if a future/sync SDK renames it. Resume is wired in
+        :func:`provision_workroom` via ``resume_id`` (``AsyncSandbox.connect(id)`` auto-resumes)."""
+        if not _pause_resume_enabled():
+            return None  # flag off → tear down cold (working path unchanged)
+        pause = getattr(self.sandbox, "beta_pause", None) or getattr(self.sandbox, "pause", None)
         if pause is None:
             return None
         try:
@@ -827,6 +869,13 @@ def _packaged_source(name: str) -> str:
     return (pathlib.Path(__file__).with_name(name)).read_text(encoding="utf-8")
 
 
+def _packaged_skill_source(name: str) -> str:
+    """A packaged skill's ``SKILL.md``, read off disk from ``skills/<name>/SKILL.md`` beside this
+    module — the source of truth for a skill COPIED into the sandbox at provision. Skills live in a
+    subdir (not a sibling file), so this can't reuse :func:`_packaged_source`."""
+    return (pathlib.Path(__file__).parent / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+
+
 def _mcp_server_source() -> str:
     """The packaged in-sandbox MCP server source (``sandbox_meeting_mcp.py``)."""
     return _packaged_source("sandbox_meeting_mcp.py")
@@ -859,14 +908,18 @@ def _seed_files(*, prime: str, map_text: str, meeting_info: str) -> list[tuple[s
       connection) and the stdio config that registers it with native ``claude`` (``alwaysLoad``).
     - **session_host.py** — the warm permanent session that serves every wake.
 
-    (Skills — ``SKILL_NAMES`` / ``SKILLS_DIR`` — are deliberately NOT in this set yet; the
-    seed-or-delete decision is deferred to the interaction-layer phase.)"""
+    - **.claude/skills/<name>/SKILL.md** — the three meeting skills (``meeting-artifact``,
+      ``meeting-diagram``, ``background-job``), seeded to the CLI's discovery path so native ``claude``
+      loads each ON-DEMAND when doing that kind of work. Progressive disclosure: they cost the always-on
+      prime nothing, but are present the instant the interaction layer reaches for them (the layer names
+      them by their skill name), so "put it on screen / build the diagram / run it in the background" is
+      a real capability, not a dangling reference."""
     mcp_config = {
         "mcpServers": {
             "meeting": {"command": "python3", "args": [MCP_SERVER_FILE], "alwaysLoad": True}
         }
     }
-    return [
+    seeds = [
         (PRIME_FILE, compose_resident_prime(prime, map_text)),
         (INTERACTION_LAYER_FILE, _packaged_source(INTERACTION_LAYER_NAME)),
         (MEETING_INFO_FILE, meeting_info.strip() and meeting_info or _MEETING_INFO_PLACEHOLDER),
@@ -876,6 +929,13 @@ def _seed_files(*, prime: str, map_text: str, meeting_info: str) -> list[tuple[s
         (MCP_CONFIG_FILE, json.dumps(mcp_config)),
         (SESSION_HOST_FILE, _session_host_source()),
     ]
+    # THE SKILLS (the interaction-layer unlock): seed each packaged skill to its CLI discovery path so
+    # the layer's references to them ("the ``meeting-artifact`` skill", ``meeting-diagram``,
+    # ``background-job``) resolve to a real, loadable skill instead of a dangling name.
+    seeds += [
+        (f"{SKILLS_DIR}/{name}/SKILL.md", _packaged_skill_source(name)) for name in SKILL_NAMES
+    ]
+    return seeds
 
 
 async def _start_session_host(wr: Workroom) -> bool:
@@ -961,9 +1021,13 @@ async def provision_workroom(
 
     sandbox = None
     resumed = False
-    if resume_id:
-        # Fast join: reconnect to a paused warm snapshot (repo + deps already baked in). A resume
-        # fault degrades to a fresh provision below — never a crash, never a stuck meeting.
+    # Resume is the pause/resume fast-join lever — GATED OFF by default (``PROXY_ENABLE_PAUSE_RESUME``).
+    # With the flag off, ANY ``resume_id`` is ignored and we always cold-provision, so the working path
+    # is unchanged (E2B persistence is public beta; needs live multi-cycle validation — see the flag).
+    if resume_id and _pause_resume_enabled():
+        # Fast join: reconnect to a paused warm snapshot (repo + deps already baked in). ``connect``
+        # is the async classmethod that AUTO-RESUMES a paused sandbox (verified). A resume fault
+        # degrades to a fresh provision below — never a crash, never a stuck meeting.
         connect = getattr(sandbox_class, "connect", None)
         if connect is not None:
             try:
@@ -1032,6 +1096,17 @@ async def provision_workroom(
     await wr._seed_and_verify(  # noqa: SLF001 — same module
         _seed_files(prime=prime, map_text=map_text, meeting_info=meeting_info)
     )
+    # RESUMED-SNAPSHOT HYGIENE: ``beta_pause`` restores RUNNING processes, so a resumed sandbox still
+    # carries the OLD session host (and its stale SDK client / MCP stdio child) from before the pause.
+    # Kill it before starting a fresh host, else two hosts would tail the same WAKE_IN and double-serve
+    # every wake (double delivery to the room). Starting a FRESH host is safe: it re-sends the identical
+    # resident prime, which still hits the Anthropic prompt cache (1h TTL) as a cache_read if within the
+    # window — so we get clean single-host ownership without losing the cache benefit. Best-effort.
+    if resumed:
+        try:
+            await wr._run(f"pkill -f {shlex.quote(SESSION_HOST_FILE)} || true", timeout=30.0)  # noqa: SLF001
+        except Exception:  # noqa: BLE001 — best-effort cleanup; the fresh host is started regardless
+            logger.warning("resumed-snapshot session-host cleanup failed (continuing)", exc_info=True)
     # START the WARM permanent session (the ONE delivery path): one persistent Claude session per
     # meeting, warm before the first wake. On any launch fault ``warm`` stays False and the first wake
     # self-heals (restart-and-retry) or honest-degrades.
